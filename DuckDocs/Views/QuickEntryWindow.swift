@@ -151,7 +151,8 @@ struct QuickEntryView: View {
                 ) {
                     // For region, we need to dismiss first then show selector
                     onDismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
                         NotificationCenter.default.post(name: .quickEntrySelectRegion, object: nil)
                     }
                 }
@@ -162,7 +163,8 @@ struct QuickEntryView: View {
                     shortcut: "3"
                 ) {
                     onDismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
                         NotificationCenter.default.post(name: .quickEntrySelectWindow, object: nil)
                     }
                 }

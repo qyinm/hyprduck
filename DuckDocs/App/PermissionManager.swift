@@ -58,22 +58,25 @@ final class PermissionManager {
         startAccessibilityPolling()
     }
 
-    private var accessibilityTimer: Timer?
+    private var pollingTask: Task<Void, Never>?
 
     private func startAccessibilityPolling() {
-        accessibilityTimer?.invalidate()
-        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
-            Task { @MainActor in
-                guard let self else {
-                    timer.invalidate()
-                    return
-                }
+        pollingTask?.cancel()
+        pollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
                 self.checkAccessibilityPermission()
                 if self.accessibilityGranted {
-                    timer.invalidate()
+                    return  // Stop polling once granted
                 }
+                try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    private func stopAccessibilityPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     // MARK: - Screen Capture Permission

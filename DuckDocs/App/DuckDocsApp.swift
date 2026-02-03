@@ -31,7 +31,8 @@ struct DuckDocsApp: App {
                         job.captureMode = .window(windowID: windowID, title: title, appName: appName)
                         showWindowPicker = false
                         // Start capture after window selection
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(100))
                             startCapture()
                         }
                     }
@@ -137,7 +138,8 @@ struct DuckDocsApp: App {
             job.captureMode = .region(rect)
             regionSelectorWindow = nil
             // Start capture after region selection
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
                 startCapture()
             }
         }

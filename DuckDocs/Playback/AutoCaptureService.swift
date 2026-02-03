@@ -344,10 +344,11 @@ final class AutoCaptureService {
         }
 
         return await withCheckedContinuation { continuation in
-            var completed = false
+            let hasResumed = OSAllocatedUnfairLock(initialState: false)
 
             window.onCancel = {
-                if !completed {
+                hasResumed.withLock { completed in
+                    guard !completed else { return }
                     completed = true
                     Task { @MainActor in
                         self.cancel()
@@ -357,7 +358,8 @@ final class AutoCaptureService {
             }
 
             window.startCountdown {
-                if !completed {
+                hasResumed.withLock { completed in
+                    guard !completed else { return }
                     completed = true
                     continuation.resume(returning: true)
                 }

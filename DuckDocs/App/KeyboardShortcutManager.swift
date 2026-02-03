@@ -30,12 +30,18 @@ final class KeyboardShortcutManager {
     func start() {
         // Global monitor for Option double-tap and Option+Space
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
-            self?.handleGlobalEvent(event)
+            DispatchQueue.main.async {
+                self?.handleGlobalEvent(event)
+            }
         }
 
         // Local monitor when app is active
+        // Note: Local monitor runs on main thread but we need synchronous handling
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
-            if self?.handleLocalEvent(event) == true {
+            guard let self = self else { return event }
+            // Since we're @MainActor and local monitor is already on main thread,
+            // we can call directly without dispatch
+            if self.handleLocalEvent(event) {
                 return nil
             }
             return event

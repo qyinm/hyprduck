@@ -189,19 +189,4 @@ final class AIService {
             config.apiKey = key
         }
     }
-
-    // MARK: - Legacy Compatibility
-
-    /// For backwards compatibility with code expecting DeepSeekOCRService
-    func preloadModel() {
-        // No preloading needed for API-based providers
-    }
-
-    func loadModel() async throws {
-        // No loading needed for API-based providers
-    }
-
-    func unloadModel() {
-        // No unloading needed for API-based providers
-    }
 }

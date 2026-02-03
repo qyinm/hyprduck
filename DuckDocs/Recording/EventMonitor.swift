@@ -10,16 +10,15 @@ import CoreGraphics
 import AppKit
 
 /// Monitors global mouse and keyboard events using CGEvent tap
-@preconcurrency
-final class EventMonitor: @unchecked Sendable {
+final class EventMonitor: Sendable {
     /// Callback when an action is captured
-    var onActionCaptured: ((Action) -> Void)?
+    nonisolated(unsafe) var onActionCaptured: ((Action) -> Void)?
 
     /// Callback when monitoring fails
-    var onError: ((Error) -> Void)?
+    nonisolated(unsafe) var onError: ((Error) -> Void)?
 
     /// Enable keyboard monitoring (disabled by default for privacy)
-    var captureKeyboard: Bool = true
+    nonisolated(unsafe) var captureKeyboard: Bool = true
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -37,8 +36,8 @@ final class EventMonitor: @unchecked Sendable {
 
     // Keyboard text accumulator for batching
     private var textBuffer: String = ""
-    private var textBufferTimer: Timer?
-    private let textBufferDelay: TimeInterval = 0.5
+    nonisolated(unsafe) private var textBufferTask: Task<Void, Never>?
+    private let textBufferDelay: Duration = .milliseconds(500)
 
     init() {}
 
@@ -128,15 +127,38 @@ final class EventMonitor: @unchecked Sendable {
 
         // Flush any remaining text buffer
         flushTextBuffer()
-        textBufferTimer?.invalidate()
-        textBufferTimer = nil
+        textBufferTask?.cancel()
+        textBufferTask = nil
     }
 
     // MARK: - Event Handling
 
     private func handleEvent(type: CGEventType, event: CGEvent) {
+        // Capture values we need before dispatching to main thread
         let location = event.location
+        let eventType = type
 
+        // Extract event-specific data on the event tap thread
+        var scrollDeltaX: CGFloat = 0
+        var scrollDeltaY: CGFloat = 0
+        if type == .scrollWheel {
+            scrollDeltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+            scrollDeltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+        }
+
+        // Dispatch to main thread for all state mutations and callbacks
+        DispatchQueue.main.async { [weak self] in
+            self?.processEvent(
+                type: eventType,
+                location: location,
+                event: event,
+                scrollDeltaX: scrollDeltaX,
+                scrollDeltaY: scrollDeltaY
+            )
+        }
+    }
+
+    private func processEvent(type: CGEventType, location: CGPoint, event: CGEvent, scrollDeltaX: CGFloat, scrollDeltaY: CGFloat) {
         // Calculate delay since last event (only for mouse events, not keyboard)
         let now = Date()
         let isMouseEvent = type == .leftMouseDown || type == .leftMouseUp ||
@@ -193,15 +215,12 @@ final class EventMonitor: @unchecked Sendable {
             onActionCaptured?(.click(x: location.x, y: location.y, button: .right))
 
         case .scrollWheel:
-            let deltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
-            let deltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
-
-            if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
+            if abs(scrollDeltaX) > 0.1 || abs(scrollDeltaY) > 0.1 {
                 onActionCaptured?(.scroll(
                     x: location.x,
                     y: location.y,
-                    deltaX: deltaX,
-                    deltaY: deltaY
+                    deltaX: scrollDeltaX,
+                    deltaY: scrollDeltaY
                 ))
             }
 
@@ -228,6 +247,7 @@ final class EventMonitor: @unchecked Sendable {
     // MARK: - Keyboard Event Handling
 
     private func handleKeyDown(event: CGEvent) {
+        // Extract all needed values on the event tap thread
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let modifiers = ModifierFlags.from(cgFlags: flags)
@@ -252,6 +272,13 @@ final class EventMonitor: @unchecked Sendable {
             }
         }
 
+        // Dispatch to main thread for all state mutations and callbacks
+        DispatchQueue.main.async { [weak self] in
+            self?.processKeyDown(keyCode: keyCode, character: character, modifiers: modifiers)
+        }
+    }
+
+    private func processKeyDown(keyCode: Int64, character: String?, modifiers: ModifierFlags) {
         // Check if it's a printable character without command modifiers (shift is OK)
         let hasCommandModifiers = modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option)
 
@@ -277,8 +304,10 @@ final class EventMonitor: @unchecked Sendable {
     }
 
     private func resetTextBufferTimer() {
-        textBufferTimer?.invalidate()
-        textBufferTimer = Timer.scheduledTimer(withTimeInterval: textBufferDelay, repeats: false) { [weak self] _ in
+        textBufferTask?.cancel()
+        textBufferTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.textBufferDelay ?? .milliseconds(500))
+            guard !Task.isCancelled else { return }
             self?.flushTextBuffer()
         }
     }
