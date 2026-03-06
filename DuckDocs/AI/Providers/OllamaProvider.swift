@@ -85,7 +85,17 @@ final class OllamaProvider: AIProvider, Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            if !isCloudMode {
+                throw AIProviderError.requestFailed(
+                    "Cannot connect to Ollama at \(baseURL). Make sure the Ollama app or server is running."
+                )
+            }
+            throw AIProviderError.networkError(error)
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIProviderError.invalidResponse

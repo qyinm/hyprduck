@@ -8,34 +8,24 @@
 import Foundation
 import AppKit
 
-/// Generates markdown documentation from capture results and AI analysis
+/// Generates markdown documentation for capture and import workflows.
 struct MarkdownGenerator {
-    /// Output configuration
     struct Configuration {
         var includeTableOfContents: Bool = true
         var includeTimestamps: Bool = false
-        var includeActionDetails: Bool = true
-        var imageFormat: ImageFormat = .png
-        var imageFolder: String = "images"
+    }
 
-        enum ImageFormat: String {
-            case png
-            case jpg
-        }
+    struct Section {
+        let title: String
+        let detail: String?
+        let imagePath: String
+        let body: String
     }
 
     var configuration = Configuration()
 
-    /// Generate markdown documentation
-    func generate(
-        title: String,
-        captures: [CaptureResult],
-        aiAnalysis: [String]? = nil
-    ) -> String {
-        var markdown = ""
-
-        // Header
-        markdown += "# \(title)\n\n"
+    func generate(title: String, sections: [Section]) -> String {
+        var markdown = "# \(title)\n\n"
 
         if configuration.includeTimestamps {
             let formatter = DateFormatter()
@@ -44,99 +34,91 @@ struct MarkdownGenerator {
             markdown += "*Generated: \(formatter.string(from: Date()))*\n\n"
         }
 
-        // Table of contents
-        if configuration.includeTableOfContents && !captures.isEmpty {
+        if configuration.includeTableOfContents && sections.count > 1 {
             markdown += "## Table of Contents\n\n"
-            for capture in captures {
-                markdown += "- [Step \(capture.stepNumber): \(capture.action.shortDescription)](#step-\(capture.stepNumber))\n"
+            for section in sections {
+                markdown += "- [\(section.title)](#\(anchor(for: section.title)))\n"
             }
             markdown += "\n---\n\n"
         }
 
-        // Steps
-        for (index, capture) in captures.enumerated() {
-            markdown += generateStep(
-                capture: capture,
-                analysis: aiAnalysis?[safe: index]
-            )
-            markdown += "\n---\n\n"
+        for (index, section) in sections.enumerated() {
+            markdown += "## \(section.title)\n\n"
+
+            if let detail = section.detail, !detail.isEmpty {
+                markdown += "\(detail)\n\n"
+            }
+
+            markdown += "![\(section.title)](\(section.imagePath))\n\n"
+            markdown += section.body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+
+            if index < sections.count - 1 {
+                markdown += "\n\n---\n\n"
+            } else {
+                markdown += "\n"
+            }
         }
 
         return markdown
     }
 
-    private func generateStep(capture: CaptureResult, analysis: String?) -> String {
-        var step = ""
-
-        // Step header
-        step += "## Step \(capture.stepNumber)\n\n"
-
-        // Action description
-        if configuration.includeActionDetails {
-            step += "**Action:** \(capture.action.description)\n\n"
+    func generate(
+        title: String,
+        captures: [CaptureResult],
+        aiAnalysis: [String]? = nil
+    ) -> String {
+        let sections = captures.enumerated().map { index, capture in
+            Section(
+                title: "Step \(capture.stepNumber)",
+                detail: "**Action:** \(capture.action.description)",
+                imagePath: "images/step_\(capture.stepNumber).png",
+                body: aiAnalysis?[safe: index] ?? ""
+            )
         }
 
-        // Screenshot
-        let imageName = "step_\(capture.stepNumber).\(configuration.imageFormat.rawValue)"
-        let imagePath = "\(configuration.imageFolder)/\(imageName)"
-        step += "![Step \(capture.stepNumber)](\(imagePath))\n\n"
-
-        // AI analysis
-        if let analysis = analysis, !analysis.isEmpty {
-            step += analysis + "\n\n"
-        }
-
-        return step
+        return generate(title: title, sections: sections)
     }
 
-    /// Export documentation to a directory
     func export(
         title: String,
         captures: [CaptureResult],
         aiAnalysis: [String]? = nil,
         to directory: URL
     ) throws -> URL {
-        // Create directories
-        let imagesDir = directory.appendingPathComponent(configuration.imageFolder, isDirectory: true)
+        let imagesDir = directory.appendingPathComponent("images", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
 
-        // Save images
         for capture in captures {
-            let imageName = "step_\(capture.stepNumber).\(configuration.imageFormat.rawValue)"
+            let imageName = "step_\(capture.stepNumber).png"
             let imageURL = imagesDir.appendingPathComponent(imageName)
 
             guard let tiffData = capture.screenshot.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiffData) else {
+                  let bitmap = NSBitmapImageRep(data: tiffData),
+                  let imageData = bitmap.representation(using: .png, properties: [:]) else {
                 continue
             }
 
-            let imageData: Data?
-            switch configuration.imageFormat {
-            case .png:
-                imageData = bitmap.representation(using: .png, properties: [:])
-            case .jpg:
-                imageData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
-            }
-
-            if let data = imageData {
-                try data.write(to: imageURL)
-            }
+            try imageData.write(to: imageURL)
         }
 
-        // Generate and save markdown
         let markdown = generate(title: title, captures: captures, aiAnalysis: aiAnalysis)
         let markdownURL = directory.appendingPathComponent("README.md")
         try markdown.write(to: markdownURL, atomically: true, encoding: .utf8)
 
         return markdownURL
     }
+
+    private func anchor(for title: String) -> String {
+        title
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9\\s-]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
+    }
 }
 
-// MARK: - Action Extensions
-
 extension Action {
-    /// Short description for table of contents
+    /// Short description for legacy capture table-of-contents entries.
     var shortDescription: String {
         switch self {
         case .click(_, _, let button):
@@ -161,8 +143,6 @@ extension Action {
         }
     }
 }
-
-// MARK: - Array Extension
 
 extension Array {
     subscript(safe index: Index) -> Element? {

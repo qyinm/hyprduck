@@ -1,42 +1,68 @@
 # DuckDocs - Project Knowledge Base
 
-**Generated:** 2026-01-30
-**Project:** DuckDocs - Automated Screenshot to Documentation
+**Generated:** 2026-03-06
+**Project:** DuckDocs - Capture and Document Import to Markdown
 **Stack:** Swift, SwiftUI, macOS
 
 ---
 
 ## OVERVIEW
 
-DuckDocs is a macOS app that records user actions (clicks, drags, scrolls), plays them back with automatic screenshot capture, and uses DeepSeek OCR 2 (MLX 4-bit) running locally on Apple Silicon to generate structured markdown documentation.
+DuckDocs is a macOS app that captures screens or imports documents, then converts the resulting images into markdown using AI.
 
-**Core Value Proposition:** Click a few times, get complete documentation.
+Current product direction:
+- **Auto Capture**: full screen, region, or window capture with optional simulated next actions
+- **Document Import**: PDF, DOCX, and DOC conversion into page images for markdown generation
+- **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
+
+Legacy recording/playback components still exist in the codebase, but the primary product surface is now capture plus import.
+
+**Core Value Proposition:** turn visual workflows and documents into markdown quickly.
 
 ---
 
 ## PROJECT STRUCTURE
 
-```
+```text
 DuckDocs/
 ├── DuckDocs.xcodeproj
-├── Sources/
+├── DuckDocs/
 │   ├── App/
-│   │   └── DuckDocsApp.swift          # App entry point
-│   ├── Recording/
-│   │   ├── ActionRecorder.swift       # Main recording coordinator
-│   │   ├── EventMonitor.swift         # CGEvent monitoring
-│   │   └── ActionSequence.swift       # Data model for recorded actions
-│   ├── Playback/
-│   │   ├── ActionPlayer.swift         # Action replay engine
-│   │   └── ScreenCapture.swift        # Screenshot capture (ScreenCaptureKit)
+│   │   ├── DuckDocsApp.swift
+│   │   ├── AppState.swift
+│   │   ├── KeyboardShortcutManager.swift
+│   │   └── PermissionManager.swift
 │   ├── AI/
-│   │   ├── DeepSeekOCRService.swift   # DeepSeek OCR 2 (MLX 4-bit)
-│   │   └── MarkdownGenerator.swift    # Markdown output generator
+│   │   ├── AIService.swift
+│   │   ├── AIProvider.swift
+│   │   ├── MarkdownGenerator.swift
+│   │   ├── KeychainService.swift
+│   │   ├── PromptTemplate.swift
+│   │   ├── Models/
+│   │   └── Providers/
+│   ├── Models/
+│   │   ├── CaptureJob.swift
+│   │   ├── CaptureResult.swift
+│   │   ├── DocumentImportJob.swift
+│   │   └── ActionSequence.swift
+│   ├── Playback/
+│   │   ├── AutoCaptureService.swift
+│   │   ├── DocumentImportService.swift
+│   │   ├── DocumentConverter.swift
+│   │   ├── ScreenCapture.swift
+│   │   └── ActionPlayer.swift
+│   ├── Recording/
+│   │   ├── ActionRecorder.swift
+│   │   └── EventMonitor.swift
 │   └── Views/
-│       ├── RecordingView.swift        # Record UI
-│       ├── PlaybackView.swift         # Playback UI
-│       └── OutputView.swift           # Output preview UI
-└── Resources/
+│       ├── ContentView.swift
+│       ├── DocumentImportSection.swift
+│       ├── OnboardingView.swift
+│       ├── QuickEntryWindow.swift
+│       ├── RegionSelectorWindow.swift
+│       ├── CapturePreviewWindow.swift
+│       └── WindowPickerView.swift
+└── docs/
 ```
 
 ---
@@ -45,42 +71,43 @@ DuckDocs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Start recording | `Recording/ActionRecorder.swift` | Main coordinator |
-| Event capture | `Recording/EventMonitor.swift` | CGEvent taps |
-| Data models | `Recording/ActionSequence.swift` | Action enum, structs |
-| Replay actions | `Playback/ActionPlayer.swift` | Simulates user actions |
-| Take screenshots | `Playback/ScreenCapture.swift` | ScreenCaptureKit |
-| AI processing | `AI/VisionService.swift` | Vision API integration |
-| Markdown gen | `AI/MarkdownGenerator.swift` | Output formatting |
-| UI views | `Views/` | SwiftUI view components |
+| App entry | `DuckDocs/App/DuckDocsApp.swift` | Root scene and commands |
+| Main UI | `DuckDocs/Views/ContentView.swift` | Capture workflow UI |
+| Document import UI | `DuckDocs/Views/DocumentImportSection.swift` | Import progress and actions |
+| Capture workflow | `DuckDocs/Playback/AutoCaptureService.swift` | Capture, AI processing, save |
+| Document import workflow | `DuckDocs/Playback/DocumentImportService.swift` | Convert, process, save |
+| Document conversion | `DuckDocs/Playback/DocumentConverter.swift` | PDF and Word to images |
+| Screen capture | `DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
+| AI orchestration | `DuckDocs/AI/AIService.swift` | Provider selection and prompts |
+| AI providers | `DuckDocs/AI/Providers/` | OpenRouter, OpenAI, Anthropic, Ollama |
+| Prompt templates | `DuckDocs/AI/PromptTemplate.swift` | Shared capture/import prompts |
+| Legacy record/playback | `DuckDocs/Recording/`, `DuckDocs/Playback/ActionPlayer.swift` | Secondary, not primary UI |
 
 ---
 
 ## DATA MODELS
 
 ```swift
-// Core recording unit
-struct ActionSequence: Codable {
-    let id: UUID
-    let name: String
-    let createdAt: Date
-    let actions: [Action]
+struct CaptureJob {
+    var captureMode: CaptureMode
+    var nextAction: NextAction
+    var captureCount: Int
+    var delayBetweenCaptures: TimeInterval
+    var outputName: String
 }
 
-// Individual action types
-enum Action: Codable {
-    case click(x: CGFloat, y: CGFloat, type: ClickType)
-    case drag(from: CGPoint, to: CGPoint)
-    case scroll(direction: ScrollDirection, amount: CGFloat)
-    case keypress(key: String, modifiers: [Modifier])
-    case delay(seconds: Double)
+struct DocumentImportJob {
+    let fileURL: URL
+    let format: DocumentFormat
+    var outputName: String
 }
 
-// Screenshot capture result
-struct CaptureResult {
-    let action: Action
-    let screenshot: NSImage
-    let timestamp: Date
+struct ImageProcessingResult {
+    let id: Int
+    let image: NSImage
+    var status: Status
+    var analysis: String?
+    var errorMessage: String?
 }
 ```
 
@@ -89,52 +116,58 @@ struct CaptureResult {
 ## CONVENTIONS
 
 ### Swift Style
-- Use `Codable` for all data models (persistence)
-- Prefer `struct` over `class` for value types
-- Use `async/await` for async operations (Vision API calls)
-- NSImage for screenshots (AppKit)
+- Prefer `async/await` for capture, conversion, and AI processing
+- Use `@Observable` state containers for UI-facing services
+- Keep AppKit usage isolated to capture, permissions, and image handling
+- Use `NSImage` for screenshots and converted page images
 
-### macOS Permissions
-- **Accessibility API** required for recording user actions
-- **ScreenCaptureKit** required for screenshots
-- Guide users through permission prompts on first launch
+### Permissions
+- **Screen Recording** and **Accessibility** are capture-only requirements
+- Document import should remain usable even when capture permissions are missing
+- Guide users to System Settings when capture permissions are needed
 
-### Error Handling
-- Use `Result<T, Error>` for operations that can fail
-- Wrap CGEvent errors with descriptive messages
-- Handle Vision API failures gracefully (timeout, rate limits)
+### AI Architecture
+- Treat AI settings as shared across capture and import
+- Use provider abstractions instead of product-specific OCR services
+- Keep user-facing error messages specific, especially for missing API keys or unavailable Ollama instances
+
+### Output
+- Save results under `~/Documents/DuckDocs/`
+- Keep images on disk, not in long-term memory
+- Generate markdown that references the saved images
 
 ---
 
 ## ANTI-PATTERNS (DO NOT)
 
-- **DO NOT** use deprecated CGDisplay APIs for screenshots
-- **DO NOT** store screenshots in memory long-term (write to disk)
-- **DO NOT** capture passwords or sensitive data (respect privacy)
-- **DO NOT** block main thread during Vision API calls
-- **DO NOT** assume Accessibility permissions are granted
+- **DO NOT** reintroduce product messaging that describes DuckDocs as DeepSeek-only
+- **DO NOT** block document import behind capture permissions
+- **DO NOT** save markdown without corresponding image references
+- **DO NOT** assume single-display setups when working on region capture
+- **DO NOT** route main UI and menu actions through different service instances
 
 ---
 
 ## UNIQUE REQUIREMENTS
 
-### CGEvent Monitoring
-- Use `CGEvent.tapCreate()` for global event monitoring
-- Monitor: mouse clicks (left/right/double), drags, scrolls
-- Store coordinates in screen space (handle multiple displays)
+### Auto Capture
+- Support full screen, region, and window capture modes
+- Support simulated next actions between captures
+- Show a countdown preview before hiding the app and starting capture
 
-### ScreenCaptureKit (macOS 12.3+)
-- Use `SCShareableContent` to get available displays/windows
-- Use `SCStream` for continuous capture during playback
-- Configure for high-resolution captures
+### Document Import
+- Support PDF, DOCX, and DOC
+- Convert documents into one image per page before AI processing
+- Allow retrying failed pages and saving partial results
 
-### DeepSeek OCR 2 Integration (MLX-Community 4-bit)
-- Model: `mlx-community/DeepSeek-OCR-2-4bit`
-- Runs locally via Python mlx-lm library
-- Apple Silicon optimized (M1/M2/M3)
-- First run: ~4GB model download
-- 100% offline, no API costs
-- Handle model loading errors gracefully
+### AI Providers
+- OpenRouter, OpenAI, Anthropic, and Ollama are first-class providers
+- Ollama should support local usage without an API key
+- Prompt templates should work across both capture and import flows
+
+### Legacy Components
+- `ActionRecorder`, `EventMonitor`, `ActionPlayer`, and `ActionSequence` remain in the repo
+- Treat them as legacy or secondary unless the product direction explicitly changes back to record/playback
 
 ---
 
@@ -144,36 +177,32 @@ struct CaptureResult {
 # Build
 xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs
 
+# Build without code signing for local verification
+xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
+
 # Run tests
 xcodebuild test -project DuckDocs.xcodeproj -scheme DuckDocs
-
-# Archive for distribution
-xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs -configuration Release archive
 ```
 
 ---
 
 ## NOTES
 
-### MVP Scope (v1.0)
-- Click, drag, scroll recording only
-- Full-screen capture during playback
-- DeepSeek OCR 2 (MLX 4-bit) local AI processing
-- Local JSON storage for action sequences
+### Current Scope
+- Capture-driven markdown generation
+- Document import to markdown
+- Shared provider-based AI processing
+- Local and cloud AI options via Ollama and hosted providers
 
-### Future (v1.1+)
-- Keyboard input recording
-- Browser-specific mode (URL tracking)
-- Cloud sync
-- Team sharing
-
-### Key Dependencies
-- ScreenCaptureKit (system)
-- Accessibility API (system, requires permission)
-- Python mlx-lm (DeepSeek OCR 2 model)
-- PythonKit or Process (Swift-Python bridge)
+### Near-Term Focus
+- Output quality and markdown structure
+- Permission flow cleanup
+- Multi-display region capture correctness
+- Unifying product messaging with the implemented app
 
 ### Testing Considerations
-- Test on multiple display setups
-- Test with different accessibility permission states
-- Test Vision API rate limiting scenarios
+- Capture with and without permissions granted
+- Import-only flow on a fresh machine
+- Multi-display region capture
+- Partial AI failure and retry flows
+- Provider configuration errors, especially missing keys and local Ollama availability

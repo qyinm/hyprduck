@@ -41,6 +41,31 @@ final class AIService {
     /// Shared instance for app-wide use
     static let shared = AIService()
 
+    var sharedConfigurationSummary: String {
+        "These AI settings power both Capture Workflow and Document Import."
+    }
+
+    var configurationIssue: String? {
+        let effectiveBaseURL = config.effectiveBaseURL
+        guard URL(string: effectiveBaseURL) != nil else {
+            return "Enter a valid server URL for \(config.providerType.rawValue)."
+        }
+
+        switch config.providerType {
+        case .openRouter, .openAI, .anthropic:
+            guard !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return "Add an API key for \(config.providerType.rawValue) before generating markdown."
+            }
+        case .ollama:
+            let isCloudURL = effectiveBaseURL.contains("ollama.com")
+            if isCloudURL && config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Add an Ollama API key to use Ollama Cloud, or clear the server URL to use local Ollama."
+            }
+        }
+
+        return nil
+    }
+
     // MARK: - UserDefaults Keys
 
     private let configKey = "ai_provider_config"
@@ -136,8 +161,8 @@ final class AIService {
 
     /// Analyze a single image and convert to markdown
     func analyzeImage(_ image: NSImage, prompt: String? = nil) async throws -> String {
-        guard config.providerType.requiresAPIKey == false || !config.apiKey.isEmpty else {
-            throw AIProviderError.apiKeyMissing
+        if let configurationIssue {
+            throw AIProviderError.requestFailed(configurationIssue)
         }
 
         state = .processing

@@ -11,12 +11,18 @@ import SwiftUI
 /// A transparent overlay window for selecting a screen region
 class RegionSelectorWindow: NSPanel {
     private var selectionView: RegionSelectionView!
-    var onRegionSelected: ((CGRect) -> Void)?
+    var onRegionSelected: ((CaptureRegion) -> Void)?
     var onCancelled: (() -> Void)?
 
     init() {
-        // Get the main screen frame
-        let screenFrame = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let unionFrame = NSScreen.screens
+            .map(\.frame)
+            .reduce(CGRect.null) { partialResult, frame in
+                partialResult.union(frame)
+            }
+        let screenFrame = unionFrame.isNull
+            ? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            : unionFrame
 
         super.init(
             contentRect: screenFrame,
@@ -34,7 +40,7 @@ class RegionSelectorWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // Create the selection view
-        selectionView = RegionSelectionView(frame: screenFrame)
+        selectionView = RegionSelectionView(frame: CGRect(origin: .zero, size: screenFrame.size))
         selectionView.onRegionSelected = { [weak self] rect in
             self?.onRegionSelected?(rect)
             self?.close()
@@ -60,7 +66,8 @@ class RegionSelectorWindow: NSPanel {
 class RegionSelectionView: NSView {
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
-    var onRegionSelected: ((CGRect) -> Void)?
+    private var activeScreen: NSScreen?
+    var onRegionSelected: ((CaptureRegion) -> Void)?
     var onCancelled: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
@@ -149,6 +156,7 @@ class RegionSelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         startPoint = convert(event.locationInWindow, from: nil)
         currentPoint = startPoint
+        activeScreen = screenContainingSelectionStart()
         needsDisplay = true
     }
 
@@ -169,10 +177,8 @@ class RegionSelectionView: NSView {
         case 36: // Enter
             if let start = startPoint, let current = currentPoint {
                 let rect = rectFromPoints(start, current)
-                if rect.width >= 10 && rect.height >= 10 {
-                    // Convert from view coordinates to screen coordinates
-                    let screenRect = convertToScreenCoordinates(rect)
-                    onRegionSelected?(screenRect)
+                if let region = convertToCaptureRegion(rect), region.rect.width >= 10, region.rect.height >= 10 {
+                    onRegionSelected?(region)
                 }
             }
         default:
@@ -189,23 +195,46 @@ class RegionSelectionView: NSView {
         )
     }
 
-    private func convertToScreenCoordinates(_ rect: CGRect) -> CGRect {
-        guard let screen = NSScreen.main else { return rect }
-        // NSView coordinates have origin at bottom-left, but CGRect for capture uses top-left
-        // ScreenCaptureKit uses screen coordinates with origin at top-left
-        let screenHeight = screen.frame.height
-        return CGRect(
-            x: rect.origin.x,
-            y: screenHeight - rect.origin.y - rect.height,
-            width: rect.width,
-            height: rect.height
+    private func screenContainingSelectionStart() -> NSScreen? {
+        guard let startPoint, let window else { return nil }
+        let globalPoint = window.convertPoint(toScreen: startPoint)
+        return NSScreen.screens.first { $0.frame.contains(globalPoint) }
+    }
+
+    private func convertToCaptureRegion(_ rect: CGRect) -> CaptureRegion? {
+        guard let window else { return nil }
+
+        let globalRect = window.convertToScreen(rect)
+        let targetScreen = activeScreen
+            ?? NSScreen.screens.first {
+                $0.frame.contains(CGPoint(x: globalRect.midX, y: globalRect.midY))
+            }
+
+        guard let targetScreen else { return nil }
+
+        let clippedRect = globalRect.intersection(targetScreen.frame)
+        guard !clippedRect.isNull, clippedRect.width > 0, clippedRect.height > 0 else {
+            return nil
+        }
+
+        let localRect = CGRect(
+            x: clippedRect.minX - targetScreen.frame.minX,
+            y: targetScreen.frame.maxY - clippedRect.maxY,
+            width: clippedRect.width,
+            height: clippedRect.height
+        )
+
+        return CaptureRegion(
+            rect: localRect,
+            displayID: targetScreen.displayID,
+            displayName: targetScreen.captureDisplayName
         )
     }
 }
 
 /// SwiftUI wrapper for presenting the region selector
 struct RegionSelectorPresenter: NSViewRepresentable {
-    let onRegionSelected: (CGRect) -> Void
+    let onRegionSelected: (CaptureRegion) -> Void
     let onCancelled: () -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -223,5 +252,15 @@ struct RegionSelectorPresenter: NSViewRepresentable {
         window.onRegionSelected = onRegionSelected
         window.onCancelled = onCancelled
         window.show()
+    }
+}
+
+private extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
+    }
+
+    var captureDisplayName: String {
+        localizedName
     }
 }

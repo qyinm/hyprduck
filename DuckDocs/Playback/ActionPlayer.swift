@@ -9,7 +9,7 @@ import Foundation
 import CoreGraphics
 import AppKit
 
-/// Replays recorded actions
+/// Legacy playback subsystem retained for future product exploration.
 @Observable
 @MainActor
 final class ActionPlayer {

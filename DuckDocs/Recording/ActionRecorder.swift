@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// Records user actions into an ActionSequence
+/// Legacy recording subsystem retained for future product exploration.
 @Observable
 @MainActor
 final class ActionRecorder {

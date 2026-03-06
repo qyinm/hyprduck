@@ -40,7 +40,10 @@ final class ScreenCapture {
         // Get shareable content
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
-        guard let display = content.displays.first else {
+        let preferredDisplayID = NSScreen.main?.displayID
+        let display = content.displays.first { $0.displayID == preferredDisplayID } ?? content.displays.first
+
+        guard let display else {
             throw CaptureError.noDisplay
         }
 
@@ -99,20 +102,19 @@ final class ScreenCapture {
     }
 
     /// Capture a region of the screen
-    func captureRegion(_ rect: CGRect, on display: SCDisplay? = nil) async throws -> NSImage {
+    func captureRegion(_ region: CaptureRegion) async throws -> NSImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
-        let targetDisplay = display ?? content.displays.first
-        guard let targetDisplay else {
+        guard let targetDisplay = content.displays.first(where: { $0.displayID == region.displayID }) else {
             throw CaptureError.noDisplay
         }
 
         let filter = SCContentFilter(display: targetDisplay, excludingWindows: [])
 
         let config = SCStreamConfiguration()
-        config.sourceRect = rect
-        config.width = Int(rect.width * configuration.captureResolution.scaleFactor)
-        config.height = Int(rect.height * configuration.captureResolution.scaleFactor)
+        config.sourceRect = region.rect
+        config.width = Int(region.rect.width * configuration.captureResolution.scaleFactor)
+        config.height = Int(region.rect.height * configuration.captureResolution.scaleFactor)
         config.showsCursor = configuration.showCursor
         config.pixelFormat = kCVPixelFormatType_32BGRA
 
@@ -121,7 +123,7 @@ final class ScreenCapture {
             configuration: config
         )
 
-        return NSImage(cgImage: image, size: rect.size)
+        return NSImage(cgImage: image, size: region.rect.size)
     }
 
     /// Get all available displays
@@ -167,5 +169,11 @@ extension SCWindow {
             return appName
         }
         return "Window \(windowID)"
+    }
+}
+
+private extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
     }
 }

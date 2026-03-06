@@ -9,7 +9,7 @@ import Foundation
 import CoreGraphics
 import AppKit
 
-/// Monitors global mouse and keyboard events using CGEvent tap
+/// Legacy event monitor used by the recording/playback subsystem.
 final class EventMonitor: Sendable {
     /// Callback when an action is captured
     nonisolated(unsafe) var onActionCaptured: ((Action) -> Void)?

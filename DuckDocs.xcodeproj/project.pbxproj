@@ -7,17 +7,28 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		41F309002F2CA000003AFF19 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 41F308FF2F2CA000003AFF19 /* MLXLMCommon */; };
-		41F309022F2CA000003AFF19 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 41F309012F2CA000003AFF19 /* MLXVLM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		41F308822F2C9C6C003AFF19 /* DuckDocs.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DuckDocs.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		41F309A12F2C9C6C003AFF19 /* Exceptions for "DuckDocs" folder in "DuckDocs" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 41F308812F2C9C6C003AFF19 /* DuckDocs */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		41F308842F2C9C6C003AFF19 /* DuckDocs */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				41F309A12F2C9C6C003AFF19 /* Exceptions for "DuckDocs" folder in "DuckDocs" target */,
+			);
 			path = DuckDocs;
 			sourceTree = "<group>";
 		};
@@ -28,8 +39,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				41F309002F2CA000003AFF19 /* MLXLMCommon in Frameworks */,
-				41F309022F2CA000003AFF19 /* MLXVLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,8 +81,6 @@
 			);
 			name = DuckDocs;
 			packageProductDependencies = (
-				41F308FF2F2CA000003AFF19 /* MLXLMCommon */,
-				41F309012F2CA000003AFF19 /* MLXVLM */,
 			);
 			productName = DuckDocs;
 			productReference = 41F308822F2C9C6C003AFF19 /* DuckDocs.app */;
@@ -104,7 +111,6 @@
 			mainGroup = 41F308792F2C9C6C003AFF19;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				41F308FE2F2CA000003AFF19 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 41F308832F2C9C6C003AFF19 /* Products */;
@@ -262,7 +268,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = DuckDocs/DuckDocs.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -270,7 +275,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DuckDocs/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -294,7 +299,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = DuckDocs/DuckDocs.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -302,7 +306,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DuckDocs/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -344,29 +348,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		41F308FE2F2CA000003AFF19 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
-			requirement = {
-				kind = revision;
-				revision = 2c700546340c37f275d23302163701b77c4dcbd9;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		41F308FF2F2CA000003AFF19 /* MLXLMCommon */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 41F308FE2F2CA000003AFF19 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLMCommon;
-		};
-		41F309012F2CA000003AFF19 /* MLXVLM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 41F308FE2F2CA000003AFF19 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXVLM;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 41F3087A2F2C9C6C003AFF19 /* Project object */;
 }

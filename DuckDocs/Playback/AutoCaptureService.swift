@@ -28,8 +28,10 @@ final class AutoCaptureService {
     private(set) var state: State = .idle
     private(set) var capturedImages: [NSImage] = []
     private(set) var processingResults: [ImageProcessingResult] = []
+    private(set) var currentJob: CaptureJob?
 
     private let screenCapture = ScreenCapture()
+    private let outputBuilder = DocumentationOutputBuilder()
     private var captureTask: Task<Void, Never>?
 
     /// Start delay before capturing begins
@@ -39,7 +41,14 @@ final class AutoCaptureService {
 
     /// Run the full auto-capture workflow
     func run(job: CaptureJob, aiService: AIService) {
-        guard case .idle = state else { return }
+        guard !isBusy else { return }
+
+        if let configurationIssue = aiService.configurationIssue {
+            state = .error(configurationIssue)
+            return
+        }
+
+        resetForNewJob(job: job)
 
         captureTask = Task {
             await executeJob(job, aiService: aiService)
@@ -52,12 +61,15 @@ final class AutoCaptureService {
         captureTask = nil
         state = .idle
         capturedImages = []
+        processingResults = []
+        currentJob = nil
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func executeJob(_ job: CaptureJob, aiService: AIService) async {
         capturedImages = []
+        processingResults = []
 
         // Phase 1: Prepare - show preview window with countdown
         state = .preparing
@@ -124,26 +136,15 @@ final class AutoCaptureService {
             return
         }
 
-        // All succeeded - continue to save
-        let analyses = results.compactMap { $0.analysis }
-
-        // Phase 4: Save
-        state = .saving
-
-        do {
-            let url = try await saveOutput(job: job, analyses: analyses)
-            state = .completed(url)
-        } catch {
-            state = .error("Save failed: \(error.localizedDescription)")
-        }
+        await performSave(job: job)
     }
 
     private func capture(mode: CaptureMode) async throws -> NSImage {
         switch mode {
         case .fullScreen:
             return try await screenCapture.captureScreen()
-        case .region(let rect):
-            return try await screenCapture.captureRegion(rect)
+        case .region(let region):
+            return try await screenCapture.captureRegion(region)
         case .window(let windowID, _, _):
             return try await screenCapture.captureWindowByID(windowID)
         }
@@ -268,54 +269,6 @@ final class AutoCaptureService {
         return processingResults
     }
 
-    private func saveOutput(job: CaptureJob, analyses: [String]) async throws -> URL {
-        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-
-        // Sanitize output name to prevent path traversal
-        let sanitizedName = job.outputName
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "\\", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: "..", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .prefix(100)
-        let safeName = sanitizedName.isEmpty ? "output" : String(sanitizedName)
-
-        let outputDir = documentsDir.appendingPathComponent("DuckDocs/\(safeName)_\(timestamp)", isDirectory: true)
-
-        // Create directories
-        let imagesDir = outputDir.appendingPathComponent("images", isDirectory: true)
-        try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-
-        // Save images
-        var imageFilenames: [String] = []
-        for (i, image) in capturedImages.enumerated() {
-            let filename = "step_\(i + 1).png"
-            let imageURL = imagesDir.appendingPathComponent(filename)
-
-            if let tiffData = image.tiffRepresentation,
-               let bitmap = NSBitmapImageRep(data: tiffData),
-               let pngData = bitmap.representation(using: .png, properties: [:]) {
-                try pngData.write(to: imageURL)
-                imageFilenames.append("images/\(filename)")
-            }
-        }
-
-        // Generate markdown - only AI analysis content
-        var markdown = ""
-
-        for analysis in analyses {
-            markdown += analysis + "\n\n"
-        }
-
-        // Save markdown
-        let mdURL = outputDir.appendingPathComponent("\(safeName).md")
-        try markdown.write(to: mdURL, atomically: true, encoding: .utf8)
-
-        return mdURL
-    }
-
     private func showApp() {
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -410,31 +363,46 @@ final class AutoCaptureService {
 
         if stillFailed > 0 {
             state = .partiallyCompleted(successCount: successCount, failedCount: stillFailed)
-        } else {
-            // All now succeeded - can proceed to save
-            state = .processing(current: processingResults.count, total: processingResults.count)
+        } else if let currentJob {
+            await performSave(job: currentJob)
         }
     }
 
     /// Save results (call after all retries done or user accepts partial)
-    func saveResults(job: CaptureJob) {
+    func saveResults() {
+        guard let currentJob else { return }
+
         captureTask = Task {
-            await performSave(job: job)
+            await performSave(job: currentJob)
         }
     }
 
     private func performSave(job: CaptureJob) async {
         state = .saving
 
-        let analyses = processingResults
-            .sorted { $0.id < $1.id }
-            .compactMap { $0.analysis }
-
         do {
-            let url = try await saveOutput(job: job, analyses: analyses)
+            let url = try outputBuilder.exportCapture(job: job, results: processingResults)
             state = .completed(url)
         } catch {
             state = .error("Save failed: \(error.localizedDescription)")
         }
+    }
+
+    private var isBusy: Bool {
+        switch state {
+        case .preparing, .capturing, .processing, .saving:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func resetForNewJob(job: CaptureJob) {
+        captureTask?.cancel()
+        captureTask = nil
+        capturedImages = []
+        processingResults = []
+        currentJob = job
+        state = .idle
     }
 }

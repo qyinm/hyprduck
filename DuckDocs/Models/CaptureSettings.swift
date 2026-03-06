@@ -8,18 +8,25 @@
 import Foundation
 import CoreGraphics
 
-/// Capture mode for screenshots during playback
+/// A selected region on a specific display.
+struct CaptureRegion: Equatable {
+    var rect: CGRect
+    var displayID: CGDirectDisplayID
+    var displayName: String
+}
+
+/// Capture mode for documentation capture workflows.
 enum CaptureMode: Equatable {
     case fullScreen
-    case region(CGRect)
+    case region(CaptureRegion)
     case window(windowID: CGWindowID, title: String, appName: String)
 
     var displayName: String {
         switch self {
         case .fullScreen:
             return "Full Screen"
-        case .region(let rect):
-            return "Region (\(Int(rect.width))x\(Int(rect.height)))"
+        case .region(let region):
+            return "\(region.displayName) Region (\(Int(region.rect.width))x\(Int(region.rect.height)))"
         case .window(_, let title, let appName):
             if title.isEmpty {
                 return appName
@@ -40,7 +47,7 @@ enum CaptureMode: Equatable {
     }
 }
 
-/// Settings for screen capture during playback
+/// Settings for the capture workflow.
 struct CaptureSettings {
     var mode: CaptureMode = .fullScreen
 }

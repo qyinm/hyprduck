@@ -11,6 +11,7 @@ import SwiftUI
 struct OnboardingView: View {
     @Environment(AppState.self) var appState
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("hasDismissedCapturePermissionOnboarding") private var hasDismissedCapturePermissionOnboarding = false
 
     var body: some View {
         VStack(spacing: 32) {
@@ -24,7 +25,7 @@ struct OnboardingView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("Automatic documentation from your actions")
+                Text("Capture screens or import documents, then generate markdown with AI.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
@@ -33,12 +34,12 @@ struct OnboardingView: View {
 
             // Permissions
             VStack(alignment: .leading, spacing: 24) {
-                Text("Required Permissions")
+                Text("Capture Permissions")
                     .font(.headline)
 
                 PermissionRow(
                     title: "Accessibility",
-                    description: "Required to record mouse actions",
+                    description: "Required to automate clicks and keyboard actions during capture",
                     systemImage: "hand.tap",
                     isGranted: appState.permissionManager.accessibilityGranted,
                     action: {
@@ -48,13 +49,26 @@ struct OnboardingView: View {
 
                 PermissionRow(
                     title: "Screen Recording",
-                    description: "Required to capture screenshots",
+                    description: "Required to capture screenshots during Capture Workflow",
                     systemImage: "rectangle.dashed.badge.record",
                     isGranted: appState.permissionManager.screenCaptureGranted,
                     action: {
                         appState.permissionManager.requestScreenCapturePermission()
                     }
                 )
+
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Document Import is available now")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                        Text("You can import PDFs and Word documents without granting capture permissions.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding()
             .background(.regularMaterial)
@@ -64,17 +78,17 @@ struct OnboardingView: View {
 
             // Continue button
             Button {
+                hasDismissedCapturePermissionOnboarding = true
                 dismiss()
             } label: {
-                Text(appState.permissionManager.allPermissionsGranted ? "Get Started" : "Continue Anyway")
+                Text(appState.permissionManager.canUseCapture ? "Get Started" : "Continue to App")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!appState.permissionManager.allPermissionsGranted)
 
-            if !appState.permissionManager.allPermissionsGranted {
-                Text("Grant all permissions to continue")
+            if !appState.permissionManager.canUseCapture {
+                Text("Capture stays disabled until you grant both permissions. Document Import already works.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

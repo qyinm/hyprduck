@@ -24,6 +24,29 @@ final class PermissionManager {
         accessibilityGranted && screenCaptureGranted
     }
 
+    /// Whether the capture workflow can be used.
+    var canUseCapture: Bool {
+        allPermissionsGranted
+    }
+
+    /// Whether the import workflow can be used.
+    var canUseImport: Bool {
+        true
+    }
+
+    var capturePermissionCallout: String {
+        switch (accessibilityGranted, screenCaptureGranted) {
+        case (false, false):
+            return "Grant Accessibility and Screen Recording to use Capture Workflow. Document Import works without these permissions."
+        case (false, true):
+            return "Grant Accessibility to automate capture actions. Document Import already works."
+        case (true, false):
+            return "Grant Screen Recording to capture screenshots. Document Import already works."
+        case (true, true):
+            return "Capture Workflow is ready."
+        }
+    }
+
     init() {
         Task {
             await checkAllPermissions()

@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// A recorded sequence of user actions
+/// Legacy action-sequence model retained for the recording/playback subsystem.
 struct ActionSequence: Codable, Identifiable, Hashable {
     static func == (lhs: ActionSequence, rhs: ActionSequence) -> Bool {
         lhs.id == rhs.id

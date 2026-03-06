@@ -9,15 +9,22 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
+    @AppStorage("hasDismissedCapturePermissionOnboarding") private var hasDismissedCapturePermissionOnboarding = false
     @State private var showOnboarding = false
     @Binding var captureService: AutoCaptureService
     @Binding var job: CaptureJob
     @State private var showWindowPicker = false
+    let documentImportService: DocumentImportService
     private var aiService: AIService { AIService.shared }
 
-    init(captureService: Binding<AutoCaptureService>, job: Binding<CaptureJob>) {
+    init(
+        captureService: Binding<AutoCaptureService>,
+        job: Binding<CaptureJob>,
+        documentImportService: DocumentImportService
+    ) {
         self._captureService = captureService
         self._job = job
+        self.documentImportService = documentImportService
     }
 
     var body: some View {
@@ -28,36 +35,24 @@ struct ContentView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("Auto-capture and generate documentation")
+                Text("Capture screens or import documents, then turn them into markdown with AI.")
                     .foregroundStyle(.secondary)
 
-                Divider()
-
-                // Settings
-                SettingsSection(job: $job, showWindowPicker: $showWindowPicker, aiService: aiService)
-
-                Divider()
-
-                // Status & Progress
-                StatusSection(captureService: captureService, job: job)
-
-                Spacer()
-                    .frame(minHeight: 20)
-
-                // Action Button
-                ActionButton(
-                    captureService: captureService,
-                    job: job,
+                CaptureWorkflowSection(
+                    captureService: $captureService,
+                    job: $job,
+                    showWindowPicker: $showWindowPicker,
                     aiService: aiService
                 )
+
+                DocumentImportSection(importService: documentImportService, aiService: aiService)
             }
             .padding(32)
         }
         .frame(minWidth: 500, minHeight: 600)
         .task {
-            // Wait for permission check to complete before deciding onboarding
             await appState.permissionManager.checkAllPermissions()
-            if !appState.permissionManager.allPermissionsGranted {
+            if !appState.canUseCapture && !hasDismissedCapturePermissionOnboarding {
                 showOnboarding = true
             }
         }
@@ -74,6 +69,125 @@ struct ContentView: View {
 
 // MARK: - Settings Section
 
+struct CaptureWorkflowSection: View {
+    @Environment(AppState.self) var appState
+    @Binding var captureService: AutoCaptureService
+    @Binding var job: CaptureJob
+    @Binding var showWindowPicker: Bool
+    let aiService: AIService
+
+    private var canStartCapture: Bool {
+        appState.canUseCapture && aiService.configurationIssue == nil
+    }
+
+    private var canRetryCapture: Bool {
+        aiService.configurationIssue == nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Capture Workflow")
+                .font(.headline)
+
+            Text("Automate full-screen, region, or window captures, then compile each step into a markdown guide.")
+                .foregroundStyle(.secondary)
+
+            if !appState.canUseCapture {
+                CapturePermissionsBanner(permissionManager: appState.permissionManager)
+            }
+
+            SettingsSection(job: $job, showWindowPicker: $showWindowPicker, aiService: aiService)
+
+            if let configurationIssue = aiService.configurationIssue {
+                WorkflowNotice(
+                    title: "AI Setup Required",
+                    message: configurationIssue,
+                    systemImage: "bolt.horizontal.circle"
+                )
+            }
+
+            StatusSection(captureService: captureService)
+
+            ActionButton(
+                captureService: captureService,
+                job: job,
+                aiService: aiService,
+                canStart: canStartCapture,
+                canRetry: canRetryCapture
+            )
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        .cornerRadius(16)
+    }
+}
+
+struct CapturePermissionsBanner: View {
+    @Bindable var permissionManager: PermissionManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(.orange)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Capture permissions needed")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(permissionManager.capturePermissionCallout)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                if !permissionManager.accessibilityGranted {
+                    Button("Grant Accessibility") {
+                        permissionManager.requestAccessibilityPermission()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if !permissionManager.screenCaptureGranted {
+                    Button("Grant Screen Recording") {
+                        permissionManager.requestScreenCapturePermission()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.08))
+        .cornerRadius(12)
+    }
+}
+
+struct WorkflowNotice: View {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.08))
+        .cornerRadius(12)
+    }
+}
+
 struct SettingsSection: View {
     @Binding var job: CaptureJob
     @Binding var showWindowPicker: Bool
@@ -89,6 +203,10 @@ struct SettingsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            Text(aiService.sharedConfigurationSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             // AI Provider
             HStack {
                 Text("AI Provider:")
@@ -203,7 +321,7 @@ struct SettingsSection: View {
             HStack {
                 Text("Output Name:")
                     .frame(width: 120, alignment: .trailing)
-                TextField("Documentation", text: $job.outputName)
+                TextField("Workflow Documentation", text: $job.outputName)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -282,7 +400,7 @@ struct SettingsSection: View {
                 Text("Capture Count:")
                     .frame(width: 120, alignment: .trailing)
 
-                Stepper("\(job.captureCount) pages", value: $job.captureCount, in: 1...100)
+                Stepper("\(job.captureCount) steps", value: $job.captureCount, in: 1...100)
             }
 
             // Delay
@@ -312,9 +430,6 @@ struct SettingsSection: View {
                 }
             }
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .cornerRadius(12)
         .onAppear {
             syncUIWithService()
         }
@@ -347,8 +462,8 @@ struct SettingsSection: View {
 
     private func showRegionSelector() {
         let window = RegionSelectorWindow()
-        window.onRegionSelected = { rect in
-            job.captureMode = .region(rect)
+        window.onRegionSelected = { region in
+            job.captureMode = .region(region)
             regionSelectorWindow = nil
         }
         window.onCancelled = {
@@ -363,7 +478,6 @@ struct SettingsSection: View {
 
 struct StatusSection: View {
     let captureService: AutoCaptureService
-    let job: CaptureJob
 
     var body: some View {
         VStack(spacing: 12) {
@@ -437,18 +551,6 @@ struct StatusSection: View {
                     Text("\(successCount) succeeded, \(failedCount) failed")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-
-                    HStack(spacing: 12) {
-                        Button("Retry Failed") {
-                            captureService.retryFailed(aiService: AIService.shared)
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Save Anyway") {
-                            captureService.saveResults(job: job)
-                        }
-                        .buttonStyle(.bordered)
-                    }
                 }
             }
 
@@ -528,6 +630,8 @@ struct ActionButton: View {
     let captureService: AutoCaptureService
     let job: CaptureJob
     let aiService: AIService
+    let canStart: Bool
+    let canRetry: Bool
 
     var body: some View {
         switch captureService.state {
@@ -541,6 +645,7 @@ struct ActionButton: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(!canStart)
 
         case .partiallyCompleted:
             HStack(spacing: 12) {
@@ -552,9 +657,10 @@ struct ActionButton: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(!canRetry)
 
                 Button {
-                    captureService.saveResults(job: job)
+                    captureService.saveResults()
                 } label: {
                     Label("Save Partial", systemImage: "square.and.arrow.down")
                         .frame(maxWidth: .infinity)
@@ -581,6 +687,10 @@ struct ActionButton: View {
 // MARK: - Preview
 
 #Preview {
-    ContentView(captureService: .constant(AutoCaptureService()), job: .constant(CaptureJob()))
+    ContentView(
+        captureService: .constant(AutoCaptureService()),
+        job: .constant(CaptureJob()),
+        documentImportService: DocumentImportService()
+    )
         .environment(AppState.shared)
 }

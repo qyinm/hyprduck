@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>DuckDocs needs Accessibility permission to record your mouse actions (clicks, drags, scrolls) for documentation.</string>
+	<string>DuckDocs needs Accessibility permission to automate capture actions while building step-by-step documentation.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>DuckDocs needs Screen Recording permission to capture screenshots during playback for documentation.</string>
+	<string>DuckDocs needs Screen Recording permission to capture screenshots during the Capture Workflow.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 </dict>

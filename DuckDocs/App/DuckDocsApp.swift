@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct DuckDocsApp: App {
@@ -14,6 +15,7 @@ struct DuckDocsApp: App {
     @State private var job = CaptureJob()
     @State private var showWindowPicker = false
     @State private var regionSelectorWindow: RegionSelectorWindow?
+    @State private var documentImportService = DocumentImportService()
 
     init() {
         // API-based service, no preloading needed
@@ -21,7 +23,11 @@ struct DuckDocsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(captureService: $captureService, job: $job)
+            ContentView(
+                captureService: $captureService,
+                job: $job,
+                documentImportService: documentImportService
+            )
                 .environment(appState)
                 .onAppear {
                     setupKeyboardShortcuts()
@@ -47,6 +53,7 @@ struct DuckDocsApp: App {
                     showQuickEntry()
                 }
                 .keyboardShortcut(" ", modifiers: .option)
+                .disabled(!canStartCapture)
 
                 Divider()
 
@@ -62,15 +69,68 @@ struct DuckDocsApp: App {
                 }
                 .keyboardShortcut("x", modifiers: [.command, .shift])
                 .disabled(!canStopCapture)
+
+                Divider()
+
+                Button("Import Document...") {
+                    importDocument()
+                }
+                .keyboardShortcut("i", modifiers: .command)
+                .disabled(!canStartImport)
+            }
+        }
+    }
+
+    private func importDocument() {
+        guard canStartImport else { return }
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .pdf,
+            UTType(filenameExtension: "docx") ?? .data,
+            UTType(filenameExtension: "doc") ?? .data
+        ]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a PDF or Word document to convert to Markdown"
+        panel.prompt = "Import"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                if case .idle = documentImportService.state {
+                    // Keep current state.
+                } else {
+                    documentImportService.reset()
+                }
+                let job = try DocumentImportJob(fileURL: url)
+                documentImportService.run(job: job, aiService: AIService.shared)
+            } catch {
+                print("Error creating import job: \(error)")
             }
         }
     }
 
     private var canStartCapture: Bool {
+        guard appState.canUseCapture, AIService.shared.configurationIssue == nil else { return false }
+
         if case .idle = captureService.state { return true }
         if case .completed = captureService.state { return true }
         if case .error = captureService.state { return true }
+        if case .partiallyCompleted = captureService.state { return true }
         return false
+    }
+
+    private var canStartImport: Bool {
+        guard appState.canUseImport, AIService.shared.configurationIssue == nil else {
+            return false
+        }
+
+        switch documentImportService.state {
+        case .converting, .processing, .saving:
+            return false
+        default:
+            return true
+        }
     }
 
     private var canStopCapture: Bool {
@@ -134,8 +194,8 @@ struct DuckDocsApp: App {
 
     private func showRegionSelector() {
         let window = RegionSelectorWindow()
-        window.onRegionSelected = { [self] rect in
-            job.captureMode = .region(rect)
+        window.onRegionSelected = { [self] region in
+            job.captureMode = .region(region)
             regionSelectorWindow = nil
             // Start capture after region selection
             Task { @MainActor in
