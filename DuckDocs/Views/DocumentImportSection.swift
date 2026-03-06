@@ -8,52 +8,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct DocumentImportSection: View {
-    @Environment(AppState.self) var appState
-    @Bindable var importService: DocumentImportService
-    let aiService: AIService
-
-    private var canImport: Bool {
-        appState.canUseImport && aiService.configurationIssue == nil
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Document Import")
-                .font(.headline)
-
-            Text("Convert PDFs and Word documents into markdown using the shared AI configuration above.")
-                .foregroundStyle(.secondary)
-
-            if let configurationIssue = aiService.configurationIssue {
-                WorkflowNotice(
-                    title: "AI Setup Required",
-                    message: configurationIssue,
-                    systemImage: "bolt.horizontal.circle"
-                )
-            }
-
-            HStack {
-                Spacer()
-
-                if case .idle = importService.state {
-                    Button("Import File...") {
-                        selectFile()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canImport)
-                }
-            }
-
-            DocumentImportStatusView(importService: importService, aiService: aiService)
-        }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
-        .cornerRadius(16)
-    }
-
-    private func selectFile() {
-        guard canImport else { return }
+enum ImportPanelPresenter {
+    @MainActor
+    static func present(importService: DocumentImportService, aiService: AIService) {
+        guard aiService.configurationIssue == nil else { return }
 
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [
@@ -71,8 +29,50 @@ struct DocumentImportSection: View {
                 let job = try DocumentImportJob(fileURL: url)
                 importService.run(job: job, aiService: aiService)
             } catch {
-                // Show error - the service will handle it
                 print("Error creating import job: \(error)")
+            }
+        }
+    }
+}
+
+struct DocumentImportSection: View {
+    @Environment(AppState.self) var appState
+    @Bindable var importService: DocumentImportService
+    let aiService: AIService
+
+    private var canImport: Bool {
+        appState.canUseImport && aiService.configurationIssue == nil
+    }
+
+    var body: some View {
+        WorkflowCard(
+            eyebrow: "Document Import",
+            title: "Bring in PDFs and Word files",
+            description: "Start from an existing document, extract each page as an image, and generate markdown with the shared AI engine."
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                SupportedFormatsRow()
+                DocumentImportStatusView(importService: importService, aiService: aiService, canImport: canImport)
+            }
+        }
+    }
+}
+
+struct SupportedFormatsRow: View {
+    private let formats = [
+        ("PDF", "doc.richtext"),
+        ("DOCX", "text.document"),
+        ("DOC", "doc")
+    ]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(formats, id: \.0) { format in
+                Label(format.0, systemImage: format.1)
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.55), in: Capsule())
             }
         }
     }
@@ -81,61 +81,63 @@ struct DocumentImportSection: View {
 struct DocumentImportStatusView: View {
     @Bindable var importService: DocumentImportService
     let aiService: AIService
+    let canImport: Bool
 
     var body: some View {
         VStack(spacing: 12) {
             switch importService.state {
             case .idle:
-                Label("Choose a PDF or Word document to convert into markdown", systemImage: "doc.badge.plus")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 20)
+                IdleImportPanel(canImport: canImport) {
+                    ImportPanelPresenter.present(importService: importService, aiService: aiService)
+                }
 
             case .converting:
-                HStack {
+                WorkflowProgressPanel(
+                    title: "Preparing document pages",
+                    subtitle: "Converting the selected file into page images.",
+                    tint: .blue
+                ) {
                     ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Converting document to images...")
-                        .foregroundStyle(.blue)
                 }
 
             case .processing(let current, let total):
-                VStack(spacing: 8) {
-                    ProgressView(value: Double(current), total: Double(total))
-                    Text("AI Processing: \(current) / \(total) pages")
+                WorkflowProgressPanel(
+                    title: "Analyzing imported pages",
+                    subtitle: "AI is converting page \(current) of \(total) into markdown.",
+                    tint: .blue
+                ) {
+                    VStack(spacing: 12) {
+                        ProgressView(value: Double(current), total: Double(total))
+                        if !importService.pageImages.isEmpty {
+                            PageThumbnailsView(
+                                images: importService.pageImages,
+                                results: importService.processingResults
+                            )
+                        }
 
-                    // Page thumbnails with status
-                    if !importService.pageImages.isEmpty {
-                        PageThumbnailsView(
-                            images: importService.pageImages,
-                            results: importService.processingResults
-                        )
+                        Button("Cancel") {
+                            importService.cancel()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
                     }
                 }
 
-                Button("Cancel") {
-                    importService.cancel()
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-
             case .saving:
-                HStack {
+                WorkflowProgressPanel(
+                    title: "Saving markdown package",
+                    subtitle: "Writing the markdown file and linked page images.",
+                    tint: .orange
+                ) {
                     ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Saving...")
                 }
 
             case .completed(let url):
-                VStack(spacing: 12) {
-                    Label("Import Complete!", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.headline)
-
-                    Text(url.deletingLastPathComponent().path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                WorkflowProgressPanel(
+                    title: "Import complete",
+                    subtitle: url.deletingLastPathComponent().path,
+                    tint: .green
+                ) {
                     HStack {
                         Button("Open Folder") {
                             NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
@@ -151,13 +153,11 @@ struct DocumentImportStatusView: View {
                 }
 
             case .error(let message):
-                VStack(spacing: 8) {
-                    Label("Error", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                WorkflowProgressPanel(
+                    title: "Import failed",
+                    subtitle: message,
+                    tint: .red
+                ) {
                     Button("Try Again") {
                         importService.reset()
                     }
@@ -165,37 +165,111 @@ struct DocumentImportStatusView: View {
                 }
 
             case .partiallyCompleted(let successCount, let failedCount):
-                VStack(spacing: 12) {
-                    Label("Partial Completion", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.headline)
-
-                    Text("\(successCount) pages succeeded, \(failedCount) failed")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    // Page thumbnails
-                    if !importService.pageImages.isEmpty {
-                        PageThumbnailsView(
-                            images: importService.pageImages,
-                            results: importService.processingResults
-                        )
-                    }
-
-                    HStack(spacing: 12) {
-                        Button("Retry Failed") {
-                            importService.retryFailed(aiService: aiService)
+                WorkflowProgressPanel(
+                    title: "Partial import",
+                    subtitle: "\(successCount) pages succeeded, \(failedCount) failed.",
+                    tint: .orange
+                ) {
+                    VStack(spacing: 12) {
+                        if !importService.pageImages.isEmpty {
+                            PageThumbnailsView(
+                                images: importService.pageImages,
+                                results: importService.processingResults
+                            )
                         }
-                        .buttonStyle(.borderedProminent)
 
-                        Button("Save Anyway") {
-                            importService.saveResults()
+                        HStack(spacing: 12) {
+                            Button("Retry Failed") {
+                                importService.retryFailed(aiService: aiService)
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("Save Anyway") {
+                                importService.saveResults()
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
             }
         }
+    }
+}
+
+struct IdleImportPanel: View {
+    let canImport: Bool
+    let importAction: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "square.and.arrow.down.on.square")
+                .font(.system(size: 32))
+                .foregroundStyle(Color.accentColor)
+
+            VStack(spacing: 6) {
+                Text("Import a document to begin")
+                    .font(.headline)
+                Text("Pick a PDF or Word document and DuckDocs will turn each page into linked markdown.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            Button(action: importAction) {
+                Label("Choose File", systemImage: "doc.badge.plus")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!canImport)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [8, 8]))
+                .foregroundStyle(Color.accentColor.opacity(0.35))
+        )
+    }
+}
+
+struct WorkflowProgressPanel<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let tint: Color
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(tint.opacity(0.18))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Image(systemName: "sparkles.rectangle.stack")
+                            .foregroundStyle(tint)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+            }
+
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -211,14 +285,13 @@ struct PageThumbnailsView: View {
                         Image(nsImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(height: 60)
-                            .cornerRadius(4)
+                            .frame(height: 68)
+                            .cornerRadius(8)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: 8)
                                     .stroke(statusColor(for: index), lineWidth: 2)
                             )
 
-                        // Status indicator
                         if let result = results.first(where: { $0.id == index }) {
                             statusIcon(for: result.status)
                                 .offset(x: 4, y: -4)
@@ -226,9 +299,9 @@ struct PageThumbnailsView: View {
                     }
                 }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 2)
         }
-        .frame(height: 70)
+        .frame(height: 80)
     }
 
     private func statusColor(for index: Int) -> Color {
