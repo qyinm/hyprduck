@@ -66,6 +66,11 @@ button.ghost {
   color: var(--ink);
 }
 
+.nav-pill.active {
+  background: rgba(34, 27, 20, 0.12);
+  border-color: rgba(68, 54, 36, 0.18);
+}
+
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -124,6 +129,7 @@ textarea {
 
 .pill-row,
 .cta-column,
+.nav-row,
 .notice-stack,
 .dashboard,
 .window-stack,
@@ -159,6 +165,15 @@ textarea {
   margin-bottom: 0.35rem;
 }
 
+.panel-card {
+  margin-top: 22px;
+}
+
+.inset-card {
+  margin-top: 16px;
+  padding: 18px;
+}
+
 .dashboard {
   grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
   margin-top: 22px;
@@ -188,6 +203,14 @@ textarea {
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .status-tag {
@@ -307,6 +330,10 @@ textarea {
   .field-grid,
   .result-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel-heading {
+    flex-direction: column;
   }
 
   .shell {

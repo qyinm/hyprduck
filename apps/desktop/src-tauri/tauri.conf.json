@@ -21,27 +21,6 @@
         "height": 860,
         "resizable": true,
         "visible": true
-      },
-      {
-        "label": "settings",
-        "title": "DuckDocs Settings",
-        "width": 720,
-        "height": 720,
-        "visible": false
-      },
-      {
-        "label": "progress",
-        "title": "DuckDocs Progress",
-        "width": 720,
-        "height": 760,
-        "visible": false
-      },
-      {
-        "label": "result",
-        "title": "DuckDocs Result",
-        "width": 760,
-        "height": 780,
-        "visible": false
       }
     ]
   },

@@ -17,7 +17,7 @@ use duckdocs_engine_types::{
 };
 use rfd::FileDialog;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 
 const SNAPSHOT_EVENT: &str = "duckdocs://snapshot";
 const MAX_PROGRESS_LOG: usize = 80;
@@ -99,7 +99,6 @@ fn main() {
         .manage::<SharedStore>(Arc::new(Mutex::new(AppStore::default())))
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
-            open_aux_window,
             pick_import_file,
             load_engine_config,
             save_engine_config,
@@ -109,7 +108,6 @@ fn main() {
             open_saved_output
         ])
         .setup(|app| {
-            ensure_window(app.handle(), "main")?;
             if let Err(error) = maybe_import_legacy_swift_config(app.handle()) {
                 eprintln!("legacy config migration skipped: {error:#}");
             }
@@ -126,16 +124,6 @@ fn app_snapshot(store: tauri::State<'_, SharedStore>) -> UiSnapshot {
         .expect("snapshot lock poisoned")
         .snapshot
         .clone()
-}
-
-#[tauri::command]
-fn open_aux_window(app: AppHandle, label: String) -> Result<(), DesktopError> {
-    ensure_window(&app, &label).map_err(|error| DesktopError::Message(error.to_string()))?;
-    if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -520,33 +508,6 @@ fn format_timestamp() -> String {
             .unwrap_or_default()
             .as_secs()
     )
-}
-
-fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(label) {
-        window.show()?;
-        return Ok(());
-    }
-
-    let (title, hash, visible, size) = match label {
-        "main" => ("DuckDocs", "", true, (1160.0, 860.0)),
-        "settings" => ("DuckDocs Settings", "#settings", false, (720.0, 720.0)),
-        "progress" => ("DuckDocs Progress", "#progress", false, (720.0, 760.0)),
-        "result" => ("DuckDocs Result", "#result", false, (760.0, 780.0)),
-        _ => ("DuckDocs", "", false, (920.0, 720.0)),
-    };
-
-    WebviewWindowBuilder::new(
-        app,
-        label,
-        WebviewUrl::App(format!("index.html{hash}").into()),
-    )
-    .title(title)
-    .inner_size(size.0, size.1)
-    .visible(visible)
-    .resizable(true)
-    .build()?;
-    Ok(())
 }
 
 fn parse_format(value: &str) -> Result<DocumentFormat, DesktopError> {

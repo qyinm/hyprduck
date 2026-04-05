@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default DuckDocs desktop capability for all local windows.",
-  "windows": ["main", "settings", "progress", "result"],
+  "description": "Default DuckDocs desktop capability for the main local window.",
+  "windows": ["main"],
   "permissions": ["core:default"]
 }
