@@ -17,6 +17,7 @@ DerivedData/
 # Claude
 .claude/
 .omc/
+.omx/
 
 # Build products
 build/
@@ -24,6 +25,7 @@ release/
 exports/
 !exports/.gitkeep
 *.app
+target/
 
 # Temporary files
 *.swp
