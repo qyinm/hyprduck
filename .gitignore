@@ -35,5 +35,7 @@ target/
 
 # JavaScript / Tauri
 node_modules/
+.pnpm-store/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/binaries/duckdocs-engine-*
+apps/desktop/dist/

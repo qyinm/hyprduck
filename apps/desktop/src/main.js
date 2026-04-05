@@ -4,7 +4,8 @@ if (!tauri) {
   throw new Error("DuckDocs desktop UI requires Tauri global APIs.");
 }
 
-const { core, event } = tauri;
+const core = tauri.core;
+const event = tauri.event;
 
 const state = {
   snapshot: null,
@@ -397,7 +398,8 @@ async function bootstrap() {
   state.validation = await invoke("validate_engine_config");
   render();
 
-  await event.listen("duckdocs://snapshot", ({ payload }) => {
+  await event.listen("duckdocs://snapshot", (message) => {
+    const payload = message.payload;
     state.snapshot = payload;
     if (payload.activeJob) {
       state.activePanel = "progress";

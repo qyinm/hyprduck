@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.duckdocs.desktop",
   "build": {
-    "beforeDevCommand": "pnpm run sync:sidecar:debug",
-    "beforeBuildCommand": "pnpm run sync:sidecar:release",
-    "frontendDist": "../src"
+    "beforeDevCommand": "pnpm run tauri:dev-server",
+    "beforeBuildCommand": "pnpm run tauri:build-assets",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,

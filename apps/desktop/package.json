@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "frontend:dev": "vite",
+    "frontend:build": "vite build",
+    "tauri:dev-server": "pnpm run sync:sidecar:debug && vite",
+    "tauri:build-assets": "pnpm run frontend:build && pnpm run sync:sidecar:release",
     "sync:sidecar:debug": "../../scripts/sync-tauri-sidecar.sh debug",
     "sync:sidecar:release": "../../scripts/sync-tauri-sidecar.sh release"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.0.0",
+    "vite": "^7.1.7"
   }
 }
