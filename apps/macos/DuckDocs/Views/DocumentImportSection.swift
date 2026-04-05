@@ -36,12 +36,11 @@ enum ImportPanelPresenter {
 }
 
 struct DocumentImportSection: View {
-    @Environment(AppState.self) var appState
     @Bindable var importService: DocumentImportService
     let aiService: AIService
 
     private var canImport: Bool {
-        appState.canUseImport && aiService.configurationIssue == nil
+        aiService.configurationIssue == nil
     }
 
     var body: some View {

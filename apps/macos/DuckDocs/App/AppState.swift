@@ -8,23 +8,14 @@
 import Foundation
 import SwiftUI
 
-/// Global application state for shared permissions and user-facing errors.
+/// Global application state for shared user-facing errors.
 @Observable
 @MainActor
 final class AppState {
     static let shared = AppState()
 
-    var permissionManager = PermissionManager()
     var errorMessage: String?
     var showError: Bool = false
-
-    var canUseCapture: Bool {
-        permissionManager.canUseCapture
-    }
-
-    var canUseImport: Bool {
-        permissionManager.canUseImport
-    }
 
     private init() {}
 

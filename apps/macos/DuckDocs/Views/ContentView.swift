@@ -8,13 +8,12 @@
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(AppState.self) var appState
     @State private var showAdvancedSettings = false
     let documentImportService: DocumentImportService
     private var aiService: AIService { AIService.shared }
 
     private var canStartImport: Bool {
-        guard appState.canUseImport, aiService.configurationIssue == nil else { return false }
+        guard aiService.configurationIssue == nil else { return false }
 
         switch documentImportService.state {
         case .converting, .processing, .saving:

@@ -61,7 +61,7 @@ struct DuckDocsApp: App {
     }
 
     private var canStartImport: Bool {
-        guard appState.canUseImport, AIService.shared.configurationIssue == nil else {
+        guard AIService.shared.configurationIssue == nil else {
             return false
         }
 
