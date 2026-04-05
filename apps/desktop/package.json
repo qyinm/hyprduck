@@ -7,7 +7,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "frontend:dev": "vite",
-    "frontend:build": "vite build",
+    "frontend:typecheck": "tsc --noEmit",
+    "frontend:build": "tsc --noEmit && vite build",
     "tauri:dev-server": "pnpm run sync:sidecar:debug && vite",
     "tauri:build-assets": "pnpm run frontend:build && pnpm run sync:sidecar:release",
     "sync:sidecar:debug": "../../scripts/sync-tauri-sidecar.sh debug",
@@ -15,6 +16,14 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^6.0.2",
     "vite": "^7.1.7"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   }
 }
