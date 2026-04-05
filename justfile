@@ -1,7 +1,8 @@
 set shell := ["bash", "-cu"]
 
-app_project := "apps/macos/DuckDocs.xcodeproj"
-app_scheme := "DuckDocs"
+desktop_dir := "apps/desktop"
+legacy_app_project := "apps/macos/DuckDocs.xcodeproj"
+legacy_app_scheme := "DuckDocs"
 derived_data := "/tmp/DuckDocsDerivedData"
 site_dir := "apps/site"
 site_out := "_site"
@@ -10,19 +11,32 @@ default:
   @just --list
 
 paths:
-  @echo "app_project={{app_project}}"
-  @echo "app_scheme={{app_scheme}}"
+  @echo "desktop_dir={{desktop_dir}}"
+  @echo "legacy_app_project={{legacy_app_project}}"
+  @echo "legacy_app_scheme={{legacy_app_scheme}}"
   @echo "site_dir={{site_dir}}"
   @echo "site_out={{site_out}}"
 
-macos-build:
-  xcodebuild -project {{app_project}} -scheme {{app_scheme}} build
+desktop-build:
+  pnpm --dir {{desktop_dir}} build
 
-macos-build-unsigned:
-  xcodebuild -project {{app_project}} -scheme {{app_scheme}} -derivedDataPath {{derived_data}} CODE_SIGNING_ALLOWED=NO build
+desktop-check:
+  cargo check -p duckdocs-desktop
 
-macos-test:
-  xcodebuild test -project {{app_project}} -scheme {{app_scheme}} -derivedDataPath {{derived_data}}
+desktop-test:
+  cargo test -p duckdocs-desktop
+
+core-test:
+  cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
+
+legacy-macos-build:
+  xcodebuild -project {{legacy_app_project}} -scheme {{legacy_app_scheme}} build
+
+legacy-macos-build-unsigned:
+  xcodebuild -project {{legacy_app_project}} -scheme {{legacy_app_scheme}} -derivedDataPath {{derived_data}} CODE_SIGNING_ALLOWED=NO build
+
+legacy-macos-test:
+  xcodebuild test -project {{legacy_app_project}} -scheme {{legacy_app_scheme}} -derivedDataPath {{derived_data}}
 
 site-stage:
   rm -rf {{site_out}}
