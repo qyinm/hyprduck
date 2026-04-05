@@ -12,6 +12,7 @@ BUILD_DIR="./build"
 ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 DMG_PATH="$BUILD_DIR/$PROJECT_NAME.dmg"
+PROJECT_PATH="./apps/macos/$PROJECT_NAME.xcodeproj"
 
 # Colors
 RED='\033[0;31m'
@@ -29,7 +30,7 @@ mkdir -p "$BUILD_DIR"
 
 # Build archive
 echo -e "${YELLOW}Building archive...${NC}"
-xcodebuild -project "$PROJECT_NAME.xcodeproj" \
+xcodebuild -project "$PROJECT_PATH" \
     -scheme "$SCHEME" \
     -configuration "$CONFIGURATION" \
     -archivePath "$ARCHIVE_PATH" \

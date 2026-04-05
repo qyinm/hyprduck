@@ -22,17 +22,17 @@ DuckDocs automates the creation of documentation by capturing screens and conver
 ## When Working on This Project
 
 ### If Adding Capture Features
-- Look at: `DuckDocs/Playback/`
+- Look at: `apps/macos/DuckDocs/Playback/`
 - Key files: `AutoCaptureService.swift`, `ScreenCapture.swift`
 - Must handle: Capture modes (fullScreen, region, window), SCStream configuration
 
 ### If Adding AI Features
-- Look at: `DuckDocs/AI/`
+- Look at: `apps/macos/DuckDocs/AI/`
 - Key files: `DeepSeekOCRService.swift`
 - Must handle: OpenRouter API, image base64 encoding, parallel processing
 
 ### If Working on UI
-- Look at: `DuckDocs/Views/`
+- Look at: `apps/macos/DuckDocs/Views/`
 - Key files: `ContentView.swift`, `RegionSelectorWindow.swift`, `WindowPickerView.swift`
 - Pattern: SwiftUI with @Observable
 
@@ -98,12 +98,12 @@ try await withThrowingTaskGroup(of: (Int, String).self) { group in
 
 | Task | Entry Point | Notes |
 |------|-------------|-------|
-| Change AI model | `DeepSeekOCRService.swift` | Update `modelId` |
-| Modify capture logic | `AutoCaptureService.swift` | `executeJob()` method |
-| Add capture mode | `CaptureSettings.swift` | Add to `CaptureMode` enum |
-| Change output format | `AutoCaptureService.swift` | `saveOutput()` method |
-| Add UI setting | `ContentView.swift` | `SettingsSection` view |
-| Handle permissions | `DuckDocsApp.swift` | Onboarding flow |
+| Change AI model | `apps/macos/DuckDocs/AI/AIService.swift` | Update provider/model defaults |
+| Modify capture logic | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | `executeJob()` method |
+| Add capture mode | `apps/macos/DuckDocs/Models/CaptureSettings.swift` | Add to `CaptureMode` enum |
+| Change output format | `apps/macos/DuckDocs/Playback/DocumentationOutputBuilder.swift` | Output folder and markdown assembly |
+| Add UI setting | `apps/macos/DuckDocs/Views/ContentView.swift` | Main settings surface |
+| Handle permissions | `apps/macos/DuckDocs/App/DuckDocsApp.swift` | Onboarding flow |
 
 ---
 
@@ -134,14 +134,14 @@ Save: output.md + /images folder
 
 | File | Purpose |
 |------|---------|
-| `AutoCaptureService.swift` | Main capture workflow orchestrator |
-| `DeepSeekOCRService.swift` | OpenRouter API client for image analysis |
-| `ScreenCapture.swift` | ScreenCaptureKit wrapper |
-| `CaptureJob.swift` | Job configuration (mode, action, count) |
-| `CaptureSettings.swift` | CaptureMode enum |
-| `ContentView.swift` | Main UI with settings |
-| `RegionSelectorWindow.swift` | Drag-to-select region overlay |
-| `WindowPickerView.swift` | Window selection sheet |
+| `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Main capture workflow orchestrator |
+| `apps/macos/DuckDocs/AI/AIService.swift` | AI orchestration and provider routing |
+| `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrapper |
+| `apps/macos/DuckDocs/Models/CaptureJob.swift` | Job configuration (mode, action, count) |
+| `apps/macos/DuckDocs/Models/CaptureSettings.swift` | CaptureMode enum |
+| `apps/macos/DuckDocs/Views/ContentView.swift` | Main UI with settings |
+| `apps/macos/DuckDocs/Views/RegionSelectorWindow.swift` | Drag-to-select region overlay |
+| `apps/macos/DuckDocs/Views/WindowPickerView.swift` | Window selection sheet |
 
 ---
 

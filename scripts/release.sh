@@ -30,7 +30,9 @@ RELEASE_DIR="$PROJECT_ROOT/release"
 ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 TEAM_ID="${APPLE_TEAM_ID:-}"
-ENTITLEMENTS_PATH="$PROJECT_ROOT/DuckDocs/DuckDocs.entitlements"
+PROJECT_PATH="$PROJECT_ROOT/apps/macos/$PROJECT_NAME.xcodeproj"
+APP_SOURCE_DIR="$PROJECT_ROOT/apps/macos/DuckDocs"
+ENTITLEMENTS_PATH="$APP_SOURCE_DIR/DuckDocs.entitlements"
 
 # Parse arguments
 DRAFT_FLAG=""
@@ -80,7 +82,7 @@ get_version() {
         VERSION=$(node -p "require('$PROJECT_ROOT/version.json').version" 2>/dev/null)
     else
         # Fallback: read from Info.plist
-        VERSION=$(defaults read "$PROJECT_ROOT/DuckDocs/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
+        VERSION=$(defaults read "$APP_SOURCE_DIR/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
     fi
     echo -e "${CYAN}🦆 DuckDocs Release v${VERSION}${NC}"
 }
@@ -144,7 +146,7 @@ build_universal() {
 
     # Archive with both architectures
     echo -e "${YELLOW}Archiving...${NC}"
-    xcodebuild -project "$PROJECT_ROOT/$PROJECT_NAME.xcodeproj" \
+    xcodebuild -project "$PROJECT_PATH" \
         -scheme "$SCHEME" \
         -configuration "$CONFIGURATION" \
         -archivePath "$ARCHIVE_PATH" \

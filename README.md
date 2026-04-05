@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/site/favicon.svg" width="120" alt="DuckDocs">
+  <img src="apps/site/favicon.svg" width="120" alt="DuckDocs">
 </p>
 
 <h1 align="center">DuckDocs</h1>
@@ -125,11 +125,28 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 ## Build
 
 ```bash
-xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs
+xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
 ```
 
 For local verification without code signing:
 
 ```bash
-xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
+```
+
+## Repository Layout
+
+```text
+.
+├── apps
+│   ├── cli
+│   └── macos
+│       ├── DuckDocs.xcodeproj
+│       └── DuckDocs/
+├── docs
+├── packages
+├── scripts
+├── build
+├── exports
+└── release
 ```

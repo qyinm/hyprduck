@@ -25,43 +25,46 @@ Legacy recording/playback components still exist in the codebase, but the primar
 
 ```text
 DuckDocs/
-├── DuckDocs.xcodeproj
-├── DuckDocs/
-│   ├── App/
-│   │   ├── DuckDocsApp.swift
-│   │   ├── AppState.swift
-│   │   ├── KeyboardShortcutManager.swift
-│   │   └── PermissionManager.swift
-│   ├── AI/
-│   │   ├── AIService.swift
-│   │   ├── AIProvider.swift
-│   │   ├── MarkdownGenerator.swift
-│   │   ├── KeychainService.swift
-│   │   ├── PromptTemplate.swift
-│   │   ├── Models/
-│   │   └── Providers/
-│   ├── Models/
-│   │   ├── CaptureJob.swift
-│   │   ├── CaptureResult.swift
-│   │   ├── DocumentImportJob.swift
-│   │   └── ActionSequence.swift
-│   ├── Playback/
-│   │   ├── AutoCaptureService.swift
-│   │   ├── DocumentImportService.swift
-│   │   ├── DocumentConverter.swift
-│   │   ├── ScreenCapture.swift
-│   │   └── ActionPlayer.swift
-│   ├── Recording/
-│   │   ├── ActionRecorder.swift
-│   │   └── EventMonitor.swift
-│   └── Views/
-│       ├── ContentView.swift
-│       ├── DocumentImportSection.swift
-│       ├── OnboardingView.swift
-│       ├── QuickEntryWindow.swift
-│       ├── RegionSelectorWindow.swift
-│       ├── CapturePreviewWindow.swift
-│       └── WindowPickerView.swift
+├── apps/
+│   ├── cli/
+│   └── macos/
+│       ├── DuckDocs.xcodeproj
+│       └── DuckDocs/
+│           ├── App/
+│           │   ├── DuckDocsApp.swift
+│           │   ├── AppState.swift
+│           │   ├── KeyboardShortcutManager.swift
+│           │   └── PermissionManager.swift
+│           ├── AI/
+│           │   ├── AIService.swift
+│           │   ├── AIProvider.swift
+│           │   ├── MarkdownGenerator.swift
+│           │   ├── KeychainService.swift
+│           │   ├── PromptTemplate.swift
+│           │   ├── Models/
+│           │   └── Providers/
+│           ├── Models/
+│           │   ├── CaptureJob.swift
+│           │   ├── CaptureResult.swift
+│           │   ├── DocumentImportJob.swift
+│           │   └── ActionSequence.swift
+│           ├── Playback/
+│           │   ├── AutoCaptureService.swift
+│           │   ├── DocumentImportService.swift
+│           │   ├── DocumentConverter.swift
+│           │   ├── ScreenCapture.swift
+│           │   └── ActionPlayer.swift
+│           ├── Recording/
+│           │   ├── ActionRecorder.swift
+│           │   └── EventMonitor.swift
+│           └── Views/
+│               ├── ContentView.swift
+│               ├── DocumentImportSection.swift
+│               ├── OnboardingView.swift
+│               ├── QuickEntryWindow.swift
+│               ├── RegionSelectorWindow.swift
+│               ├── CapturePreviewWindow.swift
+│               └── WindowPickerView.swift
 └── docs/
 ```
 
@@ -71,17 +74,17 @@ DuckDocs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| App entry | `DuckDocs/App/DuckDocsApp.swift` | Root scene and commands |
-| Main UI | `DuckDocs/Views/ContentView.swift` | Capture workflow UI |
-| Document import UI | `DuckDocs/Views/DocumentImportSection.swift` | Import progress and actions |
-| Capture workflow | `DuckDocs/Playback/AutoCaptureService.swift` | Capture, AI processing, save |
-| Document import workflow | `DuckDocs/Playback/DocumentImportService.swift` | Convert, process, save |
-| Document conversion | `DuckDocs/Playback/DocumentConverter.swift` | PDF and Word to images |
-| Screen capture | `DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
-| AI orchestration | `DuckDocs/AI/AIService.swift` | Provider selection and prompts |
-| AI providers | `DuckDocs/AI/Providers/` | OpenRouter, OpenAI, Anthropic, Ollama |
-| Prompt templates | `DuckDocs/AI/PromptTemplate.swift` | Shared capture/import prompts |
-| Legacy record/playback | `DuckDocs/Recording/`, `DuckDocs/Playback/ActionPlayer.swift` | Secondary, not primary UI |
+| App entry | `apps/macos/DuckDocs/App/DuckDocsApp.swift` | Root scene and commands |
+| Main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Capture workflow UI |
+| Document import UI | `apps/macos/DuckDocs/Views/DocumentImportSection.swift` | Import progress and actions |
+| Capture workflow | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Capture, AI processing, save |
+| Document import workflow | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Convert, process, save |
+| Document conversion | `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | PDF and Word to images |
+| Screen capture | `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
+| AI orchestration | `apps/macos/DuckDocs/AI/AIService.swift` | Provider selection and prompts |
+| AI providers | `apps/macos/DuckDocs/AI/Providers/` | OpenRouter, OpenAI, Anthropic, Ollama |
+| Prompt templates | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Shared capture/import prompts |
+| Legacy record/playback | `apps/macos/DuckDocs/Recording/`, `apps/macos/DuckDocs/Playback/ActionPlayer.swift` | Secondary, not primary UI |
 
 ---
 
@@ -175,13 +178,13 @@ struct ImageProcessingResult {
 
 ```bash
 # Build
-xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs
+xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
 
 # Build without code signing for local verification
-xcodebuild -project DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
 
 # Run tests
-xcodebuild test -project DuckDocs.xcodeproj -scheme DuckDocs
+xcodebuild test -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
 ```
 
 ---
