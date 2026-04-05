@@ -1,7 +1,7 @@
 # DuckDocs - Context for AI Assistants
 
 **Project:** DuckDocs
-**Type:** macOS Native App (Swift/SwiftUI)
+**Type:** macOS Desktop App (Tauri + Rust core)
 **Domain:** File Parsing + AI Markdown Generation
 
 ---
@@ -15,16 +15,21 @@ DuckDocs converts existing files into markdown packages:
 3. **Generate**: Send page images to the configured AI provider and assemble markdown output.
 4. **Save**: Write markdown plus linked page images to `~/Documents/DuckDocs/`.
 
-The product surface is file parsing first. Legacy capture code still exists in the repository, but it is not the primary app flow.
+The product surface is file parsing first. The active desktop shell is `apps/desktop`, and the older `apps/macos` Swift shell remains only as a legacy reference for migration-era code and settings.
 
 ---
 
 ## When Working on This Project
 
 ### If Adding File Parsing Features
+- Look at: `apps/desktop/src-tauri/src/` and `crates/duckdocs-engine/`
+- Key files: `main.rs`, `duckdocs-engine`, `duckdocs-engine-client`
+- Must handle: sidecar orchestration, config migration, output ownership
+
+### If Touching Legacy Swift References
 - Look at: `apps/macos/DuckDocs/Playback/`
 - Key files: `DocumentImportService.swift`, `DocumentConverter.swift`, `DocumentationOutputBuilder.swift`
-- Must handle: per-page conversion, partial failures, markdown assembly
+- Treat this path as reference-only unless the migration explicitly calls for it
 
 ### If Adding AI Features
 - Look at: `apps/macos/DuckDocs/AI/`
@@ -32,9 +37,9 @@ The product surface is file parsing first. Legacy capture code still exists in t
 - Must handle: provider routing, model configuration, multimodal prompts
 
 ### If Working on UI
-- Look at: `apps/macos/DuckDocs/Views/`
-- Key files: `ContentView.swift`, `DocumentImportSection.swift`
-- Pattern: SwiftUI with `@Observable`
+- Look at: `apps/desktop/src/`
+- Key files: `main.js`, `styles.css`, `index.html`
+- Pattern: Tauri windows with a shared backend store
 
 ### If Touching Legacy Capture Code
 - Look at: `apps/macos/DuckDocs/Playback/AutoCaptureService.swift`
@@ -47,29 +52,29 @@ The product surface is file parsing first. Legacy capture code still exists in t
 
 | Task | Entry Point | Notes |
 |------|-------------|-------|
-| Change AI model | `apps/macos/DuckDocs/AI/AIService.swift` | Update provider/model defaults |
-| Change prompt behavior | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Adjust parsing-oriented prompt text |
-| Modify import logic | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Conversion, analysis, retry flow |
-| Add file format support | `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | Extend conversion pipeline |
-| Change output format | `apps/macos/DuckDocs/Playback/DocumentationOutputBuilder.swift` | Output folder and markdown assembly |
-| Change main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | File parsing surface |
+| Change AI model | `crates/duckdocs-engine/src/main.rs` | Update provider/model defaults and config payloads |
+| Change prompt behavior | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Keep prompt names aligned with Rust config options |
+| Modify import logic | `apps/desktop/src-tauri/src/main.rs` | Sidecar launch, parse lifecycle, window sync |
+| Add file format support | `crates/duckdocs-engine/src/main.rs` | Extend conversion/parsing pipeline |
+| Change output format | `crates/duckdocs-engine/src/main.rs` | Output folder and markdown package assembly |
+| Change main UI | `apps/desktop/src/main.js` | File parsing surface |
 
 ---
 
 ## Data Flow
 
 ```text
-User selects file
+User selects file in Tauri shell
     ↓
-DocumentImportJob
+apps/desktop backend starts duckdocs-engine sidecar
     ↓
-DocumentConverter renders page images
+duckdocs-engine converts/parses the document
     ↓
-AIService sends page images to provider
+Progress events stream over stderr
     ↓
-Results are collected in page order
+Final result returns over stdout
     ↓
-DocumentationOutputBuilder writes markdown + images
+The engine writes markdown + linked assets
 ```
 
 ---
@@ -78,13 +83,12 @@ DocumentationOutputBuilder writes markdown + images
 
 | File | Purpose |
 |------|---------|
-| `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Main file parsing workflow orchestrator |
-| `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | PDF and Word conversion into page images |
-| `apps/macos/DuckDocs/Playback/DocumentationOutputBuilder.swift` | Markdown package assembly |
-| `apps/macos/DuckDocs/Models/DocumentImportJob.swift` | File parsing job configuration |
-| `apps/macos/DuckDocs/AI/AIService.swift` | AI orchestration and provider routing |
-| `apps/macos/DuckDocs/Views/ContentView.swift` | Main import-first UI |
-| `apps/macos/DuckDocs/Views/DocumentImportSection.swift` | Import state and controls |
+| `apps/desktop/src-tauri/src/main.rs` | Tauri desktop shell, window management, legacy-config migration |
+| `apps/desktop/src/main.js` | Main/settings/progress/result window UI |
+| `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output package assembly |
+| `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess client contract |
+| `crates/duckdocs-engine-types/src/lib.rs` | Engine request/response/event schema |
+| `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Legacy reference flow during migration |
 
 ---
 
@@ -111,6 +115,7 @@ DocumentationOutputBuilder writes markdown + images
 
 ## Testing Checklist
 
+- [ ] Test Tauri main-window import
 - [ ] Test PDF import
 - [ ] Test DOCX import
 - [ ] Test DOC import

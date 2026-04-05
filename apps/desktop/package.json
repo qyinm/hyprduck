@@ -1,0 +1,15 @@
+{
+  "name": "duckdocs-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "sync:sidecar:debug": "../../scripts/sync-tauri-sidecar.sh debug",
+    "sync:sidecar:release": "../../scripts/sync-tauri-sidecar.sh release"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

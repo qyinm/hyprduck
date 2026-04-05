@@ -58,9 +58,11 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
     let [banner_area, lower_area] =
         Layout::vertical([Constraint::Length(11), Constraint::Min(0)]).areas(area);
     let [left_banner, right_banner] =
-        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(inner(banner_area));
+        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .areas(inner(banner_area));
     let [overview_area, actions_area] =
-        Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(lower_area);
+        Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .areas(lower_area);
 
     frame.render_widget(
         Block::default()
@@ -106,7 +108,8 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
     frame.render_widget(left, left_banner);
 
     let [tips_area, recent_area] =
-        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(right_banner);
+        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .areas(right_banner);
 
     let tips = Paragraph::new(vec![
         Line::from(Span::styled(
@@ -162,9 +165,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
 }
 
 fn inner(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let [inner] = Layout::vertical([Constraint::Min(0)])
-        .margin(1)
-        .areas(area);
+    let [inner] = Layout::vertical([Constraint::Min(0)]).margin(1).areas(area);
     inner
 }
 

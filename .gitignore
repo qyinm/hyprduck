@@ -31,3 +31,8 @@ target/
 # Temporary files
 *.swp
 *~
+
+# JavaScript / Tauri
+node_modules/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/duckdocs-engine-*

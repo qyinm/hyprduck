@@ -95,8 +95,15 @@ final class RustCoreProcess {
         }
 
         do {
-            return try JSONDecoder().decode(SchemaParseResult.self, from: outputData)
+            let envelope = try JSONDecoder().decode(EngineSuccessEnvelope<SchemaParseResponseData>.self, from: outputData)
+            guard envelope.command == .parse else {
+                throw RustCoreProcessError.invalidResult("unexpected command response \(envelope.command.rawValue)")
+            }
+            return envelope.data.result
         } catch {
+            if let failure = try? JSONDecoder().decode(EngineFailureEnvelope.self, from: outputData) {
+                throw RustCoreProcessError.launchFailed("\(failure.error.code): \(failure.error.message)")
+            }
             throw RustCoreProcessError.invalidResult(error.localizedDescription)
         }
     }

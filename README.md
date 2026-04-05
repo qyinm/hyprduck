@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-blue?style=flat-square" alt="Status">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/language-Swift-orange?style=flat-square" alt="Language">
+  <img src="https://img.shields.io/badge/runtime-Rust%20%2B%20Tauri-orange?style=flat-square" alt="Runtime">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
 </p>
 
@@ -20,6 +20,8 @@
 ## Overview
 
 DuckDocs is a macOS app for turning existing files into markdown using AI.
+
+The active desktop shell lives in `apps/desktop` as a Tauri app. The old `apps/macos` Swift shell remains in the repo only as a legacy reference for migration-era code and settings.
 
 The current product surface is file parsing:
 
@@ -104,22 +106,22 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 
 ## Build
 
-Preferred monorepo entrypoint:
+Preferred desktop build:
 
 ```bash
-just macos-build
+pnpm --dir apps/desktop build
 ```
 
-For local verification without code signing:
+Rust workspace verification:
 
 ```bash
-just macos-build-unsigned
+cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
 ```
 
-Run tests:
+Type-check the Tauri desktop shell:
 
 ```bash
-just macos-test
+cargo check -p duckdocs-desktop
 ```
 
 Stage the static site artifact locally:
@@ -128,24 +130,13 @@ Stage the static site artifact locally:
 just site-stage
 ```
 
-Direct `xcodebuild` equivalents:
-
-```bash
-xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
-```
-
-For local verification without code signing:
-
-```bash
-xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
-```
-
 ## Repository Layout
 
 ```text
 .
 ├── apps
 │   ├── cli
+│   ├── desktop
 │   ├── macos
 │       ├── DuckDocs.xcodeproj
 │       └── DuckDocs/

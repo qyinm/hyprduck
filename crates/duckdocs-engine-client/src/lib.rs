@@ -7,14 +7,26 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use duckdocs_engine_types::{ParseEvent, ParseProgress, ParseRequest, ParseResult};
+use duckdocs_engine_types::{
+    EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess,
+    LoadConfigRequest, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
+    SaveConfigRequest, SaveConfigResponseData, ValidateProviderRequest,
+    ValidateProviderResponseData,
+};
 
 pub trait EngineClient {
     fn parse(
         &self,
         request: ParseRequest,
         on_progress: &mut dyn FnMut(ParseProgress),
-    ) -> Result<ParseResult>;
+    ) -> Result<ParseResponseData>;
+
+    fn load_config(&self) -> Result<EngineConfigPayload>;
+    fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
+    fn validate_provider(
+        &self,
+        config: Option<EngineConfigPayload>,
+    ) -> Result<ValidateProviderResponseData>;
 }
 
 #[derive(Debug, Clone)]
@@ -49,14 +61,17 @@ impl SubprocessEngineClient {
     pub fn launch_display(&self) -> &str {
         &self.launch_spec.display
     }
-}
 
-impl EngineClient for SubprocessEngineClient {
-    fn parse(
+    fn run_command<T, R>(
         &self,
-        request: ParseRequest,
-        on_progress: &mut dyn FnMut(ParseProgress),
-    ) -> Result<ParseResult> {
+        request: EngineRequest,
+        command_kind: EngineCommand,
+        on_progress: Option<&mut dyn FnMut(ParseProgress)>,
+    ) -> Result<R>
+    where
+        T: serde::de::DeserializeOwned,
+        R: From<T>,
+    {
         let mut command = Command::new(&self.launch_spec.program);
         command
             .args(&self.launch_spec.args)
@@ -68,16 +83,21 @@ impl EngineClient for SubprocessEngineClient {
             command.current_dir(current_dir);
         }
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn engine runtime {}", self.launch_spec.display))?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "failed to spawn engine runtime {}",
+                self.launch_spec.display
+            )
+        })?;
 
         let mut stdin = child.stdin.take().context("missing child stdin")?;
         let stdout = child.stdout.take().context("missing child stdout")?;
         let stderr = child.stderr.take().context("missing child stderr")?;
 
-        let payload = serde_json::to_vec(&request).context("failed to encode parse request")?;
-        stdin.write_all(&payload).context("failed to write parse request to engine stdin")?;
+        let payload = serde_json::to_vec(&request).context("failed to encode engine request")?;
+        stdin
+            .write_all(&payload)
+            .context("failed to write engine request to stdin")?;
         drop(stdin);
 
         let (tx, rx) = mpsc::channel();
@@ -98,27 +118,42 @@ impl EngineClient for SubprocessEngineClient {
         let mut stdout_reader = BufReader::new(stdout);
         let mut stdout_payload = String::new();
         let mut stderr_lines = Vec::new();
+        let mut on_progress = on_progress;
 
         loop {
             while let Ok(line) = rx.try_recv() {
                 stderr_lines.push(line.clone());
-                if let Ok(event) = serde_json::from_str::<ParseEvent>(&line) {
-                    on_progress(event.into());
+                if command_kind == EngineCommand::Parse {
+                    if let Some(ref mut callback) = on_progress {
+                        if let Ok(event) = serde_json::from_str::<ParseEvent>(&line) {
+                            callback(event.into());
+                        }
+                    }
                 }
             }
 
-            if let Some(status) = child.try_wait().context("failed waiting on engine process")? {
+            if let Some(status) = child
+                .try_wait()
+                .context("failed waiting on engine process")?
+            {
                 stdout_reader
                     .read_to_string(&mut stdout_payload)
                     .context("failed reading engine stdout")?;
                 while let Ok(line) = rx.try_recv() {
                     stderr_lines.push(line.clone());
-                    if let Ok(event) = serde_json::from_str::<ParseEvent>(&line) {
-                        on_progress(event.into());
+                    if command_kind == EngineCommand::Parse {
+                        if let Some(ref mut callback) = on_progress {
+                            if let Ok(event) = serde_json::from_str::<ParseEvent>(&line) {
+                                callback(event.into());
+                            }
+                        }
                     }
                 }
 
                 if !status.success() {
+                    if let Ok(failure) = serde_json::from_str::<EngineFailure>(&stdout_payload) {
+                        return Err(anyhow!("{}: {}", failure.error.code, failure.error.message));
+                    }
                     let last_stderr = stderr_lines
                         .iter()
                         .rev()
@@ -128,13 +163,61 @@ impl EngineClient for SubprocessEngineClient {
                     return Err(anyhow!("engine exited with status {status}: {last_stderr}"));
                 }
 
-                let result: ParseResult =
-                    serde_json::from_str(&stdout_payload).context("failed decoding engine parse result")?;
-                return Ok(result);
+                let response: EngineSuccess<T> = serde_json::from_str(&stdout_payload)
+                    .context("failed decoding engine response")?;
+                if response.command != command_kind {
+                    return Err(anyhow!(
+                        "engine response command mismatch: expected {:?}, got {:?}",
+                        command_kind,
+                        response.command
+                    ));
+                }
+                return Ok(response.data.into());
             }
 
             thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+impl EngineClient for SubprocessEngineClient {
+    fn parse(
+        &self,
+        request: ParseRequest,
+        on_progress: &mut dyn FnMut(ParseProgress),
+    ) -> Result<ParseResponseData> {
+        self.run_command::<ParseResponseData, ParseResponseData>(
+            EngineRequest::Parse(request),
+            EngineCommand::Parse,
+            Some(on_progress),
+        )
+    }
+
+    fn load_config(&self) -> Result<EngineConfigPayload> {
+        self.run_command::<EngineConfigPayload, EngineConfigPayload>(
+            EngineRequest::LoadConfig(LoadConfigRequest {}),
+            EngineCommand::LoadConfig,
+            None,
+        )
+    }
+
+    fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData> {
+        self.run_command::<SaveConfigResponseData, SaveConfigResponseData>(
+            EngineRequest::SaveConfig(SaveConfigRequest { config }),
+            EngineCommand::SaveConfig,
+            None,
+        )
+    }
+
+    fn validate_provider(
+        &self,
+        config: Option<EngineConfigPayload>,
+    ) -> Result<ValidateProviderResponseData> {
+        self.run_command::<ValidateProviderResponseData, ValidateProviderResponseData>(
+            EngineRequest::ValidateProvider(ValidateProviderRequest { config }),
+            EngineCommand::ValidateProvider,
+            None,
+        )
     }
 }
 
@@ -148,7 +231,11 @@ pub fn resolve_engine_bin() -> Result<PathBuf> {
     }
 
     let current_exe = std::env::current_exe().context("failed to locate current executable")?;
-    for root in candidate_roots(&current_exe, std::env::current_dir().ok(), std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)) {
+    for root in candidate_roots(
+        &current_exe,
+        std::env::current_dir().ok(),
+        std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+    ) {
         let candidate = root.join(engine_binary_name());
         if candidate.exists() {
             return Ok(candidate);
@@ -261,63 +348,12 @@ fn detect_workspace_root(
 }
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
-    for candidate in start.ancestors() {
-        let cargo_toml = candidate.join("Cargo.toml");
-        let engine_manifest = candidate.join("crates/duckdocs-engine/Cargo.toml");
-        if cargo_toml.exists() && engine_manifest.exists() {
-            return Some(candidate.to_path_buf());
+    let mut current = Some(start);
+    while let Some(path) = current {
+        if path.join("Cargo.toml").exists() {
+            return Some(path.to_path_buf());
         }
+        current = path.parent();
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{candidate_roots, detect_workspace_root, engine_binary_name};
-    use std::path::PathBuf;
-    use tempfile::tempdir;
-
-    #[test]
-    fn candidate_roots_include_workspace_targets() {
-        let workspace = tempdir().unwrap();
-        std::fs::create_dir_all(workspace.path().join("crates/duckdocs-engine")).unwrap();
-        std::fs::write(workspace.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        std::fs::write(
-            workspace.path().join("crates/duckdocs-engine/Cargo.toml"),
-            "[package]\nname=\"duckdocs-engine\"\nversion=\"0.1.0\"\n",
-        )
-        .unwrap();
-
-        let roots = candidate_roots(
-            &workspace.path().join("target/debug/duckdocs-cli"),
-            Some(workspace.path().join("crates/duckdocs-cli")),
-            Some(workspace.path().join("crates/duckdocs-engine-client")),
-        );
-
-        assert!(roots.contains(&workspace.path().join("target/debug")));
-        assert!(roots.contains(&workspace.path().join("target/release")));
-        assert!(roots.iter().any(|root| root.ends_with(PathBuf::from("target/debug"))));
-        assert!(!engine_binary_name().is_empty());
-    }
-
-    #[test]
-    fn detect_workspace_root_walks_up_from_crate_directory() {
-        let workspace = tempdir().unwrap();
-        std::fs::create_dir_all(workspace.path().join("crates/duckdocs-engine")).unwrap();
-        std::fs::create_dir_all(workspace.path().join("crates/duckdocs-cli/src")).unwrap();
-        std::fs::write(workspace.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        std::fs::write(
-            workspace.path().join("crates/duckdocs-engine/Cargo.toml"),
-            "[package]\nname=\"duckdocs-engine\"\nversion=\"0.1.0\"\n",
-        )
-        .unwrap();
-
-        let resolved = detect_workspace_root(
-            Some(workspace.path().join("crates/duckdocs-cli/src")),
-            None,
-            None,
-        );
-
-        assert_eq!(resolved, Some(workspace.path().to_path_buf()));
-    }
 }

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps/desktop/src-tauri",
     "crates/duckdocs-cli",
     "crates/duckdocs-engine",
     "crates/duckdocs-engine-client",

@@ -8,6 +8,13 @@
 import Foundation
 import AppKit
 
+enum EngineCommand: String, Codable, Equatable {
+    case parse
+    case loadConfig = "load_config"
+    case saveConfig = "save_config"
+    case validateProvider = "validate_provider"
+}
+
 struct SchemaParseOptions: Codable, Equatable {
     var preserveImages: Bool = true
     var emitStructuredJSON: Bool = false
@@ -117,6 +124,34 @@ struct SchemaParseResult: Codable, Equatable {
         case successCount = "success_count"
         case failedCount = "failed_count"
     }
+}
+
+struct SchemaParseResponseData: Codable, Equatable {
+    let result: SchemaParseResult
+    let savedOutputPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case result
+        case savedOutputPath = "saved_output_path"
+    }
+}
+
+struct EngineErrorPayload: Codable, Equatable {
+    let code: String
+    let message: String
+    let details: [String: String]?
+}
+
+struct EngineSuccessEnvelope<T: Codable & Equatable>: Codable, Equatable {
+    let ok: Bool
+    let command: EngineCommand
+    let data: T
+}
+
+struct EngineFailureEnvelope: Codable, Equatable {
+    let ok: Bool
+    let command: EngineCommand
+    let error: EngineErrorPayload
 }
 
 enum SchemaProcessEvent: Equatable {

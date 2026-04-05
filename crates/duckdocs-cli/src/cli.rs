@@ -38,9 +38,7 @@ impl Cli {
 #[derive(Debug)]
 pub enum Commands {
     Doctor,
-    Parse {
-        input: String,
-    },
+    Parse { input: String },
     Engines { command: EnginesCommand },
 }
 

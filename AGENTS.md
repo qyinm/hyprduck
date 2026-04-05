@@ -2,7 +2,7 @@
 
 **Generated:** 2026-03-06
 **Project:** DuckDocs - File Parsing to Markdown
-**Stack:** Swift, SwiftUI, macOS
+**Stack:** Rust, Tauri, JavaScript, macOS
 
 ---
 
@@ -14,7 +14,7 @@ Current product direction:
 - **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
 - **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
 
-Legacy capture and recording/playback components still exist in the codebase, but the primary product surface is now import-first file parsing.
+The active desktop shell is `apps/desktop` (Tauri). Legacy Swift capture and recording/playback components still exist in the codebase as migration/reference material, but the primary product surface is import-first file parsing through the Rust engine.
 
 **Core Value Proposition:** turn existing files into markdown packages quickly.
 
@@ -26,6 +26,10 @@ Legacy capture and recording/playback components still exist in the codebase, bu
 DuckDocs/
 ├── apps/
 │   ├── cli/
+│   ├── desktop/
+│   │   ├── package.json
+│   │   ├── src/
+│   │   └── src-tauri/
 │   ├── macos/
 │       ├── DuckDocs.xcodeproj
 │       └── DuckDocs/
@@ -75,17 +79,14 @@ DuckDocs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| App entry | `apps/macos/DuckDocs/App/DuckDocsApp.swift` | Root scene and commands |
-| Main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Import-first file parsing UI |
-| Document import UI | `apps/macos/DuckDocs/Views/DocumentImportSection.swift` | Import progress and actions |
-| Legacy capture workflow | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Legacy capture, AI processing, save |
-| Document import workflow | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Convert, process, save |
-| Document conversion | `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | PDF and Word to images |
-| Legacy screen capture | `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
-| AI orchestration | `apps/macos/DuckDocs/AI/AIService.swift` | Provider selection and prompts |
-| AI providers | `apps/macos/DuckDocs/AI/Providers/` | OpenRouter, OpenAI, Anthropic, Ollama |
-| Prompt templates | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Shared parsing prompts |
-| Legacy record/playback | `apps/macos/DuckDocs/Recording/`, `apps/macos/DuckDocs/Playback/ActionPlayer.swift` | Secondary, not primary UI |
+| Desktop app entry | `apps/desktop/src-tauri/src/main.rs` | Active Tauri desktop shell |
+| Desktop UI | `apps/desktop/src/main.js` | Main/settings/progress/result windows |
+| Desktop styling | `apps/desktop/src/styles.css` | Active desktop visual surface |
+| Engine contract | `crates/duckdocs-engine-types/src/lib.rs` | Shared request/response/event schema |
+| Engine runtime | `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output writing |
+| Engine client | `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess bridge |
+| Legacy Swift reference UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Reference only during migration |
+| Legacy Swift import flow | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Reference only during migration |
 
 ---
 
@@ -119,11 +120,11 @@ struct ImageProcessingResult {
 
 ## CONVENTIONS
 
-### Swift Style
-- Prefer `async/await` for conversion and AI processing
-- Use `@Observable` state containers for UI-facing services
-- Keep AppKit usage isolated to conversion, optional legacy permissions, and image handling
-- Use `NSImage` for converted page images
+### Desktop Shell Style
+- Keep the active desktop shell in `apps/desktop`
+- Treat `apps/macos` as legacy reference unless the task explicitly says otherwise
+- Keep shell logic in Tauri and parsing/output logic in the Rust engine
+- Avoid reintroducing frontend-owned output packaging or provider persistence
 
 ### Permissions
 - File parsing must remain usable without Screen Recording or Accessibility permissions
@@ -173,14 +174,14 @@ struct ImageProcessingResult {
 ## COMMANDS
 
 ```bash
-# Build
-xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
+# Build active desktop app
+pnpm --dir apps/desktop build
 
-# Build without code signing for local verification
-xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_ALLOWED=NO build
+# Verify desktop shell types
+cargo check -p duckdocs-desktop
 
-# Run tests
-xcodebuild test -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
+# Run core tests
+cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
 ```
 
 ---

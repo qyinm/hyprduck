@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DuckDocs",
+  "version": "0.1.0",
+  "identifier": "com.duckdocs.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm run sync:sidecar:debug",
+    "beforeBuildCommand": "pnpm run sync:sidecar:release",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": ["default"]
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "DuckDocs",
+        "width": 1160,
+        "height": 860,
+        "resizable": true,
+        "visible": true
+      },
+      {
+        "label": "settings",
+        "title": "DuckDocs Settings",
+        "width": 720,
+        "height": 720,
+        "visible": false
+      },
+      {
+        "label": "progress",
+        "title": "DuckDocs Progress",
+        "width": 720,
+        "height": 760,
+        "visible": false
+      },
+      {
+        "label": "result",
+        "title": "DuckDocs Result",
+        "width": 760,
+        "height": 780,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "app",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "externalBin": ["binaries/duckdocs-engine"]
+  }
+}

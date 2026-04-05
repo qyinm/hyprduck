@@ -44,7 +44,10 @@ fn run_parse(input: String) -> Result<()> {
     let format = infer_format(&input)?;
     let request = ParseRequest {
         version: "1".to_string(),
-        input: ParseInput { path: input.clone(), format },
+        input: ParseInput {
+            path: input.clone(),
+            format,
+        },
         template: "General".to_string(),
         options: ParseOptions::default(),
         output: Some(ParseOutputTarget {
@@ -57,17 +60,24 @@ fn run_parse(input: String) -> Result<()> {
 
     let client = SubprocessEngineClient::default();
     let mut progress_log = Vec::new();
-    let result = client.parse(request, &mut |progress| {
+    let response = client.parse(request, &mut |progress| {
         progress_log.push(progress_label(&progress).to_string());
     })?;
+    let result = response.result;
 
     for entry in progress_log {
         println!("progress: {entry}");
     }
     println!("markdown-bytes: {}", result.markdown.len());
     println!("pages: {}", result.metadata.page_count);
-    println!("success: {} failed: {}", result.success_count, result.failed_count);
+    println!(
+        "success: {} failed: {}",
+        result.success_count, result.failed_count
+    );
     println!("engine: {}", result.metadata.engine_id);
+    if let Some(saved_output_path) = response.saved_output_path {
+        println!("saved-output: {saved_output_path}");
+    }
     Ok(())
 }
 
