@@ -1,4 +1,4 @@
-set shell := ["zsh", "-cu"]
+set shell := ["bash", "-cu"]
 
 app_project := "apps/macos/DuckDocs.xcodeproj"
 app_scheme := "DuckDocs"
