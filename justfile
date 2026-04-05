@@ -20,11 +20,20 @@ paths:
 desktop-build:
   pnpm --dir {{desktop_dir}} build
 
+desktop-dev:
+  pnpm --dir {{desktop_dir}} dev
+
 desktop-check:
   cargo check -p duckdocs-desktop
 
 desktop-test:
   cargo test -p duckdocs-desktop
+
+frontend-typecheck:
+  pnpm --dir {{desktop_dir}} frontend:typecheck
+
+frontend-build:
+  pnpm --dir {{desktop_dir}} frontend:build
 
 core-test:
   cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
@@ -44,4 +53,4 @@ site-stage:
   cp -R {{site_dir}}/. {{site_out}}/
 
 clean:
-  rm -rf {{site_out}} build
+  rm -rf {{site_out}} build {{desktop_dir}}/dist
