@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "duckdocs/parse-request",
+  "type": "object",
+  "required": ["version", "input", "template", "options"],
+  "properties": {
+    "version": { "type": "string", "const": "1" },
+    "input": {
+      "type": "object",
+      "required": ["path", "format"],
+      "properties": {
+        "path": { "type": "string" },
+        "format": {
+          "type": "string",
+          "enum": ["pdf", "docx", "doc", "image"]
+        }
+      }
+    },
+    "template": { "type": "string" },
+    "options": {
+      "type": "object",
+      "required": ["preserve_images", "emit_structured_json", "emit_svg"],
+      "properties": {
+        "preserve_images": { "type": "boolean" },
+        "emit_structured_json": { "type": "boolean" },
+        "emit_svg": { "type": "boolean" },
+        "language_hints": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "root_dir": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    }
+  }
+}

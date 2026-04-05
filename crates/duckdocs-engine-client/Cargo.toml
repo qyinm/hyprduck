@@ -1,0 +1,9 @@
+[package]
+name = "duckdocs-engine-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+duckdocs-engine-types = { path = "../duckdocs-engine-types" }

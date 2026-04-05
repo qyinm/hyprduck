@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "duckdocs/parse-progress",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "const": "queued" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["state", "current", "total"],
+      "properties": {
+        "state": { "const": "converting_pages" },
+        "current": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["state", "current", "total"],
+      "properties": {
+        "state": { "const": "parsing" },
+        "current": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "const": "packaging" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "const": "completed" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["state", "message"],
+      "properties": {
+        "state": { "const": "failed" },
+        "message": { "type": "string" }
+      }
+    }
+  ]
+}

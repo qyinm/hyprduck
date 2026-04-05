@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "duckdocs/parse-result",
+  "type": "object",
+  "required": ["version", "markdown", "pages", "assets", "metadata"],
+  "properties": {
+    "version": { "type": "string", "const": "1" },
+    "markdown": { "type": "string" },
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "markdown": { "type": ["string", "null"] },
+          "plain_text": { "type": ["string", "null"] },
+          "svg": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["relative_path", "mime_type", "base64"],
+        "properties": {
+          "relative_path": { "type": "string" },
+          "mime_type": { "type": "string" },
+          "base64": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["engine_id", "duration_ms", "page_count"],
+      "properties": {
+        "engine_id": { "type": "string" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "page_count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
