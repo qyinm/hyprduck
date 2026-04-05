@@ -124,6 +124,32 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 
 ## Build
 
+Preferred monorepo entrypoint:
+
+```bash
+just macos-build
+```
+
+For local verification without code signing:
+
+```bash
+just macos-build-unsigned
+```
+
+Run tests:
+
+```bash
+just macos-test
+```
+
+Stage the static site artifact locally:
+
+```bash
+just site-stage
+```
+
+Direct `xcodebuild` equivalents:
+
 ```bash
 xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
 ```
