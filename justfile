@@ -29,17 +29,5 @@ site-stage:
   mkdir -p {{site_out}}
   cp -R {{site_dir}}/. {{site_out}}/
 
-release-build:
-  ./scripts/build_release.sh
-
-release-local:
-  ./scripts/release.sh --local
-
-release:
-  ./scripts/release.sh
-
-upload-release app_path draft="":
-  ./scripts/upload-release.sh {{app_path}} {{draft}}
-
 clean:
   rm -rf {{site_out}} build
