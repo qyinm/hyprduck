@@ -28,6 +28,7 @@ final class AIService {
 
     /// Current provider configuration
     private(set) var config: AIProviderConfig
+    private let rustConfigStore = RustCoreConfigurationStore()
 
     /// Custom prompt for analysis
     var customPrompt: String?
@@ -74,9 +75,16 @@ final class AIService {
     // MARK: - Initialization
 
     init() {
-        // Load saved configuration or use default
-        if let data = UserDefaults.standard.data(forKey: configKey),
-           let savedConfig = try? JSONDecoder().decode(AIProviderConfig.self, from: data) {
+        if let rustConfig = rustConfigStore.load(),
+           let rustProvider = AIProviderType(rustProviderSlug: rustConfig.provider) {
+            self.config = AIProviderConfig(
+                providerType: rustProvider,
+                modelId: rustConfig.modelID,
+                apiKey: rustConfig.apiKey,
+                baseURL: rustConfig.baseURL
+            )
+        } else if let data = UserDefaults.standard.data(forKey: configKey),
+                  let savedConfig = try? JSONDecoder().decode(AIProviderConfig.self, from: data) {
             self.config = savedConfig
         } else {
             // Default to OpenRouter
@@ -91,6 +99,7 @@ final class AIService {
 
         // Try to load API key from environment if not set
         loadAPIKeyFromEnvironment()
+        rustConfigStore.importIfNeeded(from: config)
     }
 
     // MARK: - Provider Management
@@ -200,6 +209,12 @@ final class AIService {
         if let data = try? JSONEncoder().encode(config) {
             UserDefaults.standard.set(data, forKey: configKey)
         }
+        rustConfigStore.save(RustCoreConfiguration(
+            provider: config.providerType.rustProviderSlug,
+            modelID: config.modelId,
+            apiKey: config.apiKey,
+            baseURL: config.baseURL
+        ))
     }
 
     private func loadAPIKeyFromEnvironment() {

@@ -31,7 +31,6 @@ final class DocumentImportService {
     private(set) var currentJob: DocumentImportJob?
     private(set) var lastParseResult: SchemaParseResult?
 
-    private let converter = DocumentConverter()
     private let outputBuilder = DocumentationOutputBuilder()
     private var importTask: Task<Void, Never>?
     private var currentEngine: DocumentParsingEngine?
@@ -43,7 +42,7 @@ final class DocumentImportService {
     /// Import a document file and convert to markdown
     func run(job: DocumentImportJob, aiService: AIService) {
         let request = SchemaParseRequest(job: job, template: aiService.selectedTemplate)
-        let engine = AIServiceParsingEngine(aiService: aiService)
+        let engine = defaultEngine()
         run(job: job, request: request, engine: engine)
     }
 
@@ -63,6 +62,7 @@ final class DocumentImportService {
 
     /// Cancel the current import
     func cancel() {
+        currentEngine?.cancelCurrentRun()
         importTask?.cancel()
         importTask = nil
         state = .idle
@@ -77,134 +77,33 @@ final class DocumentImportService {
 
     private func executeImport(_ job: DocumentImportJob, request: SchemaParseRequest, engine: DocumentParsingEngine) async {
         Self.logger.info("Starting import: \(job.fileURL.lastPathComponent, privacy: .public)")
-
-        // Phase 1: Convert document to images
         state = .converting
-
         do {
-            pageImages = try await converter.convert(job)
-            Self.logger.info("Converted \(self.pageImages.count) pages")
+            let result = try await parseDocument(request: request, with: engine)
+
+            if Task.isCancelled { return }
+
+            apply(result: result)
+
+            if result.failedCount > 0 && result.successCount == 0 {
+                state = .error("All pages failed to process. Check provider configuration and try again.")
+                return
+            }
+
+            if result.failedCount > 0 {
+                state = .partiallyCompleted(successCount: result.successCount, failedCount: result.failedCount)
+                return
+            }
+
+            await performSave(job: job)
         } catch {
             state = .error(error.localizedDescription)
-            return
         }
-
-        if Task.isCancelled { return }
-
-        // Phase 2: AI Processing (parallel)
-        state = .processing(current: 0, total: pageImages.count)
-
-        let results = await processImagesInParallel(images: pageImages, request: request, engine: engine)
-
-        if Task.isCancelled { return }
-
-        let failedCount = results.filter { $0.status == .failed }.count
-        let successCount = results.filter { $0.status == .success }.count
-
-        if failedCount > 0 && successCount == 0 {
-            state = .error("All pages failed to process. Check your API key and try again.")
-            return
-        } else if failedCount > 0 {
-            state = .partiallyCompleted(successCount: successCount, failedCount: failedCount)
-            return
-        }
-
-        lastParseResult = buildParseResult(engineID: engine.engineID)
-
-        // Phase 3: Save
-        await performSave(job: job)
-    }
-
-    private func processImagesInParallel(
-        images: [NSImage],
-        request: SchemaParseRequest,
-        engine: DocumentParsingEngine
-    ) async -> [ImageProcessingResult] {
-        // Initialize results
-        processingResults = images.enumerated().map { index, image in
-            ImageProcessingResult(id: index, image: image, status: .pending)
-        }
-
-        let maxConcurrent = 5
-        let completedCount = OSAllocatedUnfairLock(initialState: 0)
-
-        await withTaskGroup(of: (Int, Result<String, Error>).self) { group in
-            var index = 0
-
-            // Start initial batch
-            while index < min(maxConcurrent, images.count) {
-                let currentIndex = index
-                let image = images[currentIndex]
-
-                await MainActor.run {
-                    processingResults[currentIndex].status = .processing
-                }
-
-                group.addTask {
-                    do {
-                        let result = try await engine.parsePage(
-                            image: image,
-                            pageIndex: currentIndex,
-                            request: request
-                        )
-                        return (currentIndex, .success(result.markdown ?? result.plainText ?? ""))
-                    } catch {
-                        return (currentIndex, .failure(error))
-                    }
-                }
-                index += 1
-            }
-
-            // Process remaining
-            for await (idx, result) in group {
-                let current = completedCount.withLock { count -> Int in
-                    count += 1
-                    return count
-                }
-
-                await MainActor.run {
-                    switch result {
-                    case .success(let analysis):
-                        processingResults[idx].status = .success
-                        processingResults[idx].analysis = analysis
-                    case .failure(let error):
-                        processingResults[idx].status = .failed
-                        processingResults[idx].errorMessage = error.localizedDescription
-                    }
-                    self.state = .processing(current: current, total: images.count)
-                }
-
-                if index < images.count {
-                    let currentIndex = index
-                    let image = images[currentIndex]
-
-                    await MainActor.run {
-                        processingResults[currentIndex].status = .processing
-                    }
-
-                    group.addTask {
-                        do {
-                            let result = try await engine.parsePage(
-                                image: image,
-                                pageIndex: currentIndex,
-                                request: request
-                            )
-                            return (currentIndex, .success(result.markdown ?? result.plainText ?? ""))
-                        } catch {
-                            return (currentIndex, .failure(error))
-                        }
-                    }
-                    index += 1
-                }
-            }
-        }
-
-        return processingResults
     }
 
     /// Retry failed pages
     func retryFailed(aiService: AIService) {
-        currentEngine = AIServiceParsingEngine(aiService: aiService)
+        currentEngine = defaultEngine()
         if let job = currentJob {
             currentRequest = SchemaParseRequest(job: job, template: aiService.selectedTemplate)
         }
@@ -229,47 +128,17 @@ final class DocumentImportService {
             state = .error("Retry failed because the parsing engine is no longer available.")
             return
         }
+        do {
+            let result = try await parseDocument(request: request, with: engine)
+            apply(result: result)
 
-        let failedIndices = processingResults.enumerated()
-            .filter { $0.element.status == .failed }
-            .map { $0.offset }
-
-        guard !failedIndices.isEmpty else { return }
-
-        state = .processing(current: 0, total: failedIndices.count)
-
-        var retryCount = 0
-        for idx in failedIndices {
-            if Task.isCancelled { return }
-
-            processingResults[idx].status = .processing
-            processingResults[idx].errorMessage = nil
-
-            do {
-                let result = try await engine.parsePage(
-                    image: processingResults[idx].image,
-                    pageIndex: idx,
-                    request: request
-                )
-                processingResults[idx].status = .success
-                processingResults[idx].analysis = result.markdown ?? result.plainText
-            } catch {
-                processingResults[idx].status = .failed
-                processingResults[idx].errorMessage = error.localizedDescription
+            if result.failedCount > 0 {
+                state = .partiallyCompleted(successCount: result.successCount, failedCount: result.failedCount)
+            } else if let job = currentJob {
+                await performSave(job: job)
             }
-
-            retryCount += 1
-            state = .processing(current: retryCount, total: failedIndices.count)
-        }
-
-        let stillFailed = processingResults.filter { $0.status == .failed }.count
-        let successCount = processingResults.filter { $0.status == .success }.count
-
-        if stillFailed > 0 {
-            state = .partiallyCompleted(successCount: successCount, failedCount: stillFailed)
-        } else if let job = currentJob {
-            lastParseResult = buildParseResult(engineID: engine.engineID)
-            await performSave(job: job)
+        } catch {
+            state = .error(error.localizedDescription)
         }
     }
 
@@ -300,13 +169,27 @@ final class DocumentImportService {
         cancel()
     }
 
+    private func parseDocument(
+        request: SchemaParseRequest,
+        with engine: DocumentParsingEngine
+    ) async throws -> SchemaParseResult {
+        let service = self
+        return try await engine.parseDocument(request: request) { event in
+            Task { @MainActor in
+                service.apply(event: event)
+            }
+        }
+    }
+
     private func buildParseResult(engineID: String) -> SchemaParseResult {
         let pages = processingResults.sorted { $0.id < $1.id }.map { result in
             SchemaParsedPage(
                 index: result.id,
                 markdown: result.analysis,
                 plainText: result.analysis,
-                svg: nil
+                svg: nil,
+                imageAssetPath: "images/page_\(result.id + 1).png",
+                errorMessage: result.errorMessage
             )
         }
         let sections = pages.enumerated().map { index, page in
@@ -327,7 +210,29 @@ final class DocumentImportService {
             durationMilliseconds: duration,
             pageCount: pages.count
         )
-        return SchemaParseResult(markdown: markdown, pages: pages, assets: [], metadata: metadata)
+        let assets = pageImages.enumerated().compactMap { index, image -> SchemaOutputAsset? in
+            guard let tiff = image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                return nil
+            }
+            return SchemaOutputAsset(
+                relativePath: "images/page_\(index + 1).png",
+                mimeType: "image/png",
+                base64: pngData.base64EncodedString()
+            )
+        }
+        let successCount = pages.filter { $0.errorMessage == nil }.count
+        let failedCount = pages.count - successCount
+        return SchemaParseResult(
+            version: "1",
+            markdown: markdown,
+            pages: pages,
+            assets: assets,
+            metadata: metadata,
+            successCount: successCount,
+            failedCount: failedCount
+        )
     }
 
     private var isBusy: Bool {
@@ -336,6 +241,57 @@ final class DocumentImportService {
             return true
         default:
             return false
+        }
+    }
+
+    private func defaultEngine() -> DocumentParsingEngine {
+        RustParsingEngine()
+    }
+
+    private func apply(event: SchemaProcessEvent) {
+        switch event {
+        case .queued, .documentOpened:
+            state = .converting
+        case .convertingPages(let current, let total):
+            state = .processing(current: current, total: total)
+        case .parsing(let current, let total):
+            state = .processing(current: current, total: total)
+        case .packaging:
+            state = .saving
+        case .completed:
+            break
+        case .failed(let message):
+            state = .error(message)
+        }
+    }
+
+    private func apply(result: SchemaParseResult) {
+        lastParseResult = result
+        pageImages = decodeImages(from: result.assets)
+        processingResults = buildProcessingResults(from: result, images: pageImages)
+    }
+
+    private func buildProcessingResults(from result: SchemaParseResult, images: [NSImage]) -> [ImageProcessingResult] {
+        result.pages.enumerated().map { index, page in
+            let image = images.indices.contains(index) ? images[index] : NSImage(size: NSSize(width: 1, height: 1))
+            let status: ImageProcessingResult.Status = page.errorMessage == nil ? .success : .failed
+            return ImageProcessingResult(
+                id: page.index,
+                image: image,
+                status: status,
+                analysis: page.markdown ?? page.plainText,
+                errorMessage: page.errorMessage
+            )
+        }
+    }
+
+    private func decodeImages(from assets: [SchemaOutputAsset]) -> [NSImage] {
+        assets.compactMap { asset in
+            guard asset.mimeType == "image/png",
+                  let data = Data(base64Encoded: asset.base64) else {
+                return nil
+            }
+            return NSImage(data: data)
         }
     }
 }

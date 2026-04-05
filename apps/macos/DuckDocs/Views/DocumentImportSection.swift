@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 enum ImportPanelPresenter {
     @MainActor
     static func present(importService: DocumentImportService, aiService: AIService) {
-        guard aiService.configurationIssue == nil else { return }
+        guard aiService.configurationIssue == nil, RustParsingEngine.isAvailable else { return }
 
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [
@@ -40,7 +40,19 @@ struct DocumentImportSection: View {
     let aiService: AIService
 
     private var canImport: Bool {
-        aiService.configurationIssue == nil
+        importIssue == nil
+    }
+
+    private var importIssue: String? {
+        if let configurationIssue = aiService.configurationIssue {
+            return configurationIssue
+        }
+
+        guard RustParsingEngine.isAvailable else {
+            return "Rust parsing engine is unavailable. Build or bundle `duckdocs-engine` to import documents."
+        }
+
+        return nil
     }
 
     var body: some View {
@@ -51,7 +63,12 @@ struct DocumentImportSection: View {
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 SupportedFormatsRow()
-                DocumentImportStatusView(importService: importService, aiService: aiService, canImport: canImport)
+                DocumentImportStatusView(
+                    importService: importService,
+                    aiService: aiService,
+                    canImport: canImport,
+                    importIssue: importIssue
+                )
             }
         }
     }
@@ -81,12 +98,13 @@ struct DocumentImportStatusView: View {
     @Bindable var importService: DocumentImportService
     let aiService: AIService
     let canImport: Bool
+    let importIssue: String?
 
     var body: some View {
         VStack(spacing: 12) {
             switch importService.state {
             case .idle:
-                IdleImportPanel(canImport: canImport) {
+                IdleImportPanel(canImport: canImport, disabledReason: importIssue) {
                     ImportPanelPresenter.present(importService: importService, aiService: aiService)
                 }
 
@@ -197,6 +215,7 @@ struct DocumentImportStatusView: View {
 
 struct IdleImportPanel: View {
     let canImport: Bool
+    let disabledReason: String?
     let importAction: () -> Void
 
     var body: some View {
@@ -222,6 +241,13 @@ struct IdleImportPanel: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(!canImport)
+
+            if let disabledReason, !canImport {
+                Text(disabledReason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(24)

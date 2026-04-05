@@ -5,7 +5,7 @@ mod ui;
 
 use anyhow::Result;
 use cli::{Cli, Commands};
-use duckdocs_engine_client::{EngineClient, StubEngineClient};
+use duckdocs_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
     DocumentFormat, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
 };
@@ -24,15 +24,17 @@ fn main() -> Result<()> {
 fn run_doctor() -> Result<()> {
     println!("DuckDocs CLI is available.");
     println!("TUI backend: ratatui + crossterm");
-    println!("Registered engines:");
-    println!("- stub");
+    match resolve_engine_launch() {
+        Ok(spec) => println!("Engine runtime: {}", spec.display()),
+        Err(error) => println!("Engine runtime: unresolved ({error})"),
+    }
     Ok(())
 }
 
 fn run_engines(command: cli::EnginesCommand) -> Result<()> {
     match command {
         cli::EnginesCommand::List => {
-            println!("stub");
+            println!("duckdocs-engine");
         }
     }
     Ok(())
@@ -53,7 +55,7 @@ fn run_parse(input: String) -> Result<()> {
         }),
     };
 
-    let client = StubEngineClient;
+    let client = SubprocessEngineClient::default();
     let mut progress_log = Vec::new();
     let result = client.parse(request, &mut |progress| {
         progress_log.push(progress_label(&progress).to_string());
@@ -63,6 +65,8 @@ fn run_parse(input: String) -> Result<()> {
         println!("progress: {entry}");
     }
     println!("markdown-bytes: {}", result.markdown.len());
+    println!("pages: {}", result.metadata.page_count);
+    println!("success: {} failed: {}", result.success_count, result.failed_count);
     println!("engine: {}", result.metadata.engine_id);
     Ok(())
 }

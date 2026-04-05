@@ -8,12 +8,22 @@
 import Foundation
 import AppKit
 
-/// Schema-shaped parse options for the future engine boundary.
 struct SchemaParseOptions: Codable, Equatable {
     var preserveImages: Bool = true
     var emitStructuredJSON: Bool = false
     var emitSVG: Bool = false
     var languageHints: [String] = []
+    var debugRequestPath: String?
+    var debugResultPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case preserveImages = "preserve_images"
+        case emitStructuredJSON = "emit_structured_json"
+        case emitSVG = "emit_svg"
+        case languageHints = "language_hints"
+        case debugRequestPath = "debug_request_path"
+        case debugResultPath = "debug_result_path"
+    }
 }
 
 struct SchemaParseInput: Codable, Equatable {
@@ -23,7 +33,7 @@ struct SchemaParseInput: Codable, Equatable {
 
 struct SchemaParseOutputTarget: Codable, Equatable {
     let rootDirectory: String?
-    let name: String
+    let name: String?
 
     enum CodingKeys: String, CodingKey {
         case rootDirectory = "root_dir"
@@ -31,13 +41,12 @@ struct SchemaParseOutputTarget: Codable, Equatable {
     }
 }
 
-/// Minimal local mirror of the repo-level schema contract.
 struct SchemaParseRequest: Codable, Equatable {
     let version: String
     let input: SchemaParseInput
     let template: String
     let options: SchemaParseOptions
-    let output: SchemaParseOutputTarget
+    let output: SchemaParseOutputTarget?
 
     init(job: DocumentImportJob, template: PromptTemplate, options: SchemaParseOptions = SchemaParseOptions()) {
         self.version = "1"
@@ -53,19 +62,29 @@ struct SchemaParsedPage: Codable, Equatable {
     let markdown: String?
     let plainText: String?
     let svg: String?
+    let imageAssetPath: String?
+    let errorMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case index
         case markdown
         case plainText = "plain_text"
         case svg
+        case imageAssetPath = "image_asset_path"
+        case errorMessage = "error_message"
     }
 }
 
-struct SchemaOutputAsset {
+struct SchemaOutputAsset: Codable, Equatable {
     let relativePath: String
     let mimeType: String
-    let data: Data
+    let base64: String
+
+    enum CodingKeys: String, CodingKey {
+        case relativePath = "relative_path"
+        case mimeType = "mime_type"
+        case base64
+    }
 }
 
 struct SchemaParseMetadata: Codable, Equatable {
@@ -80,29 +99,92 @@ struct SchemaParseMetadata: Codable, Equatable {
     }
 }
 
-struct SchemaParseResult {
+struct SchemaParseResult: Codable, Equatable {
     let version: String
     let markdown: String
     let pages: [SchemaParsedPage]
     let assets: [SchemaOutputAsset]
     let metadata: SchemaParseMetadata
+    let successCount: Int
+    let failedCount: Int
 
-    init(markdown: String, pages: [SchemaParsedPage], assets: [SchemaOutputAsset], metadata: SchemaParseMetadata) {
-        self.version = "1"
-        self.markdown = markdown
-        self.pages = pages
-        self.assets = assets
-        self.metadata = metadata
+    enum CodingKeys: String, CodingKey {
+        case version
+        case markdown
+        case pages
+        case assets
+        case metadata
+        case successCount = "success_count"
+        case failedCount = "failed_count"
     }
 }
 
-/// Narrow engine seam for the import-first macOS app.
-protocol DocumentParsingEngine {
-    var engineID: String { get }
+enum SchemaProcessEvent: Equatable {
+    case queued
+    case documentOpened(format: DocumentFormat)
+    case convertingPages(current: Int, total: Int)
+    case parsing(current: Int, total: Int)
+    case packaging
+    case completed
+    case failed(message: String)
+}
 
-    func parsePage(
-        image: NSImage,
-        pageIndex: Int,
-        request: SchemaParseRequest
-    ) async throws -> SchemaParsedPage
+extension SchemaProcessEvent: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case format
+        case current
+        case total
+        case message
+    }
+
+    private enum EventType: String, Decodable {
+        case queued
+        case documentOpened = "document_opened"
+        case convertingPages = "converting_pages"
+        case parsing
+        case packaging
+        case completed
+        case failed
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(EventType.self, forKey: .type)
+        switch type {
+        case .queued:
+            self = .queued
+        case .documentOpened:
+            self = .documentOpened(format: try container.decode(DocumentFormat.self, forKey: .format))
+        case .convertingPages:
+            self = .convertingPages(
+                current: try container.decode(Int.self, forKey: .current),
+                total: try container.decode(Int.self, forKey: .total)
+            )
+        case .parsing:
+            self = .parsing(
+                current: try container.decode(Int.self, forKey: .current),
+                total: try container.decode(Int.self, forKey: .total)
+            )
+        case .packaging:
+            self = .packaging
+        case .completed:
+            self = .completed
+        case .failed:
+            self = .failed(message: try container.decode(String.self, forKey: .message))
+        }
+    }
+}
+
+protocol DocumentParsingEngine: AnyObject {
+    var engineID: String { get }
+    func parseDocument(
+        request: SchemaParseRequest,
+        onEvent: @escaping @Sendable (SchemaProcessEvent) -> Void
+    ) async throws -> SchemaParseResult
+    func cancelCurrentRun()
+}
+
+extension DocumentParsingEngine {
+    func cancelCurrentRun() {}
 }

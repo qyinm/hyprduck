@@ -40,7 +40,9 @@ struct DocumentationOutputBuilder {
                 index: index,
                 markdown: result.analysis,
                 plainText: result.analysis,
-                svg: nil
+                svg: nil,
+                imageAssetPath: "images/page_\(index + 1).png",
+                errorMessage: result.errorMessage
             )
         }
         let metadata = SchemaParseMetadata(
@@ -49,6 +51,7 @@ struct DocumentationOutputBuilder {
             pageCount: orderedResults.count
         )
         let parseResult = SchemaParseResult(
+            version: "1",
             markdown: orderedResults.enumerated().map { index, result in
                 generator.generate(
                     title: job.outputName,
@@ -64,7 +67,9 @@ struct DocumentationOutputBuilder {
             }.joined(separator: "\n\n"),
             pages: pages,
             assets: [],
-            metadata: metadata
+            metadata: metadata,
+            successCount: pages.filter { $0.errorMessage == nil }.count,
+            failedCount: pages.filter { $0.errorMessage != nil }.count
         )
 
         return try exportImport(job: job, parseResult: parseResult, images: orderedResults.map(\.image))
@@ -75,17 +80,19 @@ struct DocumentationOutputBuilder {
             MarkdownGenerator.Section(
                 title: "Page \(index + 1)",
                 detail: "**Source:** \(job.format.displayName)",
-                imagePath: "images/page_\(index + 1).png",
+                imagePath: page.imageAssetPath ?? "images/page_\(index + 1).png",
                 body: pageBody(for: page, number: index + 1)
             )
         }
+
+        let resolvedImages = images.isEmpty ? decodeImages(from: parseResult.assets) : images
 
         return try exportDocument(
             outputName: job.outputName,
             title: job.outputName,
             imagePrefix: "page",
             sections: sections,
-            images: images
+            images: resolvedImages
         )
     }
 
@@ -163,6 +170,10 @@ struct DocumentationOutputBuilder {
             return plainText
         }
 
+        if let errorMessage = page.errorMessage, !errorMessage.isEmpty {
+            return "_AI analysis unavailable for page \(number): \(errorMessage)_"
+        }
+
         return "_AI analysis unavailable for page \(number)._"
     }
 
@@ -177,5 +188,14 @@ struct DocumentationOutputBuilder {
         default:
             return "**Capture:** After \(job.nextAction.displayName)"
         }
+    }
+
+    private func decodeImages(from assets: [SchemaOutputAsset]) -> [NSImage] {
+        assets
+            .filter { $0.mimeType == "image/png" }
+            .compactMap { asset in
+                guard let data = Data(base64Encoded: asset.base64) else { return nil }
+                return NSImage(data: data)
+            }
     }
 }

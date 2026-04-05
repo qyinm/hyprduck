@@ -7,3 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 duckdocs-engine-types = { path = "../duckdocs-engine-types" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
