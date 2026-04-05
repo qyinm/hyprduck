@@ -21,8 +21,8 @@ enum ImportPanelPresenter {
         ]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Select a PDF or Word document to convert to Markdown"
-        panel.prompt = "Import"
+        panel.message = "Select a PDF or Word document to parse into Markdown"
+        panel.prompt = "Parse"
 
         if panel.runModal() == .OK, let url = panel.url {
             do {
@@ -46,9 +46,9 @@ struct DocumentImportSection: View {
 
     var body: some View {
         WorkflowCard(
-            eyebrow: "Document Import",
+            eyebrow: "File Parsing",
             title: "Bring in PDFs and Word files",
-            description: "Start from an existing document, extract each page as an image, and generate markdown with the shared AI engine."
+            description: "Start from an existing file, extract each page as an image, and generate markdown with the shared AI engine."
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 SupportedFormatsRow()
@@ -209,7 +209,7 @@ struct IdleImportPanel: View {
             VStack(spacing: 6) {
                 Text("Import a document to begin")
                     .font(.headline)
-                Text("Pick a PDF or Word document and DuckDocs will turn each page into linked markdown.")
+                Text("Pick a PDF or Word document and DuckDocs will turn each page into a linked markdown package.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

@@ -1,23 +1,22 @@
 # DuckDocs - Project Knowledge Base
 
 **Generated:** 2026-03-06
-**Project:** DuckDocs - Capture and Document Import to Markdown
+**Project:** DuckDocs - File Parsing to Markdown
 **Stack:** Swift, SwiftUI, macOS
 
 ---
 
 ## OVERVIEW
 
-DuckDocs is a macOS app that captures screens or imports documents, then converts the resulting images into markdown using AI.
+DuckDocs is a macOS app that imports documents, converts each page into an image, and turns the result into markdown using AI.
 
 Current product direction:
-- **Auto Capture**: full screen, region, or window capture with optional simulated next actions
-- **Document Import**: PDF, DOCX, and DOC conversion into page images for markdown generation
+- **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
 - **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
 
-Legacy recording/playback components still exist in the codebase, but the primary product surface is now capture plus import.
+Legacy capture and recording/playback components still exist in the codebase, but the primary product surface is now import-first file parsing.
 
-**Core Value Proposition:** turn visual workflows and documents into markdown quickly.
+**Core Value Proposition:** turn existing files into markdown packages quickly.
 
 ---
 
@@ -27,7 +26,7 @@ Legacy recording/playback components still exist in the codebase, but the primar
 DuckDocs/
 ├── apps/
 │   ├── cli/
-│   └── macos/
+│   ├── macos/
 │       ├── DuckDocs.xcodeproj
 │       └── DuckDocs/
 │           ├── App/
@@ -65,7 +64,9 @@ DuckDocs/
 │               ├── RegionSelectorWindow.swift
 │               ├── CapturePreviewWindow.swift
 │               └── WindowPickerView.swift
-└── docs/
+│   └── site/
+├── packages/
+└── scripts/
 ```
 
 ---
@@ -75,15 +76,15 @@ DuckDocs/
 | Task | Location | Notes |
 |------|----------|-------|
 | App entry | `apps/macos/DuckDocs/App/DuckDocsApp.swift` | Root scene and commands |
-| Main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Capture workflow UI |
+| Main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Import-first file parsing UI |
 | Document import UI | `apps/macos/DuckDocs/Views/DocumentImportSection.swift` | Import progress and actions |
-| Capture workflow | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Capture, AI processing, save |
+| Legacy capture workflow | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Legacy capture, AI processing, save |
 | Document import workflow | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Convert, process, save |
 | Document conversion | `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | PDF and Word to images |
-| Screen capture | `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
+| Legacy screen capture | `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrappers |
 | AI orchestration | `apps/macos/DuckDocs/AI/AIService.swift` | Provider selection and prompts |
 | AI providers | `apps/macos/DuckDocs/AI/Providers/` | OpenRouter, OpenAI, Anthropic, Ollama |
-| Prompt templates | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Shared capture/import prompts |
+| Prompt templates | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Shared parsing prompts |
 | Legacy record/playback | `apps/macos/DuckDocs/Recording/`, `apps/macos/DuckDocs/Playback/ActionPlayer.swift` | Secondary, not primary UI |
 
 ---
@@ -119,18 +120,18 @@ struct ImageProcessingResult {
 ## CONVENTIONS
 
 ### Swift Style
-- Prefer `async/await` for capture, conversion, and AI processing
+- Prefer `async/await` for conversion and AI processing
 - Use `@Observable` state containers for UI-facing services
-- Keep AppKit usage isolated to capture, permissions, and image handling
-- Use `NSImage` for screenshots and converted page images
+- Keep AppKit usage isolated to conversion, optional legacy permissions, and image handling
+- Use `NSImage` for converted page images
 
 ### Permissions
-- **Screen Recording** and **Accessibility** are capture-only requirements
-- Document import should remain usable even when capture permissions are missing
-- Guide users to System Settings when capture permissions are needed
+- File parsing must remain usable without Screen Recording or Accessibility permissions
+- Screen Recording and Accessibility apply only to optional legacy capture code
+- Do not surface capture-permission friction in the primary import flow
 
 ### AI Architecture
-- Treat AI settings as shared across capture and import
+- Treat AI settings as shared across file parsing flows
 - Use provider abstractions instead of product-specific OCR services
 - Keep user-facing error messages specific, especially for missing API keys or unavailable Ollama instances
 
@@ -144,21 +145,16 @@ struct ImageProcessingResult {
 ## ANTI-PATTERNS (DO NOT)
 
 - **DO NOT** reintroduce product messaging that describes DuckDocs as DeepSeek-only
-- **DO NOT** block document import behind capture permissions
+- **DO NOT** block file parsing behind capture permissions
 - **DO NOT** save markdown without corresponding image references
-- **DO NOT** assume single-display setups when working on region capture
+- **DO NOT** let legacy capture terminology leak into the primary app surface
 - **DO NOT** route main UI and menu actions through different service instances
 
 ---
 
 ## UNIQUE REQUIREMENTS
 
-### Auto Capture
-- Support full screen, region, and window capture modes
-- Support simulated next actions between captures
-- Show a countdown preview before hiding the app and starting capture
-
-### Document Import
+### File Parsing
 - Support PDF, DOCX, and DOC
 - Convert documents into one image per page before AI processing
 - Allow retrying failed pages and saving partial results
@@ -166,11 +162,11 @@ struct ImageProcessingResult {
 ### AI Providers
 - OpenRouter, OpenAI, Anthropic, and Ollama are first-class providers
 - Ollama should support local usage without an API key
-- Prompt templates should work across both capture and import flows
+- Prompt templates should support general document parsing, tutorials, UI flows, code, and tables
 
 ### Legacy Components
-- `ActionRecorder`, `EventMonitor`, `ActionPlayer`, and `ActionSequence` remain in the repo
-- Treat them as legacy or secondary unless the product direction explicitly changes back to record/playback
+- `AutoCaptureService`, `ScreenCapture`, `ActionRecorder`, `EventMonitor`, `ActionPlayer`, and `ActionSequence` remain in the repo
+- Treat them as legacy or secondary unless the product direction explicitly changes back to capture/playback
 
 ---
 
@@ -192,20 +188,17 @@ xcodebuild test -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs
 ## NOTES
 
 ### Current Scope
-- Capture-driven markdown generation
-- Document import to markdown
+- File parsing to markdown
 - Shared provider-based AI processing
 - Local and cloud AI options via Ollama and hosted providers
 
 ### Near-Term Focus
 - Output quality and markdown structure
-- Permission flow cleanup
-- Multi-display region capture correctness
+- Import UX clarity
+- Retry and partial-save reliability
 - Unifying product messaging with the implemented app
 
 ### Testing Considerations
-- Capture with and without permissions granted
 - Import-only flow on a fresh machine
-- Multi-display region capture
 - Partial AI failure and retry flows
 - Provider configuration errors, especially missing keys and local Ollama availability

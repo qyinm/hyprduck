@@ -8,7 +8,7 @@
 
     // Configuration
     const CONFIG = {
-        tagline: 'Auto-capture.<br>AI-powered.<br>Documentation done.',
+        tagline: 'Parse files.<br>AI-powered.<br>Markdown ready.',
         typingSpeed: 60,
         typingStartDelay: 500,
         scrollThreshold: 0.15,

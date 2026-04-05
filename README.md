@@ -5,7 +5,7 @@
 <h1 align="center">DuckDocs</h1>
 
 <p align="center">
-  <strong>Capture screens. Import documents. Generate markdown.</strong>
+  <strong>Parse documents. Generate markdown. Keep the linked page images.</strong>
 </p>
 
 <p align="center">
@@ -19,14 +19,16 @@
 
 ## Overview
 
-DuckDocs is a macOS app for turning screenshots and imported documents into markdown using AI.
+DuckDocs is a macOS app for turning existing files into markdown using AI.
 
-It supports two primary workflows:
+The current product surface is file parsing:
 
-1. **Auto Capture**
-   Configure a target, let DuckDocs step through the screen, and convert the captured images into markdown.
-2. **Document Import**
-   Import a PDF or Word document, convert each page to images, and generate markdown from the page content.
+1. **Import a file**
+   Choose a PDF, DOCX, or DOC file from disk.
+2. **Convert pages**
+   DuckDocs renders each page as an image so multimodal models can analyze layout and content.
+3. **Generate markdown**
+   The selected provider extracts text and structure, then saves markdown plus linked page images.
 
 DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, Anthropic, or Ollama.
 
@@ -34,18 +36,11 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 
 ## Features
 
-### Capture Workflow
-- Full screen, region, or window capture
-- Configurable next action between captures
-- Countdown preview before capture starts
-- Parallel AI processing for captured images
-- Markdown output with saved images
-
-### Document Import
+### File Parsing
 - Import PDF, DOCX, and DOC
 - Convert each page to an image for analysis
 - Retry failed pages and save partial results
-- Shared AI settings with the capture workflow
+- Save markdown together with linked page images
 
 ### AI Processing
 - OpenRouter, OpenAI, Anthropic, and Ollama support
@@ -57,14 +52,7 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 
 ## How It Works
 
-### Capture
-1. Choose an AI provider and model.
-2. Pick a capture target: full screen, region, or window.
-3. Set the next action, capture count, and output name.
-4. Start capture and switch to the target app during the countdown.
-5. DuckDocs captures images, runs AI analysis, and saves markdown plus images to `~/Documents/DuckDocs/`.
-
-### Import
+### Parse a File
 1. Choose an AI provider and model.
 2. Import a PDF or Word document.
 3. DuckDocs converts pages into images.
@@ -98,22 +86,14 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 - Apple Silicon or Intel Mac
 
 ### Permissions
-- **Screen Recording**: required for screen capture
-- **Accessibility**: required for simulated keyboard and mouse actions during capture
-- **No special permissions are required for document import**
+- **No special permissions are required for file parsing**
+- Legacy capture code remains in the repository, but it is not part of the primary product surface
 
 ---
 
 ## Quick Start
 
-### Auto Capture
-1. Launch DuckDocs.
-2. Configure the AI provider, model, and prompt template.
-3. Choose `Full Screen`, `Region`, or `Window`.
-4. Set the next action and capture count.
-5. Start capture and review the generated markdown in `~/Documents/DuckDocs/`.
-
-### Document Import
+### Parse a Document
 1. Launch DuckDocs.
 2. Configure the AI provider and model.
 3. Import a PDF, DOCX, or DOC file.
@@ -166,13 +146,11 @@ xcodebuild -project apps/macos/DuckDocs.xcodeproj -scheme DuckDocs CODE_SIGNING_
 .
 ├── apps
 │   ├── cli
-│   └── macos
+│   ├── macos
 │       ├── DuckDocs.xcodeproj
 │       └── DuckDocs/
-├── docs
+│   └── site
 ├── packages
 ├── scripts
-├── build
-├── exports
 └── release
 ```

@@ -2,95 +2,44 @@
 
 **Project:** DuckDocs
 **Type:** macOS Native App (Swift/SwiftUI)
-**Domain:** Automation + AI Document Generation
+**Domain:** File Parsing + AI Markdown Generation
 
 ---
 
 ## What This Project Does
 
-DuckDocs automates the creation of documentation by capturing screens and converting them to markdown:
+DuckDocs converts existing files into markdown packages:
 
-1. **Select**: Choose capture target (full screen, region, or specific window)
-2. **Configure**: Set "next" action (arrow key, space, etc.) and capture count
-3. **Auto-Capture**: Automatically performs action → captures screenshot → repeats
-4. **Generate**: Sends screenshots to OpenRouter API (Vision LLM) for markdown conversion
+1. **Import**: Choose a PDF, DOCX, or DOC file.
+2. **Render**: Convert each page into an image snapshot for multimodal analysis.
+3. **Generate**: Send page images to the configured AI provider and assemble markdown output.
+4. **Save**: Write markdown plus linked page images to `~/Documents/DuckDocs/`.
 
-**User Journey:** Configure → Start Capture → Auto Action/Capture Loop → AI Processing (parallel) → Markdown Output
+The product surface is file parsing first. Legacy capture code still exists in the repository, but it is not the primary app flow.
 
 ---
 
 ## When Working on This Project
 
-### If Adding Capture Features
+### If Adding File Parsing Features
 - Look at: `apps/macos/DuckDocs/Playback/`
-- Key files: `AutoCaptureService.swift`, `ScreenCapture.swift`
-- Must handle: Capture modes (fullScreen, region, window), SCStream configuration
+- Key files: `DocumentImportService.swift`, `DocumentConverter.swift`, `DocumentationOutputBuilder.swift`
+- Must handle: per-page conversion, partial failures, markdown assembly
 
 ### If Adding AI Features
 - Look at: `apps/macos/DuckDocs/AI/`
-- Key files: `DeepSeekOCRService.swift`
-- Must handle: OpenRouter API, image base64 encoding, parallel processing
+- Key files: `AIService.swift`, `PromptTemplate.swift`, `Providers/`
+- Must handle: provider routing, model configuration, multimodal prompts
 
 ### If Working on UI
 - Look at: `apps/macos/DuckDocs/Views/`
-- Key files: `ContentView.swift`, `RegionSelectorWindow.swift`, `WindowPickerView.swift`
-- Pattern: SwiftUI with @Observable
+- Key files: `ContentView.swift`, `DocumentImportSection.swift`
+- Pattern: SwiftUI with `@Observable`
 
-### If Adding Capture Selection
-- `RegionSelectorWindow.swift`: NSPanel overlay for drag-to-select region
-- `WindowPickerView.swift`: SwiftUI sheet for window selection
-- `CaptureSettings.swift`: CaptureMode enum (fullScreen, region, window)
-
----
-
-## Critical Technical Details
-
-### ScreenCaptureKit
-```swift
-// Modern screenshot API (macOS 12.3+)
-let content = try await SCShareableContent.current
-let filter = SCContentFilter(display: display, excludingWindows: [])
-// Supports: captureScreen(), captureRegion(rect), captureWindowByID(id)
-```
-- Supports window capture, display capture, or region capture
-- Must handle stream lifecycle (start/stop properly)
-
-### OpenRouter API Integration
-```swift
-// Vision LLM API call
-let requestBody: [String: Any] = [
-    "model": "openai/gpt-4.1-nano",
-    "max_tokens": 4096,
-    "messages": [[
-        "role": "user",
-        "content": [
-            ["type": "text", "text": prompt],
-            ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(base64)"]]
-        ]
-    ]]
-]
-```
-
-**API Details:**
-- Provider: OpenRouter (https://openrouter.ai)
-- Model: `openai/gpt-4.1-nano` (configurable)
-- Requires: API key from user (stored in UserDefaults)
-- Images: Resized to max 2048px, JPEG 80% quality
-
-### Parallel Image Processing
-```swift
-// Process all images concurrently
-try await withThrowingTaskGroup(of: (Int, String).self) { group in
-    for (index, image) in images.enumerated() {
-        group.addTask {
-            let result = try await ocrService.analyzeImage(image)
-            return (index, result)
-        }
-    }
-    // Sort by index to maintain order
-    results.sort { $0.0 < $1.0 }
-}
-```
+### If Touching Legacy Capture Code
+- Look at: `apps/macos/DuckDocs/Playback/AutoCaptureService.swift`
+- Related files: `ScreenCapture.swift`, `RegionSelectorWindow.swift`, `WindowPickerView.swift`
+- Treat this as secondary unless the product direction changes again
 
 ---
 
@@ -99,33 +48,28 @@ try await withThrowingTaskGroup(of: (Int, String).self) { group in
 | Task | Entry Point | Notes |
 |------|-------------|-------|
 | Change AI model | `apps/macos/DuckDocs/AI/AIService.swift` | Update provider/model defaults |
-| Modify capture logic | `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | `executeJob()` method |
-| Add capture mode | `apps/macos/DuckDocs/Models/CaptureSettings.swift` | Add to `CaptureMode` enum |
+| Change prompt behavior | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Adjust parsing-oriented prompt text |
+| Modify import logic | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Conversion, analysis, retry flow |
+| Add file format support | `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | Extend conversion pipeline |
 | Change output format | `apps/macos/DuckDocs/Playback/DocumentationOutputBuilder.swift` | Output folder and markdown assembly |
-| Add UI setting | `apps/macos/DuckDocs/Views/ContentView.swift` | Main settings surface |
-| Handle permissions | `apps/macos/DuckDocs/App/DuckDocsApp.swift` | Onboarding flow |
+| Change main UI | `apps/macos/DuckDocs/Views/ContentView.swift` | File parsing surface |
 
 ---
 
 ## Data Flow
 
-```
-User Configuration (CaptureJob)
+```text
+User selects file
     ↓
-Start Capture → App hides (3s delay)
+DocumentImportJob
     ↓
-Auto-Capture Loop:
-    - Capture screenshot (ScreenCapture)
-    - Perform next action (CGEvent.post)
-    - Repeat n times
+DocumentConverter renders page images
     ↓
-App shows → Parallel AI Processing
+AIService sends page images to provider
     ↓
-OpenRouter API (gpt-4.1-nano)
+Results are collected in page order
     ↓
-Collect & sort results by index
-    ↓
-Save: output.md + /images folder
+DocumentationOutputBuilder writes markdown + images
 ```
 
 ---
@@ -134,55 +78,54 @@ Save: output.md + /images folder
 
 | File | Purpose |
 |------|---------|
-| `apps/macos/DuckDocs/Playback/AutoCaptureService.swift` | Main capture workflow orchestrator |
+| `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Main file parsing workflow orchestrator |
+| `apps/macos/DuckDocs/Playback/DocumentConverter.swift` | PDF and Word conversion into page images |
+| `apps/macos/DuckDocs/Playback/DocumentationOutputBuilder.swift` | Markdown package assembly |
+| `apps/macos/DuckDocs/Models/DocumentImportJob.swift` | File parsing job configuration |
 | `apps/macos/DuckDocs/AI/AIService.swift` | AI orchestration and provider routing |
-| `apps/macos/DuckDocs/Playback/ScreenCapture.swift` | ScreenCaptureKit wrapper |
-| `apps/macos/DuckDocs/Models/CaptureJob.swift` | Job configuration (mode, action, count) |
-| `apps/macos/DuckDocs/Models/CaptureSettings.swift` | CaptureMode enum |
-| `apps/macos/DuckDocs/Views/ContentView.swift` | Main UI with settings |
-| `apps/macos/DuckDocs/Views/RegionSelectorWindow.swift` | Drag-to-select region overlay |
-| `apps/macos/DuckDocs/Views/WindowPickerView.swift` | Window selection sheet |
+| `apps/macos/DuckDocs/Views/ContentView.swift` | Main import-first UI |
+| `apps/macos/DuckDocs/Views/DocumentImportSection.swift` | Import state and controls |
 
 ---
 
 ## Important Considerations
 
 ### Security & Privacy
-- API key stored locally in UserDefaults
-- Screenshots sent to external API (OpenRouter)
-- Images saved locally in ~/Documents/DuckDocs/
+- API keys are stored locally
+- Imported page images may be sent to external AI providers
+- Output is saved locally in `~/Documents/DuckDocs/`
 
 ### Performance
-- Parallel image processing for faster AI analysis
-- Images resized to max 2048px to reduce API payload
-- JPEG compression (80%) for smaller file size
+- Parallel page processing is the main latency lever
+- Images are resized/compressed before provider upload
+- Large documents should fail partially rather than losing all progress
 
 ### Error Scenarios to Handle
-- API key missing → Show error message
-- API rate limit → Handle gracefully
-- ScreenCapture permission denied → Prompt user
-- Network error → Retry or show error
-- Window not found → Fall back to full screen
+- API key missing or invalid
+- Provider/network failure during processing
+- Unsupported or unreadable file contents
+- Empty documents
+- Partial page conversion or analysis failure
 
 ---
 
 ## Testing Checklist
 
-- [ ] Test full screen capture
-- [ ] Test region selection
-- [ ] Test window selection
-- [ ] Test with different "next" actions (arrows, space, etc.)
-- [ ] Test parallel processing with multiple images
-- [ ] Test API error handling
+- [ ] Test PDF import
+- [ ] Test DOCX import
+- [ ] Test DOC import
+- [ ] Test partial AI failure and retry flow
 - [ ] Test without API key
+- [ ] Test Ollama local configuration
 
 ---
 
 ## Resources
 
-- [ScreenCaptureKit Documentation](https://developer.apple.com/documentation/screencapturekit)
+- [PDFKit Documentation](https://developer.apple.com/documentation/pdfkit)
 - [OpenRouter API](https://openrouter.ai/docs)
-- [CGEvent Reference](https://developer.apple.com/documentation/coregraphics/cgevent)
+- [OpenAI API](https://platform.openai.com/docs)
+- [Anthropic API](https://docs.anthropic.com/)
 
 ---
 

@@ -37,13 +37,13 @@ final class PermissionManager {
     var capturePermissionCallout: String {
         switch (accessibilityGranted, screenCaptureGranted) {
         case (false, false):
-            return "Grant Accessibility and Screen Recording to use Capture Workflow. Document Import works without these permissions."
+            return "Legacy capture tools need Accessibility and Screen Recording. File parsing already works without them."
         case (false, true):
-            return "Grant Accessibility to automate capture actions. Document Import already works."
+            return "Legacy capture tools need Accessibility for simulated actions. File parsing already works."
         case (true, false):
-            return "Grant Screen Recording to capture screenshots. Document Import already works."
+            return "Legacy capture tools need Screen Recording for screenshots. File parsing already works."
         case (true, true):
-            return "Capture Workflow is ready."
+            return "Optional legacy capture tools are ready."
         }
     }
 

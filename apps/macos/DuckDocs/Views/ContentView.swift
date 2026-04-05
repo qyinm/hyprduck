@@ -9,35 +9,9 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppState.self) var appState
-    @AppStorage("hasDismissedCapturePermissionOnboarding") private var hasDismissedCapturePermissionOnboarding = false
-    @State private var showOnboarding = false
-    @Binding var captureService: AutoCaptureService
-    @Binding var job: CaptureJob
-    @State private var showWindowPicker = false
     @State private var showAdvancedSettings = false
     let documentImportService: DocumentImportService
     private var aiService: AIService { AIService.shared }
-
-    init(
-        captureService: Binding<AutoCaptureService>,
-        job: Binding<CaptureJob>,
-        documentImportService: DocumentImportService
-    ) {
-        self._captureService = captureService
-        self._job = job
-        self.documentImportService = documentImportService
-    }
-
-    private var canStartCapture: Bool {
-        guard appState.canUseCapture, aiService.configurationIssue == nil else { return false }
-
-        switch captureService.state {
-        case .idle, .completed, .error, .partiallyCompleted:
-            return true
-        default:
-            return false
-        }
-    }
 
     private var canStartImport: Bool {
         guard appState.canUseImport, aiService.configurationIssue == nil else { return false }
@@ -68,30 +42,20 @@ struct ContentView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    HeroSection(
+                    ImportHeroSection(
                         aiSummary: aiSummary,
-                        canStartCapture: canStartCapture,
                         canStartImport: canStartImport,
-                        startCapture: startCapture,
                         importDocument: importDocument
                     )
 
-                    if aiService.configurationIssue != nil || !appState.canUseCapture {
-                        HomeNoticeStack(
-                            permissionManager: appState.permissionManager,
-                            configurationIssue: aiService.configurationIssue
-                        )
-                    }
+                    HomeNoticeStack(configurationIssue: aiService.configurationIssue)
 
                     AdvancedSettingsPanel(
                         isExpanded: $showAdvancedSettings,
                         aiService: aiService
                     )
 
-                    WorkflowDashboard(
-                        captureService: $captureService,
-                        job: $job,
-                        showWindowPicker: $showWindowPicker,
+                    FileParsingDashboard(
                         documentImportService: documentImportService,
                         aiService: aiService
                     )
@@ -102,25 +66,6 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 640)
-        .task {
-            await appState.permissionManager.checkAllPermissions()
-            if !appState.canUseCapture && !hasDismissedCapturePermissionOnboarding {
-                showOnboarding = true
-            }
-        }
-        .sheet(isPresented: $showOnboarding) {
-            OnboardingView()
-        }
-        .sheet(isPresented: $showWindowPicker) {
-            WindowPickerView { windowID, title, appName in
-                job.captureMode = .window(windowID: windowID, title: title, appName: appName)
-            }
-        }
-    }
-
-    private func startCapture() {
-        guard canStartCapture else { return }
-        captureService.run(job: job, aiService: aiService)
     }
 
     private func importDocument() {
@@ -128,11 +73,9 @@ struct ContentView: View {
     }
 }
 
-struct HeroSection: View {
+struct ImportHeroSection: View {
     let aiSummary: String
-    let canStartCapture: Bool
     let canStartImport: Bool
-    let startCapture: () -> Void
     let importDocument: () -> Void
 
     var body: some View {
@@ -152,7 +95,7 @@ struct HeroSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("DuckDocs")
                             .font(.system(size: 32, weight: .bold, design: .rounded))
-                        Text("Capture steps or import docs, then ship polished markdown.")
+                        Text("Parse PDFs and Word files into linked markdown with AI.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -174,25 +117,21 @@ struct HeroSection: View {
             Spacer(minLength: 0)
 
             VStack(spacing: 12) {
-                Button(action: startCapture) {
-                    Label("Start Capture", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!canStartCapture)
-
                 Button(action: importDocument) {
                     Label("Import File", systemImage: "square.and.arrow.down.on.square")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!canStartImport)
+
+                Text("No screen or accessibility permissions required.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .frame(width: 220)
+            .frame(width: 260)
         }
         .padding(28)
         .background(
@@ -216,7 +155,6 @@ struct HeroSection: View {
 }
 
 struct HomeNoticeStack: View {
-    @Bindable var permissionManager: PermissionManager
     let configurationIssue: String?
 
     var body: some View {
@@ -229,50 +167,12 @@ struct HomeNoticeStack: View {
                 )
             }
 
-            if !permissionManager.canUseCapture {
-                CompactPermissionNotice(permissionManager: permissionManager)
-            }
+            WorkflowNotice(
+                title: "Files First",
+                message: "DuckDocs now focuses on parsing existing files into markdown packages. Import works without extra macOS permissions.",
+                systemImage: "doc.text.magnifyingglass"
+            )
         }
-    }
-}
-
-struct CompactPermissionNotice: View {
-    @Bindable var permissionManager: PermissionManager
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(.orange)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Capture needs macOS permissions")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Text(permissionManager.capturePermissionCallout)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                if !permissionManager.accessibilityGranted {
-                    Button("Accessibility") {
-                        permissionManager.requestAccessibilityPermission()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if !permissionManager.screenCaptureGranted {
-                    Button("Screen Recording") {
-                        permissionManager.requestScreenCapturePermission()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-        }
-        .padding()
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -296,7 +196,7 @@ struct AdvancedSettingsPanel: View {
 
                 Spacer()
 
-                Label("Shared for Capture and Import", systemImage: "slider.horizontal.3")
+                Label("Shared for file parsing", systemImage: "slider.horizontal.3")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -306,79 +206,55 @@ struct AdvancedSettingsPanel: View {
     }
 }
 
-struct WorkflowDashboard: View {
-    @Binding var captureService: AutoCaptureService
-    @Binding var job: CaptureJob
-    @Binding var showWindowPicker: Bool
+struct FileParsingDashboard: View {
     let documentImportService: DocumentImportService
     let aiService: AIService
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: 20) {
-                CaptureWorkflowSection(
-                    captureService: $captureService,
-                    job: $job,
-                    showWindowPicker: $showWindowPicker,
-                    aiService: aiService
-                )
-                .frame(maxWidth: .infinity, alignment: .top)
-
                 DocumentImportSection(importService: documentImportService, aiService: aiService)
                     .frame(maxWidth: .infinity, alignment: .top)
+
+                ParsingGuideCard()
+                    .frame(width: 320, alignment: .top)
             }
 
             VStack(spacing: 20) {
-                CaptureWorkflowSection(
-                    captureService: $captureService,
-                    job: $job,
-                    showWindowPicker: $showWindowPicker,
-                    aiService: aiService
-                )
-
                 DocumentImportSection(importService: documentImportService, aiService: aiService)
+                ParsingGuideCard()
             }
         }
     }
 }
 
-struct CaptureWorkflowSection: View {
-    @Environment(AppState.self) var appState
-    @Binding var captureService: AutoCaptureService
-    @Binding var job: CaptureJob
-    @Binding var showWindowPicker: Bool
-    let aiService: AIService
-
-    private var canStartCapture: Bool {
-        appState.canUseCapture && aiService.configurationIssue == nil
-    }
-
-    private var canRetryCapture: Bool {
-        aiService.configurationIssue == nil
-    }
+struct ParsingGuideCard: View {
+    private let steps = [
+        "Choose a PDF, DOCX, or DOC file.",
+        "DuckDocs converts each page into an image snapshot.",
+        "The selected AI provider extracts text and structure into markdown.",
+        "Results are saved with linked page images in ~/Documents/DuckDocs/."
+    ]
 
     var body: some View {
         WorkflowCard(
-            eyebrow: "Capture Workflow",
-            title: "Automate step-by-step screenshots",
-            description: "Choose a target, decide the next action, and turn the resulting sequence into a markdown guide."
+            eyebrow: "Workflow",
+            title: "What DuckDocs creates",
+            description: "Every import becomes a markdown package with page images and provider-generated structure."
         ) {
-            VStack(alignment: .leading, spacing: 16) {
-                if !appState.canUseCapture {
-                    CapturePermissionsBanner(permissionManager: appState.permissionManager)
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(String(format: "%02d", index + 1))
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
+
+                        Text(step)
+                            .font(.subheadline)
+                    }
                 }
-
-                CaptureSummarySettingsSection(job: $job, showWindowPicker: $showWindowPicker)
-
-                StatusSection(captureService: captureService)
-
-                ActionButton(
-                    captureService: captureService,
-                    job: job,
-                    aiService: aiService,
-                    canStart: canStartCapture,
-                    canRetry: canRetryCapture
-                )
             }
         }
     }
@@ -415,47 +291,6 @@ struct WorkflowCard<Content: View>: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.white.opacity(0.42), lineWidth: 1)
         )
-    }
-}
-
-struct CapturePermissionsBanner: View {
-    @Bindable var permissionManager: PermissionManager
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "lock.shield")
-                    .foregroundStyle(.orange)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Capture permissions needed")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    Text(permissionManager.capturePermissionCallout)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack(spacing: 8) {
-                if !permissionManager.accessibilityGranted {
-                    Button("Grant Accessibility") {
-                        permissionManager.requestAccessibilityPermission()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if !permissionManager.screenCaptureGranted {
-                    Button("Grant Screen Recording") {
-                        permissionManager.requestScreenCapturePermission()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-        }
-        .padding()
-        .background(Color.orange.opacity(0.08))
-        .cornerRadius(12)
     }
 }
 
@@ -652,351 +487,7 @@ struct AISettingsForm: View {
     }
 }
 
-struct CaptureSummarySettingsSection: View {
-    @Binding var job: CaptureJob
-    @Binding var showWindowPicker: Bool
-    @State private var regionSelectorWindow: RegionSelectorWindow?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Setup")
-                .font(.headline)
-
-            LazyVGrid(columns: [
-                GridItem(.adaptive(minimum: 220), spacing: 12)
-            ], spacing: 12) {
-                CaptureSettingTile(title: "Output Name", systemImage: "doc.text") {
-                    TextField("Workflow Documentation", text: $job.outputName)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                CaptureSettingTile(title: "Capture Target", systemImage: job.captureMode.icon) {
-                    Menu {
-                        Button("Full Screen") {
-                            job.captureMode = .fullScreen
-                        }
-                        Button("Select Region...") {
-                            showRegionSelector()
-                        }
-                        Button("Select Window...") {
-                            showWindowPicker = true
-                        }
-                    } label: {
-                        CompactMenuLabel(primary: job.captureMode.displayName)
-                    }
-                    .menuStyle(.borderlessButton)
-                }
-
-                CaptureSettingTile(title: "Next Action", systemImage: "command") {
-                    Menu {
-                        Button("→ Right Arrow") {
-                            job.nextAction = .keyPress(keyCode: 124, modifiers: [])
-                        }
-                        Button("← Left Arrow") {
-                            job.nextAction = .keyPress(keyCode: 123, modifiers: [])
-                        }
-                        Button("↓ Down Arrow") {
-                            job.nextAction = .keyPress(keyCode: 125, modifiers: [])
-                        }
-                        Button("Space") {
-                            job.nextAction = .keyPress(keyCode: 49, modifiers: [])
-                        }
-                        Button("Enter") {
-                            job.nextAction = .keyPress(keyCode: 36, modifiers: [])
-                        }
-                        Button("None (Manual)") {
-                            job.nextAction = .none
-                        }
-                    } label: {
-                        CompactMenuLabel(primary: job.nextAction.displayName)
-                    }
-                    .menuStyle(.borderlessButton)
-                }
-
-                CaptureSettingTile(title: "Steps", systemImage: "number") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Stepper("\(job.captureCount) captures", value: $job.captureCount, in: 1...100)
-                        Text("How many screenshots to take in sequence.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                CaptureSettingTile(title: "Delay", systemImage: "timer") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Slider(value: $job.delayBetweenCaptures, in: 0.2...3.0, step: 0.1)
-                        Text("\(job.delayBetweenCaptures, specifier: "%.1f")s between captures")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private func showRegionSelector() {
-        let window = RegionSelectorWindow()
-        window.onRegionSelected = { region in
-            job.captureMode = .region(region)
-            regionSelectorWindow = nil
-        }
-        window.onCancelled = {
-            regionSelectorWindow = nil
-        }
-        regionSelectorWindow = window
-        window.show()
-    }
-}
-
-struct CaptureSettingTile<Content: View>: View {
-    let title: String
-    let systemImage: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline)
-                .fontWeight(.medium)
-            content
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-struct CompactMenuLabel: View {
-    let primary: String
-
-    var body: some View {
-        HStack {
-            Text(primary)
-                .lineLimit(1)
-            Spacer()
-            Image(systemName: "chevron.down")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-struct StatusSection: View {
-    let captureService: AutoCaptureService
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Status")
-                .font(.headline)
-
-            VStack(spacing: 12) {
-                switch captureService.state {
-                case .idle:
-                    Label("Ready to capture", systemImage: "checkmark.circle")
-                        .foregroundStyle(.secondary)
-
-                case .preparing:
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Preparing... Switch to the target app now.")
-                            .foregroundStyle(.orange)
-                    }
-
-                case .capturing(let current, let total):
-                    VStack(spacing: 8) {
-                        ProgressView(value: Double(current), total: Double(total))
-                        Text("Capturing \(current) of \(total)")
-                    }
-
-                case .processing(let current, let total):
-                    VStack(spacing: 8) {
-                        ProgressView(value: Double(current), total: Double(total))
-                        Text("AI Processing \(current) of \(total)")
-                    }
-
-                case .saving:
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Saving markdown and images...")
-                    }
-
-                case .completed(let url):
-                    VStack(spacing: 12) {
-                        Label("Completed!", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.headline)
-
-                        Text(url.deletingLastPathComponent().path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        HStack {
-                            Button("Open Folder") {
-                                NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
-                            }
-                            Button("Open File") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        }
-                    }
-
-                case .error(let message):
-                    VStack(spacing: 8) {
-                        Label("Error", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                case .partiallyCompleted(let successCount, let failedCount):
-                    VStack(spacing: 12) {
-                        Label("Partial Completion", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.headline)
-
-                        Text("\(successCount) succeeded, \(failedCount) failed")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if !captureService.capturedImages.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Array(captureService.capturedImages.enumerated()), id: \.offset) { index, image in
-                                ZStack(alignment: .topTrailing) {
-                                    Image(nsImage: image)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(height: 68)
-                                        .cornerRadius(8)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(statusColor(for: index), lineWidth: 2)
-                                        )
-
-                                    if let result = captureService.processingResults.first(where: { $0.id == index }) {
-                                        statusIcon(for: result.status)
-                                            .offset(x: 4, y: -4)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 2)
-                    }
-                    .frame(height: 80)
-                }
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
-        }
-    }
-
-    private func statusColor(for index: Int) -> Color {
-        guard let result = captureService.processingResults.first(where: { $0.id == index }) else {
-            return Color.secondary.opacity(0.3)
-        }
-        switch result.status {
-        case .pending: return Color.secondary.opacity(0.3)
-        case .processing: return Color.blue
-        case .success: return Color.green
-        case .failed: return Color.red
-        }
-    }
-
-    @ViewBuilder
-    private func statusIcon(for status: ImageProcessingResult.Status) -> some View {
-        switch status {
-        case .pending:
-            EmptyView()
-        case .processing:
-            ProgressView()
-                .scaleEffect(0.5)
-                .frame(width: 16, height: 16)
-        case .success:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.caption)
-                .background(Circle().fill(.white).padding(2))
-        case .failed:
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(.red)
-                .font(.caption)
-                .background(Circle().fill(.white).padding(2))
-        }
-    }
-}
-
-struct ActionButton: View {
-    let captureService: AutoCaptureService
-    let job: CaptureJob
-    let aiService: AIService
-    let canStart: Bool
-    let canRetry: Bool
-
-    var body: some View {
-        switch captureService.state {
-        case .idle, .completed, .error:
-            Button {
-                captureService.run(job: job, aiService: aiService)
-            } label: {
-                Label("Start Capture", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!canStart)
-
-        case .partiallyCompleted:
-            HStack(spacing: 12) {
-                Button {
-                    captureService.retryFailed(aiService: aiService)
-                } label: {
-                    Label("Retry Failed", systemImage: "arrow.clockwise")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canRetry)
-
-                Button {
-                    captureService.saveResults()
-                } label: {
-                    Label("Save Partial", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-            }
-
-        case .preparing, .capturing, .processing, .saving:
-            Button {
-                captureService.cancel()
-            } label: {
-                Label("Cancel", systemImage: "stop.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .tint(.red)
-        }
-    }
-}
-
 #Preview {
-    ContentView(
-        captureService: .constant(AutoCaptureService()),
-        job: .constant(CaptureJob()),
-        documentImportService: DocumentImportService()
-    )
-    .environment(AppState.shared)
+    ContentView(documentImportService: DocumentImportService())
+        .environment(AppState.shared)
 }
