@@ -29,26 +29,35 @@ final class DocumentImportService {
     private(set) var pageImages: [NSImage] = []
     private(set) var processingResults: [ImageProcessingResult] = []
     private(set) var currentJob: DocumentImportJob?
+    private(set) var lastParseResult: SchemaParseResult?
 
     private let converter = DocumentConverter()
     private let outputBuilder = DocumentationOutputBuilder()
     private var importTask: Task<Void, Never>?
+    private var currentEngine: DocumentParsingEngine?
+    private var currentRequest: SchemaParseRequest?
+    private var startedAt: Date?
 
     init() {}
 
     /// Import a document file and convert to markdown
     func run(job: DocumentImportJob, aiService: AIService) {
-        guard !isBusy else { return }
+        let request = SchemaParseRequest(job: job, template: aiService.selectedTemplate)
+        let engine = AIServiceParsingEngine(aiService: aiService)
+        run(job: job, request: request, engine: engine)
+    }
 
-        if let configurationIssue = aiService.configurationIssue {
-            state = .error(configurationIssue)
-            return
-        }
+    /// Import a document file using the schema-first engine seam.
+    func run(job: DocumentImportJob, request: SchemaParseRequest, engine: DocumentParsingEngine) {
+        guard !isBusy else { return }
 
         reset()
         currentJob = job
+        currentRequest = request
+        currentEngine = engine
+        startedAt = Date()
         importTask = Task {
-            await executeImport(job, aiService: aiService)
+            await executeImport(job, request: request, engine: engine)
         }
     }
 
@@ -60,9 +69,13 @@ final class DocumentImportService {
         pageImages = []
         processingResults = []
         currentJob = nil
+        currentRequest = nil
+        currentEngine = nil
+        lastParseResult = nil
+        startedAt = nil
     }
 
-    private func executeImport(_ job: DocumentImportJob, aiService: AIService) async {
+    private func executeImport(_ job: DocumentImportJob, request: SchemaParseRequest, engine: DocumentParsingEngine) async {
         Self.logger.info("Starting import: \(job.fileURL.lastPathComponent, privacy: .public)")
 
         // Phase 1: Convert document to images
@@ -81,7 +94,7 @@ final class DocumentImportService {
         // Phase 2: AI Processing (parallel)
         state = .processing(current: 0, total: pageImages.count)
 
-        let results = await processImagesInParallel(images: pageImages, aiService: aiService)
+        let results = await processImagesInParallel(images: pageImages, request: request, engine: engine)
 
         if Task.isCancelled { return }
 
@@ -96,11 +109,17 @@ final class DocumentImportService {
             return
         }
 
+        lastParseResult = buildParseResult(engineID: engine.engineID)
+
         // Phase 3: Save
         await performSave(job: job)
     }
 
-    private func processImagesInParallel(images: [NSImage], aiService: AIService) async -> [ImageProcessingResult] {
+    private func processImagesInParallel(
+        images: [NSImage],
+        request: SchemaParseRequest,
+        engine: DocumentParsingEngine
+    ) async -> [ImageProcessingResult] {
         // Initialize results
         processingResults = images.enumerated().map { index, image in
             ImageProcessingResult(id: index, image: image, status: .pending)
@@ -123,8 +142,12 @@ final class DocumentImportService {
 
                 group.addTask {
                     do {
-                        let result = try await aiService.analyzeImage(image)
-                        return (currentIndex, .success(result))
+                        let result = try await engine.parsePage(
+                            image: image,
+                            pageIndex: currentIndex,
+                            request: request
+                        )
+                        return (currentIndex, .success(result.markdown ?? result.plainText ?? ""))
                     } catch {
                         return (currentIndex, .failure(error))
                     }
@@ -161,8 +184,12 @@ final class DocumentImportService {
 
                     group.addTask {
                         do {
-                            let result = try await aiService.analyzeImage(image)
-                            return (currentIndex, .success(result))
+                            let result = try await engine.parsePage(
+                                image: image,
+                                pageIndex: currentIndex,
+                                request: request
+                            )
+                            return (currentIndex, .success(result.markdown ?? result.plainText ?? ""))
                         } catch {
                             return (currentIndex, .failure(error))
                         }
@@ -177,14 +204,32 @@ final class DocumentImportService {
 
     /// Retry failed pages
     func retryFailed(aiService: AIService) {
+        currentEngine = AIServiceParsingEngine(aiService: aiService)
+        if let job = currentJob {
+            currentRequest = SchemaParseRequest(job: job, template: aiService.selectedTemplate)
+        }
+        retryFailed()
+    }
+
+    /// Retry failed pages using the currently configured engine seam.
+    func retryFailed() {
         guard case .partiallyCompleted = state else { return }
+        guard currentEngine != nil, currentRequest != nil else {
+            state = .error("Retry failed because the parsing engine is no longer available.")
+            return
+        }
 
         importTask = Task {
-            await retryFailedPages(aiService: aiService)
+            await retryFailedPages()
         }
     }
 
-    private func retryFailedPages(aiService: AIService) async {
+    private func retryFailedPages() async {
+        guard let engine = currentEngine, let request = currentRequest else {
+            state = .error("Retry failed because the parsing engine is no longer available.")
+            return
+        }
+
         let failedIndices = processingResults.enumerated()
             .filter { $0.element.status == .failed }
             .map { $0.offset }
@@ -201,9 +246,13 @@ final class DocumentImportService {
             processingResults[idx].errorMessage = nil
 
             do {
-                let result = try await aiService.analyzeImage(processingResults[idx].image)
+                let result = try await engine.parsePage(
+                    image: processingResults[idx].image,
+                    pageIndex: idx,
+                    request: request
+                )
                 processingResults[idx].status = .success
-                processingResults[idx].analysis = result
+                processingResults[idx].analysis = result.markdown ?? result.plainText
             } catch {
                 processingResults[idx].status = .failed
                 processingResults[idx].errorMessage = error.localizedDescription
@@ -219,6 +268,7 @@ final class DocumentImportService {
         if stillFailed > 0 {
             state = .partiallyCompleted(successCount: successCount, failedCount: stillFailed)
         } else if let job = currentJob {
+            lastParseResult = buildParseResult(engineID: engine.engineID)
             await performSave(job: job)
         }
     }
@@ -236,7 +286,9 @@ final class DocumentImportService {
         state = .saving
 
         do {
-            let url = try outputBuilder.exportImport(job: job, results: processingResults)
+            let parseResult = lastParseResult ?? buildParseResult(engineID: currentEngine?.engineID ?? "legacy-image-processing")
+            lastParseResult = parseResult
+            let url = try outputBuilder.exportImport(job: job, parseResult: parseResult, images: pageImages)
             state = .completed(url)
         } catch {
             state = .error("Save failed: \(error.localizedDescription)")
@@ -246,6 +298,36 @@ final class DocumentImportService {
     /// Reset to idle state
     func reset() {
         cancel()
+    }
+
+    private func buildParseResult(engineID: String) -> SchemaParseResult {
+        let pages = processingResults.sorted { $0.id < $1.id }.map { result in
+            SchemaParsedPage(
+                index: result.id,
+                markdown: result.analysis,
+                plainText: result.analysis,
+                svg: nil
+            )
+        }
+        let sections = pages.enumerated().map { index, page in
+            MarkdownGenerator.Section(
+                title: "Page \(index + 1)",
+                detail: "**Source:** \(currentJob?.format.displayName ?? "Document")",
+                imagePath: "images/page_\(index + 1).png",
+                body: page.markdown ?? page.plainText ?? "_AI analysis unavailable for page \(index + 1)._"
+            )
+        }
+        let markdown = MarkdownGenerator().generate(
+            title: currentJob?.outputName ?? "DuckDocs Import",
+            sections: sections
+        )
+        let duration = max(0, Int((Date().timeIntervalSince(startedAt ?? Date())) * 1000))
+        let metadata = SchemaParseMetadata(
+            engineID: engineID,
+            durationMilliseconds: duration,
+            pageCount: pages.count
+        )
+        return SchemaParseResult(markdown: markdown, pages: pages, assets: [], metadata: metadata)
     }
 
     private var isBusy: Bool {

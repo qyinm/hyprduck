@@ -1,7 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentFormat {
     Pdf,
     Docx,
@@ -9,13 +6,13 @@ pub enum DocumentFormat {
     Image,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseInput {
     pub path: String,
     pub format: DocumentFormat,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseOptions {
     pub preserve_images: bool,
     pub emit_structured_json: bool,
@@ -34,13 +31,13 @@ impl Default for ParseOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParseOutputTarget {
     pub root_dir: Option<String>,
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseRequest {
     pub version: String,
     pub input: ParseInput,
@@ -49,7 +46,7 @@ pub struct ParseRequest {
     pub output: Option<ParseOutputTarget>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPage {
     pub index: usize,
     pub markdown: Option<String>,
@@ -57,21 +54,21 @@ pub struct ParsedPage {
     pub svg: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputAsset {
     pub relative_path: String,
     pub mime_type: String,
     pub base64: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseMetadata {
     pub engine_id: String,
     pub duration_ms: u64,
     pub page_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseResult {
     pub version: String,
     pub markdown: String,
@@ -80,8 +77,7 @@ pub struct ParseResult {
     pub metadata: ParseMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseProgress {
     Queued,
     ConvertingPages { current: u32, total: u32 },

@@ -35,13 +35,48 @@ struct DocumentationOutputBuilder {
 
     func exportImport(job: DocumentImportJob, results: [ImageProcessingResult]) throws -> URL {
         let orderedResults = results.sorted { $0.id < $1.id }
+        let pages = orderedResults.enumerated().map { index, result in
+            SchemaParsedPage(
+                index: index,
+                markdown: result.analysis,
+                plainText: result.analysis,
+                svg: nil
+            )
+        }
+        let metadata = SchemaParseMetadata(
+            engineID: "legacy-image-processing",
+            durationMilliseconds: 0,
+            pageCount: orderedResults.count
+        )
+        let parseResult = SchemaParseResult(
+            markdown: orderedResults.enumerated().map { index, result in
+                generator.generate(
+                    title: job.outputName,
+                    sections: [
+                        MarkdownGenerator.Section(
+                            title: "Page \(index + 1)",
+                            detail: "**Source:** \(job.format.displayName)",
+                            imagePath: "images/page_\(index + 1).png",
+                            body: body(for: result, itemName: "page", number: index + 1)
+                        )
+                    ]
+                )
+            }.joined(separator: "\n\n"),
+            pages: pages,
+            assets: [],
+            metadata: metadata
+        )
 
-        let sections = orderedResults.enumerated().map { index, result in
+        return try exportImport(job: job, parseResult: parseResult, images: orderedResults.map(\.image))
+    }
+
+    func exportImport(job: DocumentImportJob, parseResult: SchemaParseResult, images: [NSImage]) throws -> URL {
+        let sections = parseResult.pages.enumerated().map { index, page in
             MarkdownGenerator.Section(
                 title: "Page \(index + 1)",
                 detail: "**Source:** \(job.format.displayName)",
                 imagePath: "images/page_\(index + 1).png",
-                body: body(for: result, itemName: "page", number: index + 1)
+                body: pageBody(for: page, number: index + 1)
             )
         }
 
@@ -50,7 +85,7 @@ struct DocumentationOutputBuilder {
             title: job.outputName,
             imagePrefix: "page",
             sections: sections,
-            images: orderedResults.map(\.image)
+            images: images
         )
     }
 
@@ -117,6 +152,18 @@ struct DocumentationOutputBuilder {
         }
 
         return "_AI analysis unavailable for \(itemName) \(number)._"
+    }
+
+    private func pageBody(for page: SchemaParsedPage, number: Int) -> String {
+        if let markdown = page.markdown?.trimmingCharacters(in: .whitespacesAndNewlines), !markdown.isEmpty {
+            return markdown
+        }
+
+        if let plainText = page.plainText?.trimmingCharacters(in: .whitespacesAndNewlines), !plainText.isEmpty {
+            return plainText
+        }
+
+        return "_AI analysis unavailable for page \(number)._"
     }
 
     private func captureDetail(for index: Int, job: CaptureJob) -> String {

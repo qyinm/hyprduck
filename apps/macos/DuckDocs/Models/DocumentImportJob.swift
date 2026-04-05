@@ -8,7 +8,7 @@
 import Foundation
 
 /// Document format types
-enum DocumentFormat: String, CaseIterable {
+enum DocumentFormat: String, CaseIterable, Codable {
     case pdf
     case docx
     case doc

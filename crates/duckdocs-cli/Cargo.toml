@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-clap.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
 duckdocs-engine-client = { path = "../duckdocs-engine-client" }

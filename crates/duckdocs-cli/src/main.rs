@@ -4,7 +4,6 @@ mod tui;
 mod ui;
 
 use anyhow::Result;
-use clap::Parser;
 use cli::{Cli, Commands};
 use duckdocs_engine_client::{EngineClient, StubEngineClient};
 use duckdocs_engine_types::{
@@ -12,13 +11,13 @@ use duckdocs_engine_types::{
 };
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::parse()?;
 
     match cli.command {
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Parse { input }) => run_parse(input),
-        Some(Commands::Tui) | None => tui::run_tui(),
+        None => tui::run_tui(),
     }
 }
 
