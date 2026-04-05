@@ -48,7 +48,8 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
-    let sections = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+    let [intro_area, actions_area] =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
 
     let intro = Paragraph::new(
         "DuckDocs TUI will orchestrate parse jobs against an external engine.\n\n\
@@ -58,7 +59,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
          - configure engines",
     )
     .block(Block::default().borders(Borders::ALL).title("Home"));
-    frame.render_widget(intro, sections[0]);
+    frame.render_widget(intro, intro_area);
 
     let shortcuts = List::new(vec![
         ListItem::new("Parse file"),
@@ -67,7 +68,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
         ListItem::new("Settings"),
     ])
     .block(Block::default().borders(Borders::ALL).title("Actions"));
-    frame.render_widget(shortcuts, sections[1]);
+    frame.render_widget(shortcuts, actions_area);
 }
 
 fn render_jobs(frame: &mut Frame, area: ratatui::layout::Rect) {
