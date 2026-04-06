@@ -14,7 +14,7 @@ Current product direction:
 - **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
 - **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
 
-The active desktop shell is `apps/desktop` (Tauri). Legacy Swift capture and recording/playback components still exist in the codebase as migration/reference material, but the primary product surface is import-first file parsing through the Rust engine.
+The active desktop shell is `apps/desktop` (Tauri), and the primary product surface is import-first file parsing through the Rust engine.
 
 **Core Value Proposition:** turn existing files into markdown packages quickly.
 
@@ -30,44 +30,6 @@ DuckDocs/
 │   │   ├── package.json
 │   │   ├── src/
 │   │   └── src-tauri/
-│   ├── macos/
-│       ├── DuckDocs.xcodeproj
-│       └── DuckDocs/
-│           ├── App/
-│           │   ├── DuckDocsApp.swift
-│           │   ├── AppState.swift
-│           │   ├── KeyboardShortcutManager.swift
-│           │   └── PermissionManager.swift
-│           ├── AI/
-│           │   ├── AIService.swift
-│           │   ├── AIProvider.swift
-│           │   ├── MarkdownGenerator.swift
-│           │   ├── KeychainService.swift
-│           │   ├── PromptTemplate.swift
-│           │   ├── Models/
-│           │   └── Providers/
-│           ├── Models/
-│           │   ├── CaptureJob.swift
-│           │   ├── CaptureResult.swift
-│           │   ├── DocumentImportJob.swift
-│           │   └── ActionSequence.swift
-│           ├── Playback/
-│           │   ├── AutoCaptureService.swift
-│           │   ├── DocumentImportService.swift
-│           │   ├── DocumentConverter.swift
-│           │   ├── ScreenCapture.swift
-│           │   └── ActionPlayer.swift
-│           ├── Recording/
-│           │   ├── ActionRecorder.swift
-│           │   └── EventMonitor.swift
-│           └── Views/
-│               ├── ContentView.swift
-│               ├── DocumentImportSection.swift
-│               ├── OnboardingView.swift
-│               ├── QuickEntryWindow.swift
-│               ├── RegionSelectorWindow.swift
-│               ├── CapturePreviewWindow.swift
-│               └── WindowPickerView.swift
 │   └── site/
 ├── packages/
 └── scripts/
@@ -85,8 +47,6 @@ DuckDocs/
 | Engine contract | `crates/duckdocs-engine-types/src/lib.rs` | Shared request/response/event schema |
 | Engine runtime | `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output writing |
 | Engine client | `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess bridge |
-| Legacy Swift reference UI | `apps/macos/DuckDocs/Views/ContentView.swift` | Reference only during migration |
-| Legacy Swift import flow | `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Reference only during migration |
 
 ---
 
@@ -122,7 +82,6 @@ struct ImageProcessingResult {
 
 ### Desktop Shell Style
 - Keep the active desktop shell in `apps/desktop`
-- Treat `apps/macos` as legacy reference unless the task explicitly says otherwise
 - Keep shell logic in Tauri and parsing/output logic in the Rust engine
 - Avoid reintroducing frontend-owned output packaging or provider persistence
 
@@ -164,12 +123,6 @@ struct ImageProcessingResult {
 - OpenRouter, OpenAI, Anthropic, and Ollama are first-class providers
 - Ollama should support local usage without an API key
 - Prompt templates should support general document parsing, tutorials, UI flows, code, and tables
-
-### Legacy Components
-- `AutoCaptureService`, `ScreenCapture`, `ActionRecorder`, `EventMonitor`, `ActionPlayer`, and `ActionSequence` remain in the repo
-- Treat them as legacy or secondary unless the product direction explicitly changes back to capture/playback
-
----
 
 ## COMMANDS
 

@@ -2,15 +2,15 @@
 
 **Date:** 2026-04-05
 **Status:** Draft approved in chat, awaiting file review
-**Scope:** Unify document parsing behind a single Rust core shared by the macOS app and CLI
+**Scope:** Unify document parsing behind a single Rust core shared by the desktop app and CLI
 
 ## Goal
 
-Refactor DuckDocs so the macOS app and CLI act as thin interface layers while a single Rust parsing core owns document conversion, provider orchestration, parsing execution, output generation, and persistent configuration.
+Refactor DuckDocs so the desktop app and CLI act as thin interface layers while a single Rust parsing core owns document conversion, provider orchestration, parsing execution, output generation, and persistent configuration.
 
 ## Problem
 
-The current macOS app already contains a working import-first parsing flow in Swift, but the longer-term product direction requires:
+The current desktop app already contains a working import-first parsing flow, but the longer-term product direction requires:
 
 - one parsing implementation shared by every interface
 - support for local AI and multiple hosted providers
@@ -28,11 +28,11 @@ If parsing remains embedded inside interface-specific code, provider support, re
 
 ## Product Decision Summary
 
-- The macOS app and CLI are thin interfaces only.
+- The desktop app and CLI are thin interfaces only.
 - A single Rust core is the source of truth for parsing behavior.
 - The Rust core owns provider interfaces and concrete implementations.
 - The Rust core handles document input end-to-end: `PDF`, `DOCX`, and `DOC` to page images to parsed markdown.
-- The macOS app and CLI call the Rust core as a subprocess.
+- The desktop app and CLI call the Rust core as a subprocess.
 - Primary transport is `stdin/stdout` JSON.
 - The same executable also supports debug-oriented request/result file output.
 - Persistent provider settings live in the Rust core and are stored in the user's home directory.
@@ -44,7 +44,7 @@ If parsing remains embedded inside interface-specific code, provider support, re
 The system is composed of three layers:
 
 1. Interface layer
-   - `apps/macos`
+   - `apps/desktop`
    - `apps/cli`
    - Responsibilities: file picking, progress presentation, user commands, subprocess lifecycle, result rendering
 
@@ -79,7 +79,7 @@ crates/
 
 apps/
   cli/
-  macos/
+  desktop/
 ```
 
 `duckdocs-providers` can start as an internal `duckdocs-core/providers` module unless it becomes large enough to justify extraction into its own crate. The important decision is the boundary, not the initial packaging.
@@ -127,7 +127,7 @@ Expected event families:
 
 This allows:
 
-- the macOS app to drive progress UI and retry state
+- the desktop app to drive progress UI and retry state
 - the CLI to print readable progress logs
 
 ### Debug File Mode

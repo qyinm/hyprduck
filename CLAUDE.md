@@ -15,7 +15,7 @@ DuckDocs converts existing files into markdown packages:
 3. **Generate**: Send page images to the configured AI provider and assemble markdown output.
 4. **Save**: Write markdown plus linked page images to `~/Documents/DuckDocs/`.
 
-The product surface is file parsing first. The active desktop shell is `apps/desktop`, and the older `apps/macos` Swift shell remains only as a legacy reference for migration-era code and settings.
+The product surface is file parsing first. The active desktop shell is `apps/desktop`.
 
 ---
 
@@ -26,14 +26,8 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 - Key files: `main.rs`, `duckdocs-engine`, `duckdocs-engine-client`
 - Must handle: sidecar orchestration, config migration, output ownership
 
-### If Touching Legacy Swift References
-- Look at: `apps/macos/DuckDocs/Playback/`
-- Key files: `DocumentImportService.swift`, `DocumentConverter.swift`, `DocumentationOutputBuilder.swift`
-- Treat this path as reference-only unless the migration explicitly calls for it
-
 ### If Adding AI Features
-- Look at: `apps/macos/DuckDocs/AI/`
-- Key files: `AIService.swift`, `PromptTemplate.swift`, `Providers/`
+- Look at: `crates/duckdocs-engine/src/main.rs`
 - Must handle: provider routing, model configuration, multimodal prompts
 
 ### If Working on UI
@@ -41,19 +35,12 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 - Key files: `main.js`, `styles.css`, `index.html`
 - Pattern: Tauri windows with a shared backend store
 
-### If Touching Legacy Capture Code
-- Look at: `apps/macos/DuckDocs/Playback/AutoCaptureService.swift`
-- Related files: `ScreenCapture.swift`, `RegionSelectorWindow.swift`, `WindowPickerView.swift`
-- Treat this as secondary unless the product direction changes again
-
----
-
 ## Common Tasks & Where to Start
 
 | Task | Entry Point | Notes |
 |------|-------------|-------|
 | Change AI model | `crates/duckdocs-engine/src/main.rs` | Update provider/model defaults and config payloads |
-| Change prompt behavior | `apps/macos/DuckDocs/AI/PromptTemplate.swift` | Keep prompt names aligned with Rust config options |
+| Change prompt behavior | `crates/duckdocs-engine/src/main.rs` | Keep prompt template IDs aligned with config options |
 | Modify import logic | `apps/desktop/src-tauri/src/main.rs` | Sidecar launch, parse lifecycle, window sync |
 | Add file format support | `crates/duckdocs-engine/src/main.rs` | Extend conversion/parsing pipeline |
 | Change output format | `crates/duckdocs-engine/src/main.rs` | Output folder and markdown package assembly |
@@ -88,7 +75,6 @@ The engine writes markdown + linked assets
 | `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output package assembly |
 | `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess client contract |
 | `crates/duckdocs-engine-types/src/lib.rs` | Engine request/response/event schema |
-| `apps/macos/DuckDocs/Playback/DocumentImportService.swift` | Legacy reference flow during migration |
 
 ---
 

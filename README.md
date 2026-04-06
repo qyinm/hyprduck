@@ -21,7 +21,7 @@
 
 DuckDocs is a macOS app for turning existing files into markdown using AI.
 
-The active desktop shell lives in `apps/desktop` as a Tauri app. The old `apps/macos` Swift shell remains in the repo only as a legacy reference for migration-era code and settings.
+The active desktop shell lives in `apps/desktop` as a Tauri app.
 
 The current product surface is file parsing:
 
@@ -89,7 +89,6 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 
 ### Permissions
 - **No special permissions are required for file parsing**
-- Legacy capture code remains in the repository, but it is not part of the primary product surface
 
 ---
 
@@ -137,9 +136,6 @@ just site-stage
 ├── apps
 │   ├── cli
 │   ├── desktop
-│   ├── macos
-│       ├── DuckDocs.xcodeproj
-│       └── DuckDocs/
 │   └── site
 ├── packages
 ├── scripts
