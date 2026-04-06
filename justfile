@@ -5,7 +5,6 @@ legacy_app_project := "apps/macos/DuckDocs.xcodeproj"
 legacy_app_scheme := "DuckDocs"
 derived_data := "/tmp/DuckDocsDerivedData"
 site_dir := "apps/site"
-site_out := "_site"
 
 default:
   @just --list
@@ -15,7 +14,6 @@ paths:
   @echo "legacy_app_project={{legacy_app_project}}"
   @echo "legacy_app_scheme={{legacy_app_scheme}}"
   @echo "site_dir={{site_dir}}"
-  @echo "site_out={{site_out}}"
 
 desktop-build:
   pnpm --dir {{desktop_dir}} build
@@ -48,9 +46,13 @@ legacy-macos-test:
   xcodebuild test -project {{legacy_app_project}} -scheme {{legacy_app_scheme}} -derivedDataPath {{derived_data}}
 
 site-stage:
-  rm -rf {{site_out}}
-  mkdir -p {{site_out}}
-  cp -R {{site_dir}}/. {{site_out}}/
+  pnpm --dir {{site_dir}} build
+
+site-dev:
+  pnpm --dir {{site_dir}} dev
+
+site-check:
+  pnpm --dir {{site_dir}} exec astro check
 
 clean:
-  rm -rf {{site_out}} build {{desktop_dir}}/dist
+  rm -rf {{site_dir}}/dist build {{desktop_dir}}/dist

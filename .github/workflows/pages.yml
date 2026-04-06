@@ -1,4 +1,4 @@
-name: Website (GitHub Pages)
+name: Deploy to GitHub Pages
 
 on:
   push:
@@ -21,22 +21,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install just
-        uses: taiki-e/install-action@just
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Build static site
-        run: just site-stage
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Checkout your repository using git
+        uses: actions/checkout@v6
+      - name: Install, build, and upload your site
+        uses: withastro/action@v6
         with:
-          path: _site
+          path: apps/site
+          package-manager: pnpm@latest
 
   deploy:
     needs: build
@@ -47,4 +38,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
