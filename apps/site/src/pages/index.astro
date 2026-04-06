@@ -1,0 +1,1107 @@
+---
+import Layout from '../layouts/Layout.astro';
+import TypingEffect from '../components/TypingEffect.astro';
+import { Button } from '../components/ui/button';
+---
+
+<Layout>
+<script>
+  const navToggle = document.querySelector('.nav-toggle');
+  const mobileMenu = document.querySelector('.mobile-menu');
+  const menuLinks = mobileMenu ? mobileMenu.querySelectorAll('a') : [];
+  const body = document.body;
+
+  const closeMenu = () => {
+    if (!mobileMenu) return;
+    mobileMenu.classList.remove('is-open');
+    navToggle?.setAttribute('aria-expanded', 'false');
+    body.classList.remove('menu-open');
+  };
+
+  const toggleMenu = () => {
+    if (!mobileMenu) return;
+    const isOpen = mobileMenu.classList.contains('is-open');
+    if (isOpen) {
+      closeMenu();
+      return;
+    }
+    mobileMenu.classList.add('is-open');
+    navToggle?.setAttribute('aria-expanded', 'true');
+    body.classList.add('menu-open');
+  };
+
+  if (navToggle && mobileMenu) {
+    navToggle.setAttribute('aria-expanded', 'false');
+    navToggle.addEventListener('click', toggleMenu);
+    menuLinks.forEach((link) => link.addEventListener('click', closeMenu));
+
+    window.addEventListener('resize', () => {
+      if (window.innerWidth > 768) {
+        closeMenu();
+      }
+    });
+  }
+
+  const observerOptions = {
+    root: null,
+    rootMargin: '0px 0px -50px 0px',
+    threshold: 0.15,
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, observerOptions);
+
+  document.querySelectorAll('.fade-in').forEach((el) => observer.observe(el));
+</script>
+  <div class="noise fixed inset-0 pointer-events-none opacity-[0.015] z-0" />
+  <div class="gradient-orb gradient-orb-1" />
+  <div class="gradient-orb gradient-orb-2" />
+  <div class="gradient-orb gradient-orb-3" />
+
+  <nav class="nav">
+    <div class="nav-container">
+      <a href="#" class="nav-logo">
+        <img src="/favicon.svg" alt="DuckDocs" class="size-8" />
+        <span>DuckDocs</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it Works</a>
+        <a href="https://github.com/qyinm/duckdocs" class="nav-github" target="_blank" rel="noopener" aria-label="DuckDocs on GitHub">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+        </a>
+      </div>
+      <button class="nav-toggle" aria-label="Toggle menu">
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </nav>
+
+  <div class="mobile-menu">
+    <a href="#features">Features</a>
+    <a href="#how-it-works">How it Works</a>
+    <a href="https://github.com/qyinm/duckdocs" target="_blank" rel="noopener">GitHub</a>
+  </div>
+
+  <main>
+    <section class="hero">
+       <div class="hero-content fade-in">
+        <div class="badge-wrapper">
+          <span class="badge-dot"></span>
+          Coming Soon
+        </div>
+        <h1 class="hero-title fade-in">
+          <TypingEffect
+            tagline="Parse files.<br>AI-powered.<br>Markdown ready."
+            typingSpeed={60}
+            typingStartDelay={500}
+          />
+        </h1>
+        <p class="hero-subtitle">
+          Import a PDF or Word file, let DuckDocs parse each page with AI, and export a markdown package with linked images ready for docs, wikis, or notes.
+        </p>
+        <div class="hero-cta">
+           <Button className="btn-coming-soon" disabled>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 6v6l4 2"/>
+            </svg>
+            Coming Soon
+          </Button>
+          <a href="https://github.com/qyinm/duckdocs" class="btn btn-secondary" target="_blank" rel="noopener">
+            View on GitHub
+          </a>
+        </div>
+        <div class="hero-meta">
+          <span>macOS 12.3+</span>
+          <span class="divider"></span>
+          <span>AI Provider Flexible</span>
+          <span class="divider"></span>
+          <span>Free & Open Source</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+    <div class="section-header fade-in">
+        <h2 class="section-title">Built for file-to-markdown workflows</h2>
+        <p class="section-subtitle">Parse existing files into structured markdown instead of rebuilding them by hand.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg viewBox="0 0 48 48" fill="none">
+              <path d="M14 8h14l10 10v22H14a4 4 0 01-4-4V12a4 4 0 014-4z" stroke="url(#doc-gradient)" stroke-width="2"/>
+              <path d="M28 8v10h10" stroke="url(#doc-gradient)" stroke-width="2"/>
+              <path d="M18 24h16M18 30h12" stroke="url(#doc-gradient)" stroke-width="2" stroke-linecap="round"/>
+              <defs>
+                <linearGradient id="doc-gradient" x1="0" y1="0" x2="48" y2="48">
+                  <stop stop-color="#a855f7"/>
+                  <stop offset="1" stop-color="#6366f1"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h3 class="feature-title">File Parsing</h3>
+          <p class="feature-desc">Import PDFs and Word documents, then convert every page into a parseable image snapshot for reliable multimodal extraction.</p>
+          <ul class="feature-list">
+            <li>PDF, DOCX, and DOC support</li>
+            <li>Per-page conversion pipeline</li>
+            <li>No screen permissions required</li>
+          </ul>
+        </article>
+
+        <article class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="18" stroke="url(#ai-gradient)" stroke-width="2"/>
+              <path d="M24 12v6M24 30v6M12 24h6M30 24h6" stroke="url(#ai-gradient)" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="24" cy="24" r="6" stroke="url(#ai-gradient)" stroke-width="2"/>
+              <circle cx="24" cy="24" r="2" fill="url(#ai-gradient)"/>
+              <defs>
+                <linearGradient id="ai-gradient" x1="0" y1="0" x2="48" y2="48">
+                  <stop stop-color="#3b82f6"/>
+                  <stop offset="1" stop-color="#06b6d4"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h3 class="feature-title">Provider-Based AI</h3>
+          <p class="feature-desc">Choose OpenRouter, OpenAI, Anthropic, or Ollama depending on your latency, privacy, and cost needs.</p>
+          <ul class="feature-list">
+            <li>Shared provider settings</li>
+            <li>Preset and custom model IDs</li>
+            <li>Prompt templates for different document shapes</li>
+          </ul>
+        </article>
+
+        <article class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg viewBox="0 0 48 48" fill="none">
+              <path d="M12 8h24a4 4 0 014 4v24a4 4 0 01-4 4H12a4 4 0 01-4-4V12a4 4 0 014-4z" stroke="url(#export-gradient)" stroke-width="2"/>
+              <path d="M14 18h8M14 24h20M14 30h16" stroke="url(#export-gradient)" stroke-width="2" stroke-linecap="round"/>
+              <rect x="28" y="14" width="8" height="6" rx="1" fill="url(#export-gradient)" opacity="0.3"/>
+              <defs>
+                <linearGradient id="export-gradient" x1="0" y1="0" x2="48" y2="48">
+                  <stop stop-color="#10b981"/>
+                  <stop offset="1" stop-color="#14b8a6"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <h3 class="feature-title">Markdown Packages</h3>
+          <p class="feature-desc">Export clean markdown plus the page images it references, so the result stays inspectable and easy to move into any downstream tool.</p>
+          <ul class="feature-list">
+            <li>Linked image assets</li>
+            <li>Partial-save and retry support</li>
+            <li>Ready for docs, wikis, and notes</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="how-it-works">
+    <div class="section-header fade-in">
+        <h2 class="section-title">How it works</h2>
+        <p class="section-subtitle">A simple import-first path from source file to markdown package.</p>
+      </div>
+      <div class="steps">
+        <div class="step fade-in">
+          <div class="step-number">01</div>
+          <div class="step-content">
+            <h3>Choose a file</h3>
+            <p>Start with an existing PDF or Word document. DuckDocs uses the filename as the default output name and keeps the flow local until AI processing begins.</p>
+          </div>
+          <div class="step-visual">
+            <div class="config-ui">
+              <div class="config-row">
+                <span class="config-label">Source</span>
+                <span class="config-value">proposal.docx</span>
+              </div>
+              <div class="config-row">
+                <span class="config-label">Template</span>
+                <span class="config-value active">General</span>
+              </div>
+              <div class="config-row">
+                <span class="config-label">Provider</span>
+                <span class="config-value">OpenRouter</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-connector">
+          <svg viewBox="0 0 24 80" fill="none">
+            <path d="M12 0v80" stroke="url(#connector-gradient)" stroke-width="2" stroke-dasharray="6 4"/>
+            <circle cx="12" cy="40" r="4" fill="url(#connector-gradient)"/>
+            <defs>
+              <linearGradient id="connector-gradient" x1="12" y1="0" x2="12" y2="80" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#a855f7"/>
+                <stop offset="1" stop-color="#3b82f6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <div class="step fade-in">
+          <div class="step-number">02</div>
+          <div class="step-content">
+            <h3>Render and parse each page</h3>
+            <p>DuckDocs converts each page to an image, sends it to the configured multimodal model, and keeps page order stable while processing.</p>
+          </div>
+          <div class="step-visual">
+            <div class="capture-animation">
+              <div class="capture-frame">
+                <div class="frame-content"></div>
+                <div class="flash-overlay"></div>
+              </div>
+              <div class="capture-counter">
+                <span class="counter-current">12</span>
+                <span class="counter-divider">/</span>
+                <span class="counter-total">18</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-connector">
+          <svg viewBox="0 0 24 80" fill="none">
+            <path d="M12 0v80" stroke="url(#connector-gradient-2)" stroke-width="2" stroke-dasharray="6 4"/>
+            <circle cx="12" cy="40" r="4" fill="url(#connector-gradient-2)"/>
+            <defs>
+              <linearGradient id="connector-gradient-2" x1="12" y1="0" x2="12" y2="80" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#3b82f6"/>
+                <stop offset="1" stop-color="#10b981"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <div class="step fade-in">
+          <div class="step-number">03</div>
+          <div class="step-content">
+            <h3>Export a usable package</h3>
+            <p>The result is markdown plus linked page images, so you can review, edit, and move the output without losing visual context.</p>
+          </div>
+          <div class="step-visual">
+            <div class="markdown-preview">
+              <div class="md-line"><span class="md-hash">#</span> proposal.md</div>
+              <div class="md-line"><span class="md-text">Executive summary and extracted sections...</span></div>
+              <div class="md-line"><span class="md-img">![Page 01](./images/page-01.png)</span></div>
+              <div class="md-line"></div>
+              <div class="md-line"><span class="md-hash">##</span> Financial Overview</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="download">
+      <div class="download-content fade-in">
+        <h2 class="download-title">Coming Soon</h2>
+        <p class="download-subtitle">DuckDocs is in active development. Star the repository to follow the import-first release.</p>
+        <div class="download-buttons">
+          <a href="https://github.com/qyinm/duckdocs" class="btn btn-primary btn-large" target="_blank" rel="noopener">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            </svg>
+            Star on GitHub
+          </a>
+          <a href="https://github.com/qyinm/duckdocs" class="btn btn-secondary btn-large" target="_blank" rel="noopener">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+            View Source
+          </a>
+        </div>
+        <p class="download-note">Supports macOS 12.3 or later. Apple Silicon and Intel supported.</p>
+      </div>
+      <div class="download-glow"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-brand">
+        <img src="/favicon.svg" alt="DuckDocs" class="size-7" />
+        <span>DuckDocs</span>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/qyinm/duckdocs" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/qyinm/duckdocs/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/qyinm/duckdocs/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+    </div>
+  </footer>
+</Layout>
+
+<style is:global>
+  .nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 1rem 2rem;
+    background: rgba(9, 10, 15, 0.74);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .nav-container {
+    max-width: 1240px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-decoration: none;
+    color: var(--color-foreground);
+    font-weight: 700;
+    font-size: 1.125rem;
+  }
+
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+  }
+
+  .nav-links a {
+    color: var(--color-muted-foreground);
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: color 160ms ease;
+  }
+
+  .nav-links a:hover {
+    color: var(--color-foreground);
+  }
+
+  .nav-github {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-glass);
+    border: 1px solid var(--color-border);
+    transition: all 280ms ease;
+  }
+
+  .nav-github:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--color-border-light);
+  }
+
+  .nav-toggle {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    padding: 0.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  .nav-toggle span {
+    display: block;
+    width: 20px;
+    height: 2px;
+    background: var(--color-foreground);
+    border-radius: 2px;
+  }
+
+  .mobile-menu {
+    display: none;
+    position: fixed;
+    top: 60px;
+    left: 0;
+    right: 0;
+    background: rgba(16, 18, 27, 0.96);
+    border-bottom: 1px solid var(--color-border);
+    padding: 1.5rem;
+    z-index: 99;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .mobile-menu.is-open {
+    display: flex;
+  }
+
+  body.menu-open {
+    overflow: hidden;
+  }
+
+  .mobile-menu a {
+    color: var(--color-muted-foreground);
+    text-decoration: none;
+    font-size: 1rem;
+    padding: 0.5rem 0;
+  }
+
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: calc(88px + 6rem) 2rem 8rem;
+    max-width: 1400px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 14% 0 auto;
+    height: 52%;
+    background: radial-gradient(circle at center, rgba(177, 108, 255, 0.1), transparent 62%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .hero-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    max-width: 720px;
+    align-items: center;
+    text-align: center;
+  }
+
+  .badge-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.9rem;
+    background: rgba(177, 108, 255, 0.1);
+    border: 1px solid rgba(177, 108, 255, 0.3);
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    color: var(--color-muted-foreground);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    width: fit-content;
+  }
+
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--color-primary);
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .hero-title {
+    font-size: clamp(3.5rem, 6vw, 5.6rem);
+    font-weight: 700;
+    line-height: 0.96;
+    letter-spacing: -0.04em;
+  }
+
+  .typing-text {
+    background: linear-gradient(135deg, #d8b4fe 0%, #8ab4ff 52%, #56d7ea 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .cursor {
+    display: inline-block;
+    color: var(--color-primary);
+    animation: blink 1s step-end infinite;
+    font-weight: 300;
+    -webkit-text-fill-color: var(--color-primary);
+  }
+
+  .hero-subtitle {
+    font-size: clamp(1.05rem, 1rem + 0.3vw, 1.25rem);
+    color: var(--color-muted-foreground);
+    max-width: 560px;
+    line-height: 1.85;
+  }
+
+  .hero-cta {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .hero-meta {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: 0.875rem;
+    color: var(--color-text-tertiary);
+    flex-wrap: wrap;
+  }
+
+  .hero-meta .divider {
+    width: 4px;
+    height: 4px;
+    background: var(--color-text-tertiary);
+    border-radius: 50%;
+    opacity: 0.5;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.85rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+    border-radius: var(--radius-lg);
+    transition: transform 280ms ease, box-shadow 280ms ease, border-color 160ms ease;
+    cursor: pointer;
+    border: none;
+  }
+
+  .btn-primary {
+    background: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 18px 40px rgba(177, 108, 255, 0.22);
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 22px 48px rgba(177, 108, 255, 0.28);
+  }
+
+  .btn-secondary {
+    background: var(--color-bg-glass);
+    color: var(--color-foreground);
+    border: 1px solid var(--color-border-light);
+  }
+
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+
+  .btn-large {
+    padding: 1rem 2rem;
+    font-size: 1rem;
+    border-radius: var(--radius-xl);
+  }
+
+  .btn-coming-soon {
+    cursor: not-allowed;
+    opacity: 0.7;
+    background: var(--color-bg-glass);
+    color: var(--color-muted-foreground);
+    border: 1px solid var(--color-border-light);
+    box-shadow: none;
+    animation: subtle-pulse 3s ease-in-out infinite;
+  }
+
+  .btn-coming-soon:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  @keyframes subtle-pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 0.85; }
+  }
+
+  .features {
+    padding: 8rem 2rem 6rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 4.5rem;
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .section-title {
+    font-size: 2.75rem;
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-bottom: 1rem;
+  }
+
+  .section-subtitle {
+    font-size: 1.125rem;
+    color: var(--color-muted-foreground);
+    max-width: 620px;
+    margin: 0 auto;
+    line-height: 1.8;
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.35rem;
+  }
+
+  .feature-card {
+    position: relative;
+    padding: 2rem;
+    background: linear-gradient(180deg, rgba(18, 22, 34, 0.76), rgba(13, 16, 24, 0.9));
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    backdrop-filter: blur(20px);
+    transition: transform 280ms ease, border-color 280ms ease, box-shadow 280ms ease;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-8px);
+    border-color: var(--color-border-light);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.24);
+  }
+
+  .feature-icon {
+    width: 56px;
+    height: 56px;
+    margin-bottom: 1.5rem;
+    padding: 0.85rem;
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-glass);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .feature-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .feature-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1.15;
+    margin-bottom: 0.65rem;
+  }
+
+  .feature-desc {
+    font-size: 1rem;
+    color: var(--color-muted-foreground);
+    line-height: 1.8;
+    margin-bottom: 1.5rem;
+  }
+
+  .feature-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .feature-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--color-muted-foreground);
+    line-height: 1.6;
+  }
+
+  .feature-list li::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background: var(--color-primary);
+    border-radius: 50%;
+  }
+
+  .how-it-works {
+    padding: 8rem 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: auto 1fr 280px;
+    gap: 2rem;
+    align-items: start;
+    width: 100%;
+    padding: 2rem 0;
+  }
+
+  .step-number {
+    font-family: var(--font-mono);
+    font-size: clamp(2rem, 3vw, 2.8rem);
+    font-weight: 700;
+    background: linear-gradient(135deg, #d8b4fe 0%, #8ab4ff 52%, #56d7ea 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    opacity: 0.4;
+    line-height: 1;
+  }
+
+  .step-content h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1.15;
+    margin-bottom: 0.5rem;
+  }
+
+  .step-content p {
+    font-size: 1rem;
+    color: var(--color-muted-foreground);
+    line-height: 1.8;
+  }
+
+  .step-visual {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .step-connector {
+    display: flex;
+    justify-content: center;
+    padding: 0 60px;
+  }
+
+  .step-connector svg {
+    width: 24px;
+    height: 80px;
+  }
+
+  .config-ui {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+    width: 200px;
+  }
+
+  .config-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .config-row:last-child {
+    border-bottom: none;
+  }
+
+  .config-label {
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .config-value {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--color-muted-foreground);
+    padding: 2px 6px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius-sm);
+  }
+
+  .config-value.active {
+    background: rgba(168, 85, 247, 0.2);
+    color: var(--color-primary);
+  }
+
+  .capture-animation {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .capture-frame {
+    position: relative;
+    width: 160px;
+    height: 100px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .frame-content {
+    position: absolute;
+    inset: 8px;
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+    border-radius: 2px;
+  }
+
+  .flash-overlay {
+    position: absolute;
+    inset: 0;
+    background: white;
+    opacity: 0;
+    animation: flash 2s ease-in-out infinite;
+  }
+
+  @keyframes flash {
+    0%, 90%, 100% { opacity: 0; }
+    95% { opacity: 0.5; }
+  }
+
+  .capture-counter {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .counter-current {
+    color: var(--color-primary);
+    font-weight: 600;
+  }
+
+  .markdown-preview {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    width: 220px;
+  }
+
+  .md-line {
+    padding: 2px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 1.4em;
+  }
+
+  .md-hash {
+    color: var(--color-primary);
+    font-weight: 600;
+  }
+
+  .md-text {
+    color: var(--color-muted-foreground);
+  }
+
+  .md-img {
+    color: var(--color-accent-blue);
+    opacity: 0.7;
+  }
+
+  .download {
+    position: relative;
+    padding: 8rem 2rem 6rem;
+    text-align: center;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  .download-content {
+    position: relative;
+    z-index: 2;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  .download-title {
+    font-size: 2.75rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+  }
+
+  .download-subtitle {
+    font-size: 1.125rem;
+    color: var(--color-muted-foreground);
+    margin-bottom: 3rem;
+    line-height: 1.8;
+  }
+
+  .download-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .download-note {
+    margin-top: 2rem;
+    font-size: 0.875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .download-glow {
+    position: absolute;
+    bottom: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 400px;
+    background: radial-gradient(ellipse, rgba(177, 108, 255, 0.15) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .footer {
+    padding: 3rem 2rem;
+    border-top: 1px solid var(--color-border);
+    position: relative;
+    z-index: 1;
+  }
+
+  .footer-content {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }
+
+  .footer-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 2rem;
+  }
+
+  .footer-links a {
+    color: var(--color-muted-foreground);
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: color 160ms ease;
+  }
+
+  .footer-links a:hover {
+    color: var(--color-foreground);
+  }
+
+  @media (max-width: 1024px) {
+    .hero {
+      grid-template-columns: 1fr;
+      text-align: center;
+      gap: 3rem;
+    }
+
+    .hero-content {
+      align-items: center;
+    }
+
+    .hero-visual {
+      order: -1;
+    }
+
+    .feature-grid {
+      grid-template-columns: 1fr;
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    .step {
+      grid-template-columns: auto 1fr;
+    }
+
+    .step-visual {
+      grid-column: 2;
+      justify-content: flex-start;
+      margin-top: 1rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .nav-links {
+      display: none;
+    }
+
+    .nav-toggle {
+      display: flex;
+    }
+
+    .hero {
+      padding-top: calc(72px + 3rem);
+      min-height: auto;
+    }
+
+    .hero-cta {
+      flex-direction: column;
+      width: 100%;
+    }
+
+    .hero-cta .btn {
+      width: 100%;
+    }
+
+    .hero-meta {
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .step {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+
+    .step-number {
+      font-size: 1.5rem;
+    }
+
+    .step-visual {
+      grid-column: 1;
+    }
+
+    .step-connector {
+      padding: 0;
+    }
+
+    .download-buttons {
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .download-buttons .btn {
+      width: 100%;
+      max-width: 300px;
+    }
+
+    .footer-content {
+      flex-direction: column;
+      text-align: center;
+    }
+  }
+</style>

@@ -1,0 +1,48 @@
+---
+interface Props {
+  tagline?: string;
+  typingSpeed?: number;
+  typingStartDelay?: number;
+}
+
+const {
+  tagline = "Parse files.<br>AI-powered.<br>Markdown ready.",
+  typingSpeed = 60,
+  typingStartDelay = 500,
+} = Astro.props as Props;
+
+---
+
+<span class="typing-text"></span>
+<span class="cursor">|</span>
+
+<script is:inline define:vars={{ tagline, typingSpeed, typingStartDelay }}>
+  const typingText = document.querySelector('.typing-text');
+  const cursor = document.querySelector('.cursor');
+
+  if (typingText) {
+    let index = 0;
+    let output = '';
+
+    setTimeout(function typeChar() {
+      if (index < tagline.length) {
+        if (tagline.substring(index, index + 4) === '<br>') {
+          output += '<br>';
+          index += 4;
+        } else {
+          output += tagline.charAt(index);
+          index++;
+        }
+        typingText.innerHTML = output;
+        setTimeout(typeChar, typingSpeed);
+      } else {
+        setTimeout(() => {
+          if (cursor) {
+            cursor.style.animation = 'none';
+            cursor.style.opacity = '0';
+          }
+        }, 2000);
+      }
+    }, typingStartDelay);
+  }
+</script>
