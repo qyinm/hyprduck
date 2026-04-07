@@ -31,6 +31,18 @@ frontend-build:
 core-test:
   cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
 
+cli-build:
+  cargo build -p duckdocs-cli --release
+
+cli-dev:
+  cargo run -p duckdocs-cli
+
+cli-check:
+  cargo check -p duckdocs-cli
+
+cli-test:
+  cargo test -p duckdocs-cli
+
 site-stage:
   pnpm --dir {{site_dir}} build
 

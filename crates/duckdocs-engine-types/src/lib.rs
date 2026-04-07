@@ -384,3 +384,44 @@ mod tests {
         assert_eq!(decoded, ParseOptions::default());
     }
 }
+
+/// Returns the list of supported model IDs for a given provider slug.
+/// Single source of truth — used by both the engine and the desktop UI.
+pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
+    match provider_slug {
+        "open_router" => vec![
+            "google/gemma-4-31b-it",
+            "z-ai/glm-5v-turbo",
+            "anthropic/claude-sonnet-4.6",
+            "anthropic/claude-opus-4.6",
+            "google/gemini-3-flash-preview",
+            "qwen/qwen3.6-plus:free",
+            "x-ai/grok-4.1-fast",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-2.5-flash",
+            "moonshotai/kimi-k2.5",
+        ],
+        "open_ai" => vec![
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ],
+        "anthropic" => vec![
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        "ollama" => vec![
+            "gemma4:latest",
+            "qwen3.5:latest",
+            "qwen3-vl:8b",
+            "qwen3-vl:72b",
+            "kimi-k2.5:latest",
+            "glm-ocr:latest",
+            "deepseek-ocr:latest",
+        ],
+        _ => Vec::new(),
+    }
+}

@@ -103,6 +103,7 @@ fn main() {
             load_engine_config,
             save_engine_config,
             validate_engine_config,
+            get_models_for_provider,
             start_parse,
             cancel_parse,
             open_saved_output
@@ -175,6 +176,17 @@ fn validate_engine_config(
     client
         .validate_provider(payload)
         .map_err(|error| DesktopError::Message(error.to_string()))
+}
+
+#[tauri::command]
+fn get_models_for_provider(provider_slug: String) -> Vec<String> {
+    if provider_slug == "ollama" {
+        return list_ollama_vision_models();
+    }
+    duckdocs_engine_types::model_options_for(&provider_slug)
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 #[tauri::command]
@@ -697,8 +709,6 @@ fn legacy_api_key_from_defaults(
 ) -> anyhow::Result<Option<String>> {
     let key = match provider_slug {
         "open_router" => "openrouter_api_key",
-        "open_ai" => "openai_api_key",
-        "anthropic" => "anthropic_api_key",
         "ollama" => "ollama_api_key",
         _ => return Ok(None),
     };
@@ -708,8 +718,6 @@ fn legacy_api_key_from_defaults(
 fn legacy_api_key_from_keychain(provider_slug: &str) -> anyhow::Result<Option<String>> {
     let service = match provider_slug {
         "open_router" => "com.duckdocs.openrouter",
-        "open_ai" => "com.duckdocs.openai",
-        "anthropic" => "com.duckdocs.anthropic",
         "ollama" => "com.duckdocs.ollama",
         _ => return Ok(None),
     };
@@ -779,22 +787,69 @@ fn parse_legacy_template_blob(blob: &str) -> anyhow::Result<String> {
 fn engine_provider_slug(value: &str) -> Option<&'static str> {
     match value {
         "OpenRouter" => Some("open_router"),
-        "OpenAI" => Some("open_ai"),
-        "Anthropic" => Some("anthropic"),
         "Ollama" => Some("ollama"),
         _ => None,
     }
 }
 
+/// Vision-capable model name prefixes for matching local Ollama models.
+const VISION_PREFIXES: &[&str] = &[
+    "gemma4",
+    "qwen3.5",
+    "qwen3-vl",
+    "kimi-k2.5",
+    "glm-ocr",
+    "deepseek-ocr",
+];
+
+/// Queries the local Ollama `/v1/models` endpoint and returns vision-capable
+/// model tags.  Returns an empty vec when Ollama is not running or no vision
+/// models are found.
+fn list_ollama_vision_models() -> Vec<String> {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let resp = match client
+        .get("http://127.0.0.1:11434/v1/models")
+        .send()
+    {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    let json: serde_json::Value = match resp.json() {
+        Ok(j) => j,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut models: Vec<String> = Vec::new();
+    if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+        for entry in data {
+            if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                if VISION_PREFIXES.iter().any(|p| id.starts_with(p)) {
+                    if !models.contains(&id.to_string()) {
+                        models.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    models
+}
+
 fn default_model_for_provider(provider_slug: &str) -> &'static str {
     match provider_slug {
         "open_router" => "openai/gpt-4.1-mini",
-        "open_ai" => "gpt-4o-mini",
-        "anthropic" => "claude-3-5-sonnet-latest",
-        "ollama" => "llama3.2",
+        "ollama" => "qwen3-vl:8b",
         _ => "openai/gpt-4.1-mini",
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -843,12 +898,7 @@ mod tests {
             default_model_for_provider("open_router"),
             "openai/gpt-4.1-mini"
         );
-        assert_eq!(default_model_for_provider("open_ai"), "gpt-4o-mini");
-        assert_eq!(
-            default_model_for_provider("anthropic"),
-            "claude-3-5-sonnet-latest"
-        );
-        assert_eq!(default_model_for_provider("ollama"), "llama3.2");
+        assert_eq!(default_model_for_provider("ollama"), "qwen3-vl:8b");
     }
 
     #[test]

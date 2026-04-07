@@ -979,6 +979,7 @@ dependencies = [
  "dirs",
  "duckdocs-engine-client",
  "duckdocs-engine-types",
+ "reqwest 0.12.23",
  "rfd",
  "serde",
  "serde_json",

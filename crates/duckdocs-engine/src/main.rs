@@ -479,6 +479,7 @@ fn chrono_like_timestamp() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EngineConfig {
+    #[serde(deserialize_with = "ProviderKind::deserialize_unknown")]
     provider: ProviderKind,
     model_id: String,
     api_key: String,
@@ -507,17 +508,25 @@ fn default_prompt_template() -> String {
 #[serde(rename_all = "snake_case")]
 enum ProviderKind {
     OpenRouter,
-    OpenAi,
-    Anthropic,
     Ollama,
+}
+
+impl ProviderKind {
+    /// Deserializes a provider slug, falling back to `OpenRouter` for unknown values.
+    /// This handles legacy config files that may contain removed providers like `open_ai` or `anthropic`.
+    fn deserialize_unknown<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let slug = String::deserialize(deserializer)?;
+        Ok(Self::from_slug(&slug).unwrap_or(Self::OpenRouter))
+    }
 }
 
 impl ProviderKind {
     fn id_slug(&self) -> &'static str {
         match self {
             Self::OpenRouter => "open_router",
-            Self::OpenAi => "open_ai",
-            Self::Anthropic => "anthropic",
             Self::Ollama => "ollama",
         }
     }
@@ -525,17 +534,13 @@ impl ProviderKind {
     fn default_base_url(&self) -> &'static str {
         match self {
             Self::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
-            Self::OpenAi => "https://api.openai.com/v1/chat/completions",
-            Self::Anthropic => "https://api.anthropic.com/v1/messages",
-            Self::Ollama => "http://127.0.0.1:11434/api/generate",
+            Self::Ollama => "http://127.0.0.1:11434/v1/chat/completions",
         }
     }
 
     fn label(&self) -> &'static str {
         match self {
             Self::OpenRouter => "OpenRouter",
-            Self::OpenAi => "OpenAI",
-            Self::Anthropic => "Anthropic",
             Self::Ollama => "Ollama",
         }
     }
@@ -637,11 +642,9 @@ impl EngineConfig {
 }
 
 impl ProviderKind {
-    fn all() -> [ProviderKind; 4] {
+    fn all() -> [ProviderKind; 2] {
         [
             Self::OpenRouter,
-            Self::OpenAi,
-            Self::Anthropic,
             Self::Ollama,
         ]
     }
@@ -649,8 +652,6 @@ impl ProviderKind {
     fn from_slug(value: &str) -> Option<Self> {
         match value {
             "open_router" => Some(Self::OpenRouter),
-            "open_ai" => Some(Self::OpenAi),
-            "anthropic" => Some(Self::Anthropic),
             "ollama" => Some(Self::Ollama),
             _ => None,
         }
@@ -669,34 +670,7 @@ fn prompt_template_options() -> [&'static str; 6] {
 }
 
 fn model_options_for(provider: &ProviderKind) -> Vec<&'static str> {
-    match provider {
-        ProviderKind::OpenRouter => vec![
-            "openai/gpt-4.1-nano",
-            "openai/gpt-4o",
-            "openai/gpt-4o-mini",
-            "openai/gpt-4-turbo",
-        ],
-        ProviderKind::OpenAi => vec![
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-        ],
-        ProviderKind::Anthropic => vec![
-            "claude-sonnet-4-20250514",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-opus-20240229",
-        ],
-        ProviderKind::Ollama => vec![
-            "qwen3-vl:8b",
-            "qwen3-vl:latest",
-            "qwen2.5vl:7b",
-            "gemma3:12b",
-            "llama3.2-vision:11b",
-        ],
-    }
+    duckdocs_engine_types::model_options_for(provider.id_slug())
 }
 
 fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {
@@ -751,11 +725,9 @@ fn parse_image_with_provider(
         "Convert this document page into clean markdown. Template: {template}. Preserve headings, lists, tables, and code blocks where possible."
     );
     match config.provider {
-        ProviderKind::OpenRouter | ProviderKind::OpenAi => {
-            parse_openai_compatible(config, &prompt, Some(image_base64), None)
+        ProviderKind::OpenRouter | ProviderKind::Ollama => {
+            parse_openai_compatible(config, &prompt, Some(image_base64))
         }
-        ProviderKind::Anthropic => parse_anthropic(config, &prompt, Some(image_base64), None),
-        ProviderKind::Ollama => parse_ollama(config, &prompt, Some(image_base64), None),
     }
 }
 
@@ -773,19 +745,13 @@ fn parse_text_with_provider(config: &EngineConfig, text: &str, template: &str) -
         "Convert the following extracted document text into clean markdown. Template: {template}.\n\n{text}"
     );
     match config.provider {
-        ProviderKind::OpenRouter | ProviderKind::OpenAi => {
-            parse_openai_compatible(config, &prompt, None, None)
-        }
-        ProviderKind::Anthropic => parse_anthropic(config, &prompt, None, None),
-        ProviderKind::Ollama => parse_ollama(config, &prompt, None, Some(text)),
+        ProviderKind::OpenRouter | ProviderKind::Ollama => parse_openai_compatible(config, &prompt, None),
     }
 }
 
 fn provider_unavailable(config: &EngineConfig) -> bool {
     match config.provider {
-        ProviderKind::OpenRouter | ProviderKind::OpenAi | ProviderKind::Anthropic => {
-            config.api_key.trim().is_empty()
-        }
+        ProviderKind::OpenRouter => config.api_key.trim().is_empty(),
         ProviderKind::Ollama => false,
     }
 }
@@ -794,7 +760,6 @@ fn parse_openai_compatible(
     config: &EngineConfig,
     prompt: &str,
     image_base64: Option<String>,
-    text_override: Option<&str>,
 ) -> Result<String> {
     let client = Client::new();
     let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
@@ -803,9 +768,6 @@ fn parse_openai_compatible(
             "type": "image_url",
             "image_url": { "url": format!("data:image/png;base64,{image_base64}") }
         }));
-    }
-    if let Some(text) = text_override {
-        content.push(serde_json::json!({ "type": "text", "text": text }));
     }
 
     let body = serde_json::json!({
@@ -833,101 +795,4 @@ fn parse_openai_compatible(
         .as_str()
         .map(|value| value.to_string())
         .ok_or_else(|| anyhow!("provider response did not include markdown text"))
-}
-
-fn parse_anthropic(
-    config: &EngineConfig,
-    prompt: &str,
-    image_base64: Option<String>,
-    _text_override: Option<&str>,
-) -> Result<String> {
-    let client = Client::new();
-    let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
-    if let Some(image_base64) = image_base64 {
-        content.push(serde_json::json!({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": image_base64
-            }
-        }));
-    }
-    let body = serde_json::json!({
-        "model": config.model_id,
-        "max_tokens": 4096,
-        "messages": [{ "role": "user", "content": content }]
-    });
-    let response = client
-        .post(
-            config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| config.provider.default_base_url().to_string()),
-        )
-        .header("x-api-key", &config.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&body)
-        .send()
-        .context("failed to send anthropic request")?;
-    let response = response
-        .error_for_status()
-        .context("anthropic returned error status")?;
-    let json: serde_json::Value = response
-        .json()
-        .context("failed to decode anthropic response")?;
-    json["content"][0]["text"]
-        .as_str()
-        .map(|value| value.to_string())
-        .ok_or_else(|| anyhow!("anthropic response did not include markdown text"))
-}
-
-fn parse_ollama(
-    config: &EngineConfig,
-    prompt: &str,
-    image_base64: Option<String>,
-    text_override: Option<&str>,
-) -> Result<String> {
-    let client = Client::new();
-    let prompt = match text_override {
-        Some(text) => format!("{prompt}\n\n{text}"),
-        None => prompt.to_string(),
-    };
-    let body = if let Some(image_base64) = image_base64 {
-        serde_json::json!({
-            "model": config.model_id,
-            "prompt": prompt,
-            "images": [image_base64],
-            "stream": false
-        })
-    } else {
-        serde_json::json!({
-            "model": config.model_id,
-            "prompt": prompt,
-            "stream": false
-        })
-    };
-    let mut request = client.post(
-        config
-            .base_url
-            .clone()
-            .unwrap_or_else(|| config.provider.default_base_url().to_string()),
-    );
-    if !config.api_key.is_empty() {
-        request = request.bearer_auth(config.api_key.clone());
-    }
-    let response = request
-        .json(&body)
-        .send()
-        .context("failed to send ollama request")?;
-    let response = response
-        .error_for_status()
-        .context("ollama returned error status")?;
-    let json: serde_json::Value = response
-        .json()
-        .context("failed to decode ollama response")?;
-    json["response"]
-        .as_str()
-        .map(|value| value.to_string())
-        .ok_or_else(|| anyhow!("ollama response did not include markdown text"))
 }
