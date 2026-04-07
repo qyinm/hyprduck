@@ -20,6 +20,10 @@
         "title": "DuckDocs",
         "width": 1160,
         "height": 860,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "minWidth": 900,
+        "minHeight": 600,
         "resizable": true,
         "visible": true
       }
