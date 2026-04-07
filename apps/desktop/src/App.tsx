@@ -603,16 +603,6 @@ export function App() {
                       <span className="font-medium">{item.label}</span>
                     </Button>
                   ))}
-                  <Button
-                    className={sidebarButtonClass(false)}
-                    onClick={() => openSettings()}
-                    size="sm"
-                    variant="ghost"
-                    type="button"
-                  >
-                    <span aria-hidden="true"><Settings size={18} /></span>
-                    <span className="font-medium">Settings</span>
-                  </Button>
                 </>
               )}
 
@@ -635,6 +625,21 @@ export function App() {
                 </>
               )}
             </nav>
+
+            {!settingsOpen && (
+              <div className="mt-auto pb-6 pt-2">
+                <Button
+                  className={sidebarButtonClass(false)}
+                  onClick={() => openSettings()}
+                  size="sm"
+                  variant="ghost"
+                  type="button"
+                >
+                  <span aria-hidden="true"><Settings size={18} /></span>
+                  <span className="font-medium">Settings</span>
+                </Button>
+              </div>
+            )}
           </div>
         </aside>
       )}
