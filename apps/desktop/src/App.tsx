@@ -8,8 +8,15 @@ import {
   PanelLeftOpen,
   Save,
   Settings,
+  Sparkles,
 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -85,7 +92,10 @@ interface TauriMessage<T> {
 type TauriUnlisten = () => void;
 
 interface TauriEventApi {
-  listen<T>(eventName: string, handler: (message: TauriMessage<T>) => void | Promise<void>): Promise<TauriUnlisten>;
+  listen<T>(
+    eventName: string,
+    handler: (message: TauriMessage<T>) => void | Promise<void>,
+  ): Promise<TauriUnlisten>;
 }
 
 interface TauriCoreApi {
@@ -104,12 +114,24 @@ declare global {
 }
 
 const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
-  { id: "import", label: "Import", icon: <FileText aria-hidden="true" size={18} /> },
+  {
+    id: "import",
+    label: "Import",
+    icon: <FileText aria-hidden="true" size={18} />,
+  },
 ];
 
-const SETTINGS_NAV_ITEMS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
-  { id: "general", label: "General", icon: <Settings aria-hidden="true" size={18} /> },
-  { id: "ai", label: "AI", icon: <Settings aria-hidden="true" size={18} /> },
+const SETTINGS_NAV_ITEMS: {
+  id: SettingsTab;
+  label: string;
+  icon: ReactNode;
+}[] = [
+  {
+    id: "general",
+    label: "General",
+    icon: <Settings aria-hidden="true" size={18} />,
+  },
+  { id: "ai", label: "AI", icon: <Sparkles aria-hidden="true" size={18} /> },
 ];
 
 const EMPTY_SNAPSHOT: UiSnapshot = {
@@ -126,7 +148,10 @@ function getTauri(): TauriGlobalApi {
   return tauri;
 }
 
-async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+async function invoke<T>(
+  command: string,
+  args: Record<string, unknown> = {},
+): Promise<T> {
   return getTauri().core.invoke<T>(command, args);
 }
 
@@ -137,7 +162,9 @@ function parseSummary(snapshot: UiSnapshot): string {
   }
 
   const counts = `${result.successCount} succeeded / ${result.failedCount} failed`;
-  return result.savedOutputPath ? `${counts} · ${result.savedOutputPath}` : counts;
+  return result.savedOutputPath
+    ? `${counts} · ${result.savedOutputPath}`
+    : counts;
 }
 
 function sidebarButtonClass(active: boolean): string {
@@ -145,7 +172,7 @@ function sidebarButtonClass(active: boolean): string {
     "w-full justify-start gap-3 border border-transparent rounded-lg px-3 py-2 text-sm",
     active
       ? "bg-secondary text-foreground border-border"
-      : "text-muted-foreground hover:text-foreground hover:bg-muted hover:border-border",
+      : "text-muted-foreground hover:text-foreground hover:bg-gray-400/15",
   );
 }
 
@@ -157,8 +184,17 @@ function ImportPanel(props: {
   onCancelParse: () => Promise<void>;
   onOpenSavedOutput: (reveal: boolean) => Promise<void>;
 }) {
-  const { snapshot, selectedFile, onChooseFile, onStartParse, onCancelParse, onOpenSavedOutput } = props;
-  const fileName = selectedFile?.path ? selectedFile.path.split("/").pop() : null;
+  const {
+    snapshot,
+    selectedFile,
+    onChooseFile,
+    onStartParse,
+    onCancelParse,
+    onOpenSavedOutput,
+  } = props;
+  const fileName = selectedFile?.path
+    ? selectedFile.path.split("/").pop()
+    : null;
   const canStart = Boolean(selectedFile) && !snapshot.activeJob;
 
   return (
@@ -166,7 +202,9 @@ function ImportPanel(props: {
       {/* Import section */}
       <section>
         <h2 className="text-base font-semibold mb-1">Import</h2>
-        <p className="text-sm text-muted-foreground mb-3">Pick a file and start parsing.</p>
+        <p className="text-sm text-muted-foreground mb-3">
+          Pick a file and start parsing.
+        </p>
 
         <div className="rounded-lg border border-dashed border-border bg-muted/10 p-6 mb-3">
           <p className="font-medium">{fileName ?? "No file selected"}</p>
@@ -179,10 +217,19 @@ function ImportPanel(props: {
           <Button onClick={() => void onChooseFile()} type="button">
             Choose file
           </Button>
-          <Button onClick={() => void onStartParse()} disabled={!canStart} type="button">
+          <Button
+            onClick={() => void onStartParse()}
+            disabled={!canStart}
+            type="button"
+          >
             Start import
           </Button>
-          <Button variant="outline" disabled={!snapshot.activeJob} onClick={() => void onCancelParse()} type="button">
+          <Button
+            variant="outline"
+            disabled={!snapshot.activeJob}
+            onClick={() => void onCancelParse()}
+            type="button"
+          >
             Cancel
           </Button>
         </div>
@@ -191,9 +238,13 @@ function ImportPanel(props: {
       {/* Results section */}
       <section>
         <h2 className="text-base font-semibold mb-1">Latest output</h2>
-        <p className="text-sm text-muted-foreground mb-3">Review results from your last completed import.</p>
+        <p className="text-sm text-muted-foreground mb-3">
+          Review results from your last completed import.
+        </p>
 
-        <p className="text-sm text-muted-foreground mb-2">{parseSummary(snapshot)}</p>
+        <p className="text-sm text-muted-foreground mb-2">
+          {parseSummary(snapshot)}
+        </p>
         <div className="flex gap-2">
           <Button
             variant="ghost"
@@ -227,7 +278,9 @@ function ImportPanel(props: {
 
 interface ProviderState {
   apiKey: string;
+  baseUrl: string;
   expanded: boolean;
+  showAdvanced: boolean;
 }
 
 function SettingsPanel(props: {
@@ -238,11 +291,20 @@ function SettingsPanel(props: {
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
 }) {
-  const { config, validation, onSave, onValidate, tab, onTabChange: setTab } = props;
+  const {
+    config,
+    validation,
+    onSave,
+    onValidate,
+    tab,
+    onTabChange: setTab,
+  } = props;
   const [promptTemplate, setPromptTemplate] = useState("General");
   const [selectedModel, setSelectedModel] = useState("");
   const [activeProvider, setActiveProvider] = useState("open_router");
-  const [providerStates, setProviderStates] = useState<Map<string, ProviderState>>(new Map());
+  const [providerStates, setProviderStates] = useState<
+    Map<string, ProviderState>
+  >(new Map());
 
   useEffect(() => {
     if (config) {
@@ -252,7 +314,12 @@ function SettingsPanel(props: {
       setProviderStates((prev) => {
         const next = new Map(prev);
         for (const opt of config.provider_options) {
-          next.set(opt.id, { apiKey: config.api_key, expanded: false });
+          next.set(opt.id, {
+            apiKey: config.api_key,
+            baseUrl: "",
+            expanded: false,
+          showAdvanced: false,
+          });
         }
         return next;
       });
@@ -262,7 +329,12 @@ function SettingsPanel(props: {
   const updateApiKey = (providerId: string, key: string) => {
     setProviderStates((prev) => {
       const next = new Map(prev);
-      const existing = next.get(providerId) ?? { apiKey: "", expanded: false };
+      const existing = next.get(providerId) ?? {
+        apiKey: "",
+        baseUrl: "",
+        expanded: false,
+        showAdvanced: false,
+      };
       next.set(providerId, { ...existing, apiKey: key });
       return next;
     });
@@ -271,15 +343,50 @@ function SettingsPanel(props: {
   const toggleExpanded = (providerId: string) => {
     setProviderStates((prev) => {
       const next = new Map(prev);
-      const existing = next.get(providerId) ?? { apiKey: "", expanded: false };
+      const existing = next.get(providerId) ?? {
+        apiKey: "",
+        baseUrl: "",
+        expanded: false,
+        showAdvanced: false,
+      };
       next.set(providerId, { ...existing, expanded: !existing.expanded });
+      return next;
+    });
+  };
+
+  const updateBaseUrl = (providerId: string, url: string) => {
+    setProviderStates((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(providerId) ?? {
+        apiKey: "",
+        baseUrl: "",
+        expanded: false,
+        showAdvanced: false,
+      };
+      next.set(providerId, { ...existing, baseUrl: url });
+      return next;
+    });
+  };
+
+  const toggleAdvanced = (providerId: string) => {
+    setProviderStates((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(providerId) ?? {
+        apiKey: "",
+        baseUrl: "",
+        expanded: false,
+        showAdvanced: false,
+      };
+      next.set(providerId, { ...existing, showAdvanced: !existing.showAdvanced });
       return next;
     });
   };
 
   const handleProviderChange = async (providerId: string) => {
     setActiveProvider(providerId);
-    const models = await invoke<string[]>("get_models_for_provider", { providerSlug: providerId });
+    const models = await invoke<string[]>("get_models_for_provider", {
+      providerSlug: providerId,
+    });
     if (models.length > 0) {
       setSelectedModel(models[0]);
     }
@@ -289,7 +396,9 @@ function SettingsPanel(props: {
 
   useEffect(() => {
     if (activeProvider) {
-      invoke<string[]>("get_models_for_provider", { providerSlug: activeProvider })
+      invoke<string[]>("get_models_for_provider", {
+        providerSlug: activeProvider,
+      })
         .then((models) => setAvailableModels(models))
         .catch(() => setAvailableModels([]));
     }
@@ -315,7 +424,9 @@ function SettingsPanel(props: {
     return (
       <div>
         <h2 className="text-base font-semibold mb-1">Settings</h2>
-        <p className="text-sm text-muted-foreground">Loading engine configuration...</p>
+        <p className="text-sm text-muted-foreground">
+          Loading engine configuration...
+        </p>
       </div>
     );
   }
@@ -325,7 +436,9 @@ function SettingsPanel(props: {
       {tab === "general" && (
         <section>
           <h2 className="text-base font-semibold mb-1">General</h2>
-          <p className="text-sm text-muted-foreground mb-4">Configure prompt templates and output behavior.</p>
+          <p className="text-sm text-muted-foreground mb-4">
+            Configure prompt templates and output behavior.
+          </p>
           <div className="space-y-2">
             <Label htmlFor="prompt-template-select">Prompt template</Label>
             <select
@@ -335,7 +448,9 @@ function SettingsPanel(props: {
               onChange={(e) => setPromptTemplate(e.target.value)}
             >
               {(config.prompt_template_options ?? ["General"]).map((option) => (
-                <option key={option} value={option}>{option}</option>
+                <option key={option} value={option}>
+                  {option}
+                </option>
               ))}
             </select>
           </div>
@@ -347,7 +462,9 @@ function SettingsPanel(props: {
           {/* Active Provider & Model Selector */}
           <div>
             <h2 className="text-base font-semibold mb-1">AI provider</h2>
-            <p className="text-sm text-muted-foreground mb-4">Select the provider and model for document parsing.</p>
+            <p className="text-sm text-muted-foreground mb-4">
+              Select the provider and model for document parsing.
+            </p>
             <div className="grid gap-4 grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="active-provider">Provider</Label>
@@ -358,7 +475,9 @@ function SettingsPanel(props: {
                   onChange={(e) => void handleProviderChange(e.target.value)}
                 >
                   {config.provider_options.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -371,7 +490,9 @@ function SettingsPanel(props: {
                   onChange={(e) => setSelectedModel(e.target.value)}
                 >
                   {availableModels.map((m) => (
-                    <option key={m} value={m}>{m}</option>
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -381,51 +502,116 @@ function SettingsPanel(props: {
           {/* Provider List */}
           <div>
             <h2 className="text-base font-semibold mb-4">Provider API keys</h2>
-            <div className="space-y-1">
-          {config.provider_options.map((opt) => {
-            const state = providerStates.get(opt.id) ?? { apiKey: "", expanded: false };
-            return (
-              <div key={opt.id} className="rounded-lg border bg-card text-card-foreground">
-                <div
-                  className="flex cursor-pointer items-center justify-between px-3 h-10"
-                  onClick={() => toggleExpanded(opt.id)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleExpanded(opt.id); }}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium leading-none">{opt.label}</span>
-                    {activeProvider === opt.id && (
-                      <span className="rounded-full bg-emerald-100 px-1.5 py-0 text-[10px] font-medium text-emerald-700 leading-none">
-                        Active
-                      </span>
+            <div className="space-y-2">
+              {config.provider_options.map((opt) => {
+                const state = providerStates.get(opt.id) ?? {
+                  apiKey: "",
+                  baseUrl: "",
+                  expanded: false,
+                  showAdvanced: false,
+                };
+                return (
+                  <div
+                    key={opt.id}
+                    className="rounded-lg border bg-card text-card-foreground"
+                  >
+                    <div
+                      className="flex cursor-pointer items-center justify-between px-3 h-10"
+                      onClick={() => toggleExpanded(opt.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ")
+                          toggleExpanded(opt.id);
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium leading-none">
+                          {opt.label}
+                        </span>
+                        {activeProvider === opt.id && (
+                          <span className="rounded-full bg-emerald-100 px-1.5 py-0 text-[10px] font-medium text-emerald-700 leading-none">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      {state.expanded ? (
+                        <ChevronDown
+                          size={12}
+                          className="text-muted-foreground shrink-0"
+                        />
+                      ) : (
+                        <ChevronRight
+                          size={12}
+                          className="text-muted-foreground shrink-0"
+                        />
+                      )}
+                    </div>
+                    {state.expanded && (
+                      <div className="border-t px-3 py-2">
+                        <div className="flex items-center gap-3">
+                          <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
+                            API Key
+                          </Label>
+                          <Input
+                            autoComplete="off"
+                            onChange={(e) =>
+                              updateApiKey(opt.id, e.target.value)
+                            }
+                            placeholder={
+                              opt.requires_api_key ? "Required" : "Optional"
+                            }
+                            type="password"
+                            value={state.apiKey}
+                            className="h-7 text-xs min-w-0"
+                          />
+                        </div>
+                        {opt.supports_base_url && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => toggleAdvanced(opt.id)}
+                              className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              {state.showAdvanced ? (
+                                <ChevronDown size={12} />
+                              ) : (
+                                <ChevronRight size={12} />
+                              )}
+                              Advanced
+                            </button>
+                            {state.showAdvanced && (
+                              <div className="flex items-center gap-2 mt-1.5">
+                                <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
+                                  Base URL
+                                </Label>
+                                <Input
+                                  autoComplete="off"
+                                  onChange={(e) =>
+                                    updateBaseUrl(opt.id, e.target.value)
+                                  }
+                                  placeholder={
+                                    opt.id === "ollama"
+                                      ? "http://localhost:11434"
+                                      : opt.id === "open_router"
+                                      ? "https://openrouter.ai/v1"
+                                      : "Optional"
+                                  }
+                                  type="text"
+                                  value={state.baseUrl}
+                                  className="h-7 text-xs min-w-0"
+                                />
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
-                  {state.expanded ? (
-                    <ChevronDown size={12} className="text-muted-foreground shrink-0" />
-                  ) : (
-                    <ChevronRight size={12} className="text-muted-foreground shrink-0" />
-                  )}
-                </div>
-                {state.expanded && (
-                  <div className="border-t px-3 h-7 flex items-center gap-2">
-                    <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground">API Key</Label>
-                    <Input
-                      autoComplete="off"
-                      onChange={(e) => updateApiKey(opt.id, e.target.value)}
-                      placeholder={opt.requires_api_key ? "Required" : "Optional"}
-                      type="password"
-                      value={state.apiKey}
-                      className="h-6 text-xs"
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
           </div>
-          </div>
-
         </section>
       )}
     </div>
@@ -434,8 +620,10 @@ function SettingsPanel(props: {
 
 export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
-  const [currentConfig, setCurrentConfig] = useState<EngineConfigPayload | null>(null);
-  const [validation, setValidation] = useState<ValidateProviderResponseData | null>(null);
+  const [currentConfig, setCurrentConfig] =
+    useState<EngineConfigPayload | null>(null);
+  const [validation, setValidation] =
+    useState<ValidateProviderResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("import");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -448,18 +636,22 @@ export function App() {
 
     const bootstrap = async () => {
       const tauri = getTauri();
-      const [initialSnapshot, initialConfig, initialValidation] = await Promise.all([
-        invoke<UiSnapshot>("app_snapshot"),
-        invoke<EngineConfigPayload>("load_engine_config"),
-        invoke<ValidateProviderResponseData>("validate_engine_config"),
-      ]);
+      const [initialSnapshot, initialConfig, initialValidation] =
+        await Promise.all([
+          invoke<UiSnapshot>("app_snapshot"),
+          invoke<EngineConfigPayload>("load_engine_config"),
+          invoke<ValidateProviderResponseData>("validate_engine_config"),
+        ]);
       setSnapshot(initialSnapshot);
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
 
-      unlisten = await tauri.event.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
-        setSnapshot(message.payload);
-      });
+      unlisten = await tauri.event.listen<UiSnapshot>(
+        "duckdocs://snapshot",
+        (message) => {
+          setSnapshot(message.payload);
+        },
+      );
     };
 
     void bootstrap().catch((error: unknown) => {
@@ -507,14 +699,22 @@ export function App() {
   };
 
   const saveConfig = async (payload: EngineConfigPayload) => {
-    const saved = await invoke<EngineConfigPayload>("save_engine_config", { payload });
-    const nextValidation = await invoke<ValidateProviderResponseData>("validate_engine_config", { payload: saved });
+    const saved = await invoke<EngineConfigPayload>("save_engine_config", {
+      payload,
+    });
+    const nextValidation = await invoke<ValidateProviderResponseData>(
+      "validate_engine_config",
+      { payload: saved },
+    );
     setCurrentConfig(saved);
     setValidation(nextValidation);
   };
 
   const validateConfig = async (payload: EngineConfigPayload | null) => {
-    const nextValidation = await invoke<ValidateProviderResponseData>("validate_engine_config", { payload });
+    const nextValidation = await invoke<ValidateProviderResponseData>(
+      "validate_engine_config",
+      { payload },
+    );
     setValidation(nextValidation);
   };
 
@@ -572,7 +772,10 @@ export function App() {
               <div className="flex items-center gap-0.5">
                 <Button
                   aria-label="Back to import"
-                  onClick={() => { setSettingsOpen(false); setActivePanel("import"); }}
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setActivePanel("import");
+                  }}
                   size="icon"
                   variant="ghost"
                   className="size-7"
@@ -592,11 +795,13 @@ export function App() {
                   {MAIN_NAV_ITEMS.map((item) => (
                     <Button
                       key={item.id}
-                      aria-current={activePanel === item.id ? "page" : undefined}
+                      aria-current={
+                        activePanel === item.id ? "page" : undefined
+                      }
                       className={sidebarButtonClass(activePanel === item.id)}
                       onClick={() => setActivePanel(item.id)}
                       size="sm"
-                      variant={activePanel === item.id ? "default" : "ghost"}
+                      variant={activePanel === item.id ? "secondary" : "ghost"}
                       type="button"
                     >
                       <span aria-hidden="true">{item.icon}</span>
@@ -611,11 +816,13 @@ export function App() {
                   {SETTINGS_NAV_ITEMS.map((item) => (
                     <Button
                       key={item.id}
-                      aria-current={settingsTab === item.id ? "page" : undefined}
+                      aria-current={
+                        settingsTab === item.id ? "page" : undefined
+                      }
                       className={sidebarButtonClass(settingsTab === item.id)}
                       onClick={() => setSettingsTab(item.id)}
                       size="sm"
-                      variant={settingsTab === item.id ? "default" : "ghost"}
+                      variant={settingsTab === item.id ? "secondary" : "ghost"}
                       type="button"
                     >
                       <span aria-hidden="true">{item.icon}</span>
@@ -635,7 +842,9 @@ export function App() {
                   variant="ghost"
                   type="button"
                 >
-                  <span aria-hidden="true"><Settings size={18} /></span>
+                  <span aria-hidden="true">
+                    <Settings size={18} />
+                  </span>
                   <span className="font-medium">Settings</span>
                 </Button>
               </div>
