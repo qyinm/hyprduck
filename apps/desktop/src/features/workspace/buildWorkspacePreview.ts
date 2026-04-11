@@ -1,5 +1,7 @@
 import type {
   WorkspaceAnswerResponse,
+  WorkspaceEdgeDetail,
+  WorkspaceEdgeSummary,
   WorkspaceEvidenceRef,
   WorkspaceNodeDetail,
   WorkspaceNodeSummary,
@@ -57,7 +59,17 @@ export function buildWorkspacePreview(
   });
 
   const nodes = [documentNode, ...pageNodes];
+  const edges: WorkspaceEdgeSummary[] = pageNodes.map((node, index) => ({
+    id: `edge-document-${node.id}`,
+    sourceNodeId: "document",
+    targetNodeId: node.id,
+    kind: "source_document",
+    label: "Compiled from import",
+    confidence: 0.42,
+    evidenceCount: 1,
+  }));
   const detailsByNodeId: Record<string, WorkspaceNodeDetail> = {};
+  const edgeDetailsById: Record<string, WorkspaceEdgeDetail> = {};
   const answerByNodeId: Record<string, WorkspaceAnswerResponse> = {};
 
   const pageEvidence = pageSections.map((section, index) => ({
@@ -104,6 +116,12 @@ export function buildWorkspacePreview(
       evidence,
       [node.id],
     );
+    edgeDetailsById[`edge-document-${node.id}`] = {
+      edge: edges[index],
+      explanation:
+        "Preview edge only. The compile-backed graph will replace this with real explainable relationships once relation extraction lands.",
+      evidence,
+    };
   });
 
   return {
@@ -119,7 +137,9 @@ export function buildWorkspacePreview(
       evidenceCount: pageEvidence.length,
     },
     nodes,
+    edges,
     detailsByNodeId,
+    edgeDetailsById,
     answerByNodeId,
   };
 }

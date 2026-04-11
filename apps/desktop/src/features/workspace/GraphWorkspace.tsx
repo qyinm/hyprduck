@@ -58,11 +58,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     );
   }
 
-  const selectedNode =
-    (uiState.selectedNodeId && project.detailsByNodeId[uiState.selectedNodeId]) ||
+  const nodeById = Object.fromEntries(project.nodes.map((node) => [node.id, node]));
+  const selectedEdge =
+    (uiState.selectedEdgeId && project.edgeDetailsById[uiState.selectedEdgeId]) ||
     null;
-  const answer =
-    (selectedNode && project.answerByNodeId[selectedNode.node.id]) || null;
+  const selectedNode =
+    (!selectedEdge &&
+      uiState.selectedNodeId &&
+      project.detailsByNodeId[uiState.selectedNodeId]) ||
+    null;
+  const answer = (selectedNode && project.answerByNodeId[selectedNode.node.id]) || null;
   const graphPaneClass = project.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
@@ -195,6 +200,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{project.summary.nodeCount} nodes</span>
               <span>•</span>
+              <span>{project.summary.relationshipCount} relationships</span>
+              <span>•</span>
               <span>{project.summary.evidenceCount} visible evidence refs</span>
             </div>
           </div>
@@ -206,24 +213,53 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               className="absolute inset-4 size-[calc(100%-2rem)]"
               viewBox="0 0 100 100"
             >
-              {project.nodes
-                .filter((node) => node.id !== "document")
-                .map((node) => (
-                  <line
-                    key={node.id}
-                    stroke="rgba(93, 104, 112, 0.35)"
-                    strokeWidth="1.4"
-                    x1={48}
-                    x2={node.position.x}
-                    y1={16}
-                    y2={node.position.y}
-                  />
-                ))}
+              {project.edges.map((edge) => {
+                const sourceNode = nodeById[edge.sourceNodeId];
+                const targetNode = nodeById[edge.targetNodeId];
+                if (!sourceNode || !targetNode) {
+                  return null;
+                }
+                const selected = uiState.selectedEdgeId === edge.id;
+                return (
+                  <g key={edge.id}>
+                    <line
+                      stroke={
+                        selected
+                          ? "rgba(13, 148, 136, 0.95)"
+                          : edge.kind === "source_document"
+                          ? "rgba(148, 163, 184, 0.55)"
+                          : "rgba(93, 104, 112, 0.45)"
+                      }
+                      strokeDasharray={edge.kind === "source_document" ? "3 4" : undefined}
+                      strokeWidth={selected ? 2.4 : 1.5}
+                      x1={sourceNode.position.x}
+                      x2={targetNode.position.x}
+                      y1={sourceNode.position.y}
+                      y2={targetNode.position.y}
+                    />
+                    <line
+                      onClick={() => dispatch({ type: "select_edge", edgeId: edge.id })}
+                      stroke="transparent"
+                      strokeWidth="9"
+                      style={{ pointerEvents: "stroke" }}
+                      x1={sourceNode.position.x}
+                      x2={targetNode.position.x}
+                      y1={sourceNode.position.y}
+                      y2={targetNode.position.y}
+                    />
+                  </g>
+                );
+              })}
             </svg>
 
             <div className="relative size-full">
               {project.nodes.map((node) => {
                 const selected = uiState.selectedNodeId === node.id;
+                const edgeConnected = Boolean(
+                  selectedEdge &&
+                    (selectedEdge.edge.sourceNodeId === node.id ||
+                      selectedEdge.edge.targetNodeId === node.id),
+                );
                 return (
                   <button
                     key={node.id}
@@ -238,6 +274,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         : "border-stone-300/90 bg-white/95 text-foreground",
                       selected &&
                         "border-teal-600 ring-2 ring-teal-600/20 shadow-[0_12px_24px_rgba(15,23,42,0.08)]",
+                      edgeConnected &&
+                        !selected &&
+                        "border-teal-400/80 ring-2 ring-teal-500/10 shadow-[0_12px_24px_rgba(15,23,42,0.06)]",
                     )}
                     style={{
                       left: `${node.position.x}%`,
@@ -267,7 +306,65 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               </p>
             </div>
 
-            {selectedNode ? (
+            {selectedEdge ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+                <section className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">edge</Badge>
+                    <Badge variant="secondary">
+                      {selectedEdge.edge.confidence === null
+                        ? "No confidence yet"
+                        : `${Math.round(selectedEdge.edge.confidence * 100)}% relation confidence`}
+                    </Badge>
+                  </div>
+                  <div>
+                    <h4 className="text-lg font-semibold tracking-tight">
+                      {nodeById[selectedEdge.edge.sourceNodeId]?.label ?? selectedEdge.edge.sourceNodeId}
+                      {" -> "}
+                      {nodeById[selectedEdge.edge.targetNodeId]?.label ?? selectedEdge.edge.targetNodeId}
+                    </h4>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                      {selectedEdge.explanation}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
+                      {selectedEdge.edge.label}
+                    </span>
+                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
+                      {selectedEdge.edge.evidenceCount} evidence refs
+                    </span>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-sm font-semibold">Why DuckDocs linked these</h5>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedEdge.evidence.length} refs
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {selectedEdge.evidence.map((evidence) => (
+                      <article
+                        key={evidence.id}
+                        className="rounded-2xl border border-border/70 bg-muted/10 px-3 py-3"
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          <span>{evidence.pageLabel}</span>
+                          <span>
+                            {evidence.sourcePath?.split("/").pop() ?? "Imported source"}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-foreground">
+                          {evidence.snippet}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            ) : selectedNode ? (
               <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
                 <section className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -349,7 +446,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                Select a node to inspect its evidence and future correction path.
+                Select a node or edge to inspect its evidence and trust signals.
               </div>
             )}
           </aside>

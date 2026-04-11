@@ -2,6 +2,7 @@ import type { WorkspaceProject } from "./types";
 
 export interface WorkspaceUiState {
   selectedNodeId: string | null;
+  selectedEdgeId: string | null;
   inspectorOpen: boolean;
   answerDockOpen: boolean;
   answerInput: string;
@@ -10,6 +11,7 @@ export interface WorkspaceUiState {
 export type WorkspaceUiAction =
   | { type: "sync_project"; project: WorkspaceProject | null }
   | { type: "select_node"; nodeId: string }
+  | { type: "select_edge"; edgeId: string }
   | { type: "toggle_inspector" }
   | { type: "open_answer_dock" }
   | { type: "close_answer_dock" }
@@ -20,6 +22,7 @@ export function createInitialWorkspaceUiState(
 ): WorkspaceUiState {
   return {
     selectedNodeId: defaultSelectedNodeId(project),
+    selectedEdgeId: null,
     inspectorOpen: true,
     answerDockOpen: false,
     answerInput: "",
@@ -38,15 +41,30 @@ export function workspaceUiStateReducer(
         action.project.detailsByNodeId[state.selectedNodeId]
           ? state.selectedNodeId
           : defaultSelectedNodeId(action.project);
+      const selectedEdgeId =
+        action.project &&
+        state.selectedEdgeId &&
+        action.project.edgeDetailsById[state.selectedEdgeId]
+          ? state.selectedEdgeId
+          : null;
       return {
         ...state,
         selectedNodeId,
+        selectedEdgeId,
       };
     }
     case "select_node":
       return {
         ...state,
         selectedNodeId: action.nodeId,
+        selectedEdgeId: null,
+        inspectorOpen: true,
+      };
+    case "select_edge":
+      return {
+        ...state,
+        selectedNodeId: null,
+        selectedEdgeId: action.edgeId,
         inspectorOpen: true,
       };
     case "toggle_inspector":

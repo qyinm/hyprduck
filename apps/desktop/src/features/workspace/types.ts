@@ -1,5 +1,6 @@
 export type WorkspaceProjectStatus = "preview" | "ready" | "degraded";
 export type WorkspaceNodeKind = "document" | "page" | "concept";
+export type WorkspaceRelationKind = "source_document" | "related_to";
 export type WorkspaceAnswerStatus =
   | "grounded"
   | "low_confidence"
@@ -43,6 +44,22 @@ export interface WorkspaceNodeDetail {
   correctionActions: WorkspaceCorrectionAction[];
 }
 
+export interface WorkspaceEdgeSummary {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  kind: WorkspaceRelationKind;
+  label: string;
+  confidence: number | null;
+  evidenceCount: number;
+}
+
+export interface WorkspaceEdgeDetail {
+  edge: WorkspaceEdgeSummary;
+  explanation: string;
+  evidence: WorkspaceEvidenceRef[];
+}
+
 export interface WorkspaceSuggestedAction {
   kind:
     | "inspect_evidence"
@@ -77,6 +94,8 @@ export interface WorkspaceProjectSummary {
 export interface WorkspaceProject {
   summary: WorkspaceProjectSummary;
   nodes: WorkspaceNodeSummary[];
+  edges: WorkspaceEdgeSummary[];
   detailsByNodeId: Record<string, WorkspaceNodeDetail>;
+  edgeDetailsById: Record<string, WorkspaceEdgeDetail>;
   answerByNodeId: Record<string, WorkspaceAnswerResponse>;
 }

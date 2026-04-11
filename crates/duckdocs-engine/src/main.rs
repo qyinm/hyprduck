@@ -14,8 +14,9 @@ use duckdocs_engine_types::{
     GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
     LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput, ParseMetadata, ParseOptions,
     ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
-    ProviderOption, SaveConfigRequest, SaveConfigResponseData, SuggestedAction,
-    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
+    ProviderOption, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
+    SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    ValidateProviderResponseData, ValidationIssue,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -224,6 +225,27 @@ struct ConceptAccumulator {
     page_labels: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct PageConceptSet {
+    page_label: String,
+    concept_ids: Vec<String>,
+    snippet: String,
+}
+
+#[derive(Debug, Clone)]
+struct CollectedConcepts {
+    concepts: Vec<ConceptAccumulator>,
+    page_concepts: Vec<PageConceptSet>,
+}
+
+#[derive(Debug, Clone)]
+struct EdgeAccumulator {
+    source_node_id: String,
+    target_node_id: String,
+    evidence: Vec<EvidenceRef>,
+    page_labels: BTreeSet<String>,
+}
+
 fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) -> KnowledgeProject {
     let title = infer_markdown_title(&request.source_markdown_path, markdown);
     let page_sections = extract_page_sections(markdown);
@@ -233,21 +255,43 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
         .unwrap_or_else(|| request.source_markdown_path.clone());
     let project_id = build_project_id(request);
 
-    let concept_accumulators = collect_concepts(&page_sections, &source_path);
+    let collected = collect_concepts(&page_sections, &source_path);
+    let concept_accumulators = collected.concepts;
     let concept_count = concept_accumulators.len();
-    let document_node = GraphNodeSummary {
+    let mut document_node = GraphNodeSummary {
         id: "document".into(),
         label: title.clone(),
         kind: GraphNodeKind::Document,
         confidence: Some(if concept_count > 0 { 0.78 } else { 0.42 }),
-        related_count: concept_count,
+        related_count: 0,
         evidence_count: page_sections.len(),
         position: GraphNodePosition { x: 50.0, y: 14.0 },
     };
 
-    let mut nodes = vec![document_node.clone()];
     let concept_positions = layout_concept_positions(concept_count.max(1));
+    let mut concept_nodes = concept_accumulators
+        .iter()
+        .enumerate()
+        .map(|(index, concept)| GraphNodeSummary {
+            id: concept.id.clone(),
+            label: concept.label.clone(),
+            kind: GraphNodeKind::Concept,
+            confidence: Some((0.62 + (concept.evidence.len().min(3) as f32 * 0.08)).min(0.91)),
+            related_count: 0,
+            evidence_count: concept.evidence.len(),
+            position: concept_positions
+                .get(index)
+                .cloned()
+                .unwrap_or(GraphNodePosition { x: 50.0, y: 54.0 }),
+        })
+        .collect::<Vec<_>>();
+
+    let concept_by_id = concept_accumulators
+        .iter()
+        .map(|concept| (concept.id.clone(), concept.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut details_by_node_id = BTreeMap::new();
+    let mut edge_details_by_id = BTreeMap::new();
     let mut answer_by_node_id = BTreeMap::new();
     let document_evidence = page_sections
         .iter()
@@ -260,6 +304,25 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             source_path: Some(source_path.clone()),
         })
         .collect::<Vec<_>>();
+
+    let (edges, built_edge_details_by_id, related_count_by_node_id, connected_node_ids_by_node_id) =
+        build_relation_edges(
+            &document_node,
+            &concept_accumulators,
+            &collected.page_concepts,
+            &source_path,
+        );
+    edge_details_by_id.extend(built_edge_details_by_id);
+    document_node.related_count = related_count_by_node_id
+        .get(document_node.id.as_str())
+        .copied()
+        .unwrap_or(0);
+    for node in &mut concept_nodes {
+        node.related_count = related_count_by_node_id
+            .get(node.id.as_str())
+            .copied()
+            .unwrap_or(0);
+    }
 
     details_by_node_id.insert(
         document_node.id.clone(),
@@ -295,10 +358,10 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 "This document-level answer is grounded in the concept nodes and visible evidence DuckDocs compiled from the markdown package."
                     .into(),
             citations: document_evidence.clone(),
-            related_node_ids: concept_accumulators
-                .iter()
-                .map(|concept| concept.id.clone())
-                .collect(),
+            related_node_ids: connected_node_ids_by_node_id
+                .get(document_node.id.as_str())
+                .map(|related| related.iter().cloned().collect())
+                .unwrap_or_default(),
             suggested_actions: vec![
                 SuggestedAction {
                     kind: SuggestedActionKind::InspectEvidence,
@@ -318,19 +381,10 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
         },
     );
 
-    for (index, concept) in concept_accumulators.iter().enumerate() {
-        let node = GraphNodeSummary {
-            id: concept.id.clone(),
-            label: concept.label.clone(),
-            kind: GraphNodeKind::Concept,
-            confidence: Some((0.62 + (concept.evidence.len().min(3) as f32 * 0.08)).min(0.91)),
-            related_count: 1,
-            evidence_count: concept.evidence.len(),
-            position: concept_positions
-                .get(index)
-                .cloned()
-                .unwrap_or(GraphNodePosition { x: 50.0, y: 54.0 }),
-        };
+    for node in &concept_nodes {
+        let concept = concept_by_id
+            .get(&node.id)
+            .expect("concept node should have backing accumulator");
         let aliases = concept
             .aliases
             .iter()
@@ -368,7 +422,10 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                     "This answer is grounded in the evidence attached to the selected concept node."
                         .into(),
                 citations: concept.evidence.iter().take(3).cloned().collect(),
-                related_node_ids: vec!["document".into()],
+                related_node_ids: connected_node_ids_by_node_id
+                    .get(node.id.as_str())
+                    .map(|related| related.iter().cloned().collect())
+                    .unwrap_or_else(|| vec!["document".into()]),
                 suggested_actions: vec![SuggestedAction {
                     kind: SuggestedActionKind::InspectEvidence,
                     label: "Inspect evidence".into(),
@@ -377,14 +434,18 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 }],
             },
         );
-        nodes.push(node);
     }
+
+    let mut nodes = Vec::with_capacity(concept_nodes.len() + 1);
+    nodes.push(document_node.clone());
+    nodes.extend(concept_nodes.iter().cloned());
 
     let evidence_count = concept_accumulators
         .iter()
         .map(|concept| concept.evidence.len())
         .sum::<usize>()
-        + document_evidence.len();
+        + document_evidence.len()
+        + edges.iter().map(|edge| edge.evidence_count).sum::<usize>();
 
     KnowledgeProject {
         summary: ProjectOverview {
@@ -403,30 +464,35 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             ),
             document_count: 1,
             node_count: nodes.len(),
-            relationship_count: concept_count,
+            relationship_count: edges.len(),
             evidence_count,
         },
         nodes,
+        edges,
         details_by_node_id,
+        edge_details_by_id,
         answer_by_node_id,
     }
 }
 
-fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Vec<ConceptAccumulator> {
+fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> CollectedConcepts {
     let mut concepts = BTreeMap::<String, ConceptAccumulator>::new();
+    let mut page_concepts = Vec::new();
 
     for section in page_sections {
         let mut seen_on_page = BTreeSet::new();
+        let mut page_concept_ids = Vec::new();
         let candidates = concept_candidates(&section.content);
         for (candidate_index, candidate) in candidates.into_iter().enumerate() {
             let key = normalize_key(&candidate);
             if key.is_empty() || !seen_on_page.insert(key.clone()) {
                 continue;
             }
+            let concept_id = format!("concept-{key}");
             let concept = concepts
                 .entry(key.clone())
                 .or_insert_with(|| ConceptAccumulator {
-                    id: format!("concept-{}", key),
+                    id: concept_id.clone(),
                     label: candidate.clone(),
                     aliases: BTreeSet::new(),
                     evidence: Vec::new(),
@@ -446,6 +512,14 @@ fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Vec<Con
                 snippet: excerpt(&section.content, 180),
                 source_path: Some(source_path.to_string()),
             });
+            page_concept_ids.push(concept_id);
+        }
+        if !page_concept_ids.is_empty() {
+            page_concepts.push(PageConceptSet {
+                page_label: section.page_label.clone(),
+                concept_ids: page_concept_ids,
+                snippet: excerpt(&section.content, 180),
+            });
         }
     }
 
@@ -453,10 +527,11 @@ fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Vec<Con
         for (index, section) in page_sections.iter().enumerate() {
             let label = fallback_concept_label(&section.content, &section.page_label);
             let key = normalize_key(&label);
+            let concept_id = format!("concept-{key}");
             concepts.insert(
                 key.clone(),
                 ConceptAccumulator {
-                    id: format!("concept-{}", key),
+                    id: concept_id.clone(),
                     label,
                     aliases: BTreeSet::new(),
                     evidence: vec![EvidenceRef {
@@ -468,10 +543,211 @@ fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Vec<Con
                     page_labels: [section.page_label.clone()].into_iter().collect(),
                 },
             );
+            page_concepts.push(PageConceptSet {
+                page_label: section.page_label.clone(),
+                concept_ids: vec![concept_id],
+                snippet: excerpt(&section.content, 180),
+            });
         }
     }
 
-    concepts.into_values().take(20).collect()
+    let concepts = concepts.into_values().take(20).collect::<Vec<_>>();
+    let allowed_ids = concepts
+        .iter()
+        .map(|concept| concept.id.clone())
+        .collect::<BTreeSet<_>>();
+    let page_concepts = page_concepts
+        .into_iter()
+        .filter_map(|mut page| {
+            page.concept_ids.retain(|id| allowed_ids.contains(id));
+            page.concept_ids.sort();
+            page.concept_ids.dedup();
+            if page.concept_ids.is_empty() {
+                None
+            } else {
+                Some(page)
+            }
+        })
+        .collect();
+
+    CollectedConcepts {
+        concepts,
+        page_concepts,
+    }
+}
+
+fn build_relation_edges(
+    document_node: &GraphNodeSummary,
+    concept_accumulators: &[ConceptAccumulator],
+    page_concepts: &[PageConceptSet],
+    source_path: &str,
+) -> (
+    Vec<RelationEdgeSummary>,
+    BTreeMap<String, RelationEdgeDetail>,
+    BTreeMap<String, usize>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
+    let mut edges = Vec::new();
+    let mut edge_details_by_id = BTreeMap::new();
+    let mut related_count_by_node_id = BTreeMap::<String, usize>::new();
+    let mut connected_node_ids_by_node_id = BTreeMap::<String, BTreeSet<String>>::new();
+    let concept_by_id = concept_accumulators
+        .iter()
+        .map(|concept| (concept.id.clone(), concept))
+        .collect::<BTreeMap<_, _>>();
+
+    for concept in concept_accumulators {
+        let edge = RelationEdgeSummary {
+            id: format!("edge-document-{}", concept.id),
+            source_node_id: document_node.id.clone(),
+            target_node_id: concept.id.clone(),
+            kind: RelationKind::SourceDocument,
+            label: "Compiled from source".into(),
+            confidence: Some(0.94),
+            evidence_count: concept.evidence.iter().take(2).count(),
+        };
+        let evidence = concept.evidence.iter().take(2).cloned().collect::<Vec<_>>();
+        edge_details_by_id.insert(
+            edge.id.clone(),
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: format!(
+                    "DuckDocs linked the source document to {} because this concept was compiled from cited snippets in the import.",
+                    concept.label
+                ),
+                evidence,
+            },
+        );
+        note_relation(
+            &mut related_count_by_node_id,
+            &mut connected_node_ids_by_node_id,
+            &edge.source_node_id,
+            &edge.target_node_id,
+        );
+        edges.push(edge);
+    }
+
+    let mut concept_edge_accumulators = BTreeMap::<(String, String), EdgeAccumulator>::new();
+    for page in page_concepts {
+        if page.concept_ids.len() < 2 {
+            continue;
+        }
+        for left_index in 0..page.concept_ids.len() {
+            for right_index in (left_index + 1)..page.concept_ids.len() {
+                let left_id = &page.concept_ids[left_index];
+                let right_id = &page.concept_ids[right_index];
+                let (source_node_id, target_node_id) = if left_id <= right_id {
+                    (left_id.clone(), right_id.clone())
+                } else {
+                    (right_id.clone(), left_id.clone())
+                };
+                let accumulator = concept_edge_accumulators
+                    .entry((source_node_id.clone(), target_node_id.clone()))
+                    .or_insert_with(|| EdgeAccumulator {
+                        source_node_id: source_node_id.clone(),
+                        target_node_id: target_node_id.clone(),
+                        evidence: Vec::new(),
+                        page_labels: BTreeSet::new(),
+                    });
+                accumulator.page_labels.insert(page.page_label.clone());
+                accumulator.evidence.push(EvidenceRef {
+                    id: format!(
+                        "ev-edge-{}-{}-{}",
+                        source_node_id,
+                        target_node_id,
+                        accumulator.evidence.len() + 1
+                    ),
+                    page_label: page.page_label.clone(),
+                    snippet: page.snippet.clone(),
+                    source_path: Some(source_path.to_string()),
+                });
+            }
+        }
+    }
+
+    let mut concept_edges = concept_edge_accumulators.into_values().collect::<Vec<_>>();
+    concept_edges.sort_by(|left, right| {
+        right
+            .page_labels
+            .len()
+            .cmp(&left.page_labels.len())
+            .then_with(|| left.source_node_id.cmp(&right.source_node_id))
+            .then_with(|| left.target_node_id.cmp(&right.target_node_id))
+    });
+
+    for accumulator in concept_edges.into_iter().take(16) {
+        let source_label = concept_by_id
+            .get(&accumulator.source_node_id)
+            .map(|concept| concept.label.clone())
+            .unwrap_or_else(|| accumulator.source_node_id.clone());
+        let target_label = concept_by_id
+            .get(&accumulator.target_node_id)
+            .map(|concept| concept.label.clone())
+            .unwrap_or_else(|| accumulator.target_node_id.clone());
+        let edge = RelationEdgeSummary {
+            id: format!(
+                "edge-{}-{}",
+                accumulator.source_node_id, accumulator.target_node_id
+            ),
+            source_node_id: accumulator.source_node_id.clone(),
+            target_node_id: accumulator.target_node_id.clone(),
+            kind: RelationKind::RelatedTo,
+            label: "Related in source".into(),
+            confidence: Some(
+                (0.56 + (accumulator.page_labels.len().min(3) as f32 * 0.08)).min(0.84),
+            ),
+            evidence_count: accumulator.evidence.len(),
+        };
+        edge_details_by_id.insert(
+            edge.id.clone(),
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: format!(
+                    "DuckDocs linked {} and {} because they appeared together in {} page section(s).",
+                    source_label,
+                    target_label,
+                    accumulator.page_labels.len()
+                ),
+                evidence: accumulator.evidence.clone(),
+            },
+        );
+        note_relation(
+            &mut related_count_by_node_id,
+            &mut connected_node_ids_by_node_id,
+            &edge.source_node_id,
+            &edge.target_node_id,
+        );
+        edges.push(edge);
+    }
+
+    (
+        edges,
+        edge_details_by_id,
+        related_count_by_node_id,
+        connected_node_ids_by_node_id,
+    )
+}
+
+fn note_relation(
+    related_count_by_node_id: &mut BTreeMap<String, usize>,
+    connected_node_ids_by_node_id: &mut BTreeMap<String, BTreeSet<String>>,
+    source_node_id: &str,
+    target_node_id: &str,
+) {
+    *related_count_by_node_id
+        .entry(source_node_id.to_string())
+        .or_default() += 1;
+    *related_count_by_node_id
+        .entry(target_node_id.to_string())
+        .or_default() += 1;
+    connected_node_ids_by_node_id
+        .entry(source_node_id.to_string())
+        .or_default()
+        .insert(target_node_id.to_string());
+    connected_node_ids_by_node_id
+        .entry(target_node_id.to_string())
+        .or_default()
+        .insert(source_node_id.to_string());
 }
 
 fn concept_candidates(content: &str) -> Vec<String> {
@@ -1503,7 +1779,7 @@ mod tests {
         let markdown_path = temp.path().join("sample.md");
         fs::write(
             &markdown_path,
-            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\n\n## Page 2\n\nExplainable graph view grounds answers in visible snippets.\n",
+            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\nExplainable graph view grounds answers in visible snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
         )
         .expect("write markdown");
         let request = CompileProjectRequest {
@@ -1514,7 +1790,15 @@ mod tests {
         let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
         let project = compile_knowledge_project(&request, &markdown);
         assert_eq!(project.summary.status, ProjectStatus::Ready);
-        assert!(project.nodes.iter().any(|node| node.kind == GraphNodeKind::Concept));
+        assert!(project
+            .nodes
+            .iter()
+            .any(|node| node.kind == GraphNodeKind::Concept));
+        assert!(!project.edges.is_empty());
+        assert!(project
+            .edges
+            .iter()
+            .any(|edge| edge.kind == RelationKind::RelatedTo));
 
         let store_path = temp.path().join("knowledge.sqlite3");
         let store = KnowledgeProjectStore::new(store_path);
@@ -1529,6 +1813,8 @@ mod tests {
         assert_eq!(loaded.summary.project_id, project.summary.project_id);
         assert_eq!(loaded.summary.title, "Sample import");
         assert_eq!(loaded.nodes.len(), project.nodes.len());
+        assert_eq!(loaded.edges.len(), project.edges.len());
         assert!(loaded.details_by_node_id.contains_key("document"));
+        assert!(!loaded.edge_details_by_id.is_empty());
     }
 }

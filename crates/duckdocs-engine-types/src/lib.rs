@@ -4,7 +4,8 @@ use serde_json::Value;
 pub use duckdocs_knowledge::{
     AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, ProjectOverview,
-    ProjectStatus, SuggestedAction, SuggestedActionKind,
+    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SuggestedAction,
+    SuggestedActionKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

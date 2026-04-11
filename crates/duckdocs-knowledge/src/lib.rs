@@ -103,6 +103,35 @@ pub struct GraphNodeDetail {
     pub actions: Vec<CorrectionAction>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    SourceDocument,
+    RelatedTo,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationEdgeSummary {
+    pub id: String,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub kind: RelationKind,
+    pub label: String,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub evidence_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationEdgeDetail {
+    pub edge: RelationEdgeSummary,
+    pub explanation: String,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestedActionKind {
@@ -141,7 +170,11 @@ pub struct KnowledgeProject {
     pub summary: ProjectOverview,
     pub nodes: Vec<GraphNodeSummary>,
     #[serde(default)]
+    pub edges: Vec<RelationEdgeSummary>,
+    #[serde(default)]
     pub details_by_node_id: BTreeMap<String, GraphNodeDetail>,
+    #[serde(default)]
+    pub edge_details_by_id: BTreeMap<String, RelationEdgeDetail>,
     #[serde(default)]
     pub answer_by_node_id: BTreeMap<String, AnswerResponse>,
 }
@@ -173,5 +206,23 @@ mod tests {
         let encoded = serde_json::to_string(&response).expect("serialize answer response");
         assert!(encoded.contains("\"status\":\"low_confidence\""));
         assert!(encoded.contains("\"relatedNodeIds\":[\"page-1\"]"));
+    }
+
+    #[test]
+    fn relation_edge_uses_camel_case_wire_shape() {
+        let edge = RelationEdgeSummary {
+            id: "edge-a-b".into(),
+            source_node_id: "concept-a".into(),
+            target_node_id: "concept-b".into(),
+            kind: RelationKind::RelatedTo,
+            label: "Related in source".into(),
+            confidence: Some(0.74),
+            evidence_count: 2,
+        };
+
+        let encoded = serde_json::to_string(&edge).expect("serialize relation edge");
+        assert!(encoded.contains("\"sourceNodeId\":\"concept-a\""));
+        assert!(encoded.contains("\"targetNodeId\":\"concept-b\""));
+        assert!(encoded.contains("\"kind\":\"related_to\""));
     }
 }
