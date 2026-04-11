@@ -35,6 +35,14 @@ export interface WorkspaceCorrectionAction {
   disabledReason?: string | null;
 }
 
+export interface WorkspaceApplyCorrectionRequest {
+  projectId: string;
+  nodeId: string;
+  kind: WorkspaceCorrectionAction["kind"];
+  targetNodeId?: string | null;
+  value?: string | null;
+}
+
 export interface WorkspaceNodeDetail {
   node: WorkspaceNodeSummary;
   canonicalName: string;

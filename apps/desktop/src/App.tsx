@@ -27,7 +27,10 @@ import {
   createInitialWorkspaceUiState,
   workspaceUiStateReducer,
 } from "@/features/workspace/state";
-import type { WorkspaceProject } from "@/features/workspace/types";
+import type {
+  WorkspaceApplyCorrectionRequest,
+  WorkspaceProject,
+} from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
 
 type ActivePanel = "import" | "graph";
@@ -779,6 +782,21 @@ export function App() {
     await invoke<void>("open_saved_output", { path, reveal });
   };
 
+  const applyWorkspaceCorrection = async (
+    request: WorkspaceApplyCorrectionRequest,
+  ) => {
+    const project = await invoke<WorkspaceProject>("apply_workspace_correction", {
+      correction: {
+        projectId: request.projectId,
+        nodeId: request.nodeId,
+        kind: request.kind,
+        targetNodeId: request.targetNodeId ?? null,
+        value: request.value ?? null,
+      },
+    });
+    setLoadedWorkspaceProject(project);
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke<EngineConfigPayload>("save_engine_config", {
       payload,
@@ -972,6 +990,7 @@ export function App() {
           ) : activePanel === "graph" ? (
             <GraphWorkspace
               dispatch={dispatchWorkspaceUi}
+              onApplyCorrection={applyWorkspaceCorrection}
               onOpenImport={openImportPanel}
               project={workspaceProject}
               uiState={workspaceUiState}

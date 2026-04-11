@@ -8,10 +8,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use duckdocs_engine_types::{
-    CompileProjectRequest, CompileProjectResponseData, EngineCommand, EngineConfigPayload,
-    EngineFailure, EngineRequest, EngineSuccess, KnowledgeProject, LoadConfigRequest,
-    LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest,
-    ParseResponseData, SaveConfigRequest, SaveConfigResponseData, ValidateProviderRequest,
+    ApplyCorrectionRequest, ApplyCorrectionResponseData, CompileProjectRequest,
+    CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
+    EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
+    SaveConfigRequest, SaveConfigResponseData, ValidateProviderRequest,
     ValidateProviderResponseData,
 };
 
@@ -25,6 +26,7 @@ pub trait EngineClient {
     fn compile_project(&self, request: CompileProjectRequest)
         -> Result<CompileProjectResponseData>;
     fn load_project(&self, project_id: Option<String>) -> Result<Option<KnowledgeProject>>;
+    fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
     fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
     fn validate_provider(
@@ -214,6 +216,16 @@ impl EngineClient for SubprocessEngineClient {
             EngineCommand::LoadProject,
             None,
         )?;
+        Ok(response.project)
+    }
+
+    fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject> {
+        let response = self
+            .run_command::<ApplyCorrectionResponseData, ApplyCorrectionResponseData>(
+                EngineRequest::ApplyCorrection(request),
+                EngineCommand::ApplyCorrection,
+                None,
+            )?;
         Ok(response.project)
     }
 

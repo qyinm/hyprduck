@@ -14,6 +14,7 @@ pub enum EngineCommand {
     Parse,
     CompileProject,
     LoadProject,
+    ApplyCorrection,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -146,6 +147,23 @@ pub struct LoadProjectResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyCorrectionRequest {
+    pub project_id: String,
+    pub node_id: String,
+    pub kind: CorrectionKind,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyCorrectionResponseData {
+    pub project: KnowledgeProject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
     pub label: String,
@@ -208,6 +226,7 @@ pub enum EngineRequest {
     Parse(ParseRequest),
     CompileProject(CompileProjectRequest),
     LoadProject(LoadProjectRequest),
+    ApplyCorrection(ApplyCorrectionRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),

@@ -1,4 +1,4 @@
-import type { Dispatch } from "react";
+import { type Dispatch, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,17 +15,18 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
-import type { WorkspaceProject } from "./types";
+import type { WorkspaceApplyCorrectionRequest, WorkspaceProject } from "./types";
 
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
   uiState: WorkspaceUiState;
   dispatch: Dispatch<WorkspaceUiAction>;
   onOpenImport: () => void;
+  onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
 }
 
 export function GraphWorkspace(props: GraphWorkspaceProps) {
-  const { project, uiState, dispatch, onOpenImport } = props;
+  const { project, uiState, dispatch, onOpenImport, onApplyCorrection } = props;
 
   if (!project) {
     return (
@@ -67,6 +68,22 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       uiState.selectedNodeId &&
       project.detailsByNodeId[uiState.selectedNodeId]) ||
     null;
+  const mergeCandidates = useMemo(
+    () =>
+      project.nodes.filter(
+        (node) =>
+          node.kind === "concept" && node.id !== selectedNode?.node.id,
+      ),
+    [project.nodes, selectedNode?.node.id],
+  );
+  const [renameValue, setRenameValue] = useState(selectedNode?.canonicalName ?? "");
+  const [mergeTargetNodeId, setMergeTargetNodeId] = useState<string | null>(
+    mergeCandidates[0]?.id ?? null,
+  );
+  const [pendingCorrectionKind, setPendingCorrectionKind] = useState<
+    WorkspaceApplyCorrectionRequest["kind"] | null
+  >(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const answer = (selectedNode && project.answerByNodeId[selectedNode.node.id]) || null;
   const graphPaneClass = project.summary.stale
     ? "border-amber-300/70"
@@ -81,6 +98,45 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       : answer?.status === "blocked"
       ? "Blocked"
       : "Preview";
+
+  useEffect(() => {
+    setRenameValue(selectedNode?.canonicalName ?? "");
+    setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
+    setPendingCorrectionKind(null);
+    setCorrectionError(null);
+  }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
+
+  async function handleApplyCorrection(
+    request: Omit<WorkspaceApplyCorrectionRequest, "projectId" | "nodeId">,
+  ) {
+    if (!project || !selectedNode) {
+      return;
+    }
+
+    if (request.kind === "rename" && !(request.value ?? "").trim()) {
+      setCorrectionError("Rename needs a non-empty canonical name.");
+      return;
+    }
+
+    if (request.kind === "merge" && !request.targetNodeId) {
+      setCorrectionError("Pick a target concept before applying merge.");
+      return;
+    }
+
+    setPendingCorrectionKind(request.kind);
+    setCorrectionError(null);
+    try {
+      await onApplyCorrection({
+        projectId: project.summary.projectId,
+        nodeId: selectedNode.node.id,
+        ...request,
+      });
+    } catch (error) {
+      setCorrectionError(String(error));
+    } finally {
+      setPendingCorrectionKind(null);
+    }
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -422,27 +478,150 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                 </section>
 
-                <section className="space-y-3">
-                  <h5 className="text-sm font-semibold">Correction actions</h5>
-                  <div className="grid gap-2">
-                    {selectedNode.correctionActions.map((action) => (
-                      <div
-                        key={action.kind}
-                        className="rounded-2xl border border-dashed border-border/80 px-3 py-3"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-sm font-medium">{action.label}</span>
-                          <Button disabled size="xs" type="button" variant="outline">
-                            Pending
-                          </Button>
-                        </div>
-                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                          {action.disabledReason ?? "This action is not available yet."}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </section>
+                {selectedNode.correctionActions.length > 0 ? (
+                  <section className="space-y-3">
+                    <h5 className="text-sm font-semibold">Correction actions</h5>
+                    <div className="grid gap-2">
+                      {selectedNode.correctionActions.map((action) => {
+                        const disabled =
+                          Boolean(action.disabledReason) || pendingCorrectionKind !== null;
+
+                        if (action.disabledReason) {
+                          return (
+                            <div
+                              key={action.kind}
+                              className="rounded-2xl border border-dashed border-border/80 px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-medium">{action.label}</span>
+                                <Button disabled size="xs" type="button" variant="outline">
+                                  Unavailable
+                                </Button>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                {action.disabledReason}
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        if (action.kind === "rename") {
+                          return (
+                            <div
+                              key={action.kind}
+                              className="rounded-2xl border border-border/80 px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-medium">{action.label}</span>
+                                <Button
+                                  disabled={disabled || !renameValue.trim()}
+                                  onClick={() =>
+                                    void handleApplyCorrection({
+                                      kind: "rename",
+                                      value: renameValue.trim(),
+                                    })
+                                  }
+                                  size="xs"
+                                  type="button"
+                                >
+                                  {pendingCorrectionKind === "rename"
+                                    ? "Applying…"
+                                    : "Apply"}
+                                </Button>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                Update the canonical concept name. DuckDocs keeps the previous
+                                label as an alias so provenance stays intact.
+                              </p>
+                              <Input
+                                className="mt-3"
+                                disabled={pendingCorrectionKind !== null}
+                                onChange={(event) => setRenameValue(event.target.value)}
+                                value={renameValue}
+                              />
+                            </div>
+                          );
+                        }
+
+                        if (action.kind === "merge") {
+                          return (
+                            <div
+                              key={action.kind}
+                              className="rounded-2xl border border-border/80 px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-medium">{action.label}</span>
+                                <Button
+                                  disabled={disabled || !mergeTargetNodeId}
+                                  onClick={() =>
+                                    void handleApplyCorrection({
+                                      kind: "merge",
+                                      targetNodeId: mergeTargetNodeId,
+                                    })
+                                  }
+                                  size="xs"
+                                  type="button"
+                                >
+                                  {pendingCorrectionKind === "merge"
+                                    ? "Applying…"
+                                    : "Apply"}
+                                </Button>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                Fold this concept into another canonical node. DuckDocs keeps the
+                                evidence and aliases on the surviving concept.
+                              </p>
+                              <select
+                                className="mt-3 h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                disabled={pendingCorrectionKind !== null}
+                                onChange={(event) => setMergeTargetNodeId(event.target.value)}
+                                value={mergeTargetNodeId ?? ""}
+                              >
+                                {mergeCandidates.map((node) => (
+                                  <option key={node.id} value={node.id}>
+                                    {node.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={action.kind}
+                            className="rounded-2xl border border-border/80 px-3 py-3"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-sm font-medium">{action.label}</span>
+                              <Button
+                                disabled={disabled}
+                                onClick={() =>
+                                  void handleApplyCorrection({
+                                    kind: "keep_separate",
+                                  })
+                                }
+                                size="xs"
+                                type="button"
+                              >
+                                {pendingCorrectionKind === "keep_separate"
+                                  ? "Applying…"
+                                  : "Apply"}
+                              </Button>
+                            </div>
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                              Split the visible aliases under this concept into separate nodes
+                              without hiding the original evidence.
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {correctionError ? (
+                      <p className="text-xs leading-5 text-destructive">{correctionError}</p>
+                    ) : null}
+                  </section>
+                ) : null}
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">

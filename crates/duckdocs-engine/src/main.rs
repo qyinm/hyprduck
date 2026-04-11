@@ -8,10 +8,11 @@ use std::time::Instant;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
-    AnswerResponse, AnswerStatus, CompileProjectRequest, CompileProjectResponseData,
-    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload,
-    EngineFailure, EngineRequest, EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    AnswerResponse, AnswerStatus, ApplyCorrectionRequest, ApplyCorrectionResponseData,
+    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
+    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
+    EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
+    GraphNodeSummary, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
     LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput, ParseMetadata, ParseOptions,
     ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
     ProviderOption, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
@@ -67,6 +68,13 @@ fn run() -> Result<()> {
         EngineRequest::LoadProject(request) => {
             let payload =
                 EngineSuccess::new(EngineCommand::LoadProject, handle_load_project(request)?);
+            write_response(&payload)?;
+        }
+        EngineRequest::ApplyCorrection(request) => {
+            let payload = EngineSuccess::new(
+                EngineCommand::ApplyCorrection,
+                handle_apply_correction(request)?,
+            );
             write_response(&payload)?;
         }
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
@@ -210,6 +218,16 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
     Ok(LoadProjectResponseData { project })
 }
 
+fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorrectionResponseData> {
+    let store = KnowledgeProjectStore::default()?;
+    let mut project = store
+        .load_project(Some(&request.project_id))?
+        .ok_or_else(|| anyhow!("project {} was not found", request.project_id))?;
+    apply_correction(&mut project, &request)?;
+    store.update_project(&project)?;
+    Ok(ApplyCorrectionResponseData { project })
+}
+
 #[derive(Debug, Clone)]
 struct PageSection {
     page_label: String,
@@ -336,9 +354,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 page_sections.len()
             ),
             evidence: document_evidence.clone(),
-            actions: disabled_correction_actions(
-                "Merge and rename controls will activate once correction writes land.",
-            ),
+            actions: Vec::new(),
         },
     );
     answer_by_node_id.insert(
@@ -391,6 +407,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             .filter(|alias| alias.as_str() != concept.label)
             .cloned()
             .collect::<Vec<_>>();
+        let actions = correction_actions_for_detail(&concept.label, &aliases);
         details_by_node_id.insert(
             node.id.clone(),
             GraphNodeDetail {
@@ -403,9 +420,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                     concept.page_labels.len()
                 ),
                 evidence: concept.evidence.clone(),
-                actions: disabled_correction_actions(
-                    "Correction apply flow lands next. The graph already exposes where a future merge or rename would attach.",
-                ),
+                actions,
             },
         );
         answer_by_node_id.insert(
@@ -935,24 +950,703 @@ fn excerpt(value: &str, max_length: usize) -> String {
     format!("{}…", truncated.trim_end())
 }
 
-fn disabled_correction_actions(reason: &str) -> Vec<CorrectionAction> {
+fn correction_actions_for_detail(
+    _canonical_name: &str,
+    aliases: &[String],
+) -> Vec<CorrectionAction> {
     vec![
         CorrectionAction {
             kind: CorrectionKind::Merge,
             label: "Merge".into(),
-            disabled_reason: Some(reason.into()),
+            disabled_reason: None,
         },
         CorrectionAction {
             kind: CorrectionKind::KeepSeparate,
             label: "Keep Separate".into(),
-            disabled_reason: Some(reason.into()),
+            disabled_reason: if aliases.is_empty() {
+                Some("No grouped aliases are available to split yet.".into())
+            } else {
+                None
+            },
         },
         CorrectionAction {
             kind: CorrectionKind::Rename,
             label: "Rename".into(),
-            disabled_reason: Some(reason.into()),
+            disabled_reason: None,
         },
     ]
+}
+
+#[derive(Debug, Clone)]
+struct StoredEdgeAccumulator {
+    kind: RelationKind,
+    source_node_id: String,
+    target_node_id: String,
+    label: String,
+    confidence: Option<f32>,
+    evidence: Vec<EvidenceRef>,
+}
+
+fn apply_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    match request.kind {
+        CorrectionKind::Rename => apply_rename_correction(project, request)?,
+        CorrectionKind::Merge => apply_merge_correction(project, request)?,
+        CorrectionKind::KeepSeparate => apply_keep_separate_correction(project, request)?,
+    }
+    refresh_project_after_correction(project);
+    Ok(())
+}
+
+fn apply_rename_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    let next_name = request
+        .value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("rename needs a non-empty canonical name"))?;
+    let node = project
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == request.node_id)
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    if node.kind != GraphNodeKind::Concept {
+        bail!("only concept nodes can be renamed");
+    }
+
+    let detail = project
+        .details_by_node_id
+        .get_mut(&request.node_id)
+        .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
+    let previous_name = detail.canonical_name.clone();
+    if previous_name == next_name {
+        return Ok(());
+    }
+
+    let mut aliases = detail.aliases.iter().cloned().collect::<BTreeSet<_>>();
+    aliases.insert(previous_name.clone());
+    aliases.remove(next_name);
+    detail.aliases = aliases.into_iter().collect();
+    detail.canonical_name = next_name.to_string();
+    detail.description = format!(
+        "Renamed from {} to {}. DuckDocs kept the previous canonical label as an alias so the evidence trail stays intact.",
+        previous_name, next_name
+    );
+    node.label = next_name.to_string();
+    detail.node = node.clone();
+
+    Ok(())
+}
+
+fn apply_merge_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    let target_node_id = request
+        .target_node_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("merge needs a target concept"))?;
+    if target_node_id == request.node_id {
+        bail!("merge target must be different from the selected node");
+    }
+
+    let source_node = project
+        .nodes
+        .iter()
+        .find(|node| node.id == request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    let target_node = project
+        .nodes
+        .iter()
+        .find(|node| node.id == target_node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("target node {} was not found", target_node_id))?;
+    if source_node.kind != GraphNodeKind::Concept || target_node.kind != GraphNodeKind::Concept {
+        bail!("merge only supports concept nodes");
+    }
+
+    let source_detail = project
+        .details_by_node_id
+        .get(&request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
+    let target_name = project
+        .details_by_node_id
+        .get(target_node_id)
+        .map(|detail| detail.canonical_name.clone())
+        .ok_or_else(|| anyhow!("target node detail {} was not found", target_node_id))?;
+
+    {
+        let target_detail = project
+            .details_by_node_id
+            .get_mut(target_node_id)
+            .ok_or_else(|| anyhow!("target node detail {} was not found", target_node_id))?;
+        let mut aliases = target_detail
+            .aliases
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        aliases.insert(source_detail.canonical_name.clone());
+        aliases.extend(source_detail.aliases.iter().cloned());
+        aliases.remove(&target_name);
+        target_detail.aliases = aliases.into_iter().collect();
+        target_detail.evidence = dedupe_evidence(
+            target_detail
+                .evidence
+                .clone()
+                .into_iter()
+                .chain(source_detail.evidence.clone())
+                .collect(),
+        );
+        target_detail.description = format!(
+            "Merged {} into {}. DuckDocs kept all visible evidence on the surviving concept.",
+            source_detail.canonical_name, target_name
+        );
+    }
+
+    if let Some(node) = project
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == target_node_id)
+    {
+        node.evidence_count = project
+            .details_by_node_id
+            .get(target_node_id)
+            .map(|detail| detail.evidence.len())
+            .unwrap_or(node.evidence_count);
+        node.confidence = Some(
+            node.confidence
+                .unwrap_or(0.72)
+                .max(source_node.confidence.unwrap_or(0.72))
+                .min(0.94),
+        );
+    }
+
+    project.nodes.retain(|node| node.id != request.node_id);
+    project.details_by_node_id.remove(&request.node_id);
+    project.answer_by_node_id.remove(&request.node_id);
+    rewrite_project_edges(project, Some((&request.node_id, target_node_id)));
+
+    Ok(())
+}
+
+fn apply_keep_separate_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    let source_node = project
+        .nodes
+        .iter()
+        .find(|node| node.id == request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    if source_node.kind != GraphNodeKind::Concept {
+        bail!("keep separate only supports concept nodes");
+    }
+
+    let source_detail = project
+        .details_by_node_id
+        .get(&request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
+    if source_detail.aliases.is_empty() {
+        bail!("keep separate needs at least one grouped alias");
+    }
+
+    {
+        let detail = project
+            .details_by_node_id
+            .get_mut(&request.node_id)
+            .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
+        detail.aliases.clear();
+        detail.description = format!(
+            "DuckDocs kept the previous aliases under {} as distinct concept nodes after a manual correction.",
+            detail.canonical_name
+        );
+    }
+
+    let split_evidence = source_detail.evidence.clone();
+    for (index, alias) in source_detail.aliases.iter().enumerate() {
+        let new_node_id = unique_manual_node_id(project, alias);
+        let new_node = GraphNodeSummary {
+            id: new_node_id.clone(),
+            label: alias.clone(),
+            kind: GraphNodeKind::Concept,
+            confidence: Some(source_node.confidence.unwrap_or(0.68).min(0.82)),
+            related_count: 0,
+            evidence_count: split_evidence.len(),
+            position: manual_split_position(&source_node.position, index),
+        };
+        project.nodes.push(new_node.clone());
+        project.details_by_node_id.insert(
+            new_node_id.clone(),
+            GraphNodeDetail {
+                node: new_node.clone(),
+                canonical_name: alias.clone(),
+                aliases: Vec::new(),
+                description: format!(
+                    "Created from a keep separate correction on {}. DuckDocs preserved the supporting evidence while treating this as its own concept.",
+                    source_detail.canonical_name
+                ),
+                evidence: split_evidence.clone(),
+                actions: Vec::new(),
+            },
+        );
+
+        if project.nodes.iter().any(|node| node.id == "document") {
+            let document_evidence = split_evidence.iter().take(2).cloned().collect::<Vec<_>>();
+            let document_edge = RelationEdgeSummary {
+                id: relation_edge_id(RelationKind::SourceDocument, "document", &new_node_id),
+                source_node_id: "document".into(),
+                target_node_id: new_node_id.clone(),
+                kind: RelationKind::SourceDocument,
+                label: "Compiled from source".into(),
+                confidence: Some(0.76),
+                evidence_count: document_evidence.len(),
+            };
+            project.edges.push(document_edge.clone());
+            project.edge_details_by_id.insert(
+                document_edge.id.clone(),
+                RelationEdgeDetail {
+                    edge: document_edge,
+                    explanation: String::new(),
+                    evidence: document_evidence,
+                },
+            );
+        }
+
+        let (source_node_id, target_node_id) = if request.node_id <= new_node_id {
+            (request.node_id.clone(), new_node_id.clone())
+        } else {
+            (new_node_id.clone(), request.node_id.clone())
+        };
+        let relation_evidence = split_evidence.iter().take(2).cloned().collect::<Vec<_>>();
+        let relation_edge = RelationEdgeSummary {
+            id: relation_edge_id(RelationKind::RelatedTo, &source_node_id, &target_node_id),
+            source_node_id,
+            target_node_id,
+            kind: RelationKind::RelatedTo,
+            label: "Separated by correction".into(),
+            confidence: Some(0.68),
+            evidence_count: relation_evidence.len(),
+        };
+        project.edges.push(relation_edge.clone());
+        project.edge_details_by_id.insert(
+            relation_edge.id.clone(),
+            RelationEdgeDetail {
+                edge: relation_edge,
+                explanation: String::new(),
+                evidence: relation_evidence,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+fn refresh_project_after_correction(project: &mut KnowledgeProject) {
+    rewrite_project_edges(project, None);
+
+    let node_ids = project
+        .nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    project
+        .details_by_node_id
+        .retain(|node_id, _| node_ids.contains(node_id));
+    project
+        .answer_by_node_id
+        .retain(|node_id, _| node_ids.contains(node_id));
+    project.edges.retain(|edge| {
+        node_ids.contains(&edge.source_node_id)
+            && node_ids.contains(&edge.target_node_id)
+            && edge.source_node_id != edge.target_node_id
+    });
+    project.edge_details_by_id.retain(|edge_id, detail| {
+        node_ids.contains(&detail.edge.source_node_id)
+            && node_ids.contains(&detail.edge.target_node_id)
+            && detail.edge.source_node_id != detail.edge.target_node_id
+            && edge_id == &detail.edge.id
+    });
+
+    let mut related_count_by_node_id = BTreeMap::<String, usize>::new();
+    let mut connected_node_ids_by_node_id = BTreeMap::<String, BTreeSet<String>>::new();
+    for edge in &project.edges {
+        note_relation(
+            &mut related_count_by_node_id,
+            &mut connected_node_ids_by_node_id,
+            &edge.source_node_id,
+            &edge.target_node_id,
+        );
+    }
+
+    for node in &mut project.nodes {
+        if let Some(detail) = project.details_by_node_id.get_mut(&node.id) {
+            if node.kind == GraphNodeKind::Concept {
+                node.label = detail.canonical_name.clone();
+                node.evidence_count = detail.evidence.len();
+                detail.actions =
+                    correction_actions_for_detail(&detail.canonical_name, &detail.aliases);
+            } else {
+                detail.actions = Vec::new();
+            }
+            node.related_count = related_count_by_node_id.get(&node.id).copied().unwrap_or(0);
+            detail.node = node.clone();
+        }
+    }
+
+    let label_by_node_id = project
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.label.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for edge in &project.edges {
+        if let Some(detail) = project.edge_details_by_id.get_mut(&edge.id) {
+            detail.edge = edge.clone();
+            detail.explanation = edge_explanation(edge, &label_by_node_id, &detail.evidence);
+        }
+    }
+
+    for node in &project.nodes {
+        if let Some(detail) = project.details_by_node_id.get(&node.id).cloned() {
+            let related_node_ids = connected_node_ids_by_node_id
+                .get(&node.id)
+                .map(|related| related.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            project.answer_by_node_id.insert(
+                node.id.clone(),
+                build_answer_for_detail(project, &detail, related_node_ids),
+            );
+        }
+    }
+
+    let concept_count = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+    let document_count = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Document)
+        .count();
+    let relationship_count = project.edges.len();
+    let evidence_count = project
+        .details_by_node_id
+        .values()
+        .map(|detail| detail.evidence.len())
+        .sum::<usize>()
+        + project
+            .edge_details_by_id
+            .values()
+            .map(|detail| detail.evidence.len())
+            .sum::<usize>();
+    if let Some(document_title) = project
+        .nodes
+        .iter()
+        .find(|node| node.kind == GraphNodeKind::Document)
+        .map(|node| node.label.clone())
+    {
+        project.summary.title = document_title;
+    }
+    project.summary.status = if concept_count > 0 {
+        ProjectStatus::Ready
+    } else {
+        ProjectStatus::Degraded
+    };
+    project.summary.document_count = document_count;
+    project.summary.node_count = project.nodes.len();
+    project.summary.relationship_count = relationship_count;
+    project.summary.evidence_count = evidence_count;
+    project.summary.summary = format!(
+        "Workspace contains {} concept nodes and {} explainable relationships. Manual corrections keep the graph grounded in visible evidence.",
+        concept_count, relationship_count
+    );
+}
+
+fn rewrite_project_edges(project: &mut KnowledgeProject, redirect: Option<(&str, &str)>) {
+    let mut previous_details = std::mem::take(&mut project.edge_details_by_id);
+    let existing_edges = std::mem::take(&mut project.edges);
+    let mut accumulators = BTreeMap::<String, StoredEdgeAccumulator>::new();
+
+    for edge in existing_edges {
+        let mut source_node_id = edge.source_node_id.clone();
+        let mut target_node_id = edge.target_node_id.clone();
+        if let Some((from, to)) = redirect {
+            if source_node_id == from {
+                source_node_id = to.to_string();
+            }
+            if target_node_id == from {
+                target_node_id = to.to_string();
+            }
+        }
+        if source_node_id == target_node_id {
+            continue;
+        }
+        if edge.kind == RelationKind::SourceDocument {
+            if target_node_id == "document" {
+                std::mem::swap(&mut source_node_id, &mut target_node_id);
+            }
+            if source_node_id != "document" {
+                continue;
+            }
+        } else if source_node_id > target_node_id {
+            std::mem::swap(&mut source_node_id, &mut target_node_id);
+        }
+
+        let edge_id = relation_edge_id(edge.kind, &source_node_id, &target_node_id);
+        let evidence = previous_details
+            .remove(&edge.id)
+            .map(|detail| detail.evidence)
+            .unwrap_or_default();
+        let accumulator =
+            accumulators
+                .entry(edge_id.clone())
+                .or_insert_with(|| StoredEdgeAccumulator {
+                    kind: edge.kind,
+                    source_node_id: source_node_id.clone(),
+                    target_node_id: target_node_id.clone(),
+                    label: normalized_edge_label(edge.kind, &edge.label),
+                    confidence: edge.confidence,
+                    evidence: Vec::new(),
+                });
+        accumulator.label = preferred_edge_label(&accumulator.label, &edge.label, edge.kind);
+        accumulator.confidence = match (accumulator.confidence, edge.confidence) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+        accumulator.evidence = dedupe_evidence(
+            accumulator
+                .evidence
+                .clone()
+                .into_iter()
+                .chain(evidence)
+                .collect(),
+        );
+    }
+
+    let mut edges = Vec::new();
+    let mut edge_details_by_id = BTreeMap::new();
+    for (edge_id, accumulator) in accumulators {
+        let edge = RelationEdgeSummary {
+            id: edge_id.clone(),
+            source_node_id: accumulator.source_node_id,
+            target_node_id: accumulator.target_node_id,
+            kind: accumulator.kind,
+            label: accumulator.label,
+            confidence: accumulator.confidence,
+            evidence_count: accumulator.evidence.len(),
+        };
+        edge_details_by_id.insert(
+            edge_id,
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: String::new(),
+                evidence: accumulator.evidence,
+            },
+        );
+        edges.push(edge);
+    }
+
+    project.edges = edges;
+    project.edge_details_by_id = edge_details_by_id;
+}
+
+fn build_answer_for_detail(
+    project: &KnowledgeProject,
+    detail: &GraphNodeDetail,
+    related_node_ids: Vec<String>,
+) -> AnswerResponse {
+    match detail.node.kind {
+        GraphNodeKind::Document => {
+            let concept_count = project
+                .nodes
+                .iter()
+                .filter(|node| node.kind == GraphNodeKind::Concept)
+                .count();
+            let concept_relationship_count = project
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == RelationKind::RelatedTo)
+                .count();
+            AnswerResponse {
+                status: if concept_count > 0 {
+                    AnswerStatus::Grounded
+                } else {
+                    AnswerStatus::LowConfidence
+                },
+                text: Some(format!(
+                    "DuckDocs currently tracks {} concept nodes and {} explainable concept links in this workspace.",
+                    concept_count, concept_relationship_count
+                )),
+                explanation:
+                    "This document-level answer reflects the current corrected graph and stays grounded in visible evidence.".into(),
+                citations: detail.evidence.iter().take(3).cloned().collect(),
+                related_node_ids,
+                suggested_actions: vec![
+                    SuggestedAction {
+                        kind: SuggestedActionKind::InspectEvidence,
+                        label: "Inspect evidence".into(),
+                        description:
+                            "Review the cited snippets before trusting the workspace-wide answer."
+                                .into(),
+                    },
+                    SuggestedAction {
+                        kind: SuggestedActionKind::AskDifferentQuestion,
+                        label: "Ask a narrower question".into(),
+                        description:
+                            "Grounded answers get stronger when you focus on one concept at a time."
+                                .into(),
+                    },
+                ],
+            }
+        }
+        GraphNodeKind::Concept | GraphNodeKind::Page => {
+            let page_count = detail
+                .evidence
+                .iter()
+                .map(|evidence| evidence.page_label.clone())
+                .collect::<BTreeSet<_>>()
+                .len();
+            AnswerResponse {
+                status: if detail.evidence.is_empty() {
+                    AnswerStatus::LowConfidence
+                } else {
+                    AnswerStatus::Grounded
+                },
+                text: Some(format!(
+                    "{} currently has {} visible evidence refs across {} page(s).",
+                    detail.canonical_name,
+                    detail.evidence.len(),
+                    page_count
+                )),
+                explanation:
+                    "This answer reflects the current corrected concept node and its visible evidence."
+                        .into(),
+                citations: detail.evidence.iter().take(3).cloned().collect(),
+                related_node_ids,
+                suggested_actions: vec![SuggestedAction {
+                    kind: SuggestedActionKind::InspectEvidence,
+                    label: "Inspect evidence".into(),
+                    description:
+                        "Use the cited snippets to verify the corrected concept before acting on it."
+                            .into(),
+                }],
+            }
+        }
+    }
+}
+
+fn edge_explanation(
+    edge: &RelationEdgeSummary,
+    label_by_node_id: &BTreeMap<String, String>,
+    evidence: &[EvidenceRef],
+) -> String {
+    let source_label = label_by_node_id
+        .get(&edge.source_node_id)
+        .cloned()
+        .unwrap_or_else(|| edge.source_node_id.clone());
+    let target_label = label_by_node_id
+        .get(&edge.target_node_id)
+        .cloned()
+        .unwrap_or_else(|| edge.target_node_id.clone());
+
+    match edge.kind {
+        RelationKind::SourceDocument => format!(
+            "DuckDocs linked the source document to {} because this concept is grounded in cited snippets from the import.",
+            target_label
+        ),
+        RelationKind::RelatedTo if edge.label == "Separated by correction" => format!(
+            "DuckDocs keeps {} and {} separate because you explicitly split them during correction review.",
+            source_label, target_label
+        ),
+        RelationKind::RelatedTo => format!(
+            "DuckDocs linked {} and {} because they share {} visible evidence ref(s).",
+            source_label,
+            target_label,
+            evidence.len()
+        ),
+    }
+}
+
+fn relation_edge_id(kind: RelationKind, source_node_id: &str, target_node_id: &str) -> String {
+    match kind {
+        RelationKind::SourceDocument => format!("edge-document-{}", target_node_id),
+        RelationKind::RelatedTo => format!("edge-{}-{}", source_node_id, target_node_id),
+    }
+}
+
+fn normalized_edge_label(kind: RelationKind, label: &str) -> String {
+    match kind {
+        RelationKind::SourceDocument => "Compiled from source".into(),
+        RelationKind::RelatedTo if label == "Separated by correction" => {
+            "Separated by correction".into()
+        }
+        RelationKind::RelatedTo => "Related in source".into(),
+    }
+}
+
+fn preferred_edge_label(current: &str, incoming: &str, kind: RelationKind) -> String {
+    match kind {
+        RelationKind::SourceDocument => "Compiled from source".into(),
+        RelationKind::RelatedTo if current == "Separated by correction" => current.into(),
+        RelationKind::RelatedTo if incoming == "Separated by correction" => incoming.into(),
+        RelationKind::RelatedTo => "Related in source".into(),
+    }
+}
+
+fn dedupe_evidence(evidence: Vec<EvidenceRef>) -> Vec<EvidenceRef> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+    for item in evidence {
+        let key = format!(
+            "{}|{}|{}|{}",
+            item.id,
+            item.page_label,
+            item.snippet,
+            item.source_path.clone().unwrap_or_default()
+        );
+        if seen.insert(key) {
+            deduped.push(item);
+        }
+    }
+    deduped
+}
+
+fn unique_manual_node_id(project: &KnowledgeProject, label: &str) -> String {
+    let base = normalize_key(label);
+    let base_id = format!("concept-{base}");
+    if !project.nodes.iter().any(|node| node.id == base_id) {
+        return base_id;
+    }
+
+    let mut suffix = 2usize;
+    loop {
+        let candidate = format!("concept-{base}-manual-{suffix}");
+        if !project.nodes.iter().any(|node| node.id == candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn manual_split_position(base: &GraphNodePosition, index: usize) -> GraphNodePosition {
+    let column = (index % 2) as f32;
+    let row = (index / 2) as f32;
+    GraphNodePosition {
+        x: (base.x + 10.0 + column * 12.0).min(90.0),
+        y: (base.y + row * 10.0).min(88.0),
+    }
 }
 
 fn layout_concept_positions(count: usize) -> Vec<GraphNodePosition> {
@@ -1377,6 +2071,28 @@ impl KnowledgeProjectStore {
         self.run_sql(&sql).map(|_| ())
     }
 
+    fn update_project(&self, project: &KnowledgeProject) -> Result<()> {
+        self.ensure_schema()?;
+        let snapshot_json =
+            serde_json::to_string(project).context("failed to encode knowledge project")?;
+        let snapshot_base64 = base64::engine::general_purpose::STANDARD.encode(snapshot_json);
+        let status = match project.summary.status {
+            ProjectStatus::Preview => "preview",
+            ProjectStatus::Ready => "ready",
+            ProjectStatus::Degraded => "degraded",
+        };
+        let sql = format!(
+            "UPDATE projects SET title = '{title}', status = '{status}', updated_at = {updated_at}, snapshot_base64 = '{snapshot_base64}' \
+             WHERE project_id = '{project_id}';",
+            title = escape_sqlite(&project.summary.title),
+            status = status,
+            updated_at = unix_timestamp_seconds(),
+            snapshot_base64 = snapshot_base64,
+            project_id = escape_sqlite(&project.summary.project_id),
+        );
+        self.run_sql(&sql).map(|_| ())
+    }
+
     fn load_project(&self, project_id: Option<&str>) -> Result<Option<KnowledgeProject>> {
         self.ensure_schema()?;
         let sql = match project_id {
@@ -1751,12 +2467,18 @@ fn parse_openai_compatible(
             config
                 .base_url
                 .clone()
+                .filter(|u| !u.trim().is_empty())
                 .unwrap_or_else(|| config.provider.default_base_url().to_string()),
         )
         .bearer_auth(config.api_key.clone())
         .json(&body)
         .send()
-        .context("failed to send provider request")?;
+        .with_context(|| {
+            format!(
+                "failed to send provider request to {}",
+                config.provider.default_base_url()
+            )
+        })?;
     let response = response
         .error_for_status()
         .context("provider returned error status")?;
@@ -1773,22 +2495,30 @@ fn parse_openai_compatible(
 mod tests {
     use super::*;
 
-    #[test]
-    fn compile_and_store_project_round_trip() {
-        let temp = tempfile::tempdir().expect("temp dir");
+    fn compile_fixture_project(temp: &tempfile::TempDir, markdown: &str) -> KnowledgeProject {
         let markdown_path = temp.path().join("sample.md");
-        fs::write(
-            &markdown_path,
-            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\nExplainable graph view grounds answers in visible snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
-        )
-        .expect("write markdown");
+        fs::write(&markdown_path, markdown).expect("write markdown");
         let request = CompileProjectRequest {
             source_markdown_path: markdown_path.display().to_string(),
             source_document_path: Some("/tmp/source.pdf".into()),
         };
 
         let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
-        let project = compile_knowledge_project(&request, &markdown);
+        compile_knowledge_project(&request, &markdown)
+    }
+
+    #[test]
+    fn compile_and_store_project_round_trip() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\nExplainable graph view grounds answers in visible snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
+        );
+        let markdown_path = temp.path().join("sample.md");
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+        };
         assert_eq!(project.summary.status, ProjectStatus::Ready);
         assert!(project
             .nodes
@@ -1816,5 +2546,154 @@ mod tests {
         assert_eq!(loaded.edges.len(), project.edges.len());
         assert!(loaded.details_by_node_id.contains_key("document"));
         assert!(!loaded.edge_details_by_id.is_empty());
+    }
+
+    #[test]
+    fn rename_correction_updates_canonical_name_and_aliases() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nGrounded graph view keeps evidence visible.\nExplainable graph answers stay tied to snippets.\n",
+        );
+        let concept_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let previous_name = project
+            .details_by_node_id
+            .get(&concept_id)
+            .expect("concept detail")
+            .canonical_name
+            .clone();
+        let project_id = project.summary.project_id.clone();
+
+        apply_correction(
+            &mut project,
+            &ApplyCorrectionRequest {
+                project_id,
+                node_id: concept_id.clone(),
+                kind: CorrectionKind::Rename,
+                target_node_id: None,
+                value: Some("Graph Evidence View".into()),
+            },
+        )
+        .expect("apply rename correction");
+
+        let detail = project
+            .details_by_node_id
+            .get(&concept_id)
+            .expect("renamed detail");
+        assert_eq!(detail.canonical_name, "Graph Evidence View");
+        assert!(detail.aliases.contains(&previous_name));
+        assert_eq!(
+            project
+                .nodes
+                .iter()
+                .find(|node| node.id == concept_id)
+                .expect("renamed node")
+                .label,
+            "Graph Evidence View"
+        );
+    }
+
+    #[test]
+    fn merge_correction_combines_concepts_and_redirects_edges() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nGrounded graph view keeps evidence visible.\nExplainable graph answers stay tied to snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
+        );
+        let concept_ids = project
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        let source_id = concept_ids[0].clone();
+        let target_id = concept_ids[1].clone();
+        let source_name = project
+            .details_by_node_id
+            .get(&source_id)
+            .expect("source detail")
+            .canonical_name
+            .clone();
+        let node_count_before = project.nodes.len();
+        let project_id = project.summary.project_id.clone();
+
+        apply_correction(
+            &mut project,
+            &ApplyCorrectionRequest {
+                project_id,
+                node_id: source_id.clone(),
+                kind: CorrectionKind::Merge,
+                target_node_id: Some(target_id.clone()),
+                value: None,
+            },
+        )
+        .expect("apply merge correction");
+
+        assert_eq!(project.nodes.len(), node_count_before - 1);
+        assert!(!project.nodes.iter().any(|node| node.id == source_id));
+        assert!(project
+            .edges
+            .iter()
+            .all(|edge| { edge.source_node_id != source_id && edge.target_node_id != source_id }));
+        assert!(project
+            .details_by_node_id
+            .get(&target_id)
+            .expect("target detail")
+            .aliases
+            .contains(&source_name));
+    }
+
+    #[test]
+    fn keep_separate_correction_splits_aliases_into_new_nodes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nGrounded Graph View keeps answers cautious.\n\n## Page 2\n\nGrounded graph view keeps answers cautious.\n",
+        );
+        let concept_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        assert!(!project
+            .details_by_node_id
+            .get(&concept_id)
+            .expect("detail")
+            .aliases
+            .is_empty());
+        let node_count_before = project.nodes.len();
+        let project_id = project.summary.project_id.clone();
+
+        apply_correction(
+            &mut project,
+            &ApplyCorrectionRequest {
+                project_id,
+                node_id: concept_id.clone(),
+                kind: CorrectionKind::KeepSeparate,
+                target_node_id: None,
+                value: None,
+            },
+        )
+        .expect("apply keep separate correction");
+
+        assert!(project.nodes.len() > node_count_before);
+        assert!(project
+            .details_by_node_id
+            .get(&concept_id)
+            .expect("detail")
+            .aliases
+            .is_empty());
+        assert!(project
+            .edges
+            .iter()
+            .any(|edge| edge.label == "Separated by correction"));
     }
 }

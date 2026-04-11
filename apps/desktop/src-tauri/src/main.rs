@@ -11,9 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use duckdocs_engine_client::{EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    CompileProjectRequest, DocumentFormat, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, KnowledgeProject, ParseEvent, ParseInput, ParseOptions, ParseOutputTarget,
-    ParseRequest, ParseResponseData, ValidateProviderResponseData,
+    ApplyCorrectionRequest, CompileProjectRequest, DocumentFormat, EngineConfigPayload,
+    EngineFailure, EngineRequest, EngineSuccess, KnowledgeProject, ParseEvent, ParseInput,
+    ParseOptions, ParseOutputTarget, ParseRequest, ParseResponseData, ValidateProviderResponseData,
 };
 use rfd::FileDialog;
 use serde::Serialize;
@@ -106,6 +106,7 @@ fn main() {
             validate_engine_config,
             get_models_for_provider,
             load_workspace_project,
+            apply_workspace_correction,
             start_parse,
             cancel_parse,
             open_saved_output
@@ -202,6 +203,33 @@ fn load_workspace_project(
     client
         .load_project(project_id)
         .map_err(|error| DesktopError::Message(error.to_string()))
+}
+
+#[tauri::command]
+fn apply_workspace_correction(
+    app: AppHandle,
+    store: tauri::State<'_, SharedStore>,
+    correction: ApplyCorrectionRequest,
+) -> Result<KnowledgeProject, DesktopError> {
+    let engine_path =
+        resolve_engine_path(&app).map_err(|error| DesktopError::Message(error.to_string()))?;
+    let client = SubprocessEngineClient::new(engine_path);
+    let project = client
+        .apply_correction(correction)
+        .map_err(|error| DesktopError::Message(error.to_string()))?;
+
+    {
+        let mut state = store.lock().expect("app store lock poisoned");
+        state.snapshot.last_project_id = Some(project.summary.project_id.clone());
+        push_progress_entry(
+            &mut state.snapshot.progress_log,
+            "correction_applied",
+            &format!("Applied correction in {}", project.summary.title),
+        );
+    }
+    publish_snapshot(&app, &store);
+
+    Ok(project)
 }
 
 #[tauri::command]
