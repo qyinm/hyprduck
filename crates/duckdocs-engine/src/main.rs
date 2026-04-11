@@ -2616,10 +2616,7 @@ impl EngineConfig {
 
 impl ProviderKind {
     fn all() -> [ProviderKind; 2] {
-        [
-            Self::OpenRouter,
-            Self::Ollama,
-        ]
+        [Self::OpenRouter, Self::Ollama]
     }
 
     fn from_slug(value: &str) -> Option<Self> {
@@ -2718,7 +2715,9 @@ fn parse_text_with_provider(config: &EngineConfig, text: &str, template: &str) -
         "Convert the following extracted document text into clean markdown. Template: {template}.\n\n{text}"
     );
     match config.provider {
-        ProviderKind::OpenRouter | ProviderKind::Ollama => parse_openai_compatible(config, &prompt, None),
+        ProviderKind::OpenRouter | ProviderKind::Ollama => {
+            parse_openai_compatible(config, &prompt, None)
+        }
     }
 }
 

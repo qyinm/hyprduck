@@ -425,19 +425,28 @@ function SettingsPanel(props: {
 
   const activeApiKey = providerStates.get(activeProvider)?.apiKey ?? "";
 
-  const handleSave = async () => {
-    const payload: EngineConfigPayload = {
-      provider: activeProvider,
-      model_id: selectedModel,
-      api_key: activeApiKey,
-      base_url: null,
-      prompt_template: promptTemplate,
-      provider_options: config?.provider_options ?? [],
-      model_options: availableModels,
-      prompt_template_options: config?.prompt_template_options ?? [],
-    };
-    await onSave(payload);
-  };
+  // Auto-save whenever settings change
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!config) return;
+    const timer = setTimeout(() => {
+      const activeState = providerStates.get(activeProvider);
+      const payload: EngineConfigPayload = {
+        provider: activeProvider,
+        model_id: selectedModel,
+        api_key: activeApiKey,
+        base_url: activeState?.baseUrl || null,
+        prompt_template: promptTemplate,
+        provider_options: config?.provider_options ?? [],
+        model_options: availableModels,
+        prompt_template_options: config?.prompt_template_options ?? [],
+      };
+      setSaving(true);
+      onSave(payload).finally(() => setSaving(false));
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [activeProvider, selectedModel, activeApiKey, providerStates, promptTemplate]);
 
   if (!config) {
     return (

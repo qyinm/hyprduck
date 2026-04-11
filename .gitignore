@@ -39,3 +39,4 @@ node_modules/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/binaries/duckdocs-engine-*
 apps/desktop/dist/
+.gstack/
