@@ -29,6 +29,7 @@ import {
 } from "@/features/workspace/state";
 import type {
   WorkspaceApplyCorrectionRequest,
+  WorkspaceAnswerProjectRequest,
   WorkspaceProject,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
@@ -797,6 +798,21 @@ export function App() {
     setLoadedWorkspaceProject(project);
   };
 
+  const answerWorkspaceProject = async (
+    request: WorkspaceAnswerProjectRequest,
+  ) => {
+    return invoke<WorkspaceProject["answerByNodeId"][string]>(
+      "answer_workspace_project",
+      {
+        request: {
+          projectId: request.projectId,
+          nodeId: request.nodeId ?? null,
+          question: request.question,
+        },
+      },
+    );
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke<EngineConfigPayload>("save_engine_config", {
       payload,
@@ -991,6 +1007,7 @@ export function App() {
             <GraphWorkspace
               dispatch={dispatchWorkspaceUi}
               onApplyCorrection={applyWorkspaceCorrection}
+              onAskProject={answerWorkspaceProject}
               onOpenImport={openImportPanel}
               project={workspaceProject}
               uiState={workspaceUiState}

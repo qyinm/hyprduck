@@ -11,9 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use duckdocs_engine_client::{EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    ApplyCorrectionRequest, CompileProjectRequest, DocumentFormat, EngineConfigPayload,
-    EngineFailure, EngineRequest, EngineSuccess, KnowledgeProject, ParseEvent, ParseInput,
-    ParseOptions, ParseOutputTarget, ParseRequest, ParseResponseData, ValidateProviderResponseData,
+    AnswerProjectRequest, AnswerResponse, ApplyCorrectionRequest, CompileProjectRequest,
+    DocumentFormat, EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess,
+    KnowledgeProject, ParseEvent, ParseInput, ParseOptions, ParseOutputTarget, ParseRequest,
+    ParseResponseData, ValidateProviderResponseData,
 };
 use rfd::FileDialog;
 use serde::Serialize;
@@ -107,6 +108,7 @@ fn main() {
             get_models_for_provider,
             load_workspace_project,
             apply_workspace_correction,
+            answer_workspace_project,
             start_parse,
             cancel_parse,
             open_saved_output
@@ -230,6 +232,19 @@ fn apply_workspace_correction(
     publish_snapshot(&app, &store);
 
     Ok(project)
+}
+
+#[tauri::command]
+fn answer_workspace_project(
+    app: AppHandle,
+    request: AnswerProjectRequest,
+) -> Result<AnswerResponse, DesktopError> {
+    let engine_path =
+        resolve_engine_path(&app).map_err(|error| DesktopError::Message(error.to_string()))?;
+    let client = SubprocessEngineClient::new(engine_path);
+    client
+        .answer_project(request)
+        .map_err(|error| DesktopError::Message(error.to_string()))
 }
 
 #[tauri::command]

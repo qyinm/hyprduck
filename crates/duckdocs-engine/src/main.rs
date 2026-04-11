@@ -8,16 +8,16 @@ use std::time::Instant;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
-    AnswerResponse, AnswerStatus, ApplyCorrectionRequest, ApplyCorrectionResponseData,
-    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
-    GraphNodeSummary, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
-    LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput, ParseMetadata, ParseOptions,
-    ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
-    ProviderOption, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
-    SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
-    ValidateProviderResponseData, ValidationIssue,
+    AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
+    ApplyCorrectionRequest, ApplyCorrectionResponseData, CompileProjectRequest,
+    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
+    EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess, EvidenceRef, GraphNodeDetail,
+    GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest,
+    LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
+    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
+    ProjectOverview, ProjectStatus, ProviderOption, RelationEdgeDetail, RelationEdgeSummary,
+    RelationKind, SaveConfigRequest, SaveConfigResponseData, SuggestedAction, SuggestedActionKind,
+    ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,13 @@ fn run() -> Result<()> {
             let payload = EngineSuccess::new(
                 EngineCommand::ApplyCorrection,
                 handle_apply_correction(request)?,
+            );
+            write_response(&payload)?;
+        }
+        EngineRequest::AnswerProject(request) => {
+            let payload = EngineSuccess::new(
+                EngineCommand::AnswerProject,
+                handle_answer_project(request)?,
             );
             write_response(&payload)?;
         }
@@ -226,6 +233,15 @@ fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorre
     apply_correction(&mut project, &request)?;
     store.update_project(&project)?;
     Ok(ApplyCorrectionResponseData { project })
+}
+
+fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectResponseData> {
+    let store = KnowledgeProjectStore::default()?;
+    let project = store
+        .load_project(Some(&request.project_id))?
+        .ok_or_else(|| anyhow!("project {} was not found", request.project_id))?;
+    let answer = answer_project(&project, &request)?;
+    Ok(AnswerProjectResponseData { answer })
 }
 
 #[derive(Debug, Clone)]
@@ -1000,6 +1016,101 @@ fn apply_correction(
     Ok(())
 }
 
+fn answer_project(
+    project: &KnowledgeProject,
+    request: &AnswerProjectRequest,
+) -> Result<AnswerResponse> {
+    let question = request.question.trim();
+    if question.is_empty() {
+        return Ok(AnswerResponse {
+            status: AnswerStatus::Blocked,
+            text: None,
+            explanation: "Ask a concrete question before DuckDocs tries to answer from the graph."
+                .into(),
+            citations: Vec::new(),
+            related_node_ids: request
+                .node_id
+                .clone()
+                .into_iter()
+                .collect(),
+            suggested_actions: vec![SuggestedAction {
+                kind: SuggestedActionKind::AskDifferentQuestion,
+                label: "Ask a concrete question".into(),
+                description:
+                    "Grounded answers work best when the question names a concept, action, or relationship."
+                        .into(),
+            }],
+        });
+    }
+
+    let focal_node_id = request
+        .node_id
+        .as_deref()
+        .filter(|node_id| project.details_by_node_id.contains_key(*node_id))
+        .map(str::to_string)
+        .or_else(|| {
+            project
+                .nodes
+                .iter()
+                .find(|node| node.kind == GraphNodeKind::Document)
+                .map(|node| node.id.clone())
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "no answerable node was found in project {}",
+                request.project_id
+            )
+        })?;
+
+    let detail = project
+        .details_by_node_id
+        .get(&focal_node_id)
+        .ok_or_else(|| anyhow!("node detail {} was not found", focal_node_id))?;
+    let base_answer = project
+        .answer_by_node_id
+        .get(&focal_node_id)
+        .cloned()
+        .unwrap_or_else(|| build_answer_for_detail(project, detail, Vec::new()));
+    let citations = best_matching_evidence(question, detail);
+    let status = if citations.is_empty() {
+        if detail.evidence.is_empty() {
+            AnswerStatus::Blocked
+        } else {
+            AnswerStatus::LowConfidence
+        }
+    } else {
+        AnswerStatus::Grounded
+    };
+    let related_node_ids = if base_answer.related_node_ids.is_empty() {
+        project
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                if edge.source_node_id == focal_node_id {
+                    Some(edge.target_node_id.clone())
+                } else if edge.target_node_id == focal_node_id {
+                    Some(edge.source_node_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        base_answer.related_node_ids.clone()
+    };
+
+    Ok(AnswerResponse {
+        status,
+        text: Some(answer_text_for_question(
+            project, detail, question, status, &citations,
+        )),
+        explanation: answer_explanation_for_question(detail, question, status, &citations),
+        citations,
+        related_node_ids,
+        suggested_actions: answer_suggested_actions(status),
+    })
+}
+
 fn apply_rename_correction(
     project: &mut KnowledgeProject,
     request: &ApplyCorrectionRequest,
@@ -1545,6 +1656,180 @@ fn build_answer_for_detail(
             }
         }
     }
+}
+
+fn best_matching_evidence(question: &str, detail: &GraphNodeDetail) -> Vec<EvidenceRef> {
+    let question_terms = question_terms(question);
+    if question_terms.is_empty() {
+        return detail.evidence.iter().take(3).cloned().collect();
+    }
+
+    let mut scored = detail
+        .evidence
+        .iter()
+        .map(|evidence| {
+            let score = overlap_score(&question_terms, &evidence.snippet);
+            (score, evidence.clone())
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.page_label.cmp(&right.1.page_label))
+    });
+
+    let matched = scored
+        .iter()
+        .filter(|(score, _)| *score > 0)
+        .map(|(_, evidence)| evidence.clone())
+        .take(3)
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        detail.evidence.iter().take(2).cloned().collect()
+    } else {
+        matched
+    }
+}
+
+fn answer_text_for_question(
+    project: &KnowledgeProject,
+    detail: &GraphNodeDetail,
+    question: &str,
+    status: AnswerStatus,
+    citations: &[EvidenceRef],
+) -> String {
+    let evidence_summary = citations
+        .first()
+        .map(|citation| citation.snippet.clone())
+        .unwrap_or_else(|| "DuckDocs could not find a directly relevant snippet yet.".into());
+    let page_count = detail
+        .evidence
+        .iter()
+        .map(|evidence| evidence.page_label.clone())
+        .collect::<BTreeSet<_>>()
+        .len();
+
+    match detail.node.kind {
+        GraphNodeKind::Document => {
+            let concept_count = project
+                .nodes
+                .iter()
+                .filter(|node| node.kind == GraphNodeKind::Concept)
+                .count();
+            match status {
+                AnswerStatus::Grounded => format!(
+                    "For \"{}\", the strongest grounded reading is that this workspace currently contains {} concept nodes. Best visible support: {}",
+                    question, concept_count, evidence_summary
+                ),
+                AnswerStatus::LowConfidence => format!(
+                    "DuckDocs can partially answer \"{}\", but the graph only has weak snippet overlap. Closest visible support: {}",
+                    question, evidence_summary
+                ),
+                AnswerStatus::Blocked | AnswerStatus::Stale => format!(
+                    "DuckDocs cannot safely answer \"{}\" from the current workspace yet.",
+                    question
+                ),
+            }
+        }
+        GraphNodeKind::Concept | GraphNodeKind::Page => match status {
+            AnswerStatus::Grounded => format!(
+                "For \"{}\", {} is supported by {} visible evidence refs across {} page(s). Best visible support: {}",
+                question,
+                detail.canonical_name,
+                detail.evidence.len(),
+                page_count,
+                evidence_summary
+            ),
+            AnswerStatus::LowConfidence => format!(
+                "DuckDocs found {} evidence refs for {}, but the question \"{}\" only weakly matches those snippets. Closest visible support: {}",
+                detail.evidence.len(),
+                detail.canonical_name,
+                question,
+                evidence_summary
+            ),
+            AnswerStatus::Blocked | AnswerStatus::Stale => format!(
+                "DuckDocs cannot safely answer \"{}\" for {} yet.",
+                question, detail.canonical_name
+            ),
+        },
+    }
+}
+
+fn answer_explanation_for_question(
+    detail: &GraphNodeDetail,
+    question: &str,
+    status: AnswerStatus,
+    citations: &[EvidenceRef],
+) -> String {
+    match status {
+        AnswerStatus::Grounded => format!(
+            "DuckDocs answered \"{}\" using {} visible citation(s) attached to {}.",
+            question,
+            citations.len(),
+            detail.canonical_name
+        ),
+        AnswerStatus::LowConfidence => format!(
+            "DuckDocs kept this answer cautious because the question \"{}\" only loosely overlaps with the visible evidence on {}.",
+            question, detail.canonical_name
+        ),
+        AnswerStatus::Blocked => format!(
+            "DuckDocs blocked this answer because it could not find enough grounded evidence for \"{}\".",
+            question
+        ),
+        AnswerStatus::Stale => "DuckDocs is still reading from a stale workspace snapshot.".into(),
+    }
+}
+
+fn answer_suggested_actions(status: AnswerStatus) -> Vec<SuggestedAction> {
+    match status {
+        AnswerStatus::Grounded => vec![SuggestedAction {
+            kind: SuggestedActionKind::InspectEvidence,
+            label: "Inspect evidence".into(),
+            description: "Review the cited snippets if you want to verify the grounded answer."
+                .into(),
+        }],
+        AnswerStatus::LowConfidence => vec![
+            SuggestedAction {
+                kind: SuggestedActionKind::InspectEvidence,
+                label: "Inspect evidence".into(),
+                description:
+                    "Check the cited snippets to see where the question stopped matching strongly."
+                        .into(),
+            },
+            SuggestedAction {
+                kind: SuggestedActionKind::AskDifferentQuestion,
+                label: "Ask a narrower question".into(),
+                description:
+                    "Use a concept name, relationship, or page label to get a more grounded answer."
+                        .into(),
+            },
+        ],
+        AnswerStatus::Blocked | AnswerStatus::Stale => vec![SuggestedAction {
+            kind: SuggestedActionKind::AskDifferentQuestion,
+            label: "Ask a narrower question".into(),
+            description:
+                "DuckDocs needs a more concrete, evidence-seeking question before it can answer."
+                    .into(),
+        }],
+    }
+}
+
+fn question_terms(question: &str) -> BTreeSet<String> {
+    question
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .map(|term| term.trim().to_ascii_lowercase())
+        .filter(|term| term.len() >= 3)
+        .collect()
+}
+
+fn overlap_score(question_terms: &BTreeSet<String>, haystack: &str) -> usize {
+    let haystack_terms = haystack
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .map(|term| term.trim().to_ascii_lowercase())
+        .filter(|term| term.len() >= 3)
+        .collect::<BTreeSet<_>>();
+    question_terms.intersection(&haystack_terms).count()
 }
 
 fn edge_explanation(
@@ -2695,5 +2980,61 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.label == "Separated by correction"));
+    }
+
+    #[test]
+    fn answer_project_blocks_empty_question() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nGrounded graph view keeps evidence visible.\n",
+        );
+
+        let answer = answer_project(
+            &project,
+            &AnswerProjectRequest {
+                project_id: project.summary.project_id.clone(),
+                node_id: None,
+                question: "   ".into(),
+            },
+        )
+        .expect("answer project");
+
+        assert_eq!(answer.status, AnswerStatus::Blocked);
+        assert!(answer.citations.is_empty());
+    }
+
+    #[test]
+    fn answer_project_returns_grounded_citations_for_matching_question() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let project = compile_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nGrounded graph view keeps evidence visible.\nExplainable graph answers stay tied to snippets.\n",
+        );
+        let concept_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+
+        let answer = answer_project(
+            &project,
+            &AnswerProjectRequest {
+                project_id: project.summary.project_id.clone(),
+                node_id: Some(concept_id),
+                question: "What evidence keeps graph answers grounded?".into(),
+            },
+        )
+        .expect("answer project");
+
+        assert_eq!(answer.status, AnswerStatus::Grounded);
+        assert!(!answer.citations.is_empty());
+        assert!(answer
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("grounded"));
     }
 }

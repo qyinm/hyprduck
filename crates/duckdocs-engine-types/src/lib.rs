@@ -15,6 +15,7 @@ pub enum EngineCommand {
     CompileProject,
     LoadProject,
     ApplyCorrection,
+    AnswerProject,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -164,6 +165,20 @@ pub struct ApplyCorrectionResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerProjectRequest {
+    pub project_id: String,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    pub question: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerProjectResponseData {
+    pub answer: AnswerResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
     pub label: String,
@@ -227,6 +242,7 @@ pub enum EngineRequest {
     CompileProject(CompileProjectRequest),
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),
+    AnswerProject(AnswerProjectRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
@@ -420,6 +436,37 @@ mod tests {
         let decoded: EngineSuccess<LoadProjectResponseData> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::LoadProject);
         assert!(decoded.data.project.is_none());
+    }
+
+    #[test]
+    fn answer_project_round_trip() {
+        let request = EngineRequest::AnswerProject(AnswerProjectRequest {
+            project_id: "project-123".into(),
+            node_id: Some("concept-a".into()),
+            question: "What does this concept cover?".into(),
+        });
+        let json = serde_json::to_string(&request).unwrap();
+        let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+
+        let response = EngineSuccess::new(
+            EngineCommand::AnswerProject,
+            AnswerProjectResponseData {
+                answer: AnswerResponse {
+                    status: AnswerStatus::Grounded,
+                    text: Some("Grounded answer".into()),
+                    explanation: "Based on visible evidence.".into(),
+                    citations: vec![],
+                    related_node_ids: vec!["concept-b".into()],
+                    suggested_actions: vec![],
+                },
+            },
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<AnswerProjectResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::AnswerProject);
+        assert_eq!(decoded.data.answer.status, AnswerStatus::Grounded);
     }
 
     #[test]

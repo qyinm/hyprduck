@@ -43,6 +43,12 @@ export interface WorkspaceApplyCorrectionRequest {
   value?: string | null;
 }
 
+export interface WorkspaceAnswerProjectRequest {
+  projectId: string;
+  nodeId?: string | null;
+  question: string;
+}
+
 export interface WorkspaceNodeDetail {
   node: WorkspaceNodeSummary;
   canonicalName: string;

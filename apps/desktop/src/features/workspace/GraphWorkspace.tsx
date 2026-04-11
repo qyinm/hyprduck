@@ -15,7 +15,11 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
-import type { WorkspaceApplyCorrectionRequest, WorkspaceProject } from "./types";
+import type {
+  WorkspaceAnswerProjectRequest,
+  WorkspaceApplyCorrectionRequest,
+  WorkspaceProject,
+} from "./types";
 
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
@@ -23,10 +27,18 @@ interface GraphWorkspaceProps {
   dispatch: Dispatch<WorkspaceUiAction>;
   onOpenImport: () => void;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
+  onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
 }
 
 export function GraphWorkspace(props: GraphWorkspaceProps) {
-  const { project, uiState, dispatch, onOpenImport, onApplyCorrection } = props;
+  const {
+    project,
+    uiState,
+    dispatch,
+    onOpenImport,
+    onApplyCorrection,
+    onAskProject,
+  } = props;
 
   if (!project) {
     return (
@@ -84,7 +96,17 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     WorkspaceApplyCorrectionRequest["kind"] | null
   >(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
-  const answer = (selectedNode && project.answerByNodeId[selectedNode.node.id]) || null;
+  const defaultAnswerNodeId =
+    selectedNode?.node.id ??
+    project.nodes.find((node) => node.kind === "document")?.id ??
+    null;
+  const baseAnswer =
+    (defaultAnswerNodeId && project.answerByNodeId[defaultAnswerNodeId]) || null;
+  const [liveAnswer, setLiveAnswer] =
+    useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [answerPending, setAnswerPending] = useState(false);
+  const answer = liveAnswer ?? baseAnswer;
   const graphPaneClass = project.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
@@ -105,6 +127,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     setPendingCorrectionKind(null);
     setCorrectionError(null);
   }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
+
+  useEffect(() => {
+    setLiveAnswer(null);
+    setAnswerError(null);
+    setAnswerPending(false);
+  }, [project.summary.projectId, selectedNode?.node.id, uiState.selectedEdgeId]);
 
   async function handleApplyCorrection(
     request: Omit<WorkspaceApplyCorrectionRequest, "projectId" | "nodeId">,
@@ -135,6 +163,27 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       setCorrectionError(String(error));
     } finally {
       setPendingCorrectionKind(null);
+    }
+  }
+
+  async function handleAskProject() {
+    if (!project) {
+      return;
+    }
+
+    setAnswerPending(true);
+    setAnswerError(null);
+    try {
+      const nextAnswer = await onAskProject({
+        projectId: project.summary.projectId,
+        nodeId: selectedNode?.node.id ?? null,
+        question: uiState.answerInput,
+      });
+      setLiveAnswer(nextAnswer);
+    } catch (error) {
+      setAnswerError(String(error));
+    } finally {
+      setAnswerPending(false);
     }
   }
 
@@ -670,8 +719,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 value={uiState.answerInput}
               />
               <div className="flex flex-wrap gap-2">
-                <Button disabled type="button">
-                  Ask with compiler
+                <Button
+                  disabled={answerPending || !uiState.answerInput.trim()}
+                  onClick={() => void handleAskProject()}
+                  type="button"
+                >
+                  {answerPending ? "Answering…" : "Ask workspace"}
                 </Button>
                 <Button
                   onClick={() => dispatch({ type: "close_answer_dock" })}
@@ -682,19 +735,25 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 </Button>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                Interactive ask is still disabled in this slice. The dock already
-                shows the structured answer state the compiler produced for the
-                selected node.
+                Questions now go through the backend project reader, so corrections
+                and stored graph state show up here immediately.
               </p>
+              {answerError ? (
+                <p className="text-xs leading-5 text-destructive">{answerError}</p>
+              ) : null}
             </div>
 
             <div className="space-y-4 rounded-[20px] border border-border/70 bg-muted/10 px-4 py-4">
               <div className="flex items-center gap-2">
                 <RefreshCw size={14} className="text-muted-foreground" />
-                <p className="text-sm font-medium">Preview answer state</p>
+                <p className="text-sm font-medium">
+                  {liveAnswer ? "Live answer state" : "Stored answer state"}
+                </p>
               </div>
               <p className="text-sm leading-6 text-foreground">
-                {answer?.text ?? answer?.explanation ?? "Select a node to view the answer state."}
+                {answer?.text ??
+                  answer?.explanation ??
+                  "Select a node to view the answer state."}
               </p>
               {answer?.citations.length ? (
                 <div className="space-y-2">

@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use duckdocs_engine_types::{
-    ApplyCorrectionRequest, ApplyCorrectionResponseData, CompileProjectRequest,
-    CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
-    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
-    SaveConfigRequest, SaveConfigResponseData, ValidateProviderRequest,
-    ValidateProviderResponseData,
+    AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
+    ApplyCorrectionResponseData, CompileProjectRequest, CompileProjectResponseData, EngineCommand,
+    EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess, KnowledgeProject,
+    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress,
+    ParseRequest, ParseResponseData, SaveConfigRequest, SaveConfigResponseData,
+    ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -27,6 +27,7 @@ pub trait EngineClient {
         -> Result<CompileProjectResponseData>;
     fn load_project(&self, project_id: Option<String>) -> Result<Option<KnowledgeProject>>;
     fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject>;
+    fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
     fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
     fn validate_provider(
@@ -227,6 +228,15 @@ impl EngineClient for SubprocessEngineClient {
                 None,
             )?;
         Ok(response.project)
+    }
+
+    fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse> {
+        let response = self.run_command::<AnswerProjectResponseData, AnswerProjectResponseData>(
+            EngineRequest::AnswerProject(request),
+            EngineCommand::AnswerProject,
+            None,
+        )?;
+        Ok(response.answer)
     }
 
     fn load_config(&self) -> Result<EngineConfigPayload> {
