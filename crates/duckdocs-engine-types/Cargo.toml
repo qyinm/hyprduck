@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+duckdocs-knowledge = { path = "../duckdocs-knowledge" }
 serde.workspace = true
 serde_json.workspace = true
 

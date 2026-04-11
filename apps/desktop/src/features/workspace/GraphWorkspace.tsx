@@ -66,6 +66,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const graphPaneClass = project.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
+  const answerBadgeLabel =
+    answer?.status === "stale"
+      ? "Stale"
+      : answer?.status === "low_confidence"
+      ? "Low confidence"
+      : answer?.status === "grounded"
+      ? "Grounded"
+      : answer?.status === "blocked"
+      ? "Blocked"
+      : "Preview";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -303,7 +313,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{evidence.pageLabel}</span>
-                          <span>{evidence.sourceLabel}</span>
+                          <span>
+                            {evidence.sourcePath?.split("/").pop() ?? "Imported source"}
+                          </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-foreground">
                           {evidence.snippet}
@@ -318,7 +330,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   <div className="grid gap-2">
                     {selectedNode.correctionActions.map((action) => (
                       <div
-                        key={action.id}
+                        key={action.kind}
                         className="rounded-2xl border border-dashed border-border/80 px-3 py-3"
                       >
                         <div className="flex items-center justify-between gap-3">
@@ -328,7 +340,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </Button>
                         </div>
                         <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                          {action.disabledReason}
+                          {action.disabledReason ?? "This action is not available yet."}
                         </p>
                       </div>
                     ))}
@@ -362,11 +374,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   : "border-teal-200 bg-teal-50 text-teal-700",
               )}
             >
-              {answer?.status === "stale"
-                ? "Stale preview"
-                : answer?.status === "low_confidence"
-                ? "Low confidence"
-                : "Preview"}
+              {answerBadgeLabel}
             </Badge>
           </div>
 
@@ -398,9 +406,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 </Button>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                Ask is intentionally disabled in this preview slice. The real
-                answer path will bind to the structured response contract instead
-                of a free-form chat string.
+                Interactive ask is still disabled in this slice. The dock already
+                shows the structured answer state the compiler produced for the
+                selected node.
               </p>
             </div>
 
@@ -438,7 +446,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   <div className="space-y-2">
                     {answer.suggestedActions.map((action) => (
                       <div
-                        key={action.id}
+                        key={action.kind}
                         className="rounded-2xl border border-dashed border-border/70 px-3 py-3"
                       >
                         <div className="text-sm font-medium">{action.label}</div>

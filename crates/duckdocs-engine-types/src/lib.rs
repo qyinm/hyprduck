@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use duckdocs_knowledge::{
+    AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
+    GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, ProjectOverview,
+    ProjectStatus, SuggestedAction, SuggestedActionKind,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineCommand {
     Parse,
+    CompileProject,
+    LoadProject,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -113,6 +121,30 @@ pub struct ParseResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileProjectRequest {
+    pub source_markdown_path: String,
+    #[serde(default)]
+    pub source_document_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileProjectResponseData {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LoadProjectRequest {
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoadProjectResponseData {
+    #[serde(default)]
+    pub project: Option<KnowledgeProject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
     pub label: String,
@@ -173,6 +205,8 @@ pub struct ValidateProviderRequest {
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum EngineRequest {
     Parse(ParseRequest),
+    CompileProject(CompileProjectRequest),
+    LoadProject(LoadProjectRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
@@ -353,6 +387,19 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         let decoded: EngineSuccess<EngineConfigPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn load_project_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::LoadProject,
+            LoadProjectResponseData { project: None },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<LoadProjectResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::LoadProject);
+        assert!(decoded.data.project.is_none());
     }
 
     #[test]

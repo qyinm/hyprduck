@@ -25,13 +25,13 @@ export interface WorkspaceEvidenceRef {
   id: string;
   pageLabel: string;
   snippet: string;
-  sourceLabel: string;
+  sourcePath?: string | null;
 }
 
 export interface WorkspaceCorrectionAction {
-  id: string;
+  kind: "merge" | "keep_separate" | "rename";
   label: string;
-  disabledReason: string;
+  disabledReason?: string | null;
 }
 
 export interface WorkspaceNodeDetail {
@@ -44,7 +44,11 @@ export interface WorkspaceNodeDetail {
 }
 
 export interface WorkspaceSuggestedAction {
-  id: string;
+  kind:
+    | "inspect_evidence"
+    | "apply_correction"
+    | "reimport_project"
+    | "ask_different_question";
   label: string;
   description: string;
 }
@@ -66,6 +70,7 @@ export interface WorkspaceProjectSummary {
   summary: string;
   documentCount: number;
   nodeCount: number;
+  relationshipCount: number;
   evidenceCount: number;
 }
 

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -7,11 +8,14 @@ use std::time::Instant;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
-    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, LoadConfigRequest, OutputAsset, ParseEvent, ParseInput, ParseMetadata,
-    ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProviderOption,
-    SaveConfigRequest, SaveConfigResponseData, ValidateProviderRequest,
-    ValidateProviderResponseData, ValidationIssue,
+    AnswerResponse, AnswerStatus, CompileProjectRequest, CompileProjectResponseData,
+    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload,
+    EngineFailure, EngineRequest, EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput, ParseMetadata, ParseOptions,
+    ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ProviderOption, SaveConfigRequest, SaveConfigResponseData, SuggestedAction,
+    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -51,6 +55,18 @@ fn run() -> Result<()> {
             io::stdout()
                 .write_all(response.as_bytes())
                 .context("failed to write parse response")?;
+        }
+        EngineRequest::CompileProject(request) => {
+            let payload = EngineSuccess::new(
+                EngineCommand::CompileProject,
+                handle_compile_project(request)?,
+            );
+            write_response(&payload)?;
+        }
+        EngineRequest::LoadProject(request) => {
+            let payload =
+                EngineSuccess::new(EngineCommand::LoadProject, handle_load_project(request)?);
+            write_response(&payload)?;
         }
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
             let config = config_store.load()?;
@@ -170,6 +186,549 @@ fn handle_parse(
         result,
         saved_output_path,
     })
+}
+
+fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProjectResponseData> {
+    let markdown = fs::read_to_string(&request.source_markdown_path).with_context(|| {
+        format!(
+            "failed reading markdown package {}",
+            request.source_markdown_path
+        )
+    })?;
+    let project = compile_knowledge_project(&request, &markdown);
+    let store = KnowledgeProjectStore::default()?;
+    store.save_project(&project, &request)?;
+    Ok(CompileProjectResponseData {
+        project_id: project.summary.project_id,
+    })
+}
+
+fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
+    let store = KnowledgeProjectStore::default()?;
+    let project = store.load_project(request.project_id.as_deref())?;
+    Ok(LoadProjectResponseData { project })
+}
+
+#[derive(Debug, Clone)]
+struct PageSection {
+    page_label: String,
+    content: String,
+}
+
+#[derive(Debug, Clone)]
+struct ConceptAccumulator {
+    id: String,
+    label: String,
+    aliases: BTreeSet<String>,
+    evidence: Vec<EvidenceRef>,
+    page_labels: BTreeSet<String>,
+}
+
+fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) -> KnowledgeProject {
+    let title = infer_markdown_title(&request.source_markdown_path, markdown);
+    let page_sections = extract_page_sections(markdown);
+    let source_path = request
+        .source_document_path
+        .clone()
+        .unwrap_or_else(|| request.source_markdown_path.clone());
+    let project_id = build_project_id(request);
+
+    let concept_accumulators = collect_concepts(&page_sections, &source_path);
+    let concept_count = concept_accumulators.len();
+    let document_node = GraphNodeSummary {
+        id: "document".into(),
+        label: title.clone(),
+        kind: GraphNodeKind::Document,
+        confidence: Some(if concept_count > 0 { 0.78 } else { 0.42 }),
+        related_count: concept_count,
+        evidence_count: page_sections.len(),
+        position: GraphNodePosition { x: 50.0, y: 14.0 },
+    };
+
+    let mut nodes = vec![document_node.clone()];
+    let concept_positions = layout_concept_positions(concept_count.max(1));
+    let mut details_by_node_id = BTreeMap::new();
+    let mut answer_by_node_id = BTreeMap::new();
+    let document_evidence = page_sections
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(index, section)| EvidenceRef {
+            id: format!("ev-document-{}", index + 1),
+            page_label: section.page_label.clone(),
+            snippet: excerpt(&section.content, 180),
+            source_path: Some(source_path.clone()),
+        })
+        .collect::<Vec<_>>();
+
+    details_by_node_id.insert(
+        document_node.id.clone(),
+        GraphNodeDetail {
+            node: document_node.clone(),
+            canonical_name: title.clone(),
+            aliases: vec!["Imported document".into()],
+            description: format!(
+                "DuckDocs compiled {} concept nodes from {} visible page sections. Every node below keeps direct evidence back to the imported document.",
+                concept_count,
+                page_sections.len()
+            ),
+            evidence: document_evidence.clone(),
+            actions: disabled_correction_actions(
+                "Merge and rename controls will activate once correction writes land.",
+            ),
+        },
+    );
+    answer_by_node_id.insert(
+        document_node.id.clone(),
+        AnswerResponse {
+            status: if concept_count > 0 {
+                AnswerStatus::Grounded
+            } else {
+                AnswerStatus::LowConfidence
+            },
+            text: Some(format!(
+                "DuckDocs found {} concept nodes across {} page sections in this import.",
+                concept_count,
+                page_sections.len()
+            )),
+            explanation:
+                "This document-level answer is grounded in the concept nodes and visible evidence DuckDocs compiled from the markdown package."
+                    .into(),
+            citations: document_evidence.clone(),
+            related_node_ids: concept_accumulators
+                .iter()
+                .map(|concept| concept.id.clone())
+                .collect(),
+            suggested_actions: vec![
+                SuggestedAction {
+                    kind: SuggestedActionKind::InspectEvidence,
+                    label: "Inspect evidence".into(),
+                    description:
+                        "Review the cited snippets before trusting the document-wide summary."
+                            .into(),
+                },
+                SuggestedAction {
+                    kind: SuggestedActionKind::AskDifferentQuestion,
+                    label: "Ask a narrower question".into(),
+                    description:
+                        "Grounded answers get stronger when you focus on one concept at a time."
+                            .into(),
+                },
+            ],
+        },
+    );
+
+    for (index, concept) in concept_accumulators.iter().enumerate() {
+        let node = GraphNodeSummary {
+            id: concept.id.clone(),
+            label: concept.label.clone(),
+            kind: GraphNodeKind::Concept,
+            confidence: Some((0.62 + (concept.evidence.len().min(3) as f32 * 0.08)).min(0.91)),
+            related_count: 1,
+            evidence_count: concept.evidence.len(),
+            position: concept_positions
+                .get(index)
+                .cloned()
+                .unwrap_or(GraphNodePosition { x: 50.0, y: 54.0 }),
+        };
+        let aliases = concept
+            .aliases
+            .iter()
+            .filter(|alias| alias.as_str() != concept.label)
+            .cloned()
+            .collect::<Vec<_>>();
+        details_by_node_id.insert(
+            node.id.clone(),
+            GraphNodeDetail {
+                node: node.clone(),
+                canonical_name: concept.label.clone(),
+                aliases,
+                description: format!(
+                    "Compiled from {} evidence refs across {} page(s). DuckDocs is still conservative and only shows evidence-backed concept nodes.",
+                    concept.evidence.len(),
+                    concept.page_labels.len()
+                ),
+                evidence: concept.evidence.clone(),
+                actions: disabled_correction_actions(
+                    "Correction apply flow lands next. The graph already exposes where a future merge or rename would attach.",
+                ),
+            },
+        );
+        answer_by_node_id.insert(
+            node.id.clone(),
+            AnswerResponse {
+                status: AnswerStatus::Grounded,
+                text: Some(format!(
+                    "{} appears in {} evidence refs across {} page(s).",
+                    concept.label,
+                    concept.evidence.len(),
+                    concept.page_labels.len()
+                )),
+                explanation:
+                    "This answer is grounded in the evidence attached to the selected concept node."
+                        .into(),
+                citations: concept.evidence.iter().take(3).cloned().collect(),
+                related_node_ids: vec!["document".into()],
+                suggested_actions: vec![SuggestedAction {
+                    kind: SuggestedActionKind::InspectEvidence,
+                    label: "Inspect evidence".into(),
+                    description:
+                        "Use the cited snippets to verify the concept before acting on it.".into(),
+                }],
+            },
+        );
+        nodes.push(node);
+    }
+
+    let evidence_count = concept_accumulators
+        .iter()
+        .map(|concept| concept.evidence.len())
+        .sum::<usize>()
+        + document_evidence.len();
+
+    KnowledgeProject {
+        summary: ProjectOverview {
+            project_id,
+            title,
+            status: if concept_count > 0 {
+                ProjectStatus::Ready
+            } else {
+                ProjectStatus::Degraded
+            },
+            stale: false,
+            summary: format!(
+                "Compiled {} concept nodes from {} page sections. DuckDocs only shows nodes with visible evidence.",
+                concept_count,
+                page_sections.len()
+            ),
+            document_count: 1,
+            node_count: nodes.len(),
+            relationship_count: concept_count,
+            evidence_count,
+        },
+        nodes,
+        details_by_node_id,
+        answer_by_node_id,
+    }
+}
+
+fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Vec<ConceptAccumulator> {
+    let mut concepts = BTreeMap::<String, ConceptAccumulator>::new();
+
+    for section in page_sections {
+        let mut seen_on_page = BTreeSet::new();
+        let candidates = concept_candidates(&section.content);
+        for (candidate_index, candidate) in candidates.into_iter().enumerate() {
+            let key = normalize_key(&candidate);
+            if key.is_empty() || !seen_on_page.insert(key.clone()) {
+                continue;
+            }
+            let concept = concepts
+                .entry(key.clone())
+                .or_insert_with(|| ConceptAccumulator {
+                    id: format!("concept-{}", key),
+                    label: candidate.clone(),
+                    aliases: BTreeSet::new(),
+                    evidence: Vec::new(),
+                    page_labels: BTreeSet::new(),
+                });
+            if concept.label != candidate {
+                concept.aliases.insert(candidate.clone());
+            }
+            concept.page_labels.insert(section.page_label.clone());
+            concept.evidence.push(EvidenceRef {
+                id: format!(
+                    "ev-{}-{}",
+                    key,
+                    candidate_index + concept.evidence.len() + 1
+                ),
+                page_label: section.page_label.clone(),
+                snippet: excerpt(&section.content, 180),
+                source_path: Some(source_path.to_string()),
+            });
+        }
+    }
+
+    if concepts.is_empty() {
+        for (index, section) in page_sections.iter().enumerate() {
+            let label = fallback_concept_label(&section.content, &section.page_label);
+            let key = normalize_key(&label);
+            concepts.insert(
+                key.clone(),
+                ConceptAccumulator {
+                    id: format!("concept-{}", key),
+                    label,
+                    aliases: BTreeSet::new(),
+                    evidence: vec![EvidenceRef {
+                        id: format!("ev-fallback-{}", index + 1),
+                        page_label: section.page_label.clone(),
+                        snippet: excerpt(&section.content, 180),
+                        source_path: Some(source_path.to_string()),
+                    }],
+                    page_labels: [section.page_label.clone()].into_iter().collect(),
+                },
+            );
+        }
+    }
+
+    concepts.into_values().take(20).collect()
+}
+
+fn concept_candidates(content: &str) -> Vec<String> {
+    let mut labels: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let cleaned = clean_candidate_line(line);
+        if cleaned.is_empty() {
+            continue;
+        }
+        if let Some(label) = derive_concept_label(&cleaned) {
+            if !labels
+                .iter()
+                .any(|existing| normalize_key(existing) == normalize_key(&label))
+            {
+                labels.push(label);
+            }
+        }
+        if labels.len() >= 3 {
+            break;
+        }
+    }
+    labels
+}
+
+fn clean_candidate_line(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("![")
+        || trimmed.starts_with("_AI analysis unavailable")
+        || trimmed.starts_with("# ")
+        || trimmed.starts_with("## Page ")
+    {
+        return String::new();
+    }
+
+    trimmed
+        .trim_start_matches('#')
+        .trim_start_matches('-')
+        .trim_start_matches('*')
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')')
+        .trim()
+        .replace('`', "")
+        .replace('*', "")
+}
+
+fn derive_concept_label(value: &str) -> Option<String> {
+    let first_clause = value
+        .split(|char| matches!(char, '.' | ':' | ';' | '(' | ')' | '[' | ']'))
+        .next()
+        .unwrap_or(value)
+        .trim();
+    let mut words = first_clause
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|char: char| !char.is_alphanumeric() && char != '-' && char != '/')
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+
+    while matches!(words.first(), Some(word) if is_leading_stopword(word)) {
+        words.remove(0);
+    }
+
+    if words.len() < 2 {
+        return None;
+    }
+
+    let label = words.into_iter().take(6).collect::<Vec<_>>().join(" ");
+    if label.len() < 10 {
+        return None;
+    }
+
+    Some(label)
+}
+
+fn is_leading_stopword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "a" | "an"
+            | "and"
+            | "as"
+            | "for"
+            | "from"
+            | "in"
+            | "into"
+            | "of"
+            | "on"
+            | "or"
+            | "the"
+            | "this"
+            | "that"
+            | "to"
+            | "with"
+    )
+}
+
+fn fallback_concept_label(content: &str, page_label: &str) -> String {
+    derive_concept_label(content).unwrap_or_else(|| format!("{page_label} summary"))
+}
+
+fn normalize_key(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_dash = false;
+    for char in value.chars() {
+        if char.is_ascii_alphanumeric() {
+            normalized.push(char.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            normalized.push('-');
+            last_dash = true;
+        }
+    }
+    normalized.trim_matches('-').to_string()
+}
+
+fn extract_page_sections(markdown: &str) -> Vec<PageSection> {
+    let normalized = markdown.replace("\r\n", "\n");
+    let headers = regex_like_page_headers(&normalized);
+    if headers.is_empty() {
+        return vec![PageSection {
+            page_label: "Imported text".into(),
+            content: normalized,
+        }];
+    }
+
+    let mut sections = Vec::with_capacity(headers.len());
+    for index in 0..headers.len() {
+        let (page_label, _, content_start) = &headers[index];
+        let next_start = headers
+            .get(index + 1)
+            .map(|(_, next_start, _)| *next_start)
+            .unwrap_or(normalized.len());
+        sections.push(PageSection {
+            page_label: page_label.clone(),
+            content: normalized[*content_start..next_start].trim().to_string(),
+        });
+    }
+    sections
+}
+
+fn regex_like_page_headers(markdown: &str) -> Vec<(String, usize, usize)> {
+    let mut headers = Vec::new();
+    let mut offset = 0usize;
+    for line in markdown.lines() {
+        let line_len = line.len();
+        if let Some(page_label) = line
+            .strip_prefix("## Page ")
+            .map(|page| format!("Page {}", page.trim()))
+        {
+            headers.push((page_label, offset, offset + line_len + 1));
+        }
+        offset += line_len + 1;
+    }
+    headers
+}
+
+fn infer_markdown_title(markdown_path: &str, markdown: &str) -> String {
+    if let Some(heading) = markdown
+        .lines()
+        .find_map(|line| line.strip_prefix("# ").map(str::trim))
+        .filter(|value| !value.is_empty())
+    {
+        return heading.to_string();
+    }
+
+    Path::new(markdown_path)
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "DuckDocs import".into())
+}
+
+fn excerpt(value: &str, max_length: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return "No visible evidence snippet is available yet.".into();
+    }
+    let compact_chars = compact.chars().count();
+    if compact_chars <= max_length {
+        return compact;
+    }
+    let truncated = compact
+        .chars()
+        .take(max_length.saturating_sub(1))
+        .collect::<String>();
+    format!("{}…", truncated.trim_end())
+}
+
+fn disabled_correction_actions(reason: &str) -> Vec<CorrectionAction> {
+    vec![
+        CorrectionAction {
+            kind: CorrectionKind::Merge,
+            label: "Merge".into(),
+            disabled_reason: Some(reason.into()),
+        },
+        CorrectionAction {
+            kind: CorrectionKind::KeepSeparate,
+            label: "Keep Separate".into(),
+            disabled_reason: Some(reason.into()),
+        },
+        CorrectionAction {
+            kind: CorrectionKind::Rename,
+            label: "Rename".into(),
+            disabled_reason: Some(reason.into()),
+        },
+    ]
+}
+
+fn layout_concept_positions(count: usize) -> Vec<GraphNodePosition> {
+    let per_row = if count > 9 { 4 } else { 3 };
+    let row_count = ((count as f32) / (per_row as f32)).ceil() as usize;
+    let row_spacing = if row_count > 1 {
+        48.0 / (row_count.saturating_sub(1) as f32)
+    } else {
+        0.0
+    };
+    let mut positions = Vec::with_capacity(count);
+
+    for index in 0..count {
+        let row = index / per_row;
+        let col = index % per_row;
+        let columns_in_row = if row == row_count.saturating_sub(1) {
+            let remainder = count % per_row;
+            if remainder == 0 {
+                per_row
+            } else {
+                remainder
+            }
+        } else {
+            per_row
+        };
+        let x = if columns_in_row == 1 {
+            50.0
+        } else {
+            18.0 + (64.0 / (columns_in_row.saturating_sub(1) as f32)) * (col as f32)
+        };
+        let y = 40.0 + row_spacing * (row as f32);
+        positions.push(GraphNodePosition { x, y });
+    }
+
+    positions
+}
+
+fn build_project_id(request: &CompileProjectRequest) -> String {
+    let stable_source = request
+        .source_document_path
+        .as_deref()
+        .unwrap_or(&request.source_markdown_path);
+    format!("project-{:016x}", fnv1a_hash(stable_source.as_bytes()))
+}
+
+fn fnv1a_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn engine_failure(command: EngineCommand, error: &anyhow::Error) -> EngineFailure {
@@ -475,6 +1034,143 @@ fn chrono_like_timestamp() -> String {
         .unwrap_or_default()
         .as_secs();
     now.to_string()
+}
+
+struct KnowledgeProjectStore {
+    path: PathBuf,
+}
+
+impl KnowledgeProjectStore {
+    fn default() -> Result<Self> {
+        if let Some(explicit_path) = std::env::var_os("DUCKDOCS_PROJECT_STORE") {
+            return Ok(Self {
+                path: PathBuf::from(explicit_path),
+            });
+        }
+
+        let root = dirs::data_local_dir()
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| anyhow!("failed to resolve local data directory"))?;
+        Ok(Self {
+            path: root.join("DuckDocs/knowledge.sqlite3"),
+        })
+    }
+
+    #[cfg(test)]
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn save_project(
+        &self,
+        project: &KnowledgeProject,
+        request: &CompileProjectRequest,
+    ) -> Result<()> {
+        self.ensure_schema()?;
+        let snapshot_json =
+            serde_json::to_string(project).context("failed to encode knowledge project")?;
+        let snapshot_base64 = base64::engine::general_purpose::STANDARD.encode(snapshot_json);
+        let source_document_path = request
+            .source_document_path
+            .as_ref()
+            .map(|path| format!("'{}'", escape_sqlite(path)))
+            .unwrap_or_else(|| "NULL".into());
+        let status = match project.summary.status {
+            ProjectStatus::Preview => "preview",
+            ProjectStatus::Ready => "ready",
+            ProjectStatus::Degraded => "degraded",
+        };
+        let sql = format!(
+            "INSERT INTO projects (project_id, title, source_markdown_path, source_document_path, status, updated_at, snapshot_base64) \
+             VALUES ('{project_id}', '{title}', '{markdown_path}', {source_document_path}, '{status}', {updated_at}, '{snapshot_base64}') \
+             ON CONFLICT(project_id) DO UPDATE SET \
+               title=excluded.title, \
+               source_markdown_path=excluded.source_markdown_path, \
+               source_document_path=excluded.source_document_path, \
+               status=excluded.status, \
+               updated_at=excluded.updated_at, \
+               snapshot_base64=excluded.snapshot_base64;",
+            project_id = escape_sqlite(&project.summary.project_id),
+            title = escape_sqlite(&project.summary.title),
+            markdown_path = escape_sqlite(&request.source_markdown_path),
+            source_document_path = source_document_path,
+            status = status,
+            updated_at = unix_timestamp_seconds(),
+            snapshot_base64 = snapshot_base64,
+        );
+        self.run_sql(&sql).map(|_| ())
+    }
+
+    fn load_project(&self, project_id: Option<&str>) -> Result<Option<KnowledgeProject>> {
+        self.ensure_schema()?;
+        let sql = match project_id {
+            Some(project_id) => format!(
+                "SELECT snapshot_base64 FROM projects WHERE project_id = '{}' LIMIT 1;",
+                escape_sqlite(project_id)
+            ),
+            None => "SELECT snapshot_base64 FROM projects ORDER BY updated_at DESC LIMIT 1;".into(),
+        };
+        let output = self.run_sql(&sql)?;
+        let encoded = output.trim();
+        if encoded.is_empty() {
+            return Ok(None);
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .context("failed to decode stored project snapshot")?;
+        let project = serde_json::from_slice(&bytes).context("failed to decode stored project")?;
+        Ok(Some(project))
+    }
+
+    fn ensure_schema(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed creating {}", parent.display()))?;
+        }
+        self.run_sql(
+            "CREATE TABLE IF NOT EXISTS projects (
+                project_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                source_markdown_path TEXT NOT NULL,
+                source_document_path TEXT,
+                status TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                snapshot_base64 TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);",
+        )
+        .map(|_| ())
+    }
+
+    fn run_sql(&self, sql: &str) -> Result<String> {
+        let output = Command::new("/usr/bin/sqlite3")
+            .arg(&self.path)
+            .arg(sql)
+            .output()
+            .with_context(|| format!("failed to launch sqlite3 for {}", self.path.display()))?;
+
+        if !output.status.success() {
+            bail!(
+                "sqlite3 failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(String::from_utf8(output.stdout).context("sqlite3 output was not valid UTF-8")?)
+    }
+}
+
+fn escape_sqlite(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn unix_timestamp_seconds() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -795,4 +1491,44 @@ fn parse_openai_compatible(
         .as_str()
         .map(|value| value.to_string())
         .ok_or_else(|| anyhow!("provider response did not include markdown text"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_and_store_project_round_trip() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(
+            &markdown_path,
+            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\n\n## Page 2\n\nExplainable graph view grounds answers in visible snippets.\n",
+        )
+        .expect("write markdown");
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+        };
+
+        let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
+        let project = compile_knowledge_project(&request, &markdown);
+        assert_eq!(project.summary.status, ProjectStatus::Ready);
+        assert!(project.nodes.iter().any(|node| node.kind == GraphNodeKind::Concept));
+
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path);
+        store
+            .save_project(&project, &request)
+            .expect("save project to sqlite");
+
+        let loaded = store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load project")
+            .expect("stored project");
+        assert_eq!(loaded.summary.project_id, project.summary.project_id);
+        assert_eq!(loaded.summary.title, "Sample import");
+        assert_eq!(loaded.nodes.len(), project.nodes.len());
+        assert!(loaded.details_by_node_id.contains_key("document"));
+    }
 }

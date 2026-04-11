@@ -64,7 +64,7 @@ export function buildWorkspacePreview(
     id: `ev-page-${index + 1}`,
     pageLabel: section.pageLabel,
     snippet: excerpt(section.content),
-    sourceLabel: section.pageLabel,
+    sourcePath: result.savedOutputPath,
   }));
 
   detailsByNodeId.document = {
@@ -115,6 +115,7 @@ export function buildWorkspacePreview(
       summary: `${result.successCount} pages imported, ${result.failedCount} failed. Workspace preview is derived from the latest markdown package and keeps evidence visible while the knowledge compiler is still landing.`,
       documentCount: 1,
       nodeCount: nodes.length,
+      relationshipCount: pageNodes.length,
       evidenceCount: pageEvidence.length,
     },
     nodes,
@@ -137,13 +138,13 @@ function previewAnswer(
     relatedNodeIds,
     suggestedActions: [
       {
-        id: "inspect-evidence",
+        kind: "inspect_evidence" as const,
         label: "Inspect evidence",
         description:
           "Open the cited snippets in the inspector before trusting the draft answer.",
       },
       {
-        id: "keep-writing-light",
+        kind: "ask_different_question" as const,
         label: "Wait for compile-backed answers",
         description:
           "Structured grounded answers will replace this preview once the project compiler lands.",
@@ -155,17 +156,17 @@ function previewAnswer(
 function disabledCorrectionActions(reason: string) {
   return [
     {
-      id: "merge",
+      kind: "merge" as const,
       label: "Merge",
       disabledReason: reason,
     },
     {
-      id: "keep-separate",
+      kind: "keep_separate" as const,
       label: "Keep Separate",
       disabledReason: reason,
     },
     {
-      id: "rename",
+      kind: "rename" as const,
       label: "Rename",
       disabledReason: reason,
     },

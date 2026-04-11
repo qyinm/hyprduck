@@ -11,9 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use duckdocs_engine_client::{EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    DocumentFormat, EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess, ParseEvent,
-    ParseInput, ParseOptions, ParseOutputTarget, ParseRequest, ParseResponseData,
-    ValidateProviderResponseData,
+    CompileProjectRequest, DocumentFormat, EngineConfigPayload, EngineFailure, EngineRequest,
+    EngineSuccess, KnowledgeProject, ParseEvent, ParseInput, ParseOptions, ParseOutputTarget,
+    ParseRequest, ParseResponseData, ValidateProviderResponseData,
 };
 use rfd::FileDialog;
 use serde::Serialize;
@@ -36,6 +36,7 @@ struct UiSnapshot {
     active_job: Option<ActiveJobSnapshot>,
     progress_log: Vec<ProgressEntry>,
     last_result: Option<CompletedResultSnapshot>,
+    last_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +105,7 @@ fn main() {
             save_engine_config,
             validate_engine_config,
             get_models_for_provider,
+            load_workspace_project,
             start_parse,
             cancel_parse,
             open_saved_output
@@ -187,6 +189,19 @@ fn get_models_for_provider(provider_slug: String) -> Vec<String> {
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+#[tauri::command]
+fn load_workspace_project(
+    app: AppHandle,
+    project_id: Option<String>,
+) -> Result<Option<KnowledgeProject>, DesktopError> {
+    let engine_path =
+        resolve_engine_path(&app).map_err(|error| DesktopError::Message(error.to_string()))?;
+    let client = SubprocessEngineClient::new(engine_path);
+    client
+        .load_project(project_id)
+        .map_err(|error| DesktopError::Message(error.to_string()))
 }
 
 #[tauri::command]
@@ -362,13 +377,13 @@ fn run_parse_child(
         let data = response.data;
         {
             let mut state = store.lock().expect("app store lock poisoned");
-            state.snapshot.active_job = None;
             state.snapshot.last_result = Some(CompletedResultSnapshot {
                 saved_output_path: data.saved_output_path.clone(),
                 success_count: data.result.success_count,
                 failed_count: data.result.failed_count,
                 markdown: data.result.markdown,
             });
+            state.snapshot.last_project_id = None;
             let completion_message = data
                 .saved_output_path
                 .clone()
@@ -378,6 +393,43 @@ fn run_parse_child(
                 "completed",
                 &completion_message,
             );
+        }
+        let source_document_path = store
+            .lock()
+            .expect("app store lock poisoned")
+            .snapshot
+            .active_job
+            .as_ref()
+            .map(|job| job.file_path.clone());
+        if let Some(saved_output_path) = data.saved_output_path.clone() {
+            match compile_workspace_project(
+                app,
+                &saved_output_path,
+                source_document_path.as_deref(),
+            ) {
+                Ok(project_id) => {
+                    let mut state = store.lock().expect("app store lock poisoned");
+                    state.snapshot.last_project_id = Some(project_id.clone());
+                    push_progress_entry(
+                        &mut state.snapshot.progress_log,
+                        "compile",
+                        &format!("Compiled knowledge workspace {project_id}"),
+                    );
+                }
+                Err(error) => {
+                    let mut state = store.lock().expect("app store lock poisoned");
+                    state.snapshot.last_project_id = None;
+                    push_progress_entry(
+                        &mut state.snapshot.progress_log,
+                        "compile_failed",
+                        &format!("Knowledge compile failed: {error}"),
+                    );
+                }
+            }
+        }
+        {
+            let mut state = store.lock().expect("app store lock poisoned");
+            state.snapshot.active_job = None;
         }
         publish_snapshot(app, store);
         Ok(())
@@ -389,6 +441,23 @@ fn run_parse_child(
         }
         Ok(())
     }
+}
+
+fn compile_workspace_project(
+    app: &AppHandle,
+    saved_output_path: &str,
+    source_document_path: Option<&str>,
+) -> Result<String, DesktopError> {
+    let engine_path =
+        resolve_engine_path(app).map_err(|error| DesktopError::Message(error.to_string()))?;
+    let client = SubprocessEngineClient::new(engine_path);
+    client
+        .compile_project(CompileProjectRequest {
+            source_markdown_path: saved_output_path.to_string(),
+            source_document_path: source_document_path.map(str::to_string),
+        })
+        .map(|response| response.project_id)
+        .map_err(|error| DesktopError::Message(error.to_string()))
 }
 
 fn apply_progress_event(app: &AppHandle, store: &SharedStore, event: &ParseEvent) {
@@ -814,10 +883,7 @@ fn list_ollama_vision_models() -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    let resp = match client
-        .get("http://127.0.0.1:11434/v1/models")
-        .send()
-    {
+    let resp = match client.get("http://127.0.0.1:11434/v1/models").send() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -849,7 +915,6 @@ fn default_model_for_provider(provider_slug: &str) -> &'static str {
         _ => "openai/gpt-4.1-mini",
     }
 }
-
 
 #[cfg(test)]
 mod tests {

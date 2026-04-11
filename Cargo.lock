@@ -1018,6 +1018,7 @@ dependencies = [
 name = "duckdocs-engine-types"
 version = "0.1.0"
 dependencies = [
+ "duckdocs-knowledge",
  "serde",
  "serde_json",
 ]

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +28,14 @@ pub enum AnswerStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodePosition {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectOverview {
     pub project_id: String,
     pub title: String,
@@ -40,6 +50,7 @@ pub struct ProjectOverview {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphNodeSummary {
     pub id: String,
     pub label: String,
@@ -48,9 +59,11 @@ pub struct GraphNodeSummary {
     pub confidence: Option<f32>,
     pub related_count: usize,
     pub evidence_count: usize,
+    pub position: GraphNodePosition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceRef {
     pub id: String,
     pub page_label: String,
@@ -68,6 +81,7 @@ pub enum CorrectionKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CorrectionAction {
     pub kind: CorrectionKind,
     pub label: String,
@@ -76,6 +90,7 @@ pub struct CorrectionAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphNodeDetail {
     pub node: GraphNodeSummary,
     pub canonical_name: String,
@@ -98,6 +113,7 @@ pub enum SuggestedActionKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SuggestedAction {
     pub kind: SuggestedActionKind,
     pub label: String,
@@ -105,6 +121,7 @@ pub struct SuggestedAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnswerResponse {
     pub status: AnswerStatus,
     #[serde(default)]
@@ -116,6 +133,17 @@ pub struct AnswerResponse {
     pub related_node_ids: Vec<String>,
     #[serde(default)]
     pub suggested_actions: Vec<SuggestedAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeProject {
+    pub summary: ProjectOverview,
+    pub nodes: Vec<GraphNodeSummary>,
+    #[serde(default)]
+    pub details_by_node_id: BTreeMap<String, GraphNodeDetail>,
+    #[serde(default)]
+    pub answer_by_node_id: BTreeMap<String, AnswerResponse>,
 }
 
 #[cfg(test)]
@@ -144,6 +172,6 @@ mod tests {
 
         let encoded = serde_json::to_string(&response).expect("serialize answer response");
         assert!(encoded.contains("\"status\":\"low_confidence\""));
-        assert!(encoded.contains("\"related_node_ids\":[\"page-1\"]"));
+        assert!(encoded.contains("\"relatedNodeIds\":[\"page-1\"]"));
     }
 }

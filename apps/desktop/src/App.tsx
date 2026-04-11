@@ -27,6 +27,7 @@ import {
   createInitialWorkspaceUiState,
   workspaceUiStateReducer,
 } from "@/features/workspace/state";
+import type { WorkspaceProject } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
 
 type ActivePanel = "import" | "graph";
@@ -36,6 +37,7 @@ interface UiSnapshot {
   activeJob: ActiveJobSnapshot | null;
   progressLog: ProgressEntry[];
   lastResult: CompletedResultSnapshot | null;
+  lastProjectId?: string | null;
 }
 
 interface ActiveJobSnapshot {
@@ -150,6 +152,7 @@ const EMPTY_SNAPSHOT: UiSnapshot = {
   activeJob: null,
   progressLog: [],
   lastResult: null,
+  lastProjectId: null,
 };
 
 function getTauri(): TauriGlobalApi {
@@ -632,6 +635,8 @@ function SettingsPanel(props: {
 
 export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
+  const [loadedWorkspaceProject, setLoadedWorkspaceProject] =
+    useState<WorkspaceProject | null>(null);
   const [currentConfig, setCurrentConfig] =
     useState<EngineConfigPayload | null>(null);
   const [validation, setValidation] =
@@ -642,10 +647,20 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [startupError, setStartupError] = useState<string | null>(null);
-  const workspaceProject = buildWorkspacePreview(
+  const previewWorkspaceProject = buildWorkspacePreview(
     snapshot.lastResult,
     Boolean(snapshot.activeJob),
   );
+  const workspaceProject = loadedWorkspaceProject
+    ? {
+        ...loadedWorkspaceProject,
+        summary: {
+          ...loadedWorkspaceProject.summary,
+          stale:
+            loadedWorkspaceProject.summary.stale || Boolean(snapshot.activeJob),
+        },
+      }
+    : previewWorkspaceProject;
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,
@@ -663,9 +678,12 @@ export function App() {
           invoke<EngineConfigPayload>("load_engine_config"),
           invoke<ValidateProviderResponseData>("validate_engine_config"),
         ]);
+      const initialWorkspaceProject =
+        await invoke<WorkspaceProject | null>("load_workspace_project");
       setSnapshot(initialSnapshot);
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
+      setLoadedWorkspaceProject(initialWorkspaceProject);
 
       unlisten = await tauri.event.listen<UiSnapshot>(
         "duckdocs://snapshot",
@@ -685,6 +703,37 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (snapshot.lastProjectId) {
+      invoke<WorkspaceProject | null>("load_workspace_project", {
+        project_id: snapshot.lastProjectId,
+      })
+        .then((project) => {
+          if (!cancelled) {
+            setLoadedWorkspaceProject(project);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setLoadedWorkspaceProject(null);
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (snapshot.lastResult) {
+      setLoadedWorkspaceProject(null);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot.lastProjectId, snapshot.lastResult?.savedOutputPath]);
 
   useEffect(() => {
     dispatchWorkspaceUi({
