@@ -1,4 +1,11 @@
-import { type ReactNode, useEffect, useReducer, useState } from "react";
+import {
+  Component,
+  type ErrorInfo,
+  type ReactNode,
+  useEffect,
+  useReducer,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   ChevronDown,
@@ -158,6 +165,48 @@ const EMPTY_SNAPSHOT: UiSnapshot = {
   lastResult: null,
   lastProjectId: null,
 };
+
+class WorkspaceErrorBoundary extends Component<
+  { children: ReactNode },
+  { errorMessage: string | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { errorMessage: null };
+  }
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      errorMessage:
+        error instanceof Error ? error.message : "Unknown workspace render error",
+    };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("Workspace render failed", error, info);
+  }
+
+  render() {
+    if (this.state.errorMessage) {
+      return (
+        <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-[24px] border border-red-200 bg-red-50/80 p-8 text-center">
+          <h2 className="text-lg font-semibold text-red-900">
+            Graph workspace failed to render
+          </h2>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-red-800">
+            DuckDocs hit a frontend render error instead of showing the graph.
+            The latest issue is:
+          </p>
+          <pre className="mt-4 max-w-3xl overflow-x-auto rounded-2xl bg-white/90 px-4 py-3 text-left text-xs leading-6 text-red-900">
+            {this.state.errorMessage}
+          </pre>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 function getTauri(): TauriGlobalApi {
   const tauri = window.__TAURI__;
@@ -1013,14 +1062,16 @@ export function App() {
               onTabChange={setSettingsTab}
             />
           ) : activePanel === "graph" ? (
-            <GraphWorkspace
-              dispatch={dispatchWorkspaceUi}
-              onApplyCorrection={applyWorkspaceCorrection}
-              onAskProject={answerWorkspaceProject}
-              onOpenImport={openImportPanel}
-              project={workspaceProject}
-              uiState={workspaceUiState}
-            />
+            <WorkspaceErrorBoundary>
+              <GraphWorkspace
+                dispatch={dispatchWorkspaceUi}
+                onApplyCorrection={applyWorkspaceCorrection}
+                onAskProject={answerWorkspaceProject}
+                onOpenImport={openImportPanel}
+                project={workspaceProject}
+                uiState={workspaceUiState}
+              />
+            </WorkspaceErrorBoundary>
           ) : (
             <ImportPanel
               onCancelParse={cancelParse}

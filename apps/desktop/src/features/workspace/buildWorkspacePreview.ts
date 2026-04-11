@@ -86,7 +86,7 @@ export function buildWorkspacePreview(
     description:
       "This workspace is a graph-first preview built from the latest import. The compile-backed knowledge layer is not wired yet, so DuckDocs shows visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
-    correctionActions: disabledCorrectionActions(
+    actions: disabledCorrectionActions(
       "Correction actions unlock once project compile and merge policy are connected.",
     ),
   };
@@ -106,7 +106,7 @@ export function buildWorkspacePreview(
       description:
         "Preview node derived from the latest import output. In the final knowledge workspace this inspector will show concept aliases, merge control, and provenance-backed evidence.",
       evidence,
-      correctionActions: disabledCorrectionActions(
+      actions: disabledCorrectionActions(
         "Corrections are visible here so the tri-pane workflow can land before backend apply flows are wired.",
       ),
     };

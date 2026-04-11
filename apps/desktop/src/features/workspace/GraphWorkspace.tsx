@@ -39,6 +39,72 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onApplyCorrection,
     onAskProject,
   } = props;
+  const projectNodes = project?.nodes ?? [];
+  const nodeById = Object.fromEntries(projectNodes.map((node) => [node.id, node]));
+  const selectedEdge =
+    (uiState.selectedEdgeId &&
+      project?.edgeDetailsById[uiState.selectedEdgeId]) ||
+    null;
+  const selectedNode =
+    (!selectedEdge &&
+      uiState.selectedNodeId &&
+      project?.detailsByNodeId[uiState.selectedNodeId]) ||
+    null;
+  const mergeCandidates = useMemo(
+    () =>
+      projectNodes.filter(
+        (node) =>
+          node.kind === "concept" && node.id !== selectedNode?.node.id,
+      ),
+    [projectNodes, selectedNode?.node.id],
+  );
+  const [renameValue, setRenameValue] = useState(selectedNode?.canonicalName ?? "");
+  const [mergeTargetNodeId, setMergeTargetNodeId] = useState<string | null>(
+    mergeCandidates[0]?.id ?? null,
+  );
+  const [pendingCorrectionKind, setPendingCorrectionKind] = useState<
+    WorkspaceApplyCorrectionRequest["kind"] | null
+  >(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const defaultAnswerNodeId =
+    selectedNode?.node.id ??
+    projectNodes.find((node) => node.kind === "document")?.id ??
+    null;
+  const baseAnswer =
+    (defaultAnswerNodeId &&
+      project?.answerByNodeId[defaultAnswerNodeId]) ||
+    null;
+  const [liveAnswer, setLiveAnswer] =
+    useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [answerPending, setAnswerPending] = useState(false);
+  const answer = liveAnswer ?? baseAnswer;
+  const graphPaneClass = project?.summary.stale
+    ? "border-amber-300/70"
+    : "border-border/80";
+  const answerBadgeLabel =
+    answer?.status === "stale"
+      ? "Stale"
+      : answer?.status === "low_confidence"
+      ? "Low confidence"
+      : answer?.status === "grounded"
+      ? "Grounded"
+      : answer?.status === "blocked"
+      ? "Blocked"
+      : "Preview";
+
+  useEffect(() => {
+    setRenameValue(selectedNode?.canonicalName ?? "");
+    setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
+    setPendingCorrectionKind(null);
+    setCorrectionError(null);
+  }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
+
+  useEffect(() => {
+    setLiveAnswer(null);
+    setAnswerError(null);
+    setAnswerPending(false);
+  }, [project?.summary.projectId, selectedNode?.node.id, uiState.selectedEdgeId]);
 
   if (!project) {
     return (
@@ -70,69 +136,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </div>
     );
   }
-
-  const nodeById = Object.fromEntries(project.nodes.map((node) => [node.id, node]));
-  const selectedEdge =
-    (uiState.selectedEdgeId && project.edgeDetailsById[uiState.selectedEdgeId]) ||
-    null;
-  const selectedNode =
-    (!selectedEdge &&
-      uiState.selectedNodeId &&
-      project.detailsByNodeId[uiState.selectedNodeId]) ||
-    null;
-  const mergeCandidates = useMemo(
-    () =>
-      project.nodes.filter(
-        (node) =>
-          node.kind === "concept" && node.id !== selectedNode?.node.id,
-      ),
-    [project.nodes, selectedNode?.node.id],
-  );
-  const [renameValue, setRenameValue] = useState(selectedNode?.canonicalName ?? "");
-  const [mergeTargetNodeId, setMergeTargetNodeId] = useState<string | null>(
-    mergeCandidates[0]?.id ?? null,
-  );
-  const [pendingCorrectionKind, setPendingCorrectionKind] = useState<
-    WorkspaceApplyCorrectionRequest["kind"] | null
-  >(null);
-  const [correctionError, setCorrectionError] = useState<string | null>(null);
-  const defaultAnswerNodeId =
-    selectedNode?.node.id ??
-    project.nodes.find((node) => node.kind === "document")?.id ??
-    null;
-  const baseAnswer =
-    (defaultAnswerNodeId && project.answerByNodeId[defaultAnswerNodeId]) || null;
-  const [liveAnswer, setLiveAnswer] =
-    useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
-  const [answerError, setAnswerError] = useState<string | null>(null);
-  const [answerPending, setAnswerPending] = useState(false);
-  const answer = liveAnswer ?? baseAnswer;
-  const graphPaneClass = project.summary.stale
-    ? "border-amber-300/70"
-    : "border-border/80";
-  const answerBadgeLabel =
-    answer?.status === "stale"
-      ? "Stale"
-      : answer?.status === "low_confidence"
-      ? "Low confidence"
-      : answer?.status === "grounded"
-      ? "Grounded"
-      : answer?.status === "blocked"
-      ? "Blocked"
-      : "Preview";
-
-  useEffect(() => {
-    setRenameValue(selectedNode?.canonicalName ?? "");
-    setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
-    setPendingCorrectionKind(null);
-    setCorrectionError(null);
-  }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
-
-  useEffect(() => {
-    setLiveAnswer(null);
-    setAnswerError(null);
-    setAnswerPending(false);
-  }, [project.summary.projectId, selectedNode?.node.id, uiState.selectedEdgeId]);
 
   async function handleApplyCorrection(
     request: Omit<WorkspaceApplyCorrectionRequest, "projectId" | "nodeId">,
@@ -527,11 +530,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                 </section>
 
-                {selectedNode.correctionActions.length > 0 ? (
+                {(selectedNode.actions ?? []).length > 0 ? (
                   <section className="space-y-3">
                     <h5 className="text-sm font-semibold">Correction actions</h5>
                     <div className="grid gap-2">
-                      {selectedNode.correctionActions.map((action) => {
+                      {(selectedNode.actions ?? []).map((action) => {
                         const disabled =
                           Boolean(action.disabledReason) || pendingCorrectionKind !== null;
 

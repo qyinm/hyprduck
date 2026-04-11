@@ -55,7 +55,7 @@ export interface WorkspaceNodeDetail {
   aliases: string[];
   description: string;
   evidence: WorkspaceEvidenceRef[];
-  correctionActions: WorkspaceCorrectionAction[];
+  actions: WorkspaceCorrectionAction[];
 }
 
 export interface WorkspaceEdgeSummary {

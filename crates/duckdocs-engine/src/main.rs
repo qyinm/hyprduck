@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
@@ -2216,15 +2216,6 @@ fn export_output_package(request: &ParseRequest, result: &ParseResult) -> Result
         return Ok(None);
     };
 
-    let output_root = match &output.root_dir {
-        Some(root) => PathBuf::from(root),
-        None => dirs::document_dir()
-            .ok_or_else(|| anyhow!("failed to resolve documents directory"))?
-            .join("DuckDocs"),
-    };
-    fs::create_dir_all(&output_root)
-        .with_context(|| format!("failed creating output root {}", output_root.display()))?;
-
     let base_name = output
         .name
         .clone()
@@ -2236,6 +2227,67 @@ fn export_output_package(request: &ParseRequest, result: &ParseResult) -> Result
         .unwrap_or_else(|| "document".to_string());
     let safe_name = sanitize_name(&base_name);
     let timestamp = chrono_like_timestamp();
+    let output_roots = output_root_candidates(output)?;
+    write_output_package_with_fallback(&output_roots, &safe_name, &timestamp, result)
+        .map(|markdown_path| Some(markdown_path.display().to_string()))
+}
+
+fn output_root_candidates(
+    output: &duckdocs_engine_types::ParseOutputTarget,
+) -> Result<Vec<PathBuf>> {
+    if let Some(root) = &output.root_dir {
+        return Ok(vec![PathBuf::from(root)]);
+    }
+
+    let mut candidates = Vec::new();
+
+    if let Some(override_root) = std::env::var_os("DUCKDOCS_OUTPUT_DIR") {
+        candidates.push(PathBuf::from(override_root));
+    } else {
+        let documents_root = dirs::document_dir()
+            .ok_or_else(|| anyhow!("failed to resolve documents directory"))?
+            .join("DuckDocs");
+        candidates.push(documents_root);
+        candidates.push(std::env::temp_dir().join("DuckDocs"));
+    }
+
+    candidates.dedup();
+    Ok(candidates)
+}
+
+fn write_output_package_with_fallback(
+    output_roots: &[PathBuf],
+    safe_name: &str,
+    timestamp: &str,
+    result: &ParseResult,
+) -> Result<PathBuf> {
+    let mut last_error = None;
+
+    for output_root in output_roots {
+        match write_output_package_to_root(output_root, safe_name, timestamp, result) {
+            Ok(markdown_path) => return Ok(markdown_path),
+            Err(error) => {
+                eprintln!(
+                    "output packaging failed under {}: {error:#}",
+                    output_root.display()
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("failed writing markdown package")))
+}
+
+fn write_output_package_to_root(
+    output_root: &Path,
+    safe_name: &str,
+    timestamp: &str,
+    result: &ParseResult,
+) -> Result<PathBuf> {
+    fs::create_dir_all(output_root)
+        .with_context(|| format!("failed creating output root {}", output_root.display()))?;
+
     let output_dir = output_root.join(format!("{safe_name}_{timestamp}"));
     let images_dir = output_dir.join("images");
     fs::create_dir_all(&images_dir).with_context(|| {
@@ -2261,7 +2313,7 @@ fn export_output_package(request: &ParseRequest, result: &ParseResult) -> Result
     let markdown_path = output_dir.join(format!("{safe_name}.md"));
     fs::write(&markdown_path, &result.markdown)
         .with_context(|| format!("failed writing markdown {}", markdown_path.display()))?;
-    Ok(Some(markdown_path.display().to_string()))
+    Ok(markdown_path)
 }
 
 fn sanitize_name(value: &str) -> String {
@@ -2733,7 +2785,11 @@ fn parse_openai_compatible(
     prompt: &str,
     image_base64: Option<String>,
 ) -> Result<String> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(None)
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .context("failed to build provider HTTP client")?;
     let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
     if let Some(image_base64) = image_base64 {
         content.push(serde_json::json!({
@@ -2746,29 +2802,23 @@ fn parse_openai_compatible(
         "model": config.model_id,
         "messages": [{ "role": "user", "content": content }],
     });
+    let endpoint = config
+        .base_url
+        .clone()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| config.provider.default_base_url().to_string());
     let response = client
-        .post(
-            config
-                .base_url
-                .clone()
-                .filter(|u| !u.trim().is_empty())
-                .unwrap_or_else(|| config.provider.default_base_url().to_string()),
-        )
+        .post(&endpoint)
         .bearer_auth(config.api_key.clone())
         .json(&body)
         .send()
-        .with_context(|| {
-            format!(
-                "failed to send provider request to {}",
-                config.provider.default_base_url()
-            )
-        })?;
+        .map_err(|error| anyhow!("failed to send provider request to {endpoint}: {error:#}"))?;
     let response = response
         .error_for_status()
-        .context("provider returned error status")?;
-    let json: serde_json::Value = response
-        .json()
-        .context("failed to decode provider response")?;
+        .map_err(|error| anyhow!("provider returned error status from {endpoint}: {error:#}"))?;
+    let json: serde_json::Value = response.json().map_err(|error| {
+        anyhow!("failed to decode provider response from {endpoint}: {error:#}")
+    })?;
     json["choices"][0]["message"]["content"]
         .as_str()
         .map(|value| value.to_string())
@@ -2789,6 +2839,33 @@ mod tests {
 
         let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
         compile_knowledge_project(&request, &markdown)
+    }
+
+    fn sample_parse_result() -> ParseResult {
+        ParseResult {
+            version: "1".into(),
+            markdown: "# Sample import\n\n## Page 1\n\nGrounded evidence stays visible.\n".into(),
+            pages: vec![ParsedPage {
+                index: 0,
+                markdown: Some("Grounded evidence stays visible.".into()),
+                plain_text: Some("Grounded evidence stays visible.".into()),
+                svg: None,
+                image_asset_path: Some("images/page_1.png".into()),
+                error_message: None,
+            }],
+            assets: vec![OutputAsset {
+                relative_path: "images/page_1.png".into(),
+                mime_type: "image/png".into(),
+                base64: base64::engine::general_purpose::STANDARD.encode(b"png"),
+            }],
+            metadata: ParseMetadata {
+                engine_id: "test/model".into(),
+                duration_ms: 12,
+                page_count: 1,
+            },
+            success_count: 1,
+            failed_count: 0,
+        }
     }
 
     #[test]
@@ -2830,6 +2907,25 @@ mod tests {
         assert_eq!(loaded.edges.len(), project.edges.len());
         assert!(loaded.details_by_node_id.contains_key("document"));
         assert!(!loaded.edge_details_by_id.is_empty());
+    }
+
+    #[test]
+    fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let blocked_root = temp.path().join("blocked-root");
+        fs::write(&blocked_root, "not a directory").expect("blocked root file");
+        let fallback_root = temp.path().join("fallback-root");
+
+        let markdown_path = write_output_package_with_fallback(
+            &[blocked_root.clone(), fallback_root.clone()],
+            "sample-import",
+            "123",
+            &sample_parse_result(),
+        )
+        .expect("fallback output path");
+
+        assert!(markdown_path.starts_with(&fallback_root));
+        assert!(markdown_path.exists());
     }
 
     #[test]
