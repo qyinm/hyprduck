@@ -5,6 +5,7 @@ members = [
     "crates/duckdocs-engine",
     "crates/duckdocs-engine-client",
     "crates/duckdocs-engine-types",
+    "crates/duckdocs-knowledge",
 ]
 resolver = "2"
 

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useReducer, useState } from "react";
 import {
   ArrowLeft,
   ChevronDown,
@@ -8,6 +8,7 @@ import {
   PanelLeftOpen,
   Save,
   Settings,
+  Share2,
   Sparkles,
 } from "lucide-react";
 import {
@@ -20,9 +21,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
+import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
+import {
+  createInitialWorkspaceUiState,
+  workspaceUiStateReducer,
+} from "@/features/workspace/state";
 import { cn } from "@/lib/utils";
 
-type ActivePanel = "import" | "settings";
+type ActivePanel = "import" | "graph";
 type SettingsTab = "general" | "ai";
 
 interface UiSnapshot {
@@ -118,6 +125,11 @@ const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
     id: "import",
     label: "Import",
     icon: <FileText aria-hidden="true" size={18} />,
+  },
+  {
+    id: "graph",
+    label: "Graph",
+    icon: <Share2 aria-hidden="true" size={18} />,
   },
 ];
 
@@ -630,6 +642,15 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const workspaceProject = buildWorkspacePreview(
+    snapshot.lastResult,
+    Boolean(snapshot.activeJob),
+  );
+  const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
+    workspaceUiStateReducer,
+    null,
+    createInitialWorkspaceUiState,
+  );
 
   useEffect(() => {
     let unlisten: TauriUnlisten | null = null;
@@ -664,6 +685,17 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    dispatchWorkspaceUi({
+      type: "sync_project",
+      project: workspaceProject,
+    });
+  }, [
+    workspaceProject?.summary.projectId,
+    workspaceProject?.summary.stale,
+    workspaceProject?.summary.nodeCount,
+  ]);
 
   const chooseFile = async () => {
     const selection = await invoke<FileSelection | null>("pick_import_file");
@@ -742,6 +774,11 @@ export function App() {
   }
 
   function closeSettings() {
+    setSettingsOpen(false);
+    setActivePanel("import");
+  }
+
+  function openImportPanel() {
     setSettingsOpen(false);
     setActivePanel("import");
   }
@@ -882,6 +919,13 @@ export function App() {
               validation={validation}
               tab={settingsTab}
               onTabChange={setSettingsTab}
+            />
+          ) : activePanel === "graph" ? (
+            <GraphWorkspace
+              dispatch={dispatchWorkspaceUi}
+              onOpenImport={openImportPanel}
+              project={workspaceProject}
+              uiState={workspaceUiState}
             />
           ) : (
             <ImportPanel
