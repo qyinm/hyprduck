@@ -126,6 +126,10 @@ struct ImageProcessingResult {
 - Ollama should support local usage without an API key
 - Prompt templates should support general document parsing, tutorials, UI flows, code, and tables
 
+## PULL REQUESTS
+
+When opening a pull request, follow the template at `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Why, Changes, Testing).
+
 ## COMMANDS
 
 ```bash
