@@ -1,0 +1,11 @@
+[build]
+  command = "VITE_PLATFORM=web bun run --cwd apps/desktop frontend:build"
+  publish = "apps/desktop/dist"
+
+[build.environment]
+  VITE_PLATFORM = "web"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

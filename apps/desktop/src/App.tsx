@@ -125,6 +125,321 @@ declare global {
   }
 }
 
+const IS_WEB_PREVIEW = import.meta.env.VITE_PLATFORM === "web";
+
+const WEB_MOCK_PROVIDER_OPTIONS: ProviderOption[] = [
+  {
+    id: "open_router",
+    label: "OpenRouter",
+    requires_api_key: true,
+    supports_base_url: true,
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    requires_api_key: true,
+    supports_base_url: false,
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    requires_api_key: true,
+    supports_base_url: false,
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    requires_api_key: false,
+    supports_base_url: true,
+  },
+];
+
+const WEB_MOCK_CONFIG: EngineConfigPayload = {
+  provider: "ollama",
+  model_id: "llama3.1",
+  api_key: "",
+  base_url: "http://localhost:11434",
+  prompt_template: "General",
+  provider_options: WEB_MOCK_PROVIDER_OPTIONS,
+  model_options: ["llama3.1", "llava:latest", "gpt-4o-mini"],
+  prompt_template_options: [
+    "General",
+    "Tutorial",
+    "UI flow",
+    "Code",
+    "Table",
+  ],
+};
+
+const WEB_MOCK_SAMPLE_FILE: FileSelection = {
+  path: "/tmp/duckdocs-sample.pdf",
+  format: "pdf",
+};
+
+const WEB_MOCK_MARKDOWN = `# Sample import
+
+## Page 1
+This is a demonstration preview run in the browser.
+
+## Page 2
+The real Electron runtime is not available in this preview, so we show read-only sample behavior.
+`;
+
+const WEB_MOCK_BASE_SNAPSHOT: UiSnapshot = {
+  activeJob: null,
+  progressLog: [
+    {
+      phase: "import",
+      message: "Desktop runtime not detected. Running in browser preview mode.",
+      timestamp: new Date().toISOString(),
+    },
+  ],
+  lastResult: {
+    savedOutputPath: "~/Documents/HyprDuck/web-preview/sample.md",
+    successCount: 2,
+    failedCount: 0,
+    markdown: WEB_MOCK_MARKDOWN,
+  },
+  lastProjectId: "preview:sample",
+};
+
+const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
+  open_router: ["gpt-4o", "claude-3.5-sonnet", "llama-3.1-70b"],
+  openai: ["gpt-4o-mini", "gpt-4.1-mini"],
+  anthropic: ["claude-3.5-sonnet", "claude-3.7-sonnet"],
+  ollama: ["llama3.1", "llava:latest", "qwen2.5vl"],
+};
+
+let webMockSnapshot = WEB_MOCK_BASE_SNAPSHOT;
+let webMockConfig: EngineConfigPayload = WEB_MOCK_CONFIG;
+let webMockValidation: ValidateProviderResponseData = { ready: false, issues: [] };
+let webMockParseTimer: ReturnType<typeof setTimeout> | null = null;
+const webMockSnapshotListeners = new Set<
+  (message: DesktopMessage<UiSnapshot>) => void
+>();
+
+function deriveWebValidation(
+  payload: EngineConfigPayload | null,
+): ValidateProviderResponseData {
+  const config = payload ?? webMockConfig;
+  const provider = WEB_MOCK_PROVIDER_OPTIONS.find(
+    (option) => option.id === config.provider,
+  );
+  const issues: ValidationIssue[] = [];
+  if (provider?.requires_api_key && !config.api_key.trim()) {
+    issues.push({ message: `${provider.label} requires an API key.` });
+  }
+  return {
+    ready: issues.length === 0,
+    issues,
+  };
+}
+
+function emitWebSnapshot(snapshot: UiSnapshot) {
+  webMockSnapshot = snapshot;
+  const payload: DesktopMessage<UiSnapshot> = { payload: snapshot };
+  for (const listener of webMockSnapshotListeners) {
+    void Promise.resolve()
+      .then(() => listener(payload))
+      .catch((error: unknown) => {
+        console.error("Web mock listener error:", error);
+      });
+  }
+}
+
+function getWebWorkspaceFromSnapshot(
+  snapshot: UiSnapshot = webMockSnapshot,
+): WorkspaceProject | null {
+  if (!snapshot.lastResult) {
+    return null;
+  }
+  return buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob));
+}
+
+function createWebMockApi(): HyprDuckDesktopApi {
+  webMockValidation = deriveWebValidation(null);
+
+  return {
+    async invoke<T>(
+      command: string,
+      args: Record<string, unknown> = {},
+    ): Promise<T> {
+      switch (command) {
+        case "app_snapshot": {
+          return { ...webMockSnapshot } as T;
+        }
+        case "load_engine_config": {
+          return { ...webMockConfig, provider_options: [...WEB_MOCK_PROVIDER_OPTIONS] } as T;
+        }
+        case "validate_engine_config": {
+          const next = deriveWebValidation(
+            (args.payload as { payload?: EngineConfigPayload } | undefined)
+              ?.payload ?? null,
+          );
+          webMockValidation = next;
+          return { ...next } as T;
+        }
+        case "get_models_for_provider": {
+          const key = String(
+            (args.providerSlug as string | undefined) ??
+              webMockConfig.provider ??
+              "ollama",
+          );
+          return [...(WEB_MOCK_PROVIDER_MODELS[key] ?? WEB_MOCK_PROVIDER_MODELS.ollama)] as T;
+        }
+        case "load_workspace_project": {
+          const projectId = args.project_id as string | undefined;
+          const project = getWebWorkspaceFromSnapshot();
+          if (!project || (projectId && project.summary.projectId !== projectId)) {
+            return null as T;
+          }
+          return { ...project } as T;
+        }
+        case "pick_import_file": {
+          return { ...WEB_MOCK_SAMPLE_FILE } as T;
+        }
+        case "start_parse": {
+          const request =
+            (args.request as { path?: string; format?: string } | undefined) ??
+            null;
+          const filePath = request?.path ?? WEB_MOCK_SAMPLE_FILE.path;
+          const format = request?.format ?? WEB_MOCK_SAMPLE_FILE.format;
+          const started: ActiveJobSnapshot = {
+            jobId: `preview-${Date.now()}`,
+            filePath,
+            format,
+            status: "running",
+            progressPercent: 0,
+            lastMessage: "Preview parse started.",
+          };
+          if (webMockParseTimer) {
+            clearTimeout(webMockParseTimer);
+          }
+          emitWebSnapshot({
+            ...webMockSnapshot,
+            activeJob: started,
+            lastResult: webMockSnapshot.lastResult,
+            progressLog: [
+              ...webMockSnapshot.progressLog,
+              {
+                phase: "parse",
+                message: "Using mocked web preview parser.",
+                timestamp: new Date().toISOString(),
+              },
+            ],
+          });
+          webMockParseTimer = setTimeout(() => {
+            const completedSnapshot: UiSnapshot = {
+              ...webMockSnapshot,
+              activeJob: null,
+              lastProjectId: "preview:sample",
+              lastResult: {
+                savedOutputPath: `~/Documents/HyprDocs/web-preview/${new Date()
+                  .toISOString()
+                  .slice(0, 10)}.md`,
+                successCount: 2,
+                failedCount: 0,
+                markdown: WEB_MOCK_MARKDOWN,
+              },
+              progressLog: [
+                ...webMockSnapshot.progressLog,
+                {
+                  phase: "parse",
+                  message: "Preview parse completed.",
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            };
+            emitWebSnapshot(completedSnapshot);
+            webMockParseTimer = null;
+          }, 700);
+          return undefined as T;
+        }
+        case "cancel_parse": {
+          if (webMockParseTimer) {
+            clearTimeout(webMockParseTimer);
+            webMockParseTimer = null;
+          }
+          const current = webMockSnapshot;
+          if (current.activeJob) {
+            emitWebSnapshot({
+              ...current,
+              activeJob: null,
+              progressLog: [
+                ...current.progressLog,
+                {
+                  phase: "parse",
+                  message: "Preview parse canceled.",
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            });
+          }
+          return undefined as T;
+        }
+        case "open_saved_output": {
+          const path = String((args.path as string | undefined) ?? "");
+          if (typeof window !== "undefined") {
+            window.alert(`Cannot open local files from web preview: ${path}`);
+          }
+          return undefined as T;
+        }
+        case "apply_workspace_correction": {
+          const workspace = getWebWorkspaceFromSnapshot();
+          if (!workspace) {
+            throw new Error("No workspace available in preview mode.");
+          }
+          return { ...workspace } as T;
+        }
+        case "answer_workspace_project": {
+          const request = args.request as
+            | WorkspaceAnswerProjectRequest
+            | undefined;
+          const workspace = getWebWorkspaceFromSnapshot();
+          if (!workspace) {
+            throw new Error("No workspace available in preview mode.");
+          }
+          const answer = request?.nodeId
+            ? workspace.answerByNodeId[request.nodeId]
+            : workspace.answerByNodeId.document;
+          if (!answer) {
+            throw new Error("No answer available for this node in preview mode.");
+          }
+          return { ...answer } as T;
+        }
+        case "save_engine_config": {
+          const payload = args.payload as EngineConfigPayload;
+          webMockConfig = {
+            ...webMockConfig,
+            ...payload,
+            provider_options: WEB_MOCK_PROVIDER_OPTIONS,
+          };
+          return { ...webMockConfig } as T;
+        }
+        default:
+          throw new Error(`web-preview: unsupported command "${command}".`);
+      }
+    },
+    listen<T>(
+      eventName: string,
+      handler: (message: DesktopMessage<T>) => void | Promise<void>,
+    ): DesktopUnlisten {
+      if (eventName !== "duckdocs://snapshot") {
+        return () => undefined;
+      }
+      const typedHandler = (message: DesktopMessage<UiSnapshot>) => {
+        void handler(message as DesktopMessage<T>);
+      };
+      webMockSnapshotListeners.add(typedHandler);
+      return () => {
+        webMockSnapshotListeners.delete(typedHandler);
+      };
+    },
+  };
+}
+
+const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
+
 const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
   {
     id: "import",
@@ -201,6 +516,9 @@ class WorkspaceErrorBoundary extends Component<
 }
 
 function getDesktopApi(): HyprDuckDesktopApi {
+  if (IS_WEB_PREVIEW) {
+    return webPreviewApi as HyprDuckDesktopApi;
+  }
   const api = window.duckdocs;
   if (!api) {
     throw new Error("HyprDuck desktop UI requires Electron preload APIs.");

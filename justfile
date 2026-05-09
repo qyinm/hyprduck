@@ -28,6 +28,9 @@ frontend-typecheck:
 frontend-build:
   bun run --cwd {{desktop_dir}} frontend:build
 
+desktop-web-preview:
+  VITE_PLATFORM=web bun run --cwd {{desktop_dir}} frontend:build
+
 core-test:
   cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
 
