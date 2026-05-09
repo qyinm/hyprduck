@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 
 const baseUrl = import.meta.env.BASE_URL;
+const assetPath = (path: string) => `${baseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
 
 const workflow = [
   {
@@ -49,7 +50,7 @@ const capabilities = [
     <header class="site-nav">
       <div class="container nav-inner">
         <a href="#" class="brand" aria-label="HyprDuck home">
-          <img src={`${baseUrl}logo.png`} alt="" class="brand-mark" />
+          <img src={assetPath('logo.png')} alt="" class="brand-mark" />
           <span>HyprDuck</span>
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
