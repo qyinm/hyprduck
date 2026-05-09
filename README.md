@@ -108,7 +108,7 @@ HyprDuck currently uses provider-based AI processing with OpenRouter, OpenAI, An
 Preferred desktop build:
 
 ```bash
-pnpm --dir apps/desktop build
+bun --cwd apps/desktop run build
 ```
 
 Rust workspace verification:
@@ -120,7 +120,7 @@ cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine
 Build the Electron desktop shell:
 
 ```bash
-pnpm --dir apps/desktop build
+bun --cwd apps/desktop run build
 ```
 
 Stage the static site artifact locally:

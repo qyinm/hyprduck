@@ -3,9 +3,13 @@ const http = require("node:http");
 
 const devUrl = "http://127.0.0.1:5173";
 
-const vite = spawn("pnpm", ["run", "frontend:dev"], {
+const vite = spawn("bun", ["run", "frontend:dev"], {
   stdio: "inherit",
   shell: true,
+});
+vite.on("error", (error) => {
+  console.error("Failed to start frontend dev process via Bun:", error);
+  shutdown(1);
 });
 
 let electron = null;
@@ -13,13 +17,17 @@ let shuttingDown = false;
 
 waitForDevServer()
   .then(() => {
-    electron = spawn("pnpm", ["run", "electron:dev"], {
+    electron = spawn("bun", ["run", "electron:dev"], {
       stdio: "inherit",
       shell: true,
       env: {
         ...process.env,
         VITE_DEV_SERVER_URL: devUrl,
       },
+    });
+    electron.on("error", (error) => {
+      console.error("Failed to start Electron dev process via Bun:", error);
+      shutdown(1);
     });
     electron.on("exit", (code) => {
       shutdown(code ?? 0);

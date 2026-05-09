@@ -1,12 +1,13 @@
 {
   "name": "duckdocs-desktop",
+  "packageManager": "bun@1.2.18",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "main": "main.cjs",
   "scripts": {
-    "dev": "pnpm run sync:sidecar:debug && node scripts/dev-electron.cjs",
-    "build": "pnpm run frontend:build && pnpm run sync:sidecar:release && electron-builder --mac dir",
+    "dev": "bun run sync:sidecar:debug && node scripts/dev-electron.cjs",
+    "build": "bun run frontend:build && bun run sync:sidecar:release && electron-builder --mac dir",
     "electron:dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",

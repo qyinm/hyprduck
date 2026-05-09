@@ -28,7 +28,7 @@ jobs:
         with:
           path: apps/site
           node-version: 22
-          package-manager: pnpm@10
+          package-manager: bun@1.2.18
 
   deploy:
     needs: build
