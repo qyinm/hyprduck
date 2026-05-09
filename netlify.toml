@@ -1,5 +1,5 @@
 [build]
-  command = "VITE_PLATFORM=web bun run --cwd apps/desktop frontend:build"
+  command = "bun install --cwd apps/desktop --no-save && VITE_PLATFORM=web bun run --cwd apps/desktop frontend:build"
   publish = "apps/desktop/dist"
 
 [build.environment]
