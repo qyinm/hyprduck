@@ -271,6 +271,7 @@ Revenue expansion was concentrated in the enterprise segment...
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    max-width: 100%;
     min-height: 36px;
     padding: 8px 16px;
     border-radius: var(--radius-full);
@@ -278,6 +279,8 @@ Revenue expansion was concentrated in the enterprise segment...
     color: var(--color-charcoal);
     font-size: 14px;
     font-weight: 500;
+    text-align: left;
+    overflow-wrap: anywhere;
   }
 
   .status-dot {
@@ -293,6 +296,7 @@ Revenue expansion was concentrated in the enterprise segment...
     max-width: 720px;
     font-size: clamp(2.25rem, 6vw, 4.75rem);
     line-height: 1.02;
+    overflow-wrap: break-word;
   }
 
   .hero-copy > p {
@@ -352,6 +356,7 @@ Revenue expansion was concentrated in the enterprise segment...
   }
 
   .desktop-main {
+    min-width: 0;
     padding: 28px;
   }
 
@@ -384,6 +389,7 @@ Revenue expansion was concentrated in the enterprise segment...
   }
 
   .import-panel {
+    min-width: 0;
     padding: 20px;
   }
 
@@ -437,6 +443,7 @@ Revenue expansion was concentrated in the enterprise segment...
   .markdown-panel pre {
     margin: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     font-family: var(--font-mono);
     font-size: 14px;
     line-height: 1.55;
@@ -628,7 +635,38 @@ Revenue expansion was concentrated in the enterprise segment...
     }
 
     .hero h1 {
-      font-size: 42px;
+      max-width: 280px;
+      font-size: 30px;
+      line-height: 1.08;
+    }
+
+    .status-line {
+      width: min(100%, 280px);
+      justify-content: flex-start;
+      font-size: 13px;
+      line-height: 1.35;
+      white-space: normal;
+    }
+
+    .hero-copy > p {
+      max-width: 280px;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .hero-actions,
+    .hero-meta {
+      max-width: 300px;
+      margin-right: auto;
+      margin-left: auto;
+    }
+
+    .hero-actions {
+      flex-direction: column;
+    }
+
+    .hero-actions .pill {
+      width: min(100%, 220px);
     }
 
     .desktop-main {
