@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "bun install --cwd apps/desktop --no-save",
+  "buildCommand": "VITE_PLATFORM=web bun run --cwd apps/desktop frontend:build",
+  "outputDirectory": "apps/desktop/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
