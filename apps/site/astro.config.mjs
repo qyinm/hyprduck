@@ -7,8 +7,8 @@ import tailwindcss from '@tailwindcss/vite';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://qyinm.github.io/duckdocs',
-  base: '/duckdocs',
+  site: 'https://qyinm.github.io/hyprduck',
+  base: '/hyprduck',
 
   integrations: [react()],
 
