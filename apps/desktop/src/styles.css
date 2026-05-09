@@ -199,3 +199,11 @@ body {
 .mono {
   font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
+
+[data-electron-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-electron-drag-region] button {
+  -webkit-app-region: no-drag;
+}

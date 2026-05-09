@@ -4,7 +4,7 @@ set -euo pipefail
 MODE="${1:-debug}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BIN_DIR="${REPO_ROOT}/apps/desktop/src-tauri/binaries"
+BIN_DIR="${REPO_ROOT}/apps/desktop/resources/binaries"
 HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 
 if [[ -z "${HOST_TRIPLE}" ]]; then

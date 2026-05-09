@@ -2,7 +2,7 @@
 
 **Generated:** 2026-03-06
 **Project:** DuckDocs - File Parsing to Markdown
-**Stack:** Rust, Tauri, JavaScript, macOS
+**Stack:** Rust, Electron, JavaScript, macOS
 
 ---
 
@@ -14,7 +14,7 @@ Current product direction:
 - **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
 - **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
 
-The active desktop shell is `apps/desktop` (Tauri), and the primary product surface is import-first file parsing through the Rust engine.
+The active desktop shell is `apps/desktop` (Electron), and the primary product surface is import-first file parsing through the Rust engine.
 
 **Core Value Proposition:** turn existing files into markdown packages quickly.
 
@@ -28,8 +28,9 @@ DuckDocs/
 │   ├── cli/
 │   ├── desktop/
 │   │   ├── package.json
-│   │   ├── src/
-│   │   └── src-tauri/
+│   │   ├── main.cjs
+│   │   ├── preload.cjs
+│   │   └── src/
 │   └── site/
 ├── packages/
 └── scripts/
@@ -41,8 +42,9 @@ DuckDocs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Desktop app entry | `apps/desktop/src-tauri/src/main.rs` | Active Tauri desktop shell |
-| Desktop UI | `apps/desktop/src/main.js` | Main/settings/progress/result windows |
+| Desktop app entry | `apps/desktop/main.cjs` | Active Electron desktop shell |
+| Desktop preload bridge | `apps/desktop/preload.cjs` | Safe IPC bridge for renderer calls |
+| Desktop UI | `apps/desktop/src/App.tsx` | Main/settings/progress/result windows |
 | Desktop styling | `apps/desktop/src/styles.css` | Active desktop visual surface |
 | Engine contract | `crates/duckdocs-engine-types/src/lib.rs` | Shared request/response/event schema |
 | Engine runtime | `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output writing |
@@ -82,7 +84,7 @@ struct ImageProcessingResult {
 
 ### Desktop Shell Style
 - Keep the active desktop shell in `apps/desktop`
-- Keep shell logic in Tauri and parsing/output logic in the Rust engine
+- Keep shell logic in Electron main/preload and parsing/output logic in the Rust engine
 - Avoid reintroducing frontend-owned output packaging or provider persistence
 
 ### Permissions

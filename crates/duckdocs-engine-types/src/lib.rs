@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -19,6 +21,7 @@ pub enum EngineCommand {
     LoadConfig,
     SaveConfig,
     ValidateProvider,
+    ListProviderModels,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +224,15 @@ pub struct ValidateProviderResponseData {
     pub issues: Vec<ValidationIssue>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ListProviderModelsRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderModelCatalogResponseData {
+    pub provider_models: BTreeMap<String, Vec<String>>,
+    pub ollama_vision_prefixes: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadConfigRequest {}
 
@@ -246,6 +258,7 @@ pub enum EngineRequest {
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
+    ListProviderModels(ListProviderModelsRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,6 +483,27 @@ mod tests {
     }
 
     #[test]
+    fn provider_model_catalog_round_trip() {
+        let mut provider_models = BTreeMap::new();
+        provider_models.insert("open_router".into(), vec!["openai/gpt-4.1-mini".into()]);
+        provider_models.insert("ollama".into(), vec!["qwen3-vl:8b".into()]);
+
+        let response = EngineSuccess::new(
+            EngineCommand::ListProviderModels,
+            ProviderModelCatalogResponseData {
+                provider_models,
+                ollama_vision_prefixes: vec!["qwen3-vl".into()],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<ProviderModelCatalogResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::ListProviderModels);
+        assert!(decoded.data.provider_models.contains_key("open_router"));
+    }
+
+    #[test]
     fn failure_round_trip() {
         let failure = EngineFailure::new(
             EngineCommand::ValidateProvider,
@@ -538,4 +572,16 @@ pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
         ],
         _ => Vec::new(),
     }
+}
+
+/// Prefixes used to identify local Ollama models that can process page images.
+pub fn ollama_vision_prefixes() -> Vec<&'static str> {
+    vec![
+        "gemma4",
+        "qwen3.5",
+        "qwen3-vl",
+        "kimi-k2.5",
+        "glm-ocr",
+        "deepseek-ocr",
+    ]
 }

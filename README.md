@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-blue?style=flat-square" alt="Status">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/runtime-Rust%20%2B%20Tauri-orange?style=flat-square" alt="Runtime">
+  <img src="https://img.shields.io/badge/runtime-Rust%20%2B%20Electron-orange?style=flat-square" alt="Runtime">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
 </p>
 
@@ -21,7 +21,7 @@
 
 DuckDocs is a macOS app for turning existing files into markdown using AI.
 
-The active desktop shell lives in `apps/desktop` as a Tauri app.
+The active desktop shell lives in `apps/desktop` as an Electron app.
 
 The current product surface is file parsing:
 
@@ -117,10 +117,10 @@ Rust workspace verification:
 cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
 ```
 
-Type-check the Tauri desktop shell:
+Build the Electron desktop shell:
 
 ```bash
-cargo check -p duckdocs-desktop
+pnpm --dir apps/desktop build
 ```
 
 Stage the static site artifact locally:

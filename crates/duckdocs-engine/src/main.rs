@@ -15,9 +15,10 @@ use duckdocs_engine_types::{
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest,
     LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
     ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
-    ProjectOverview, ProjectStatus, ProviderOption, RelationEdgeDetail, RelationEdgeSummary,
-    RelationKind, SaveConfigRequest, SaveConfigResponseData, SuggestedAction, SuggestedActionKind,
-    ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
+    ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
+    SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    ValidateProviderResponseData, ValidationIssue,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -107,6 +108,11 @@ fn run() -> Result<()> {
                 .unwrap_or(config_store.load()?);
             let payload =
                 EngineSuccess::new(EngineCommand::ValidateProvider, validate_provider(&config));
+            write_response(&payload)?;
+        }
+        EngineRequest::ListProviderModels(_) => {
+            let payload =
+                EngineSuccess::new(EngineCommand::ListProviderModels, provider_model_catalog());
             write_response(&payload)?;
         }
     }
@@ -2693,6 +2699,29 @@ fn prompt_template_options() -> [&'static str; 6] {
 
 fn model_options_for(provider: &ProviderKind) -> Vec<&'static str> {
     duckdocs_engine_types::model_options_for(provider.id_slug())
+}
+
+fn provider_model_catalog() -> ProviderModelCatalogResponseData {
+    let provider_models = ProviderKind::all()
+        .into_iter()
+        .map(|provider| {
+            (
+                provider.id_slug().to_string(),
+                model_options_for(&provider)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            )
+        })
+        .collect();
+
+    ProviderModelCatalogResponseData {
+        provider_models,
+        ollama_vision_prefixes: duckdocs_engine_types::ollama_vision_prefixes()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
 }
 
 fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {

@@ -105,31 +105,23 @@ interface ValidateProviderResponseData {
   issues: ValidationIssue[];
 }
 
-interface TauriMessage<T> {
+interface DesktopMessage<T> {
   payload: T;
 }
 
-type TauriUnlisten = () => void;
+type DesktopUnlisten = () => void;
 
-interface TauriEventApi {
+interface DuckDocsDesktopApi {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(
     eventName: string,
-    handler: (message: TauriMessage<T>) => void | Promise<void>,
-  ): Promise<TauriUnlisten>;
-}
-
-interface TauriCoreApi {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
-}
-
-interface TauriGlobalApi {
-  core: TauriCoreApi;
-  event: TauriEventApi;
+    handler: (message: DesktopMessage<T>) => void | Promise<void>,
+  ): DesktopUnlisten;
 }
 
 declare global {
   interface Window {
-    __TAURI__?: TauriGlobalApi;
+    duckdocs?: DuckDocsDesktopApi;
   }
 }
 
@@ -208,19 +200,19 @@ class WorkspaceErrorBoundary extends Component<
   }
 }
 
-function getTauri(): TauriGlobalApi {
-  const tauri = window.__TAURI__;
-  if (!tauri) {
-    throw new Error("DuckDocs desktop UI requires Tauri global APIs.");
+function getDesktopApi(): DuckDocsDesktopApi {
+  const api = window.duckdocs;
+  if (!api) {
+    throw new Error("DuckDocs desktop UI requires Electron preload APIs.");
   }
-  return tauri;
+  return api;
 }
 
 async function invoke<T>(
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  return getTauri().core.invoke<T>(command, args);
+  return getDesktopApi().invoke<T>(command, args);
 }
 
 function parseSummary(snapshot: UiSnapshot): string {
@@ -730,10 +722,10 @@ export function App() {
   );
 
   useEffect(() => {
-    let unlisten: TauriUnlisten | null = null;
+    let unlisten: DesktopUnlisten | null = null;
 
     const bootstrap = async () => {
-      const tauri = getTauri();
+      const desktop = getDesktopApi();
       const [initialSnapshot, initialConfig, initialValidation] =
         await Promise.all([
           invoke<UiSnapshot>("app_snapshot"),
@@ -747,12 +739,9 @@ export function App() {
       setValidation(initialValidation);
       setLoadedWorkspaceProject(initialWorkspaceProject);
 
-      unlisten = await tauri.event.listen<UiSnapshot>(
-        "duckdocs://snapshot",
-        (message) => {
-          setSnapshot(message.payload);
-        },
-      );
+      unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
+        setSnapshot(message.payload);
+      });
     };
 
     void bootstrap().catch((error: unknown) => {
@@ -931,7 +920,7 @@ export function App() {
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
           {/* Header row matches macOS traffic-lights height, same as char */}
           <header
-            data-tauri-drag-region
+            data-electron-drag-region
             className="flex h-9 w-full shrink-0 items-center justify-end pl-20 pr-2"
           >
             {!settingsOpen && (
@@ -1035,7 +1024,7 @@ export function App() {
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {!showSidebar && (
           <header
-            data-tauri-drag-region
+            data-electron-drag-region
             className="flex h-9 w-full shrink-0 items-center pl-20 pr-2"
           >
             <Button

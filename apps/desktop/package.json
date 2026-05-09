@@ -3,24 +3,50 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "main.cjs",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
+    "dev": "pnpm run sync:sidecar:debug && node scripts/dev-electron.cjs",
+    "build": "pnpm run frontend:build && pnpm run sync:sidecar:release && electron-builder --mac dir",
+    "electron:dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",
     "frontend:build": "tsc --noEmit && vite build",
-    "tauri:dev-server": "pnpm run sync:sidecar:debug && vite",
-    "tauri:build-assets": "pnpm run frontend:build && pnpm run sync:sidecar:release",
-    "sync:sidecar:debug": "../../scripts/sync-tauri-sidecar.sh debug",
-    "sync:sidecar:release": "../../scripts/sync-tauri-sidecar.sh release"
+    "sync:sidecar:debug": "../../scripts/sync-electron-sidecar.sh debug",
+    "sync:sidecar:release": "../../scripts/sync-electron-sidecar.sh release"
+  },
+  "build": {
+    "appId": "com.duckdocs.desktop",
+    "productName": "DuckDocs",
+    "directories": {
+      "output": "release/electron"
+    },
+    "mac": {
+      "target": "dir",
+      "category": "public.app-category.productivity",
+      "icon": "resources/icons/icon.icns",
+      "identity": null
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/binaries",
+        "to": "binaries"
+      }
+    ]
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
-    "@tauri-apps/cli": "^2.0.0",
     "@types/node": "^25.5.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "vite": "^7.1.7"
