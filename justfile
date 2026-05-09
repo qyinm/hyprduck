@@ -11,22 +11,22 @@ paths:
   @echo "site_dir={{site_dir}}"
 
 desktop-build:
-  pnpm --dir {{desktop_dir}} build
+  bun run --cwd {{desktop_dir}} build
 
 desktop-dev:
-  pnpm --dir {{desktop_dir}} dev
+  bun run --cwd {{desktop_dir}} dev
 
 desktop-check:
-  cargo check -p duckdocs-desktop
+  bun run --cwd {{desktop_dir}} frontend:typecheck
 
 desktop-test:
-  cargo test -p duckdocs-desktop
+  just desktop-check
 
 frontend-typecheck:
-  pnpm --dir {{desktop_dir}} frontend:typecheck
+  bun run --cwd {{desktop_dir}} frontend:typecheck
 
 frontend-build:
-  pnpm --dir {{desktop_dir}} frontend:build
+  bun run --cwd {{desktop_dir}} frontend:build
 
 core-test:
   cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
@@ -44,13 +44,13 @@ cli-test:
   cargo test -p duckdocs-cli
 
 site-stage:
-  pnpm --dir {{site_dir}} build
+  bun run --cwd {{site_dir}} build
 
 site-dev:
-  pnpm --dir {{site_dir}} dev
+  bun run --cwd {{site_dir}} dev
 
 site-check:
-  pnpm --dir {{site_dir}} exec astro check
+  bun run --cwd {{site_dir}} astro check
 
 clean:
   rm -rf {{site_dir}}/dist build {{desktop_dir}}/dist
