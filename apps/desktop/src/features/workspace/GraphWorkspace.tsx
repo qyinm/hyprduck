@@ -116,7 +116,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           Build a graph workspace from your first import
         </h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-          DuckDocs now has a dedicated graph workspace shell. Import a document to
+          HyprDuck now has a dedicated graph workspace shell. Import a document to
           seed the first preview project, then use the right inspector and bottom
           answer dock to review evidence before the compile-backed knowledge layer
           lands.
@@ -447,7 +447,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
                 <section className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <h5 className="text-sm font-semibold">Why DuckDocs linked these</h5>
+                    <h5 className="text-sm font-semibold">Why HyprDuck linked these</h5>
                     <span className="text-xs text-muted-foreground">
                       {selectedEdge.evidence.length} refs
                     </span>
@@ -582,7 +582,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                                 </Button>
                               </div>
                               <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                Update the canonical concept name. DuckDocs keeps the previous
+                                Update the canonical concept name. HyprDuck keeps the previous
                                 label as an alias so provenance stays intact.
                               </p>
                               <Input
@@ -620,7 +620,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                                 </Button>
                               </div>
                               <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                Fold this concept into another canonical node. DuckDocs keeps the
+                                Fold this concept into another canonical node. HyprDuck keeps the
                                 evidence and aliases on the surviving concept.
                               </p>
                               <select

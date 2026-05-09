@@ -34,7 +34,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
 
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("DuckDocs"))
+        .block(Block::default().borders(Borders::ALL).title("HyprDuck"))
         .highlight_style(
             Style::default()
                 .fg(ACCENT_CYAN)
@@ -69,7 +69,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(PANEL_BORDER))
             .title(Span::styled(
-                " DuckDocs  v0.1.0 ",
+                " HyprDuck  v0.1.0 ",
                 Style::default()
                     .fg(ACCENT_PURPLE)
                     .add_modifier(Modifier::BOLD),
@@ -87,7 +87,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "DuckDocs",
+            "HyprDuck",
             Style::default()
                 .fg(ACCENT_BLUE)
                 .add_modifier(Modifier::BOLD),
@@ -145,7 +145,7 @@ fn render_home(frame: &mut Frame, area: ratatui::layout::Rect) {
     frame.render_widget(recent, recent_area);
 
     let overview = Paragraph::new(
-        "DuckDocs TUI orchestrates parse jobs against an external engine.\n\n\
+        "HyprDuck TUI orchestrates parse jobs against an external engine.\n\n\
          Start here:\n\
          - parse a file\n\
          - inspect recent jobs\n\

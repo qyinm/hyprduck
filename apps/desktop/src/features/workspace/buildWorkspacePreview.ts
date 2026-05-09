@@ -84,14 +84,14 @@ export function buildWorkspacePreview(
     canonicalName: title,
     aliases: ["Latest import", "Preview project"],
     description:
-      "This workspace is a graph-first preview built from the latest import. The compile-backed knowledge layer is not wired yet, so DuckDocs shows visible evidence before making strong claims.",
+      "This workspace is a graph-first preview built from the latest import. The compile-backed knowledge layer is not wired yet, so HyprDuck shows visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
     actions: disabledCorrectionActions(
       "Correction actions unlock once project compile and merge policy are connected.",
     ),
   };
   answerByNodeId.document = previewAnswer(
-    "DuckDocs can already point you to the most relevant imported evidence, but compile-backed grounded answers are still pending. Review the cited snippets before trusting this draft.",
+    "HyprDuck can already point you to the most relevant imported evidence, but compile-backed grounded answers are still pending. Review the cited snippets before trusting this draft.",
     stale,
     pageEvidence.slice(0, 2),
     pageNodes.map((node) => node.id),
@@ -111,7 +111,7 @@ export function buildWorkspacePreview(
       ),
     };
     answerByNodeId[node.id] = previewAnswer(
-      `${node.label} is available as a draft workspace node. DuckDocs is keeping the answer conservative until concept compile and confidence scoring are connected.`,
+      `${node.label} is available as a draft workspace node. HyprDuck is keeping the answer conservative until concept compile and confidence scoring are connected.`,
       stale,
       evidence,
       [node.id],

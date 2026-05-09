@@ -152,7 +152,7 @@ export default function AppMockup() {
             <span className="w-3 h-3 rounded-full bg-[#eab308]" />
             <span className="w-3 h-3 rounded-full bg-[#22c55e]" />
           </div>
-          <div className="text-[0.72rem] font-bold uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">DuckDocs Demo Console</div>
+          <div className="text-[0.72rem] font-bold uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">HyprDuck Demo Console</div>
         </div>
         <span className="inline-flex items-center gap-2 text-[0.67rem] px-2.5 py-1 rounded-full border border-white/[0.16] bg-[rgba(93,168,255,0.12)] text-[var(--color-accent-blue)] font-semibold uppercase tracking-[0.1em]">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent-green)] animate-[pulse_2s_ease-in-out_infinite]" />

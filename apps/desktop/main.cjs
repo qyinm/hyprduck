@@ -24,7 +24,7 @@ function createWindow() {
     height: 860,
     minWidth: 900,
     minHeight: 600,
-    title: "DuckDocs",
+    title: "HyprDuck",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     webPreferences: {
@@ -115,7 +115,7 @@ function registerIpcHandlers() {
       case "open_saved_output":
         return openSavedOutput(args.path, Boolean(args.reveal));
       default:
-        throw new Error(`unknown DuckDocs command: ${command}`);
+        throw new Error(`unknown HyprDuck command: ${command}`);
     }
   });
 }

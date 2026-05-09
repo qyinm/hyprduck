@@ -1,14 +1,14 @@
-# DuckDocs - Project Knowledge Base
+# HyprDuck - Project Knowledge Base
 
 **Generated:** 2026-03-06
-**Project:** DuckDocs - File Parsing to Markdown
+**Project:** HyprDuck - File Parsing to Markdown
 **Stack:** Rust, Electron, JavaScript, macOS
 
 ---
 
 ## OVERVIEW
 
-DuckDocs is a macOS app that imports documents, converts each page into an image, and turns the result into markdown using AI.
+HyprDuck is a macOS app that imports documents, converts each page into an image, and turns the result into markdown using AI.
 
 Current product direction:
 - **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
@@ -16,14 +16,14 @@ Current product direction:
 
 The active desktop shell is `apps/desktop` (Electron), and the primary product surface is import-first file parsing through the Rust engine.
 
-**Core Value Proposition:** turn existing files into markdown packages quickly.
+**Core Value Proposition:** local document parsing for agent-ready knowledge.
 
 ---
 
 ## PROJECT STRUCTURE
 
 ```text
-DuckDocs/
+HyprDuck/
 ├── apps/
 │   ├── cli/
 │   ├── desktop/
@@ -98,7 +98,7 @@ struct ImageProcessingResult {
 - Keep user-facing error messages specific, especially for missing API keys or unavailable Ollama instances
 
 ### Output
-- Save results under `~/Documents/DuckDocs/`
+- Save results under `~/Documents/HyprDuck/`
 - Keep images on disk, not in long-term memory
 - Generate markdown that references the saved images
 
@@ -106,7 +106,7 @@ struct ImageProcessingResult {
 
 ## ANTI-PATTERNS (DO NOT)
 
-- **DO NOT** reintroduce product messaging that describes DuckDocs as DeepSeek-only
+- **DO NOT** reintroduce product messaging that describes HyprDuck as DeepSeek-only
 - **DO NOT** block file parsing behind capture permissions
 - **DO NOT** save markdown without corresponding image references
 - **DO NOT** let legacy capture terminology leak into the primary app surface

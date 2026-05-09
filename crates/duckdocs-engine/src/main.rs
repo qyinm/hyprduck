@@ -371,7 +371,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             canonical_name: title.clone(),
             aliases: vec!["Imported document".into()],
             description: format!(
-                "DuckDocs compiled {} concept nodes from {} visible page sections. Every node below keeps direct evidence back to the imported document.",
+                "HyprDuck compiled {} concept nodes from {} visible page sections. Every node below keeps direct evidence back to the imported document.",
                 concept_count,
                 page_sections.len()
             ),
@@ -388,12 +388,12 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 AnswerStatus::LowConfidence
             },
             text: Some(format!(
-                "DuckDocs found {} concept nodes across {} page sections in this import.",
+                "HyprDuck found {} concept nodes across {} page sections in this import.",
                 concept_count,
                 page_sections.len()
             )),
             explanation:
-                "This document-level answer is grounded in the concept nodes and visible evidence DuckDocs compiled from the markdown package."
+                "This document-level answer is grounded in the concept nodes and visible evidence HyprDuck compiled from the markdown package."
                     .into(),
             citations: document_evidence.clone(),
             related_node_ids: connected_node_ids_by_node_id
@@ -437,7 +437,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 canonical_name: concept.label.clone(),
                 aliases,
                 description: format!(
-                    "Compiled from {} evidence refs across {} page(s). DuckDocs is still conservative and only shows evidence-backed concept nodes.",
+                    "Compiled from {} evidence refs across {} page(s). HyprDuck is still conservative and only shows evidence-backed concept nodes.",
                     concept.evidence.len(),
                     concept.page_labels.len()
                 ),
@@ -495,7 +495,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             },
             stale: false,
             summary: format!(
-                "Compiled {} concept nodes from {} page sections. DuckDocs only shows nodes with visible evidence.",
+                "Compiled {} concept nodes from {} page sections. HyprDuck only shows nodes with visible evidence.",
                 concept_count,
                 page_sections.len()
             ),
@@ -649,7 +649,7 @@ fn build_relation_edges(
             RelationEdgeDetail {
                 edge: edge.clone(),
                 explanation: format!(
-                    "DuckDocs linked the source document to {} because this concept was compiled from cited snippets in the import.",
+                    "HyprDuck linked the source document to {} because this concept was compiled from cited snippets in the import.",
                     concept.label
                 ),
                 evidence,
@@ -740,7 +740,7 @@ fn build_relation_edges(
             RelationEdgeDetail {
                 edge: edge.clone(),
                 explanation: format!(
-                    "DuckDocs linked {} and {} because they appeared together in {} page section(s).",
+                    "HyprDuck linked {} and {} because they appeared together in {} page section(s).",
                     source_label,
                     target_label,
                     accumulator.page_labels.len()
@@ -953,7 +953,7 @@ fn infer_markdown_title(markdown_path: &str, markdown: &str) -> String {
     Path::new(markdown_path)
         .file_stem()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "DuckDocs import".into())
+        .unwrap_or_else(|| "HyprDuck import".into())
 }
 
 fn excerpt(value: &str, max_length: usize) -> String {
@@ -1031,7 +1031,7 @@ fn answer_project(
         return Ok(AnswerResponse {
             status: AnswerStatus::Blocked,
             text: None,
-            explanation: "Ask a concrete question before DuckDocs tries to answer from the graph."
+            explanation: "Ask a concrete question before HyprDuck tries to answer from the graph."
                 .into(),
             citations: Vec::new(),
             related_node_ids: request
@@ -1151,7 +1151,7 @@ fn apply_rename_correction(
     detail.aliases = aliases.into_iter().collect();
     detail.canonical_name = next_name.to_string();
     detail.description = format!(
-        "Renamed from {} to {}. DuckDocs kept the previous canonical label as an alias so the evidence trail stays intact.",
+        "Renamed from {} to {}. HyprDuck kept the previous canonical label as an alias so the evidence trail stays intact.",
         previous_name, next_name
     );
     node.label = next_name.to_string();
@@ -1223,7 +1223,7 @@ fn apply_merge_correction(
                 .collect(),
         );
         target_detail.description = format!(
-            "Merged {} into {}. DuckDocs kept all visible evidence on the surviving concept.",
+            "Merged {} into {}. HyprDuck kept all visible evidence on the surviving concept.",
             source_detail.canonical_name, target_name
         );
     }
@@ -1284,7 +1284,7 @@ fn apply_keep_separate_correction(
             .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
         detail.aliases.clear();
         detail.description = format!(
-            "DuckDocs kept the previous aliases under {} as distinct concept nodes after a manual correction.",
+            "HyprDuck kept the previous aliases under {} as distinct concept nodes after a manual correction.",
             detail.canonical_name
         );
     }
@@ -1309,7 +1309,7 @@ fn apply_keep_separate_correction(
                 canonical_name: alias.clone(),
                 aliases: Vec::new(),
                 description: format!(
-                    "Created from a keep separate correction on {}. DuckDocs preserved the supporting evidence while treating this as its own concept.",
+                    "Created from a keep separate correction on {}. HyprDuck preserved the supporting evidence while treating this as its own concept.",
                     source_detail.canonical_name
                 ),
                 evidence: split_evidence.clone(),
@@ -1603,7 +1603,7 @@ fn build_answer_for_detail(
                     AnswerStatus::LowConfidence
                 },
                 text: Some(format!(
-                    "DuckDocs currently tracks {} concept nodes and {} explainable concept links in this workspace.",
+                    "HyprDuck currently tracks {} concept nodes and {} explainable concept links in this workspace.",
                     concept_count, concept_relationship_count
                 )),
                 explanation:
@@ -1708,7 +1708,7 @@ fn answer_text_for_question(
     let evidence_summary = citations
         .first()
         .map(|citation| citation.snippet.clone())
-        .unwrap_or_else(|| "DuckDocs could not find a directly relevant snippet yet.".into());
+        .unwrap_or_else(|| "HyprDuck could not find a directly relevant snippet yet.".into());
     let page_count = detail
         .evidence
         .iter()
@@ -1729,11 +1729,11 @@ fn answer_text_for_question(
                     question, concept_count, evidence_summary
                 ),
                 AnswerStatus::LowConfidence => format!(
-                    "DuckDocs can partially answer \"{}\", but the graph only has weak snippet overlap. Closest visible support: {}",
+                    "HyprDuck can partially answer \"{}\", but the graph only has weak snippet overlap. Closest visible support: {}",
                     question, evidence_summary
                 ),
                 AnswerStatus::Blocked | AnswerStatus::Stale => format!(
-                    "DuckDocs cannot safely answer \"{}\" from the current workspace yet.",
+                    "HyprDuck cannot safely answer \"{}\" from the current workspace yet.",
                     question
                 ),
             }
@@ -1748,14 +1748,14 @@ fn answer_text_for_question(
                 evidence_summary
             ),
             AnswerStatus::LowConfidence => format!(
-                "DuckDocs found {} evidence refs for {}, but the question \"{}\" only weakly matches those snippets. Closest visible support: {}",
+                "HyprDuck found {} evidence refs for {}, but the question \"{}\" only weakly matches those snippets. Closest visible support: {}",
                 detail.evidence.len(),
                 detail.canonical_name,
                 question,
                 evidence_summary
             ),
             AnswerStatus::Blocked | AnswerStatus::Stale => format!(
-                "DuckDocs cannot safely answer \"{}\" for {} yet.",
+                "HyprDuck cannot safely answer \"{}\" for {} yet.",
                 question, detail.canonical_name
             ),
         },
@@ -1770,20 +1770,20 @@ fn answer_explanation_for_question(
 ) -> String {
     match status {
         AnswerStatus::Grounded => format!(
-            "DuckDocs answered \"{}\" using {} visible citation(s) attached to {}.",
+            "HyprDuck answered \"{}\" using {} visible citation(s) attached to {}.",
             question,
             citations.len(),
             detail.canonical_name
         ),
         AnswerStatus::LowConfidence => format!(
-            "DuckDocs kept this answer cautious because the question \"{}\" only loosely overlaps with the visible evidence on {}.",
+            "HyprDuck kept this answer cautious because the question \"{}\" only loosely overlaps with the visible evidence on {}.",
             question, detail.canonical_name
         ),
         AnswerStatus::Blocked => format!(
-            "DuckDocs blocked this answer because it could not find enough grounded evidence for \"{}\".",
+            "HyprDuck blocked this answer because it could not find enough grounded evidence for \"{}\".",
             question
         ),
-        AnswerStatus::Stale => "DuckDocs is still reading from a stale workspace snapshot.".into(),
+        AnswerStatus::Stale => "HyprDuck is still reading from a stale workspace snapshot.".into(),
     }
 }
 
@@ -1815,7 +1815,7 @@ fn answer_suggested_actions(status: AnswerStatus) -> Vec<SuggestedAction> {
             kind: SuggestedActionKind::AskDifferentQuestion,
             label: "Ask a narrower question".into(),
             description:
-                "DuckDocs needs a more concrete, evidence-seeking question before it can answer."
+                "HyprDuck needs a more concrete, evidence-seeking question before it can answer."
                     .into(),
         }],
     }
@@ -1854,15 +1854,15 @@ fn edge_explanation(
 
     match edge.kind {
         RelationKind::SourceDocument => format!(
-            "DuckDocs linked the source document to {} because this concept is grounded in cited snippets from the import.",
+            "HyprDuck linked the source document to {} because this concept is grounded in cited snippets from the import.",
             target_label
         ),
         RelationKind::RelatedTo if edge.label == "Separated by correction" => format!(
-            "DuckDocs keeps {} and {} separate because you explicitly split them during correction review.",
+            "HyprDuck keeps {} and {} separate because you explicitly split them during correction review.",
             source_label, target_label
         ),
         RelationKind::RelatedTo => format!(
-            "DuckDocs linked {} and {} because they share {} visible evidence ref(s).",
+            "HyprDuck linked {} and {} because they share {} visible evidence ref(s).",
             source_label,
             target_label,
             evidence.len()
@@ -2250,11 +2250,10 @@ fn output_root_candidates(
     if let Some(override_root) = std::env::var_os("DUCKDOCS_OUTPUT_DIR") {
         candidates.push(PathBuf::from(override_root));
     } else {
-        let documents_root = dirs::document_dir()
-            .ok_or_else(|| anyhow!("failed to resolve documents directory"))?
-            .join("DuckDocs");
-        candidates.push(documents_root);
-        candidates.push(std::env::temp_dir().join("DuckDocs"));
+        if let Some(documents_root) = dirs::document_dir() {
+            candidates.push(documents_root.join("HyprDuck"));
+        }
+        candidates.push(std::env::temp_dir().join("HyprDuck"));
     }
 
     candidates.dedup();
@@ -2364,8 +2363,16 @@ impl KnowledgeProjectStore {
         let root = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .ok_or_else(|| anyhow!("failed to resolve local data directory"))?;
+        let new_path = root.join("HyprDuck/knowledge.sqlite3");
+        let legacy_path = root.join("DuckDocs/knowledge.sqlite3");
         Ok(Self {
-            path: root.join("DuckDocs/knowledge.sqlite3"),
+            path: if new_path.exists() {
+                new_path
+            } else if legacy_path.exists() {
+                legacy_path
+            } else {
+                new_path
+            },
         })
     }
 
@@ -2764,7 +2771,7 @@ fn parse_image_with_provider(
 ) -> Result<String> {
     if provider_unavailable(config) {
         return Ok(format!(
-            "_DuckDocs fallback parse._\n\nProvider `{}` is not configured or reachable, so this page was packaged as an image-only placeholder.\n\n- Template: {}\n- Image bytes: {}\n",
+            "_HyprDuck fallback parse._\n\nProvider `{}` is not configured or reachable, so this page was packaged as an image-only placeholder.\n\n- Template: {}\n- Image bytes: {}\n",
             config.provider.id_slug(),
             template,
             image_bytes.len()
@@ -2785,7 +2792,7 @@ fn parse_image_with_provider(
 fn parse_text_with_provider(config: &EngineConfig, text: &str, template: &str) -> Result<String> {
     if provider_unavailable(config) {
         return Ok(format!(
-            "_DuckDocs fallback parse._\n\nProvider `{}` is not configured or reachable, so this document was returned from extracted text.\n\n- Template: {}\n\n{}",
+            "_HyprDuck fallback parse._\n\nProvider `{}` is not configured or reachable, so this document was returned from extracted text.\n\n- Template: {}\n\n{}",
             config.provider.id_slug(),
             template,
             text
@@ -2902,7 +2909,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let project = compile_fixture_project(
             &temp,
-            "# Sample import\n\n## Page 1\n\nDuckDocs compile path keeps evidence visible for every concept.\nExplainable graph view grounds answers in visible snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
+            "# Sample import\n\n## Page 1\n\nHyprDuck compile path keeps evidence visible for every concept.\nExplainable graph view grounds answers in visible snippets.\n\n## Page 2\n\nEvidence inspector helps people trust the graph.\n",
         );
         let markdown_path = temp.path().join("sample.md");
         let request = CompileProjectRequest {

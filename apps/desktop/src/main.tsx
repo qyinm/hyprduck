@@ -7,7 +7,7 @@ import "./styles.css";
 const container = document.getElementById("app");
 
 if (!container) {
-  throw new Error("DuckDocs root container was not found.");
+  throw new Error("HyprDuck root container was not found.");
 }
 
 createRoot(container).render(

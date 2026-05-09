@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="apps/site/favicon.svg" width="120" alt="DuckDocs">
+  <img src="apps/site/favicon.svg" width="120" alt="HyprDuck">
 </p>
 
-<h1 align="center">DuckDocs</h1>
+<h1 align="center">HyprDuck</h1>
 
 <p align="center">
-  <strong>Parse documents. Generate markdown. Keep the linked page images.</strong>
+  <strong>Local document parsing for agent-ready knowledge.</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 ## Overview
 
-DuckDocs is a macOS app for turning existing files into markdown using AI.
+HyprDuck is a macOS app for turning existing files into markdown using AI.
 
 The active desktop shell lives in `apps/desktop` as an Electron app.
 
@@ -28,11 +28,11 @@ The current product surface is file parsing:
 1. **Import a file**
    Choose a PDF, DOCX, or DOC file from disk.
 2. **Convert pages**
-   DuckDocs renders each page as an image so multimodal models can analyze layout and content.
+   HyprDuck renders each page as an image so multimodal models can analyze layout and content.
 3. **Generate markdown**
    The selected provider extracts text and structure, then saves markdown plus linked page images.
 
-DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, Anthropic, or Ollama.
+HyprDuck currently uses provider-based AI processing with OpenRouter, OpenAI, Anthropic, or Ollama.
 
 ---
 
@@ -57,9 +57,9 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 ### Parse a File
 1. Choose an AI provider and model.
 2. Import a PDF or Word document.
-3. DuckDocs converts pages into images.
+3. HyprDuck converts pages into images.
 4. Each page is analyzed and assembled into markdown.
-5. Results are saved to `~/Documents/DuckDocs/`.
+5. Results are saved to `~/Documents/HyprDuck/`.
 
 ---
 
@@ -95,11 +95,11 @@ DuckDocs currently uses provider-based AI processing with OpenRouter, OpenAI, An
 ## Quick Start
 
 ### Parse a Document
-1. Launch DuckDocs.
+1. Launch HyprDuck.
 2. Configure the AI provider and model.
 3. Import a PDF, DOCX, or DOC file.
 4. Wait for conversion and analysis to complete.
-5. Open the generated markdown from `~/Documents/DuckDocs/`.
+5. Open the generated markdown from `~/Documents/HyprDuck/`.
 
 ---
 

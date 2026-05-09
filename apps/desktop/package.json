@@ -16,7 +16,7 @@
   },
   "build": {
     "appId": "com.duckdocs.desktop",
-    "productName": "DuckDocs",
+    "productName": "HyprDuck",
     "directories": {
       "output": "release/electron"
     },

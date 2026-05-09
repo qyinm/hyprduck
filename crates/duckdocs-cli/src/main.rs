@@ -22,7 +22,7 @@ fn main() -> Result<()> {
 }
 
 fn run_doctor() -> Result<()> {
-    println!("DuckDocs CLI is available.");
+    println!("HyprDuck CLI is available.");
     println!("TUI backend: ratatui + crossterm");
     match resolve_engine_launch() {
         Ok(spec) => println!("Engine runtime: {}", spec.display()),

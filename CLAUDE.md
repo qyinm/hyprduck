@@ -1,6 +1,6 @@
-# DuckDocs - Context for AI Assistants
+# HyprDuck - Context for AI Assistants
 
-**Project:** DuckDocs
+**Project:** HyprDuck
 **Type:** macOS Desktop App (Electron + Rust core)
 **Domain:** File Parsing + AI Markdown Generation
 
@@ -8,12 +8,12 @@
 
 ## What This Project Does
 
-DuckDocs converts existing files into markdown packages:
+HyprDuck converts existing files into markdown packages:
 
 1. **Import**: Choose a PDF, DOCX, or DOC file.
 2. **Render**: Convert each page into an image snapshot for multimodal analysis.
 3. **Generate**: Send page images to the configured AI provider and assemble markdown output.
-4. **Save**: Write markdown plus linked page images to `~/Documents/DuckDocs/`.
+4. **Save**: Write markdown plus linked page images to `~/Documents/HyprDuck/`.
 
 The product surface is file parsing first. The active desktop shell is `apps/desktop`.
 
@@ -84,7 +84,7 @@ The engine writes markdown + linked assets
 ### Security & Privacy
 - API keys are stored locally
 - Imported page images may be sent to external AI providers
-- Output is saved locally in `~/Documents/DuckDocs/`
+- Output is saved locally in `~/Documents/HyprDuck/`
 
 ### Performance
 - Parallel page processing is the main latency lever

@@ -111,7 +111,7 @@ interface DesktopMessage<T> {
 
 type DesktopUnlisten = () => void;
 
-interface DuckDocsDesktopApi {
+interface HyprDuckDesktopApi {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(
     eventName: string,
@@ -121,7 +121,7 @@ interface DuckDocsDesktopApi {
 
 declare global {
   interface Window {
-    duckdocs?: DuckDocsDesktopApi;
+    duckdocs?: HyprDuckDesktopApi;
   }
 }
 
@@ -186,7 +186,7 @@ class WorkspaceErrorBoundary extends Component<
             Graph workspace failed to render
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-red-800">
-            DuckDocs hit a frontend render error instead of showing the graph.
+            HyprDuck hit a frontend render error instead of showing the graph.
             The latest issue is:
           </p>
           <pre className="mt-4 max-w-3xl overflow-x-auto rounded-2xl bg-white/90 px-4 py-3 text-left text-xs leading-6 text-red-900">
@@ -200,10 +200,10 @@ class WorkspaceErrorBoundary extends Component<
   }
 }
 
-function getDesktopApi(): DuckDocsDesktopApi {
+function getDesktopApi(): HyprDuckDesktopApi {
   const api = window.duckdocs;
   if (!api) {
-    throw new Error("DuckDocs desktop UI requires Electron preload APIs.");
+    throw new Error("HyprDuck desktop UI requires Electron preload APIs.");
   }
   return api;
 }
@@ -885,7 +885,7 @@ export function App() {
       <main className="grid min-h-screen place-items-center bg-background p-6">
         <Card className="max-w-xl">
           <CardHeader>
-            <CardTitle>DuckDocs failed to start</CardTitle>
+            <CardTitle>HyprDuck failed to start</CardTitle>
             <CardDescription>Required runtime is missing.</CardDescription>
           </CardHeader>
           <CardContent>

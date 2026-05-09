@@ -8,5 +8,5 @@ fn doctor_reports_engine_resolution() {
         .expect("doctor command should run");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("DuckDocs CLI is available."));
+    assert!(stdout.contains("HyprDuck CLI is available."));
 }
