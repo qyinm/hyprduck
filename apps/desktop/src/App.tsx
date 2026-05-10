@@ -8,14 +8,14 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Bell,
+  BookOpen,
   ChevronDown,
   ChevronRight,
-  FileText,
   PanelLeftClose,
   PanelLeftOpen,
   Save,
   Settings,
-  Share2,
   Sparkles,
 } from "lucide-react";
 import {
@@ -41,7 +41,7 @@ import type {
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
 
-type ActivePanel = "import" | "graph";
+type ActivePanel = "knowledge" | "settings";
 type SettingsTab = "general" | "ai";
 
 interface UiSnapshot {
@@ -442,14 +442,9 @@ const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
 const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
   {
-    id: "import",
-    label: "Import",
-    icon: <FileText aria-hidden="true" size={18} />,
-  },
-  {
-    id: "graph",
-    label: "Graph",
-    icon: <Share2 aria-hidden="true" size={18} />,
+    id: "knowledge",
+    label: "Knowledge",
+    icon: <BookOpen aria-hidden="true" size={18} />,
   },
 ];
 
@@ -1014,8 +1009,8 @@ export function App() {
   const [validation, setValidation] =
     useState<ValidateProviderResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
-  const [activePanel, setActivePanel] = useState<ActivePanel>("import");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
+  const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [startupError, setStartupError] = useState<string | null>(null);
@@ -1119,7 +1114,13 @@ export function App() {
     const selection = await invoke<FileSelection | null>("pick_import_file");
     if (selection) {
       setSelectedFile(selection);
-      setActivePanel("import");
+      setActivePanel("knowledge");
+      await invoke<void>("start_parse", {
+        request: {
+          path: selection.path,
+          format: selection.format,
+        },
+      });
     }
   };
 
@@ -1133,7 +1134,7 @@ export function App() {
         format: selectedFile.format,
       },
     });
-    setActivePanel("import");
+    setActivePanel("knowledge");
   };
 
   const cancelParse = async () => {
@@ -1217,18 +1218,12 @@ export function App() {
   const showSidebar = !sidebarCollapsed;
 
   function openSettings() {
-    setSettingsOpen(true);
+    setActivePanel("settings");
     setSidebarCollapsed(false);
   }
 
   function closeSettings() {
-    setSettingsOpen(false);
-    setActivePanel("import");
-  }
-
-  function openImportPanel() {
-    setSettingsOpen(false);
-    setActivePanel("import");
+    setActivePanel("knowledge");
   }
 
   return (
@@ -1239,7 +1234,7 @@ export function App() {
           {/* Header row matches macOS traffic-lights height, same as char */}
           <header
             data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center justify-end pl-20 pr-2"
+            className="flex h-9 w-full shrink-0 items-center justify-between pl-20 pr-2"
           >
             {!settingsOpen && (
               <Button
@@ -1256,10 +1251,9 @@ export function App() {
             {settingsOpen && (
               <div className="flex items-center gap-0.5">
                 <Button
-                  aria-label="Back to import"
+                  aria-label="Back to Knowledge"
                   onClick={() => {
-                    setSettingsOpen(false);
-                    setActivePanel("import");
+                    setActivePanel("knowledge");
                   }}
                   size="icon"
                   variant="ghost"
@@ -1270,6 +1264,16 @@ export function App() {
                 </Button>
               </div>
             )}
+            <Button
+              aria-label="Knowledge maintenance"
+              title="Knowledge maintenance"
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              type="button"
+            >
+              <Bell size={14} />
+            </Button>
           </header>
 
           {/* Navigation content */}
@@ -1343,7 +1347,7 @@ export function App() {
         {!showSidebar && (
           <header
             data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center pl-20 pr-2"
+            className="flex h-9 w-full shrink-0 items-center justify-between pl-20 pr-2"
           >
             <Button
               aria-label="Expand sidebar"
@@ -1354,6 +1358,16 @@ export function App() {
               type="button"
             >
               <PanelLeftOpen size={14} />
+            </Button>
+            <Button
+              aria-label="Knowledge maintenance"
+              title="Knowledge maintenance"
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              type="button"
+            >
+              <Bell size={14} />
             </Button>
           </header>
         )}
@@ -1368,27 +1382,18 @@ export function App() {
               tab={settingsTab}
               onTabChange={setSettingsTab}
             />
-          ) : activePanel === "graph" ? (
+          ) : activePanel === "knowledge" ? (
             <WorkspaceErrorBoundary>
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onAskProject={answerWorkspaceProject}
-                onOpenImport={openImportPanel}
+                onOpenImport={chooseFile}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />
             </WorkspaceErrorBoundary>
-          ) : (
-            <ImportPanel
-              onCancelParse={cancelParse}
-              onChooseFile={chooseFile}
-              onOpenSavedOutput={openSavedOutput}
-              onStartParse={startParse}
-              selectedFile={selectedFile}
-              snapshot={snapshot}
-            />
-          )}
+          ) : null}
         </div>
       </section>
     </main>

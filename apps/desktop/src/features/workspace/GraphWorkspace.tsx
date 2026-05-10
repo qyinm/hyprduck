@@ -113,25 +113,25 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           <Share2 size={20} />
         </div>
         <h2 className="text-xl font-semibold text-foreground">
-          Build a graph workspace from your first import
+          Your knowledge base is empty
         </h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-          HyprDuck now has a dedicated graph workspace shell. Import a document to
-          seed the first preview project, then use the right inspector and bottom
-          answer dock to review evidence before the compile-backed knowledge layer
-          lands.
+          Drop PDF, DOCX, or DOC files here. HyprDuck will turn them into a
+          source-backed graph, wiki pages, claims, and evidence.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <Button onClick={onOpenImport} type="button">
-            Go to Import
+            Choose files
           </Button>
-          <Button
-            onClick={() => dispatch({ type: "open_answer_dock" })}
-            type="button"
-            variant="outline"
-          >
-            Preview answer dock
-          </Button>
+        </div>
+        <div className="mt-8 w-full max-w-2xl rounded-[22px] border border-border bg-background p-3 text-left shadow-sm">
+          <div className="flex items-center gap-2">
+            <Button onClick={onOpenImport} size="sm" type="button" variant="outline">
+              + files
+            </Button>
+            <Input placeholder="Add files or ask about your knowledge..." />
+            <Button type="button">Ask</Button>
+          </div>
         </div>
       </div>
     );
@@ -198,8 +198,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
                 {project.summary.status === "preview"
-                  ? "Preview workspace"
-                  : "Knowledge workspace"}
+                  ? "Source file"
+                  : "Knowledge node"}
               </Badge>
               {project.summary.stale && (
                 <Badge
@@ -298,12 +298,27 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
-                Graph workspace
+                Knowledge Graph
               </h3>
               <p className="text-xs text-muted-foreground">
-                Graph remains the primary surface. Evidence and answers stay
-                attached to the selected node.
+                Graph is the primary surface. Wiki, Sources, Claims, and Conflicts
+                are modes over the same evidence-backed knowledge base.
               </p>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {["Graph", "Wiki", "Sources", "Claims", "Conflicts"].map((mode) => (
+                <span
+                  key={mode}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-xs font-medium",
+                    mode === "Graph"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-secondary-foreground",
+                  )}
+                >
+                  {mode}
+                </span>
+              ))}
             </div>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{project.summary.nodeCount} nodes</span>
@@ -392,7 +407,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     }}
                   >
                     <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                      {node.kind}
+                      {node.kind === "document" ? "source file" : node.kind}
                     </div>
                     <div className="mt-1 text-sm font-medium">{node.label}</div>
                     <div className="mt-2 text-xs text-muted-foreground">
@@ -502,6 +517,29 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     ))}
                   </div>
                 </section>
+
+                {selectedNode.node.kind === "document" ? (
+                  <section className="space-y-3 rounded-2xl border border-border/70 bg-muted/10 px-3 py-3">
+                    <div>
+                      <h5 className="text-sm font-semibold">Source Detail</h5>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Original uploaded file stays immutable. Derived page images,
+                        raw markdown, evidence, and linked claims stay adjacent.
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Button size="sm" type="button" variant="outline">
+                        Open source detail
+                      </Button>
+                      <Button size="sm" type="button" variant="outline">
+                        Open uploaded file
+                      </Button>
+                      <Button size="sm" type="button" variant="outline">
+                        Reveal in Finder
+                      </Button>
+                    </div>
+                  </section>
+                ) : null}
 
                 <section className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -684,14 +722,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         )}
       </div>
 
-      {uiState.answerDockOpen && (
-        <section className="rounded-[24px] border border-border/80 bg-background">
+      <section className="rounded-[24px] border border-border/80 bg-background shadow-lg">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Grounded answer dock</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                Ask or add files to this knowledge base
+              </h3>
               <p className="text-xs text-muted-foreground">
-                Bottom-docked so the graph stays visible while answers remain
-                attached to evidence.
+                Bottom prompt composer stays attached to the Knowledge graph. Use
+                selected context, attach source files, and save grounded answers.
               </p>
             </div>
             <Badge
@@ -709,8 +748,22 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <div className="space-y-3">
               <label className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                Ask this workspace
+                Ask selected graph context or attach files
               </label>
+              <div className="grid gap-2 rounded-2xl border border-border/70 bg-muted/10 p-3 text-xs text-muted-foreground sm:grid-cols-2">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="attachment-intent" defaultChecked />
+                  <span>Add to knowledge base</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="attachment-intent" />
+                  <span>Ask only this time</span>
+                </label>
+                <div className="sm:col-span-2">
+                  File description becomes source metadata: source.description,
+                  source.user_context, and source.ingest_instruction.
+                </div>
+              </div>
               <Input
                 onChange={(event) =>
                   dispatch({
@@ -718,7 +771,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     value: event.target.value,
                   })
                 }
-                placeholder="What does this node appear to cover?"
+                placeholder="Ask, add source metadata, or describe attached files..."
                 value={uiState.answerInput}
               />
               <div className="flex flex-wrap gap-2">
@@ -727,7 +780,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   onClick={() => void handleAskProject()}
                   type="button"
                 >
-                  {answerPending ? "Answering…" : "Ask workspace"}
+                  {answerPending ? "Answering…" : "Ask"}
                 </Button>
                 <Button
                   onClick={() => dispatch({ type: "close_answer_dock" })}
@@ -738,8 +791,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 </Button>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                Questions now go through the backend project reader, so corrections
-                and stored graph state show up here immediately.
+                Attached files use the same automatic ingest primitive as the
+                Sources mode. Answers can be saved back as a wiki page, claim,
+                note, or source description.
               </p>
               {answerError ? (
                 <p className="text-xs leading-5 text-destructive">{answerError}</p>
@@ -798,8 +852,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               ) : null}
             </div>
           </div>
-        </section>
-      )}
+      </section>
     </div>
   );
 }
