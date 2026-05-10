@@ -6,7 +6,9 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
+  Plus,
   RefreshCw,
+  Send,
   Share2,
 } from "lucide-react";
 
@@ -218,7 +220,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       >
         <section
           className={cn(
-            "flex min-h-0 flex-col bg-background px-6 pb-6 pt-14",
+            "relative flex min-h-0 flex-col bg-background px-6 pb-6 pt-14",
             graphPaneClass,
           )}
         >
@@ -227,6 +229,19 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             dispatch={dispatch}
             project={project}
             uiState={uiState}
+          />
+          <GraphPromptComposer
+            answerError={answerError}
+            answerPending={answerPending}
+            inputValue={uiState.answerInput}
+            onAsk={() => void handleAskProject()}
+            onAttachFiles={onOpenImport}
+            onInputChange={(value) =>
+              dispatch({
+                type: "set_answer_input",
+                value,
+              })
+            }
           />
         </section>
 
@@ -711,6 +726,76 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </section>
       )}
     </div>
+  );
+}
+
+interface GraphPromptComposerProps {
+  answerError: string | null;
+  answerPending: boolean;
+  inputValue: string;
+  onAsk: () => void;
+  onAttachFiles: () => void;
+  onInputChange: (value: string) => void;
+}
+
+function GraphPromptComposer(props: GraphPromptComposerProps) {
+  const {
+    answerError,
+    answerPending,
+    inputValue,
+    onAsk,
+    onAttachFiles,
+    onInputChange,
+  } = props;
+  const canAsk = inputValue.trim().length > 0 && !answerPending;
+
+  return (
+    <form
+      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-16 w-[min(46rem,calc(100%-3rem))] items-center gap-2 rounded-[1.75rem] border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canAsk) {
+          onAsk();
+        }
+      }}
+    >
+      <Button
+        aria-label="Attach files"
+        className="size-10 rounded-xl border-border bg-secondary/80"
+        onClick={onAttachFiles}
+        size="icon"
+        type="button"
+        variant="outline"
+      >
+        <Plus size={19} />
+      </Button>
+      <input
+        aria-label="Ask knowledge graph"
+        className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+        onChange={(event) => onInputChange(event.target.value)}
+        placeholder="Ask this knowledge graph..."
+        value={inputValue}
+      />
+      {answerPending ? (
+        <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+          Answering...
+        </span>
+      ) : null}
+      <Button
+        aria-label="Ask"
+        className="size-10 rounded-xl"
+        disabled={!canAsk}
+        size="icon"
+        type="submit"
+      >
+        <Send size={18} />
+      </Button>
+      {answerError ? (
+        <p className="absolute left-6 top-full mt-2 text-xs leading-5 text-destructive">
+          {answerError}
+        </p>
+      ) : null}
+    </form>
   );
 }
 
