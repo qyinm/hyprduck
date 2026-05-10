@@ -23,7 +23,7 @@ export function createInitialWorkspaceUiState(
   return {
     selectedNodeId: defaultSelectedNodeId(project),
     selectedEdgeId: null,
-    inspectorOpen: true,
+    inspectorOpen: false,
     answerDockOpen: false,
     answerInput: "",
   };

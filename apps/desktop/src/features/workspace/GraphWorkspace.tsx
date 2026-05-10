@@ -6,15 +6,14 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
-  PanelBottomClose,
-  PanelBottomOpen,
-  PanelRightClose,
-  PanelRightOpen,
+  Plus,
   RefreshCw,
+  Send,
   Share2,
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
+import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceApplyCorrectionRequest,
@@ -108,29 +107,20 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   if (!project) {
     return (
-      <div className="flex h-full min-h-[30rem] flex-col items-center justify-center rounded-[24px] border border-dashed border-border bg-muted/15 p-10 text-center">
-        <div className="mb-4 inline-flex size-12 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
+      <div className="flex h-full min-h-[30rem] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/15 p-10 text-center">
+        <div className="mb-4 inline-flex size-12 items-center justify-center rounded-xl bg-secondary text-secondary-foreground">
           <Share2 size={20} />
         </div>
         <h2 className="text-xl font-semibold text-foreground">
-          Build a graph workspace from your first import
+          Your knowledge base is empty
         </h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-          HyprDuck now has a dedicated graph workspace shell. Import a document to
-          seed the first preview project, then use the right inspector and bottom
-          answer dock to review evidence before the compile-backed knowledge layer
-          lands.
+          Drop PDF, DOCX, or DOC files here. HyprDuck will turn them into a
+          source-backed graph, wiki pages, claims, and evidence.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <Button onClick={onOpenImport} type="button">
-            Go to Import
-          </Button>
-          <Button
-            onClick={() => dispatch({ type: "open_answer_dock" })}
-            type="button"
-            variant="outline"
-          >
-            Preview answer dock
+            Choose files
           </Button>
         </div>
       </div>
@@ -191,89 +181,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <section className="rounded-[24px] border border-border/80 bg-background/80 px-5 py-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                {project.summary.status === "preview"
-                  ? "Preview workspace"
-                  : "Knowledge workspace"}
-              </Badge>
-              {project.summary.stale && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-200 bg-amber-50 text-amber-700"
-                >
-                  Stale while new write job runs
-                </Badge>
-              )}
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold tracking-tight text-foreground">
-                {project.summary.title}
-              </h2>
-              <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
-                {project.summary.summary}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={() => dispatch({ type: "toggle_inspector" })}
-              type="button"
-              variant="outline"
-            >
-              {uiState.inspectorOpen ? (
-                <>
-                  <PanelRightClose size={16} />
-                  Hide inspector
-                </>
-              ) : (
-                <>
-                  <PanelRightOpen size={16} />
-                  Show inspector
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={() =>
-                dispatch({
-                  type: uiState.answerDockOpen
-                    ? "close_answer_dock"
-                    : "open_answer_dock",
-                })
-              }
-              type="button"
-              variant="outline"
-            >
-              {uiState.answerDockOpen ? (
-                <>
-                  <PanelBottomClose size={16} />
-                  Hide answer
-                </>
-              ) : (
-                <>
-                  <PanelBottomOpen size={16} />
-                  Open answer
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      </section>
-
+    <div className="flex min-h-0 flex-1 flex-col">
       {project.summary.stale && (
-        <section className="rounded-[20px] border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
+        <section className="mx-6 mt-14 rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" />
             <div className="space-y-1">
               <p className="font-medium">Read path stays open while write jobs run.</p>
               <p className="leading-6">
                 You are looking at the most recent stable workspace snapshot. New
-                compile, re-import, or correction writes can finish in the
+                ingest, re-import, or correction writes can finish in the
                 background without freezing the graph.
               </p>
             </div>
@@ -283,134 +200,52 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
       <div
         className={cn(
-          "grid min-h-0 flex-1 gap-4",
-          uiState.inspectorOpen
-            ? "grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(19rem,24rem)]"
-            : "grid-cols-1",
+          "grid min-h-0 flex-1 overflow-hidden bg-background",
+          !uiState.inspectorOpen && "grid-cols-1",
         )}
+        style={{
+          gridTemplateColumns: uiState.inspectorOpen
+            ? "minmax(0, 1fr) clamp(18rem, 28vw, 24rem)"
+            : undefined,
+        }}
       >
         <section
           className={cn(
-            "flex min-h-[26rem] flex-col rounded-[24px] border bg-background",
+            "relative flex min-h-0 flex-col bg-background px-6 pb-6 pt-14",
             graphPaneClass,
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-4 py-3">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">
-                Graph workspace
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Graph remains the primary surface. Evidence and answers stay
-                attached to the selected node.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-              <span>{project.summary.nodeCount} nodes</span>
-              <span>•</span>
-              <span>{project.summary.relationshipCount} relationships</span>
-              <span>•</span>
-              <span>{project.summary.evidenceCount} visible evidence refs</span>
-            </div>
-          </div>
-
-          <div className="relative flex-1 overflow-hidden p-4">
-            <div className="absolute inset-4 rounded-[20px] bg-[radial-gradient(circle_at_top,rgba(17,94,89,0.08),transparent_38%),linear-gradient(180deg,rgba(246,244,239,0.7),rgba(255,255,255,0.95))]" />
-            <svg
-              aria-hidden="true"
-              className="absolute inset-4 size-[calc(100%-2rem)]"
-              viewBox="0 0 100 100"
-            >
-              {project.edges.map((edge) => {
-                const sourceNode = nodeById[edge.sourceNodeId];
-                const targetNode = nodeById[edge.targetNodeId];
-                if (!sourceNode || !targetNode) {
-                  return null;
-                }
-                const selected = uiState.selectedEdgeId === edge.id;
-                return (
-                  <g key={edge.id}>
-                    <line
-                      stroke={
-                        selected
-                          ? "rgba(13, 148, 136, 0.95)"
-                          : edge.kind === "source_document"
-                          ? "rgba(148, 163, 184, 0.55)"
-                          : "rgba(93, 104, 112, 0.45)"
-                      }
-                      strokeDasharray={edge.kind === "source_document" ? "3 4" : undefined}
-                      strokeWidth={selected ? 2.4 : 1.5}
-                      x1={sourceNode.position.x}
-                      x2={targetNode.position.x}
-                      y1={sourceNode.position.y}
-                      y2={targetNode.position.y}
-                    />
-                    <line
-                      onClick={() => dispatch({ type: "select_edge", edgeId: edge.id })}
-                      stroke="transparent"
-                      strokeWidth="9"
-                      style={{ pointerEvents: "stroke" }}
-                      x1={sourceNode.position.x}
-                      x2={targetNode.position.x}
-                      y1={sourceNode.position.y}
-                      y2={targetNode.position.y}
-                    />
-                  </g>
-                );
-              })}
-            </svg>
-
-            <div className="relative size-full">
-              {project.nodes.map((node) => {
-                const selected = uiState.selectedNodeId === node.id;
-                const edgeConnected = Boolean(
-                  selectedEdge &&
-                    (selectedEdge.edge.sourceNodeId === node.id ||
-                      selectedEdge.edge.targetNodeId === node.id),
-                );
-                return (
-                  <button
-                    key={node.id}
-                    onClick={() =>
-                      dispatch({ type: "select_node", nodeId: node.id })
-                    }
-                    type="button"
-                    className={cn(
-                      "absolute min-w-32 -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 text-left shadow-[0_10px_25px_rgba(15,23,42,0.04)] transition",
-                      node.kind === "document"
-                        ? "border-teal-300/60 bg-white text-foreground"
-                        : "border-stone-300/90 bg-white/95 text-foreground",
-                      selected &&
-                        "border-teal-600 ring-2 ring-teal-600/20 shadow-[0_12px_24px_rgba(15,23,42,0.08)]",
-                      edgeConnected &&
-                        !selected &&
-                        "border-teal-400/80 ring-2 ring-teal-500/10 shadow-[0_12px_24px_rgba(15,23,42,0.06)]",
-                    )}
-                    style={{
-                      left: `${node.position.x}%`,
-                      top: `${node.position.y}%`,
-                    }}
-                  >
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                      {node.kind}
-                    </div>
-                    <div className="mt-1 text-sm font-medium">{node.label}</div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      {node.evidenceCount} evidence refs
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <SigmaGraphCanvas
+            className="flex-1"
+            dispatch={dispatch}
+            project={project}
+            uiState={uiState}
+          />
+          <GraphPromptComposer
+            answerError={answerError}
+            answerPending={answerPending}
+            inputValue={uiState.answerInput}
+            onAsk={() => void handleAskProject()}
+            onAttachFiles={onOpenImport}
+            onInputChange={(value) =>
+              dispatch({
+                type: "set_answer_input",
+                value,
+              })
+            }
+          />
         </section>
 
         {uiState.inspectorOpen && (
-          <aside className="flex min-h-[26rem] flex-col rounded-[24px] border border-border/80 bg-background">
+          <aside
+            className="flex min-h-0 flex-col border-l border-border bg-background pt-14"
+            style={{ width: "clamp(18rem, 28vw, 24rem)" }}
+          >
             <div className="border-b border-border/70 px-4 py-3">
-              <h3 className="text-sm font-semibold text-foreground">Inspector</h3>
+              <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
               <p className="text-xs text-muted-foreground">
-                Evidence stays visible even when answers stay cautious.
+                Selection detail, source provenance, and evidence stay visible
+                without leaving the graph.
               </p>
             </div>
 
@@ -456,7 +291,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {selectedEdge.evidence.map((evidence) => (
                       <article
                         key={evidence.id}
-                        className="rounded-2xl border border-border/70 bg-muted/10 px-3 py-3"
+                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{evidence.pageLabel}</span>
@@ -465,8 +300,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-foreground">
-                          {evidence.snippet}
+                          {formatEvidenceSnippet(evidence.snippet)}
                         </p>
+                        {extractMarkdownImageLabel(evidence.snippet) ? (
+                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -503,6 +343,47 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                 </section>
 
+                {selectedNode.node.kind === "document" ? (
+                  <section className="space-y-3 rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
+                    <div>
+                      <h5 className="text-sm font-semibold">Source Detail</h5>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Original uploaded file stays immutable. Derived page images,
+                        raw markdown, evidence, and linked claims stay adjacent.
+                      </p>
+                    </div>
+                    <div className="grid gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Original file</span>
+                        <span className="truncate font-medium text-foreground">
+                          {selectedNode.evidence[0]?.sourcePath?.split("/").pop() ?? selectedNode.canonicalName}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Evidence refs</span>
+                        <span className="font-medium text-foreground">
+                          {selectedNode.evidence.length}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Derived artifacts</span>
+                        <span className="font-medium text-foreground">Page images + markdown</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <Button size="sm" type="button" variant="outline">
+                        Open source detail
+                      </Button>
+                      <Button size="sm" type="button" variant="outline">
+                        Open uploaded file
+                      </Button>
+                      <Button size="sm" type="button" variant="outline">
+                        Reveal in Finder
+                      </Button>
+                    </div>
+                  </section>
+                ) : null}
+
                 <section className="space-y-3">
                   <div className="flex items-center justify-between">
                     <h5 className="text-sm font-semibold">Visible evidence</h5>
@@ -514,7 +395,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {selectedNode.evidence.map((evidence) => (
                       <article
                         key={evidence.id}
-                        className="rounded-2xl border border-border/70 bg-muted/10 px-3 py-3"
+                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{evidence.pageLabel}</span>
@@ -523,8 +404,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-foreground">
-                          {evidence.snippet}
+                          {formatEvidenceSnippet(evidence.snippet)}
                         </p>
+                        {extractMarkdownImageLabel(evidence.snippet) ? (
+                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -542,7 +428,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-dashed border-border/80 px-3 py-3"
+                              className="rounded-xl border border-dashed border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -561,7 +447,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-border/80 px-3 py-3"
+                              className="rounded-xl border border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -599,7 +485,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-border/80 px-3 py-3"
+                              className="rounded-xl border border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -642,7 +528,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         return (
                           <div
                             key={action.kind}
-                            className="rounded-2xl border border-border/80 px-3 py-3"
+                            className="rounded-xl border border-border/80 px-3 py-3"
                           >
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-sm font-medium">{action.label}</span>
@@ -685,13 +571,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </div>
 
       {uiState.answerDockOpen && (
-        <section className="rounded-[24px] border border-border/80 bg-background">
+        <section className="rounded-xl border border-border bg-background">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Grounded answer dock</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                Ask or add files to this knowledge base
+              </h3>
               <p className="text-xs text-muted-foreground">
-                Bottom-docked so the graph stays visible while answers remain
-                attached to evidence.
+                Bottom prompt composer stays attached to the Knowledge graph. Use
+                selected context, attach source files, and save grounded answers.
               </p>
             </div>
             <Badge
@@ -699,7 +587,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               className={cn(
                 answer?.status === "stale" || answer?.status === "low_confidence"
                   ? "border-amber-200 bg-amber-50 text-amber-700"
-                  : "border-teal-200 bg-teal-50 text-teal-700",
+                  : "border-border bg-secondary text-foreground",
               )}
             >
               {answerBadgeLabel}
@@ -709,8 +597,22 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <div className="space-y-3">
               <label className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                Ask this workspace
+                Ask selected graph context or attach files
               </label>
+              <div className="grid gap-2 rounded-xl border border-border bg-secondary/70 p-3 text-xs text-foreground sm:grid-cols-2">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="attachment-intent" defaultChecked />
+                  <span>Add to knowledge base</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="attachment-intent" />
+                  <span>Ask only this time</span>
+                </label>
+                <div className="sm:col-span-2">
+                  File description becomes source metadata: source.description,
+                  source.user_context, and source.ingest_instruction.
+                </div>
+              </div>
               <Input
                 onChange={(event) =>
                   dispatch({
@@ -718,16 +620,23 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     value: event.target.value,
                   })
                 }
-                placeholder="What does this node appear to cover?"
+                placeholder="Ask, add source metadata, or describe attached files..."
                 value={uiState.answerInput}
               />
               <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={onOpenImport}
+                  type="button"
+                  variant="outline"
+                >
+                  + Attach files
+                </Button>
                 <Button
                   disabled={answerPending || !uiState.answerInput.trim()}
                   onClick={() => void handleAskProject()}
                   type="button"
                 >
-                  {answerPending ? "Answering…" : "Ask workspace"}
+                  {answerPending ? "Answering…" : "Ask"}
                 </Button>
                 <Button
                   onClick={() => dispatch({ type: "close_answer_dock" })}
@@ -738,15 +647,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 </Button>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                Questions now go through the backend project reader, so corrections
-                and stored graph state show up here immediately.
+                Attached files use the same automatic ingest primitive as the
+                Sources mode. Answers can be saved back as a wiki page, claim,
+                note, or source description.
               </p>
               {answerError ? (
                 <p className="text-xs leading-5 text-destructive">{answerError}</p>
               ) : null}
             </div>
 
-            <div className="space-y-4 rounded-[20px] border border-border/70 bg-muted/10 px-4 py-4">
+            <div className="space-y-4 rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
               <div className="flex items-center gap-2">
                 <RefreshCw size={14} className="text-muted-foreground" />
                 <p className="text-sm font-medium">
@@ -766,12 +676,18 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   {answer.citations.map((citation) => (
                     <article
                       key={citation.id}
-                      className="rounded-2xl border border-border/70 bg-background px-3 py-3"
+                      className="rounded-xl border border-border/70 bg-background px-3 py-3"
                     >
-                      <div className="text-xs text-muted-foreground">
+                      <div className="text-xs font-medium text-muted-foreground">
                         {citation.pageLabel}
+                        {citation.sourcePath ? ` · ${citation.sourcePath.split("/").pop()}` : ""}
                       </div>
-                      <p className="mt-1 text-sm leading-6">{citation.snippet}</p>
+                      {extractMarkdownImageLabel(citation.snippet) ? (
+                        <div className="mt-2 rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                          Page image: {extractMarkdownImageLabel(citation.snippet)}
+                        </div>
+                      ) : null}
+                      <p className="mt-2 text-sm leading-6">{formatEvidenceSnippet(citation.snippet)}</p>
                     </article>
                   ))}
                 </div>
@@ -785,7 +701,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {answer.suggestedActions.map((action) => (
                       <div
                         key={action.kind}
-                        className="rounded-2xl border border-dashed border-border/70 px-3 py-3"
+                        className="rounded-xl border border-dashed border-border/70 px-3 py-3"
                       >
                         <div className="text-sm font-medium">{action.label}</div>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -802,4 +718,85 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       )}
     </div>
   );
+}
+
+interface GraphPromptComposerProps {
+  answerError: string | null;
+  answerPending: boolean;
+  inputValue: string;
+  onAsk: () => void;
+  onAttachFiles: () => void;
+  onInputChange: (value: string) => void;
+}
+
+function GraphPromptComposer(props: GraphPromptComposerProps) {
+  const {
+    answerError,
+    answerPending,
+    inputValue,
+    onAsk,
+    onAttachFiles,
+    onInputChange,
+  } = props;
+  const canAsk = inputValue.trim().length > 0 && !answerPending;
+
+  return (
+    <form
+      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-16 w-[min(46rem,calc(100%-3rem))] items-center gap-2 rounded-[1.75rem] border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canAsk) {
+          onAsk();
+        }
+      }}
+    >
+      <Button
+        aria-label="Attach files"
+        className="size-10 rounded-xl border-border bg-secondary/80"
+        onClick={onAttachFiles}
+        size="icon"
+        type="button"
+        variant="outline"
+      >
+        <Plus size={19} />
+      </Button>
+      <input
+        aria-label="Ask knowledge graph"
+        className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+        onChange={(event) => onInputChange(event.target.value)}
+        placeholder="Ask this knowledge graph..."
+        value={inputValue}
+      />
+      {answerPending ? (
+        <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+          Answering...
+        </span>
+      ) : null}
+      <Button
+        aria-label="Ask"
+        className="size-10 rounded-xl"
+        disabled={!canAsk}
+        size="icon"
+        type="submit"
+      >
+        <Send size={18} />
+      </Button>
+      {answerError ? (
+        <p className="absolute left-6 top-full mt-2 text-xs leading-5 text-destructive">
+          {answerError}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function extractMarkdownImageLabel(value: string): string | null {
+  return value.match(/!\[([^\]]*)\]\(([^)]+)\)/)?.[1]?.trim() || null;
+}
+
+function formatEvidenceSnippet(value: string): string {
+  return value
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "No text evidence is available for this page yet.";
 }

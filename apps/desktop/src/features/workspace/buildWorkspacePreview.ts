@@ -64,7 +64,7 @@ export function buildWorkspacePreview(
     sourceNodeId: "document",
     targetNodeId: node.id,
     kind: "source_document",
-    label: "Compiled from import",
+    label: "Ingested from source",
     confidence: 0.42,
     evidenceCount: 1,
   }));
@@ -84,14 +84,14 @@ export function buildWorkspacePreview(
     canonicalName: title,
     aliases: ["Latest import", "Preview project"],
     description:
-      "This workspace is a graph-first preview built from the latest import. The compile-backed knowledge layer is not wired yet, so HyprDuck shows visible evidence before making strong claims.",
+      "This workspace is a graph-first preview built from the latest import. HyprDuck is showing the latest automatic ingest preview with visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
     actions: disabledCorrectionActions(
-      "Correction actions unlock once project compile and merge policy are connected.",
+      "Correction actions unlock once merge policy and safe-write review are connected.",
     ),
   };
   answerByNodeId.document = previewAnswer(
-    "HyprDuck can already point you to the most relevant imported evidence, but compile-backed grounded answers are still pending. Review the cited snippets before trusting this draft.",
+    "HyprDuck can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before trusting this draft.",
     stale,
     pageEvidence.slice(0, 2),
     pageNodes.map((node) => node.id),
@@ -111,7 +111,7 @@ export function buildWorkspacePreview(
       ),
     };
     answerByNodeId[node.id] = previewAnswer(
-      `${node.label} is available as a draft workspace node. HyprDuck is keeping the answer conservative until concept compile and confidence scoring are connected.`,
+      `${node.label} is available as a draft workspace node. HyprDuck is keeping the answer conservative until concept linking and confidence scoring are connected.`,
       stale,
       evidence,
       [node.id],
@@ -119,7 +119,7 @@ export function buildWorkspacePreview(
     edgeDetailsById[`edge-document-${node.id}`] = {
       edge: edges[index],
       explanation:
-        "Preview edge only. The compile-backed graph will replace this with real explainable relationships once relation extraction lands.",
+        "Preview edge only. The automatic ingest graph will replace this with real explainable relationships once relation extraction lands.",
       evidence,
     };
   });
@@ -130,7 +130,7 @@ export function buildWorkspacePreview(
       title,
       status: "preview",
       stale,
-      summary: `${result.successCount} pages imported, ${result.failedCount} failed. Workspace preview is derived from the latest markdown package and keeps evidence visible while the knowledge compiler is still landing.`,
+      summary: `${result.successCount} pages imported, ${result.failedCount} failed. Workspace preview is derived from the latest automatic ingest output and keeps evidence visible while full knowledge writing is still landing.`,
       documentCount: 1,
       nodeCount: nodes.length,
       relationshipCount: pageNodes.length,
@@ -165,9 +165,9 @@ function previewAnswer(
       },
       {
         kind: "ask_different_question" as const,
-        label: "Wait for compile-backed answers",
+        label: "Wait for grounded answers",
         description:
-          "Structured grounded answers will replace this preview once the project compiler lands.",
+          "Structured grounded answers will replace this preview once the knowledge writer lands.",
       },
     ],
   };

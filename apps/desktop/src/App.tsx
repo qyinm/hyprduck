@@ -8,14 +8,16 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Bell,
+  BookOpen,
   ChevronDown,
   ChevronRight,
-  FileText,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Save,
   Settings,
-  Share2,
   Sparkles,
 } from "lucide-react";
 import {
@@ -41,7 +43,7 @@ import type {
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
 
-type ActivePanel = "import" | "graph";
+type ActivePanel = "knowledge" | "settings";
 type SettingsTab = "general" | "ai";
 
 interface UiSnapshot {
@@ -442,14 +444,9 @@ const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
 const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
   {
-    id: "import",
-    label: "Import",
-    icon: <FileText aria-hidden="true" size={18} />,
-  },
-  {
-    id: "graph",
-    label: "Graph",
-    icon: <Share2 aria-hidden="true" size={18} />,
+    id: "knowledge",
+    label: "Knowledge",
+    icon: <BookOpen aria-hidden="true" size={18} />,
   },
 ];
 
@@ -547,11 +544,15 @@ function parseSummary(snapshot: UiSnapshot): string {
 
 function sidebarButtonClass(active: boolean): string {
   return cn(
-    "w-full justify-start gap-3 border border-transparent rounded-lg px-3 py-2 text-sm",
+    "h-9 w-full justify-start gap-3 rounded-full border px-3 text-sm font-medium",
     active
-      ? "bg-secondary text-foreground border-border"
-      : "text-muted-foreground hover:text-foreground hover:bg-gray-400/15",
+      ? "border-border bg-secondary text-foreground"
+      : "border-transparent text-muted-foreground hover:bg-secondary hover:text-foreground",
   );
+}
+
+function windowChromeButtonClass(): string {
+  return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
 }
 
 function ImportPanel(props: {
@@ -917,7 +918,7 @@ function SettingsPanel(props: {
                           {opt.label}
                         </span>
                         {activeProvider === opt.id && (
-                          <span className="rounded-full bg-emerald-100 px-1.5 py-0 text-[10px] font-medium text-emerald-700 leading-none">
+                          <span className="rounded-full border border-border bg-secondary px-1.5 py-0 text-[10px] font-medium leading-none text-foreground">
                             Active
                           </span>
                         )}
@@ -1014,10 +1015,11 @@ export function App() {
   const [validation, setValidation] =
     useState<ValidateProviderResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
-  const [activePanel, setActivePanel] = useState<ActivePanel>("import");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
+  const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [healthOpen, setHealthOpen] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = buildWorkspacePreview(
     snapshot.lastResult,
@@ -1119,7 +1121,18 @@ export function App() {
     const selection = await invoke<FileSelection | null>("pick_import_file");
     if (selection) {
       setSelectedFile(selection);
-      setActivePanel("import");
+      setActivePanel("knowledge");
+      try {
+        await invoke<void>("start_parse", {
+          request: {
+            path: selection.path,
+            format: selection.format,
+          },
+        });
+      } catch (error) {
+        setSelectedFile(null);
+        window.alert(`Failed to start parsing: ${String(error)}`);
+      }
     }
   };
 
@@ -1133,7 +1146,7 @@ export function App() {
         format: selectedFile.format,
       },
     });
-    setActivePanel("import");
+    setActivePanel("knowledge");
   };
 
   const cancelParse = async () => {
@@ -1217,60 +1230,153 @@ export function App() {
   const showSidebar = !sidebarCollapsed;
 
   function openSettings() {
-    setSettingsOpen(true);
+    setActivePanel("settings");
     setSidebarCollapsed(false);
   }
 
   function closeSettings() {
-    setSettingsOpen(false);
-    setActivePanel("import");
-  }
-
-  function openImportPanel() {
-    setSettingsOpen(false);
-    setActivePanel("import");
+    setActivePanel("knowledge");
   }
 
   return (
-    <main className="flex h-screen w-screen overflow-hidden bg-sidebar text-foreground">
-      {/* Sidebar — char-style: native titlebar, h-9 header, hide completely when collapsed */}
+    <main className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+      <div
+        data-electron-drag-region
+        className="fixed inset-x-0 top-0 z-40 h-12"
+      />
+      <div
+        data-electron-no-drag
+        className="fixed left-[88px] top-[10px] z-50 flex h-7 items-center gap-1"
+      >
+        {settingsOpen ? (
+          <Button
+            aria-label="Back to Knowledge"
+            onClick={() => {
+              setActivePanel("knowledge");
+              setHealthOpen(false);
+            }}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <ArrowLeft size={14} />
+          </Button>
+        ) : showSidebar ? (
+          <Button
+            aria-label="Collapse sidebar"
+            onClick={() => {
+              setSidebarCollapsed(true);
+              setHealthOpen(false);
+            }}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <PanelLeftClose size={14} />
+          </Button>
+        ) : (
+          <Button
+            aria-label="Expand sidebar"
+            onClick={() => {
+              setSidebarCollapsed(false);
+              setHealthOpen(false);
+            }}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <PanelLeftOpen size={14} />
+          </Button>
+        )}
+      </div>
+      <Button
+        aria-expanded={healthOpen}
+        aria-label="Knowledge maintenance"
+        title="Knowledge maintenance"
+        data-electron-no-drag
+        onClick={() => setHealthOpen((open) => !open)}
+        size="icon"
+        variant="ghost"
+        className={cn(
+          "fixed top-[10px] z-50",
+          !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-12",
+          windowChromeButtonClass(),
+        )}
+        style={
+          !settingsOpen && workspaceUiState.inspectorOpen
+            ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
+            : undefined
+        }
+        type="button"
+      >
+        <Bell size={14} />
+      </Button>
+      {!settingsOpen && (
+        <Button
+          aria-expanded={workspaceUiState.inspectorOpen}
+          aria-label={
+            workspaceUiState.inspectorOpen
+              ? "Collapse right inspector"
+              : "Expand right inspector"
+          }
+          title={
+            workspaceUiState.inspectorOpen
+              ? "Collapse right inspector"
+              : "Expand right inspector"
+          }
+          data-electron-no-drag
+          onClick={() => {
+            dispatchWorkspaceUi({ type: "toggle_inspector" });
+            setHealthOpen(false);
+          }}
+          size="icon"
+          variant="ghost"
+          className={cn("fixed right-3 top-[10px] z-50", windowChromeButtonClass())}
+          type="button"
+        >
+          {workspaceUiState.inspectorOpen ? (
+            <PanelRightClose size={14} />
+          ) : (
+            <PanelRightOpen size={14} />
+          )}
+        </Button>
+      )}
+      {healthOpen && (
+        <section
+          data-electron-no-drag
+          className={cn(
+            "fixed top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none",
+            !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-3",
+          )}
+          style={
+            !settingsOpen && workspaceUiState.inspectorOpen
+              ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
+              : undefined
+          }
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Knowledge maintenance</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Safe ingest repairs run automatically. Only conflicts, failed writes, or risky merges need review.
+              </p>
+            </div>
+            <span className="rounded-full border border-border bg-secondary px-2 py-1 text-[11px] font-medium text-foreground">
+              Quiet
+            </span>
+          </div>
+          <div className="mt-4 rounded-xl border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
+            No user action needed. The local knowledge base is ready for source updates and grounded answers.
+          </div>
+        </section>
+      )}
+      {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
-          {/* Header row matches macOS traffic-lights height, same as char */}
-          <header
-            data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center justify-end pl-20 pr-2"
-          >
-            {!settingsOpen && (
-              <Button
-                aria-label="Collapse sidebar"
-                onClick={() => setSidebarCollapsed(true)}
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                type="button"
-              >
-                <PanelLeftClose size={14} />
-              </Button>
-            )}
-            {settingsOpen && (
-              <div className="flex items-center gap-0.5">
-                <Button
-                  aria-label="Back to import"
-                  onClick={() => {
-                    setSettingsOpen(false);
-                    setActivePanel("import");
-                  }}
-                  size="icon"
-                  variant="ghost"
-                  className="size-7"
-                  type="button"
-                >
-                  <ArrowLeft size={14} />
-                </Button>
-              </div>
-            )}
-          </header>
+          <div className="h-12 w-full shrink-0" />
 
           {/* Navigation content */}
           <div className="flex min-h-0 flex-1 flex-col px-3 overflow-y-auto">
@@ -1340,25 +1446,12 @@ export function App() {
 
       {/* Main content area */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {!showSidebar && (
-          <header
-            data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center pl-20 pr-2"
-          >
-            <Button
-              aria-label="Expand sidebar"
-              onClick={() => setSidebarCollapsed(false)}
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              type="button"
-            >
-              <PanelLeftOpen size={14} />
-            </Button>
-          </header>
-        )}
-
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-hidden",
+            settingsOpen ? "p-6 pt-14" : "",
+          )}
+        >
           {settingsOpen ? (
             <SettingsPanel
               config={currentConfig}
@@ -1368,27 +1461,18 @@ export function App() {
               tab={settingsTab}
               onTabChange={setSettingsTab}
             />
-          ) : activePanel === "graph" ? (
+          ) : activePanel === "knowledge" ? (
             <WorkspaceErrorBoundary>
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onAskProject={answerWorkspaceProject}
-                onOpenImport={openImportPanel}
+                onOpenImport={chooseFile}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />
             </WorkspaceErrorBoundary>
-          ) : (
-            <ImportPanel
-              onCancelParse={cancelParse}
-              onChooseFile={chooseFile}
-              onOpenSavedOutput={openSavedOutput}
-              onStartParse={startParse}
-              selectedFile={selectedFile}
-              snapshot={snapshot}
-            />
-          )}
+          ) : null}
         </div>
       </section>
     </main>
