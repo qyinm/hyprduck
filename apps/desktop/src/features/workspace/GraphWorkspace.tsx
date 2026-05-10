@@ -123,15 +123,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             Choose files
           </Button>
         </div>
-        <div className="mt-8 w-full max-w-2xl rounded-xl border border-border bg-background p-3 text-left ">
-          <div className="flex items-center gap-2">
-            <Button onClick={onOpenImport} size="sm" type="button" variant="outline">
-              + files
-            </Button>
-            <Input placeholder="Add files or ask about your knowledge..." />
-            <Button type="button">Ask</Button>
-          </div>
-        </div>
       </div>
     );
   }
