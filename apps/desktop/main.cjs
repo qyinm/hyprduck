@@ -123,7 +123,7 @@ function registerIpcHandlers() {
       case "cancel_parse":
         return cancelParse();
       case "open_saved_output":
-        return openSavedOutput(args.path, Boolean(args.reveal));
+        return openLocalArtifact(args.path, Boolean(args.reveal));
       case "open_local_artifact":
         return openLocalArtifact(args.path, Boolean(args.reveal));
       default:
