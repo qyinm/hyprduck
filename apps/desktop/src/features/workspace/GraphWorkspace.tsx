@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
+import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceApplyCorrectionRequest,
@@ -218,94 +219,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             graphPaneClass,
           )}
         >
-          <div className="relative flex-1 overflow-hidden">
-            <svg
-              aria-hidden="true"
-              className="absolute inset-0 size-full"
-              viewBox="0 0 100 100"
-            >
-              {project.edges.map((edge) => {
-                const sourceNode = nodeById[edge.sourceNodeId];
-                const targetNode = nodeById[edge.targetNodeId];
-                if (!sourceNode || !targetNode) {
-                  return null;
-                }
-                const selected = uiState.selectedEdgeId === edge.id;
-                return (
-                  <g key={edge.id}>
-                    <line
-                      stroke={
-                        selected
-                          ? "rgba(13, 148, 136, 0.95)"
-                          : edge.kind === "source_document"
-                          ? "rgba(148, 163, 184, 0.55)"
-                          : "rgba(93, 104, 112, 0.45)"
-                      }
-                      strokeDasharray={edge.kind === "source_document" ? "3 4" : undefined}
-                      strokeWidth={selected ? 2.4 : 1.5}
-                      x1={sourceNode.position.x}
-                      x2={targetNode.position.x}
-                      y1={sourceNode.position.y}
-                      y2={targetNode.position.y}
-                    />
-                    <line
-                      onClick={() => dispatch({ type: "select_edge", edgeId: edge.id })}
-                      stroke="transparent"
-                      strokeWidth="9"
-                      style={{ pointerEvents: "stroke" }}
-                      x1={sourceNode.position.x}
-                      x2={targetNode.position.x}
-                      y1={sourceNode.position.y}
-                      y2={targetNode.position.y}
-                    />
-                  </g>
-                );
-              })}
-            </svg>
-
-            <div className="relative size-full">
-              {project.nodes.map((node) => {
-                const selected = uiState.selectedNodeId === node.id;
-                const edgeConnected = Boolean(
-                  selectedEdge &&
-                    (selectedEdge.edge.sourceNodeId === node.id ||
-                      selectedEdge.edge.targetNodeId === node.id),
-                );
-                return (
-                  <button
-                    key={node.id}
-                    onClick={() =>
-                      dispatch({ type: "select_node", nodeId: node.id })
-                    }
-                    type="button"
-                    className={cn(
-                      "absolute min-w-32 -translate-x-1/2 -translate-y-1/2 rounded-xl border px-3 py-2 text-left transition",
-                      node.kind === "document"
-                        ? "border-border bg-background text-foreground"
-                        : "border-border bg-background text-foreground",
-                      selected &&
-                        "border-foreground ring-1 ring-foreground/20",
-                      edgeConnected &&
-                        !selected &&
-                        "border-foreground/40 ring-1 ring-border",
-                    )}
-                    style={{
-                      left: `${node.position.x}%`,
-                      top: `${node.position.y}%`,
-                    }}
-                  >
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                      {node.kind === "document" ? "source file" : node.kind}
-                    </div>
-                    <div className="mt-1 text-sm font-medium">{node.label}</div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      {node.evidenceCount} evidence refs
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <SigmaGraphCanvas
+            className="flex-1"
+            dispatch={dispatch}
+            project={project}
+            uiState={uiState}
+          />
         </section>
 
         {uiState.inspectorOpen && (
