@@ -1,20 +1,16 @@
 import {
   type Dispatch,
   type PointerEvent,
-  useEffect,
   useMemo,
   useRef,
   useState,
   type WheelEvent,
 } from "react";
-import Sigma from "sigma";
 
 import { cn } from "@/lib/utils";
 
 import {
   buildSigmaGraph,
-  type SigmaEdgeAttributes,
-  type SigmaNodeAttributes,
   type SigmaWorkspaceGraph,
 } from "./graphologyAdapter";
 import { pointerDeltaToViewBox, zoomGraphViewportAtPoint } from "./graphViewport";
@@ -30,11 +26,6 @@ interface SigmaGraphCanvasProps {
 
 export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
   const { project, uiState, dispatch, className } = props;
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const rendererRef = useRef<Sigma<SigmaNodeAttributes, SigmaEdgeAttributes> | null>(
-    null,
-  );
-  const dispatchRef = useRef(dispatch);
   const graph = useMemo(
     () =>
       buildSigmaGraph(project, {
@@ -44,90 +35,8 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
     [project, uiState.selectedEdgeId, uiState.selectedNodeId],
   );
 
-  useEffect(() => {
-    dispatchRef.current = dispatch;
-  }, [dispatch]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-
-    const renderer = new Sigma<SigmaNodeAttributes, SigmaEdgeAttributes>(
-      graph,
-      container,
-      {
-        allowInvalidContainer: true,
-        autoCenter: true,
-        autoRescale: true,
-        enableEdgeEvents: true,
-        hideEdgesOnMove: false,
-        hideLabelsOnMove: true,
-        itemSizesReference: "positions",
-        labelColor: { color: "#111111" },
-        labelFont: "Geist Variable, Geist, ui-sans-serif, system-ui",
-        labelRenderedSizeThreshold: 8,
-        labelSize: 13,
-        labelWeight: "500",
-        maxCameraRatio: 4,
-        minCameraRatio: 0.18,
-        renderEdgeLabels: false,
-        renderLabels: true,
-        stagePadding: 24,
-        zIndex: true,
-        nodeReducer: (_node, data) => ({
-          color: data.color,
-          forceLabel: data.forceLabel,
-          highlighted: data.highlighted,
-          label: data.label,
-          size: data.size,
-          x: data.x,
-          y: data.y,
-          zIndex: data.zIndex,
-        }),
-        edgeReducer: (_edge, data) => ({
-          color: data.color,
-          hidden: data.hidden,
-          label: data.label,
-          size: data.size,
-          zIndex: data.selected ? 10 : 0,
-        }),
-      },
-    );
-
-    renderer.on("clickNode", ({ node }) => {
-      dispatchRef.current({ type: "select_node", nodeId: node });
-    });
-    renderer.on("clickEdge", ({ edge }) => {
-      dispatchRef.current({ type: "select_edge", edgeId: edge });
-    });
-    renderer.on("beforeClear", () => {
-      applySigmaCanvasBackground(renderer, "#ffffff");
-    });
-
-    applySigmaCanvasBackground(renderer, "#ffffff");
-    rendererRef.current = renderer;
-
-    return () => {
-      renderer.kill();
-      rendererRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const renderer = rendererRef.current;
-    if (!renderer) {
-      return;
-    }
-
-    renderer.setGraph(graph);
-    renderer.refresh();
-  }, [graph]);
-
   return (
     <div className={cn("relative size-full overflow-hidden bg-white", className)}>
-      <div ref={containerRef} className="absolute inset-0 bg-white opacity-0" />
       <SvgGraphLayer
         dispatch={dispatch}
         graph={graph}
@@ -340,30 +249,4 @@ function toPercentX(value: number): number {
 
 function toPercentY(value: number): number {
   return 50 - value * 50;
-}
-
-function applySigmaCanvasBackground(
-  renderer: Sigma<SigmaNodeAttributes, SigmaEdgeAttributes>,
-  backgroundColor: string,
-) {
-  const layerHost = renderer.getContainer();
-  layerHost.style.backgroundColor = backgroundColor;
-
-  for (const canvas of layerHost.querySelectorAll("canvas")) {
-    canvas.style.backgroundColor = "transparent";
-  }
-
-  const webGLContexts = (
-    renderer as unknown as {
-      webGLContexts?: Record<string, WebGLRenderingContext>;
-    }
-  ).webGLContexts;
-
-  if (!webGLContexts) {
-    return;
-  }
-
-  webGLContexts.edges?.clearColor(1, 1, 1, 1);
-  webGLContexts.nodes?.clearColor(1, 1, 1, 1);
-  webGLContexts.hoverNodes?.clearColor(1, 1, 1, 1);
 }
