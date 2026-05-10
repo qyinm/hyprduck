@@ -43,6 +43,33 @@ const capabilities = [
   ['Provider flexible', 'OpenRouter, OpenAI, Anthropic, and local providers can share the same parsing workflow.'],
   ['Evidence-linked output', 'Generated markdown references the page images on disk instead of hiding the source.'],
 ];
+
+const providers = [
+  {
+    name: 'Ollama',
+    mode: 'Local',
+    description: 'Run private document parsing against local models without an API key.',
+    icon: 'provider-icons/ollama.webp',
+  },
+  {
+    name: 'OpenRouter',
+    mode: 'Router',
+    description: 'Use one provider setting to reach multiple hosted model families.',
+    icon: 'provider-icons/openrouter.webp',
+  },
+  {
+    name: 'OpenAI',
+    mode: 'Hosted',
+    description: 'Parse dense business documents with hosted frontier models.',
+    icon: 'provider-icons/openai.webp',
+  },
+  {
+    name: 'Anthropic',
+    mode: 'Hosted',
+    description: 'Use Claude for long-form document structure and careful extraction.',
+    icon: 'provider-icons/anthropic.webp',
+  },
+];
 ---
 
 <Layout>
@@ -172,11 +199,27 @@ Revenue expansion was concentrated in the enterprise segment...
               <span class="status-dot"></span>
               <span>Local Mode ready</span>
             </div>
-            <div class="provider-tags">
-              <span class="tag-pill">local</span>
-              <span class="tag-pill">openrouter</span>
-              <span class="tag-pill">openai</span>
-              <span class="tag-pill">anthropic</span>
+            <div class="provider-list" aria-label="Supported AI providers">
+              {providers.map((provider) => (
+                <article class="provider-item">
+                  <div class="provider-icon-wrap">
+                    <img
+                      src={assetPath(provider.icon)}
+                      alt={`${provider.name} logo`}
+                      class="provider-icon"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </div>
+                  <div class="provider-info">
+                    <div class="provider-title-row">
+                      <h3>{provider.name}</h3>
+                      <span>{provider.mode}</span>
+                    </div>
+                    <p>{provider.description}</p>
+                  </div>
+                </article>
+              ))}
             </div>
           </div>
         </div>
@@ -542,7 +585,7 @@ Revenue expansion was concentrated in the enterprise segment...
   .provider-card {
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: var(--radius-lg);
-    padding: 24px;
+    padding: 16px;
     background: rgba(255, 255, 255, 0.04);
   }
 
@@ -552,17 +595,73 @@ Revenue expansion was concentrated in the enterprise segment...
     gap: 10px;
     color: var(--color-on-dark);
     font-weight: 500;
+    padding: 8px 8px 16px;
   }
 
-  .provider-tags {
-    display: flex;
-    flex-wrap: wrap;
+  .provider-list {
+    display: grid;
     gap: 10px;
-    margin-top: 28px;
   }
 
-  .provider-tags .tag-pill {
+  .provider-item {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+    min-height: 82px;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .provider-icon-wrap {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
     background: var(--color-on-dark);
+  }
+
+  .provider-icon {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+  }
+
+  .provider-info {
+    min-width: 0;
+  }
+
+  .provider-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .provider-title-row h3 {
+    color: var(--color-on-dark);
+    font-size: 15px;
+    line-height: 1.3;
+  }
+
+  .provider-title-row span {
+    flex: 0 0 auto;
+    border-radius: var(--radius-full);
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-on-dark-mute);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .provider-info p {
+    margin-top: 5px;
+    font-size: 13px;
+    line-height: 1.45;
   }
 
   .capability-grid {
