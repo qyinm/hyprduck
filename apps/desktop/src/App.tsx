@@ -1122,12 +1122,17 @@ export function App() {
     if (selection) {
       setSelectedFile(selection);
       setActivePanel("knowledge");
-      await invoke<void>("start_parse", {
-        request: {
-          path: selection.path,
-          format: selection.format,
-        },
-      });
+      try {
+        await invoke<void>("start_parse", {
+          request: {
+            path: selection.path,
+            format: selection.format,
+          },
+        });
+      } catch (error) {
+        setSelectedFile(null);
+        window.alert(`Failed to start parsing: ${String(error)}`);
+      }
     }
   };
 
