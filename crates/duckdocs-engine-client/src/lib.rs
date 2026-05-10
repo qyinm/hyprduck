@@ -26,7 +26,7 @@ pub trait EngineClient {
 
     fn compile_project(&self, request: CompileProjectRequest)
         -> Result<CompileProjectResponseData>;
-    fn load_project(&self, project_id: Option<String>) -> Result<Option<KnowledgeProject>>;
+    fn load_project(&self, project_id: Option<String>) -> Result<LoadProjectResponseData>;
     fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject>;
     fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
@@ -208,13 +208,15 @@ impl EngineClient for SubprocessEngineClient {
         )
     }
 
-    fn load_project(&self, project_id: Option<String>) -> Result<Option<KnowledgeProject>> {
-        let response = self.run_command::<LoadProjectResponseData, LoadProjectResponseData>(
-            EngineRequest::LoadProject(LoadProjectRequest { project_id }),
+    fn load_project(&self, project_id: Option<String>) -> Result<LoadProjectResponseData> {
+        self.run_command::<LoadProjectResponseData, LoadProjectResponseData>(
+            EngineRequest::LoadProject(LoadProjectRequest {
+                project_id,
+                workspace_id: None,
+            }),
             EngineCommand::LoadProject,
             None,
-        )?;
-        Ok(response.project)
+        )
     }
 
     fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject> {

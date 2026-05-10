@@ -14,19 +14,22 @@ use duckdocs_engine_types::{
     CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
     EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
     EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, EvidenceRef, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest,
-    LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
-    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
-    ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
-    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SuggestedAction,
-    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
+    GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
+    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, OutputAsset, PageArtifact,
+    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
+    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData,
+    ProviderOption, ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
+    SourceArtifactManifest, SourceId, SourceSummary, SuggestedAction, SuggestedActionKind,
+    ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tempfile::tempdir;
 use uuid::{Uuid, Version};
+
+const DEFAULT_WORKSPACE_ID: &str = "default";
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -371,11 +374,15 @@ fn handle_parse(
         failed_count: parse.failed_count,
     };
 
-    let saved_output_path = export_output_package(&request, &result)?;
+    let source_manifest = export_output_package(&request, &result)?;
+    let saved_output_path = source_manifest
+        .as_ref()
+        .map(|manifest| manifest.markdown_path.clone());
     emit_event(&ParseEvent::Completed)?;
     Ok(ParseResponseData {
         result,
         saved_output_path,
+        source_manifest,
     })
 }
 
@@ -387,17 +394,34 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         )
     })?;
     let project = compile_knowledge_project(&request, &markdown);
+    let source_manifest = load_source_manifest(&request)?;
+    let (workspace_id, source_id) = resolved_source_ids(&request, source_manifest.as_ref())?;
     let store = KnowledgeProjectStore::default()?;
-    store.save_project(&project, &request)?;
+    store.save_project(&project, &request, source_manifest.as_ref())?;
     Ok(CompileProjectResponseData {
         project_id: project.summary.project_id,
+        workspace_id,
+        source_id,
     })
 }
 
 fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
     let store = KnowledgeProjectStore::default()?;
     let project = store.load_project(request.project_id.as_deref())?;
-    Ok(LoadProjectResponseData { project })
+    let workspace_id = match request.workspace_id.clone() {
+        Some(workspace_id) => Some(workspace_id),
+        None => store.load_latest_workspace_id()?,
+    };
+    let sources = workspace_id
+        .as_deref()
+        .map(|workspace_id| store.load_sources(workspace_id))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(LoadProjectResponseData {
+        project,
+        workspace_id,
+        sources,
+    })
 }
 
 fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorrectionResponseData> {
@@ -2389,7 +2413,10 @@ fn build_markdown(title: String, pages: &[ParsedPage]) -> String {
     markdown
 }
 
-fn export_output_package(request: &ParseRequest, result: &ParseResult) -> Result<Option<String>> {
+fn export_output_package(
+    request: &ParseRequest,
+    result: &ParseResult,
+) -> Result<Option<SourceArtifactManifest>> {
     let Some(output) = &request.output else {
         return Ok(None);
     };
@@ -2406,8 +2433,8 @@ fn export_output_package(request: &ParseRequest, result: &ParseResult) -> Result
     let safe_name = sanitize_name(&base_name);
     let timestamp = chrono_like_timestamp();
     let output_roots = output_root_candidates(output)?;
-    write_output_package_with_fallback(&output_roots, &safe_name, &timestamp, result)
-        .map(|markdown_path| Some(markdown_path.display().to_string()))
+    write_output_package_with_fallback(&output_roots, &safe_name, &timestamp, request, result)
+        .map(Some)
 }
 
 fn output_root_candidates(
@@ -2436,13 +2463,14 @@ fn write_output_package_with_fallback(
     output_roots: &[PathBuf],
     safe_name: &str,
     timestamp: &str,
+    request: &ParseRequest,
     result: &ParseResult,
-) -> Result<PathBuf> {
+) -> Result<SourceArtifactManifest> {
     let mut last_error = None;
 
     for output_root in output_roots {
-        match write_output_package_to_root(output_root, safe_name, timestamp, result) {
-            Ok(markdown_path) => return Ok(markdown_path),
+        match write_output_package_to_root(output_root, safe_name, timestamp, request, result) {
+            Ok(manifest) => return Ok(manifest),
             Err(error) => {
                 eprintln!(
                     "output packaging failed under {}: {error:#}",
@@ -2460,17 +2488,62 @@ fn write_output_package_to_root(
     output_root: &Path,
     safe_name: &str,
     timestamp: &str,
+    request: &ParseRequest,
     result: &ParseResult,
-) -> Result<PathBuf> {
-    fs::create_dir_all(output_root)
-        .with_context(|| format!("failed creating output root {}", output_root.display()))?;
+) -> Result<SourceArtifactManifest> {
+    let workspace_id = request
+        .output
+        .as_ref()
+        .and_then(|output| output.workspace_id.clone())
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.to_string());
+    let source_id = request
+        .output
+        .as_ref()
+        .and_then(|output| output.source_id.clone())
+        .unwrap_or_else(new_source_id);
+    let workspace_root = output_root.join(&workspace_id);
+    let sources_root = workspace_root.join("sources");
+    let artifacts_root = workspace_root.join("artifacts");
+    for required_dir in [
+        &sources_root,
+        &artifacts_root,
+        &workspace_root.join("wiki"),
+        &workspace_root.join("graph"),
+        &workspace_root.join("reviews"),
+    ] {
+        fs::create_dir_all(required_dir)
+            .with_context(|| format!("failed creating {}", required_dir.display()))?;
+    }
 
-    let output_dir = output_root.join(format!("{safe_name}_{timestamp}"));
+    let source_dir = sources_root.join(&source_id);
+    let output_dir = artifacts_root.join(&source_id);
     let images_dir = output_dir.join("images");
+    let pages_dir = output_dir.join("pages");
+    fs::create_dir_all(&source_dir)
+        .with_context(|| format!("failed creating source directory {}", source_dir.display()))?;
     fs::create_dir_all(&images_dir).with_context(|| {
         format!(
             "failed creating image output directory {}",
             images_dir.display()
+        )
+    })?;
+    fs::create_dir_all(&pages_dir).with_context(|| {
+        format!(
+            "failed creating page artifact directory {}",
+            pages_dir.display()
+        )
+    })?;
+
+    let source_filename = Path::new(&request.input.path)
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{safe_name}.{timestamp}"));
+    let source_path = source_dir.join(sanitize_name(&source_filename));
+    fs::copy(&request.input.path, &source_path).with_context(|| {
+        format!(
+            "failed copying source document {} to {}",
+            request.input.path,
+            source_path.display()
         )
     })?;
 
@@ -2490,7 +2563,234 @@ fn write_output_package_to_root(
     let markdown_path = output_dir.join(format!("{safe_name}.md"));
     fs::write(&markdown_path, &result.markdown)
         .with_context(|| format!("failed writing markdown {}", markdown_path.display()))?;
-    Ok(markdown_path)
+
+    let mut page_artifacts = Vec::new();
+    for page in &result.pages {
+        let page_number = page.index + 1;
+        let markdown_path = if let Some(markdown) = &page.markdown {
+            let path = pages_dir.join(format!("page_{page_number}.md"));
+            fs::write(&path, markdown)
+                .with_context(|| format!("failed writing page markdown {}", path.display()))?;
+            Some(path.display().to_string())
+        } else {
+            None
+        };
+        let plain_text_path = if let Some(plain_text) = &page.plain_text {
+            let path = pages_dir.join(format!("page_{page_number}.txt"));
+            fs::write(&path, plain_text)
+                .with_context(|| format!("failed writing page text {}", path.display()))?;
+            Some(path.display().to_string())
+        } else {
+            None
+        };
+        page_artifacts.push(PageArtifact {
+            index: page.index,
+            label: format!("Page {page_number}"),
+            image_path: page
+                .image_asset_path
+                .as_ref()
+                .map(|relative_path| output_dir.join(relative_path).display().to_string()),
+            markdown_path,
+            plain_text_path,
+            error_message: page.error_message.clone(),
+        });
+    }
+
+    let status = ingest_status_for_result(result);
+    let now = unix_timestamp_seconds();
+    let manifest_path = output_dir.join("source-manifest.json");
+    let manifest = SourceArtifactManifest {
+        workspace_id,
+        source_id,
+        original_path: request.input.path.clone(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        artifact_root: output_dir.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        format: request.input.format.clone(),
+        output_name: safe_name.to_string(),
+        status,
+        pages: page_artifacts,
+        created_at: now,
+        updated_at: now,
+    };
+    write_source_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn ingest_status_for_result(result: &ParseResult) -> IngestStatus {
+    if result.success_count == 0 && result.failed_count > 0 {
+        IngestStatus::Failed
+    } else if result.failed_count > 0 {
+        IngestStatus::NeedsReview
+    } else {
+        IngestStatus::Ingested
+    }
+}
+
+fn write_source_manifest(manifest: &SourceArtifactManifest) -> Result<()> {
+    let json =
+        serde_json::to_string_pretty(manifest).context("failed to encode source manifest")?;
+    fs::write(&manifest.manifest_path, json)
+        .with_context(|| format!("failed writing source manifest {}", manifest.manifest_path))
+}
+
+fn load_source_manifest(request: &CompileProjectRequest) -> Result<Option<SourceArtifactManifest>> {
+    let Some(path) = &request.source_manifest_path else {
+        return Ok(None);
+    };
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed reading source manifest {path}"))?;
+    serde_json::from_str(&json)
+        .with_context(|| format!("failed decoding source manifest {path}"))
+        .map(Some)
+}
+
+fn resolved_source_ids(
+    request: &CompileProjectRequest,
+    manifest: Option<&SourceArtifactManifest>,
+) -> Result<(WorkspaceId, SourceId)> {
+    if let Some(manifest) = manifest {
+        if let Some(request_workspace_id) = &request.workspace_id {
+            if request_workspace_id != &manifest.workspace_id {
+                bail!(
+                    "compile_project workspace_id {} does not match source manifest workspace_id {}",
+                    request_workspace_id,
+                    manifest.workspace_id
+                );
+            }
+        }
+        if let Some(request_source_id) = &request.source_id {
+            if request_source_id != &manifest.source_id {
+                bail!(
+                    "compile_project source_id {} does not match source manifest source_id {}",
+                    request_source_id,
+                    manifest.source_id
+                );
+            }
+        }
+        return Ok((manifest.workspace_id.clone(), manifest.source_id.clone()));
+    }
+
+    Ok((
+        request
+            .workspace_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.to_string()),
+        request
+            .source_id
+            .clone()
+            .unwrap_or_else(|| build_source_id(&request.source_markdown_path, 0)),
+    ))
+}
+
+fn build_source_id(seed: &str, timestamp: u64) -> SourceId {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in format!("{seed}|{timestamp}").as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("source-{hash:016x}")
+}
+
+fn new_source_id() -> SourceId {
+    format!("source-{}", Uuid::now_v7())
+}
+
+fn source_summary_from_manifest(manifest: &SourceArtifactManifest) -> SourceSummary {
+    let failed_count = manifest
+        .pages
+        .iter()
+        .filter(|page| page.error_message.is_some())
+        .count();
+    SourceSummary {
+        workspace_id: manifest.workspace_id.clone(),
+        source_id: manifest.source_id.clone(),
+        original_path: manifest.original_path.clone(),
+        source_path: manifest.source_path.clone(),
+        markdown_path: manifest.markdown_path.clone(),
+        format: manifest.format.clone(),
+        status: manifest.status.clone(),
+        page_count: manifest.pages.len(),
+        success_count: manifest.pages.len().saturating_sub(failed_count),
+        failed_count,
+        updated_at: manifest.updated_at,
+    }
+}
+
+fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
+    let columns: Vec<&str> = line.split('|').collect();
+    if columns.len() != 11 {
+        bail!(
+            "expected 11 source summary columns from sqlite, got {}",
+            columns.len()
+        );
+    }
+    Ok(SourceSummary {
+        workspace_id: columns[0].to_string(),
+        source_id: columns[1].to_string(),
+        original_path: columns[2].to_string(),
+        source_path: columns[3].to_string(),
+        markdown_path: columns[4].to_string(),
+        format: document_format_from_slug(columns[5])?,
+        status: ingest_status_from_slug(columns[6])?,
+        page_count: columns[7]
+            .parse()
+            .context("failed to parse source page_count")?,
+        success_count: columns[8]
+            .parse()
+            .context("failed to parse source success_count")?,
+        failed_count: columns[9]
+            .parse()
+            .context("failed to parse source failed_count")?,
+        updated_at: columns[10]
+            .parse()
+            .context("failed to parse source updated_at")?,
+    })
+}
+
+fn ingest_status_slug(status: &IngestStatus) -> &'static str {
+    match status {
+        IngestStatus::Added => "added",
+        IngestStatus::Rendering => "rendering",
+        IngestStatus::Ingesting => "ingesting",
+        IngestStatus::Ingested => "ingested",
+        IngestStatus::NeedsReview => "needs_review",
+        IngestStatus::Failed => "failed",
+        IngestStatus::Stale => "stale",
+    }
+}
+
+fn ingest_status_from_slug(value: &str) -> Result<IngestStatus> {
+    match value {
+        "added" => Ok(IngestStatus::Added),
+        "rendering" => Ok(IngestStatus::Rendering),
+        "ingesting" => Ok(IngestStatus::Ingesting),
+        "ingested" => Ok(IngestStatus::Ingested),
+        "needs_review" => Ok(IngestStatus::NeedsReview),
+        "failed" => Ok(IngestStatus::Failed),
+        "stale" => Ok(IngestStatus::Stale),
+        _ => bail!("unknown ingest status {value}"),
+    }
+}
+
+fn document_format_slug(format: &DocumentFormat) -> &'static str {
+    match format {
+        DocumentFormat::Pdf => "pdf",
+        DocumentFormat::Docx => "docx",
+        DocumentFormat::Doc => "doc",
+        DocumentFormat::Image => "image",
+    }
+}
+
+fn document_format_from_slug(value: &str) -> Result<DocumentFormat> {
+    match value {
+        "pdf" => Ok(DocumentFormat::Pdf),
+        "docx" => Ok(DocumentFormat::Docx),
+        "doc" => Ok(DocumentFormat::Doc),
+        "image" => Ok(DocumentFormat::Image),
+        _ => bail!("unknown document format {value}"),
+    }
 }
 
 fn sanitize_name(value: &str) -> String {
@@ -2557,6 +2857,7 @@ impl KnowledgeProjectStore {
         &self,
         project: &KnowledgeProject,
         request: &CompileProjectRequest,
+        source_manifest: Option<&SourceArtifactManifest>,
     ) -> Result<()> {
         self.ensure_schema()?;
         let snapshot_json =
@@ -2590,7 +2891,11 @@ impl KnowledgeProjectStore {
             updated_at = unix_timestamp_seconds(),
             snapshot_base64 = snapshot_base64,
         );
-        self.run_sql(&sql).map(|_| ())
+        self.run_sql(&sql)?;
+        if let Some(source_manifest) = source_manifest {
+            self.save_source(project, source_manifest)?;
+        }
+        Ok(())
     }
 
     fn update_project(&self, project: &KnowledgeProject) -> Result<()> {
@@ -2636,6 +2941,75 @@ impl KnowledgeProjectStore {
         Ok(Some(project))
     }
 
+    fn load_latest_workspace_id(&self) -> Result<Option<WorkspaceId>> {
+        self.ensure_schema()?;
+        let output =
+            self.run_sql("SELECT workspace_id FROM sources ORDER BY updated_at DESC LIMIT 1;")?;
+        let workspace_id = output.trim();
+        Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
+    }
+
+    fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
+        self.ensure_schema()?;
+        let sql = format!(
+            "SELECT workspace_id, source_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at \
+             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            escape_sqlite(workspace_id)
+        );
+        let output = self.run_sql(&sql)?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(source_summary_from_sqlite_row)
+            .collect()
+    }
+
+    fn save_source(
+        &self,
+        project: &KnowledgeProject,
+        manifest: &SourceArtifactManifest,
+    ) -> Result<()> {
+        let manifest_json =
+            serde_json::to_string(manifest).context("failed to encode source manifest snapshot")?;
+        let manifest_base64 = base64::engine::general_purpose::STANDARD.encode(manifest_json);
+        let summary = source_summary_from_manifest(manifest);
+        let status = ingest_status_slug(&summary.status);
+        let format = document_format_slug(&summary.format);
+        let sql = format!(
+            "INSERT INTO sources (source_id, workspace_id, project_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at, manifest_path, manifest_base64) \
+             VALUES ('{source_id}', '{workspace_id}', '{project_id}', '{original_path}', '{source_path}', '{markdown_path}', '{format}', '{status}', {page_count}, {success_count}, {failed_count}, {updated_at}, '{manifest_path}', '{manifest_base64}') \
+             ON CONFLICT(source_id) DO UPDATE SET \
+               workspace_id=excluded.workspace_id, \
+               project_id=excluded.project_id, \
+               original_path=excluded.original_path, \
+               source_path=excluded.source_path, \
+               markdown_path=excluded.markdown_path, \
+               format=excluded.format, \
+               status=excluded.status, \
+               page_count=excluded.page_count, \
+               success_count=excluded.success_count, \
+               failed_count=excluded.failed_count, \
+               updated_at=excluded.updated_at, \
+               manifest_path=excluded.manifest_path, \
+               manifest_base64=excluded.manifest_base64;",
+            source_id = escape_sqlite(&summary.source_id),
+            workspace_id = escape_sqlite(&summary.workspace_id),
+            project_id = escape_sqlite(&project.summary.project_id),
+            original_path = escape_sqlite(&summary.original_path),
+            source_path = escape_sqlite(&summary.source_path),
+            markdown_path = escape_sqlite(&summary.markdown_path),
+            format = format,
+            status = status,
+            page_count = summary.page_count,
+            success_count = summary.success_count,
+            failed_count = summary.failed_count,
+            updated_at = summary.updated_at,
+            manifest_path = escape_sqlite(&manifest.manifest_path),
+            manifest_base64 = manifest_base64,
+        );
+        self.run_sql(&sql).map(|_| ())
+    }
+
     fn ensure_schema(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
@@ -2651,7 +3025,24 @@ impl KnowledgeProjectStore {
                 updated_at INTEGER NOT NULL,
                 snapshot_base64 TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);",
+            CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                original_path TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                markdown_path TEXT NOT NULL,
+                format TEXT NOT NULL,
+                status TEXT NOT NULL,
+                page_count INTEGER NOT NULL,
+                success_count INTEGER NOT NULL,
+                failed_count INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                manifest_path TEXT NOT NULL,
+                manifest_base64 TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sources_workspace_updated_at ON sources(workspace_id, updated_at DESC);",
         )
         .map(|_| ())
     }
@@ -3241,6 +3632,9 @@ mod tests {
         let request = CompileProjectRequest {
             source_markdown_path: markdown_path.display().to_string(),
             source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: None,
+            workspace_id: None,
+            source_id: None,
         };
 
         let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
@@ -3274,6 +3668,62 @@ mod tests {
         }
     }
 
+    fn sample_parse_request(temp: &tempfile::TempDir) -> ParseRequest {
+        let source_path = temp.path().join("source.pdf");
+        fs::write(&source_path, b"%PDF sample").expect("write source");
+        ParseRequest {
+            version: "1".into(),
+            input: ParseInput {
+                path: source_path.display().to_string(),
+                format: DocumentFormat::Pdf,
+            },
+            template: "General".into(),
+            options: ParseOptions::default(),
+            output: None,
+        }
+    }
+
+    fn sample_manifest(temp: &tempfile::TempDir) -> SourceArtifactManifest {
+        SourceArtifactManifest {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            source_id: "source-test".into(),
+            original_path: temp.path().join("source.pdf").display().to_string(),
+            source_path: temp
+                .path()
+                .join("default/sources/source-test/source.pdf")
+                .display()
+                .to_string(),
+            markdown_path: temp
+                .path()
+                .join("default/artifacts/source-test/source.md")
+                .display()
+                .to_string(),
+            artifact_root: temp
+                .path()
+                .join("default/artifacts/source-test")
+                .display()
+                .to_string(),
+            manifest_path: temp
+                .path()
+                .join("default/artifacts/source-test/source-manifest.json")
+                .display()
+                .to_string(),
+            format: DocumentFormat::Pdf,
+            output_name: "source".into(),
+            status: IngestStatus::Ingested,
+            pages: vec![PageArtifact {
+                index: 0,
+                label: "Page 1".into(),
+                image_path: None,
+                markdown_path: None,
+                plain_text_path: None,
+                error_message: None,
+            }],
+            created_at: 1,
+            updated_at: 2,
+        }
+    }
+
     #[test]
     fn compile_and_store_project_round_trip() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -3285,6 +3735,9 @@ mod tests {
         let request = CompileProjectRequest {
             source_markdown_path: markdown_path.display().to_string(),
             source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: None,
+            workspace_id: None,
+            source_id: None,
         };
         assert_eq!(project.summary.status, ProjectStatus::Ready);
         assert!(project
@@ -3300,7 +3753,7 @@ mod tests {
         let store_path = temp.path().join("knowledge.sqlite3");
         let store = KnowledgeProjectStore::new(store_path);
         store
-            .save_project(&project, &request)
+            .save_project(&project, &request, None)
             .expect("save project to sqlite");
 
         let loaded = store
@@ -3316,22 +3769,119 @@ mod tests {
     }
 
     #[test]
+    fn project_store_persists_workspace_source_manifest_summary() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Sample import\n\n## Page 1\n\nSource evidence belongs to the workspace.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: Some(sample_manifest(&temp).manifest_path),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some("source-test".into()),
+        };
+        let project = compile_knowledge_project(&request, markdown);
+        let manifest = sample_manifest(&temp);
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save project with source");
+
+        let workspace_id = store
+            .load_latest_workspace_id()
+            .expect("load latest workspace")
+            .expect("workspace id");
+        let sources = store.load_sources(&workspace_id).expect("load sources");
+        assert_eq!(workspace_id, DEFAULT_WORKSPACE_ID);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_id, "source-test");
+        assert_eq!(sources[0].page_count, 1);
+        assert_eq!(sources[0].status, IngestStatus::Ingested);
+        assert_eq!(sources[0].format, DocumentFormat::Pdf);
+        assert_eq!(sources[0].success_count, 1);
+        assert_eq!(sources[0].failed_count, 0);
+    }
+
+    #[test]
+    fn compile_project_rejects_request_ids_that_conflict_with_manifest() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some("different-workspace".into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+
+        let error = resolved_source_ids(&request, Some(&manifest)).expect_err("id mismatch");
+        assert!(error
+            .to_string()
+            .contains("does not match source manifest workspace_id"));
+    }
+
+    #[test]
     fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         let temp = tempfile::tempdir().expect("temp dir");
         let blocked_root = temp.path().join("blocked-root");
         fs::write(&blocked_root, "not a directory").expect("blocked root file");
         let fallback_root = temp.path().join("fallback-root");
+        let request = sample_parse_request(&temp);
 
-        let markdown_path = write_output_package_with_fallback(
+        let manifest = write_output_package_with_fallback(
             &[blocked_root.clone(), fallback_root.clone()],
             "sample-import",
             "123",
+            &request,
             &sample_parse_result(),
         )
-        .expect("fallback output path");
+        .expect("fallback output manifest");
 
-        assert!(markdown_path.starts_with(&fallback_root));
-        assert!(markdown_path.exists());
+        assert!(Path::new(&manifest.markdown_path).starts_with(&fallback_root));
+        assert!(Path::new(&manifest.markdown_path).exists());
+        assert!(Path::new(&manifest.source_path).exists());
+        assert!(Path::new(&manifest.manifest_path).exists());
+        assert!(manifest.artifact_root.contains("/default/artifacts/"));
+        assert!(manifest.source_path.contains("/default/sources/"));
+        assert_eq!(manifest.pages[0].label, "Page 1");
+        assert!(manifest.pages[0]
+            .markdown_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).exists()));
+    }
+
+    #[test]
+    fn output_packaging_uses_requested_workspace_and_source_ids() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let fallback_root = temp.path().join("output-root");
+        let mut request = sample_parse_request(&temp);
+        request.output = Some(duckdocs_engine_types::ParseOutputTarget {
+            root_dir: Some(fallback_root.display().to_string()),
+            name: Some("sample-import".into()),
+            workspace_id: Some("workspace-alpha".into()),
+            source_id: Some("source-alpha".into()),
+        });
+
+        let manifest = write_output_package_with_fallback(
+            &[fallback_root.clone()],
+            "sample-import",
+            "123",
+            &request,
+            &sample_parse_result(),
+        )
+        .expect("output manifest");
+
+        assert_eq!(manifest.workspace_id, "workspace-alpha");
+        assert_eq!(manifest.source_id, "source-alpha");
+        assert!(manifest
+            .artifact_root
+            .contains("/workspace-alpha/artifacts/source-alpha"));
+        assert!(manifest
+            .source_path
+            .contains("/workspace-alpha/sources/source-alpha"));
     }
 
     #[test]

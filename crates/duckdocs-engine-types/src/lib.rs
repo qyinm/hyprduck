@@ -71,6 +71,10 @@ impl Default for ParseOptions {
 pub struct ParseOutputTarget {
     pub root_dir: Option<String>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,11 +125,88 @@ pub struct ParseResult {
     pub failed_count: usize,
 }
 
+pub type WorkspaceId = String;
+pub type SourceId = String;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestStatus {
+    Added,
+    Rendering,
+    Ingesting,
+    Ingested,
+    NeedsReview,
+    Failed,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageArtifact {
+    pub index: usize,
+    pub label: String,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub plain_text_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceArtifactManifest {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub artifact_root: String,
+    pub manifest_path: String,
+    pub format: DocumentFormat,
+    pub output_name: String,
+    pub status: IngestStatus,
+    pub pages: Vec<PageArtifact>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSummary {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: DocumentFormat,
+    pub status: IngestStatus,
+    pub page_count: usize,
+    pub success_count: usize,
+    pub failed_count: usize,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestRun {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub status: IngestStatus,
+    pub started_at: u64,
+    #[serde(default)]
+    pub completed_at: Option<u64>,
+    pub source_manifest_path: String,
+    pub page_count: usize,
+    pub success_count: usize,
+    pub failed_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParseResponseData {
     pub result: ParseResult,
     #[serde(default)]
     pub saved_output_path: Option<String>,
+    #[serde(default)]
+    pub source_manifest: Option<SourceArtifactManifest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,23 +214,37 @@ pub struct CompileProjectRequest {
     pub source_markdown_path: String,
     #[serde(default)]
     pub source_document_path: Option<String>,
+    #[serde(default)]
+    pub source_manifest_path: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompileProjectResponseData {
     pub project_id: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct LoadProjectRequest {
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadProjectResponseData {
     #[serde(default)]
     pub project: Option<KnowledgeProject>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub sources: Vec<SourceSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +560,8 @@ mod tests {
             output: Some(ParseOutputTarget {
                 root_dir: Some("/tmp/out".into()),
                 name: Some("sample".into()),
+                workspace_id: Some("default".into()),
+                source_id: None,
             }),
         });
 
@@ -551,6 +648,7 @@ mod tests {
                     failed_count: 0,
                 },
                 saved_output_path: Some("/tmp/out/sample.md".into()),
+                source_manifest: None,
             },
         );
 
@@ -589,13 +687,54 @@ mod tests {
     fn load_project_round_trip() {
         let response = EngineSuccess::new(
             EngineCommand::LoadProject,
-            LoadProjectResponseData { project: None },
+            LoadProjectResponseData {
+                project: None,
+                workspace_id: Some("default".into()),
+                sources: Vec::new(),
+            },
         );
 
         let json = serde_json::to_string(&response).unwrap();
         let decoded: EngineSuccess<LoadProjectResponseData> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::LoadProject);
         assert!(decoded.data.project.is_none());
+        assert_eq!(decoded.data.workspace_id.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn source_artifact_contract_round_trip() {
+        let manifest = SourceArtifactManifest {
+            workspace_id: "default".into(),
+            source_id: "source-123".into(),
+            original_path: "/tmp/input.pdf".into(),
+            source_path: "/tmp/HyprDuck/default/sources/source-123/input.pdf".into(),
+            markdown_path: "/tmp/HyprDuck/default/artifacts/source-123/input.md".into(),
+            artifact_root: "/tmp/HyprDuck/default/artifacts/source-123".into(),
+            manifest_path: "/tmp/HyprDuck/default/artifacts/source-123/source-manifest.json".into(),
+            format: DocumentFormat::Pdf,
+            output_name: "input".into(),
+            status: IngestStatus::Ingested,
+            pages: vec![PageArtifact {
+                index: 0,
+                label: "Page 1".into(),
+                image_path: Some(
+                    "/tmp/HyprDuck/default/artifacts/source-123/images/page_1.png".into(),
+                ),
+                markdown_path: Some(
+                    "/tmp/HyprDuck/default/artifacts/source-123/pages/page_1.md".into(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            }],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert!(json.contains("\"status\":\"ingested\""));
+        assert!(json.contains("\"format\":\"pdf\""));
+        let decoded: SourceArtifactManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, manifest);
     }
 
     #[test]
