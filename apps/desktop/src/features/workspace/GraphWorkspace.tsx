@@ -108,8 +108,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   if (!project) {
     return (
-      <div className="flex h-full min-h-[30rem] flex-col items-center justify-center rounded-[24px] border border-dashed border-border bg-muted/15 p-10 text-center">
-        <div className="mb-4 inline-flex size-12 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
+      <div className="flex h-full min-h-[30rem] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/15 p-10 text-center">
+        <div className="mb-4 inline-flex size-12 items-center justify-center rounded-xl bg-secondary text-secondary-foreground">
           <Share2 size={20} />
         </div>
         <h2 className="text-xl font-semibold text-foreground">
@@ -124,7 +124,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             Choose files
           </Button>
         </div>
-        <div className="mt-8 w-full max-w-2xl rounded-[22px] border border-border bg-background p-3 text-left shadow-sm">
+        <div className="mt-8 w-full max-w-2xl rounded-xl border border-border bg-background p-3 text-left ">
           <div className="flex items-center gap-2">
             <Button onClick={onOpenImport} size="sm" type="button" variant="outline">
               + files
@@ -192,11 +192,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <section className="rounded-[24px] border border-border/80 bg-background/80 px-5 py-4">
+      <section className="rounded-xl border border-border/80 bg-background/80 px-5 py-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+              <Badge variant="outline" className="border-border bg-secondary text-foreground">
                 {project.summary.status === "preview"
                   ? "Source file"
                   : "Knowledge node"}
@@ -266,7 +266,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </section>
 
       {project.summary.stale && (
-        <section className="rounded-[20px] border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
+        <section className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" />
             <div className="space-y-1">
@@ -291,7 +291,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       >
         <section
           className={cn(
-            "flex min-h-[26rem] flex-col rounded-[24px] border bg-background",
+            "flex min-h-[26rem] flex-col rounded-xl border bg-background",
             graphPaneClass,
           )}
         >
@@ -305,7 +305,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 provenance without leaving the graph context.
               </p>
             </div>
-            <div className="order-last flex w-full flex-wrap gap-1 rounded-2xl border border-border/70 bg-muted/10 p-1 sm:order-none sm:w-auto">
+            <div className="order-last flex w-full flex-wrap gap-1 rounded-xl border border-border/70 bg-muted/10 p-1 sm:order-none sm:w-auto">
               {["Graph", "Wiki", "Sources", "Claims", "Conflicts"].map((mode) => (
                 <button
                   key={mode}
@@ -313,7 +313,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   className={cn(
                     "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
                     mode === "Graph"
-                      ? "bg-primary text-primary-foreground shadow-sm"
+                      ? "bg-primary text-primary-foreground "
                       : "text-muted-foreground hover:bg-background hover:text-foreground",
                   )}
                 >
@@ -331,8 +331,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           </div>
 
           <div className="relative flex-1 overflow-hidden p-4">
-            <div className="absolute inset-4 rounded-[20px] bg-[radial-gradient(circle_at_top,rgba(17,94,89,0.08),transparent_38%),linear-gradient(180deg,rgba(246,244,239,0.7),rgba(255,255,255,0.95))]" />
-            <div className="pointer-events-none absolute inset-4 rounded-[20px] bg-[linear-gradient(rgba(15,23,42,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.04)_1px,transparent_1px)] bg-[size:28px_28px]" />
+            <div className="absolute inset-4 rounded-xl border border-border bg-muted/20" />
             <svg
               aria-hidden="true"
               className="absolute inset-4 size-[calc(100%-2rem)]"
@@ -393,15 +392,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     }
                     type="button"
                     className={cn(
-                      "absolute min-w-32 -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 text-left shadow-[0_10px_25px_rgba(15,23,42,0.04)] transition",
+                      "absolute min-w-32 -translate-x-1/2 -translate-y-1/2 rounded-xl border px-3 py-2 text-left transition",
                       node.kind === "document"
-                        ? "border-teal-300/60 bg-white text-foreground"
-                        : "border-stone-300/90 bg-white/95 text-foreground",
+                        ? "border-border bg-background text-foreground"
+                        : "border-border bg-background text-foreground",
                       selected &&
-                        "border-teal-600 ring-2 ring-teal-600/20 shadow-[0_12px_24px_rgba(15,23,42,0.08)]",
+                        "border-foreground ring-1 ring-foreground/20",
                       edgeConnected &&
                         !selected &&
-                        "border-teal-400/80 ring-2 ring-teal-500/10 shadow-[0_12px_24px_rgba(15,23,42,0.06)]",
+                        "border-foreground/40 ring-1 ring-border",
                     )}
                     style={{
                       left: `${node.position.x}%`,
@@ -423,7 +422,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </section>
 
         {uiState.inspectorOpen && (
-          <aside className="flex min-h-[26rem] flex-col rounded-[24px] border border-border/80 bg-background shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+          <aside className="flex min-h-[26rem] flex-col rounded-xl border border-border bg-background">
             <div className="border-b border-border/70 px-4 py-3">
               <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
               <p className="text-xs text-muted-foreground">
@@ -474,7 +473,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {selectedEdge.evidence.map((evidence) => (
                       <article
                         key={evidence.id}
-                        className="rounded-2xl border border-border/70 bg-muted/10 px-3 py-3"
+                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{evidence.pageLabel}</span>
@@ -527,7 +526,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 </section>
 
                 {selectedNode.node.kind === "document" ? (
-                  <section className="space-y-3 rounded-2xl border border-border/70 bg-muted/10 px-3 py-3">
+                  <section className="space-y-3 rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
                     <div>
                       <h5 className="text-sm font-semibold">Source Detail</h5>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -578,7 +577,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {selectedNode.evidence.map((evidence) => (
                       <article
                         key={evidence.id}
-                        className="rounded-2xl border border-border/70 bg-muted/10 px-3 py-3"
+                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{evidence.pageLabel}</span>
@@ -611,7 +610,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-dashed border-border/80 px-3 py-3"
+                              className="rounded-xl border border-dashed border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -630,7 +629,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-border/80 px-3 py-3"
+                              className="rounded-xl border border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -668,7 +667,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           return (
                             <div
                               key={action.kind}
-                              className="rounded-2xl border border-border/80 px-3 py-3"
+                              className="rounded-xl border border-border/80 px-3 py-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-sm font-medium">{action.label}</span>
@@ -711,7 +710,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         return (
                           <div
                             key={action.kind}
-                            className="rounded-2xl border border-border/80 px-3 py-3"
+                            className="rounded-xl border border-border/80 px-3 py-3"
                           >
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-sm font-medium">{action.label}</span>
@@ -753,7 +752,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         )}
       </div>
 
-      <section className="rounded-[28px] border border-teal-200/80 bg-background shadow-[0_22px_60px_rgba(13,148,136,0.16)] ring-1 ring-teal-100/80">
+      <section className="rounded-xl border border-border bg-background">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
@@ -769,7 +768,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               className={cn(
                 answer?.status === "stale" || answer?.status === "low_confidence"
                   ? "border-amber-200 bg-amber-50 text-amber-700"
-                  : "border-teal-200 bg-teal-50 text-teal-700",
+                  : "border-border bg-secondary text-foreground",
               )}
             >
               {answerBadgeLabel}
@@ -781,7 +780,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <label className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 Ask selected graph context or attach files
               </label>
-              <div className="grid gap-2 rounded-2xl border border-teal-200/80 bg-teal-50/60 p-3 text-xs text-teal-900 sm:grid-cols-2">
+              <div className="grid gap-2 rounded-xl border border-border bg-secondary/70 p-3 text-xs text-foreground sm:grid-cols-2">
                 <label className="flex items-center gap-2">
                   <input type="radio" name="attachment-intent" defaultChecked />
                   <span>Add to knowledge base</span>
@@ -838,7 +837,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               ) : null}
             </div>
 
-            <div className="space-y-4 rounded-[20px] border border-border/70 bg-muted/10 px-4 py-4">
+            <div className="space-y-4 rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
               <div className="flex items-center gap-2">
                 <RefreshCw size={14} className="text-muted-foreground" />
                 <p className="text-sm font-medium">
@@ -858,7 +857,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   {answer.citations.map((citation) => (
                     <article
                       key={citation.id}
-                      className="rounded-2xl border border-border/70 bg-background px-3 py-3"
+                      className="rounded-xl border border-border/70 bg-background px-3 py-3"
                     >
                       <div className="text-xs font-medium text-muted-foreground">
                         {citation.pageLabel}
@@ -883,7 +882,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {answer.suggestedActions.map((action) => (
                       <div
                         key={action.kind}
-                        className="rounded-2xl border border-dashed border-border/70 px-3 py-3"
+                        className="rounded-xl border border-dashed border-border/70 px-3 py-3"
                       >
                         <div className="text-sm font-medium">{action.label}</div>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">

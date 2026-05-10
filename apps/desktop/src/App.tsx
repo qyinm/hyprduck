@@ -542,11 +542,15 @@ function parseSummary(snapshot: UiSnapshot): string {
 
 function sidebarButtonClass(active: boolean): string {
   return cn(
-    "w-full justify-start gap-3 border border-transparent rounded-lg px-3 py-2 text-sm",
+    "h-9 w-full justify-start gap-3 rounded-full border px-3 text-sm font-medium",
     active
-      ? "bg-secondary text-foreground border-border"
-      : "text-muted-foreground hover:text-foreground hover:bg-gray-400/15",
+      ? "border-border bg-secondary text-foreground"
+      : "border-transparent text-muted-foreground hover:bg-secondary hover:text-foreground",
   );
+}
+
+function windowChromeButtonClass(): string {
+  return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
 }
 
 function ImportPanel(props: {
@@ -912,7 +916,7 @@ function SettingsPanel(props: {
                           {opt.label}
                         </span>
                         {activeProvider === opt.id && (
-                          <span className="rounded-full bg-emerald-100 px-1.5 py-0 text-[10px] font-medium text-emerald-700 leading-none">
+                          <span className="rounded-full border border-border bg-secondary px-1.5 py-0 text-[10px] font-medium leading-none text-foreground">
                             Active
                           </span>
                         )}
@@ -1227,54 +1231,63 @@ export function App() {
   }
 
   return (
-    <main className="flex h-screen w-screen overflow-hidden bg-sidebar text-foreground">
-      {/* Sidebar — char-style: native titlebar, h-9 header, hide completely when collapsed */}
+    <main className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+      <div
+        data-electron-drag-region
+        className="fixed inset-x-0 top-0 z-40 h-12"
+      />
+      <div className="fixed left-[76px] top-[10px] z-50 flex h-7 items-center gap-1">
+        {settingsOpen ? (
+          <Button
+            aria-label="Back to Knowledge"
+            onClick={() => {
+              setActivePanel("knowledge");
+            }}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <ArrowLeft size={14} />
+          </Button>
+        ) : showSidebar ? (
+          <Button
+            aria-label="Collapse sidebar"
+            onClick={() => setSidebarCollapsed(true)}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <PanelLeftClose size={14} />
+          </Button>
+        ) : (
+          <Button
+            aria-label="Expand sidebar"
+            onClick={() => setSidebarCollapsed(false)}
+            size="icon"
+            variant="ghost"
+            className={windowChromeButtonClass()}
+            type="button"
+          >
+            <PanelLeftOpen size={14} />
+          </Button>
+        )}
+      </div>
+      <Button
+        aria-label="Knowledge maintenance"
+        title="Knowledge maintenance"
+        size="icon"
+        variant="ghost"
+        className={cn("fixed right-3 top-[10px] z-50", windowChromeButtonClass())}
+        type="button"
+      >
+        <Bell size={14} />
+      </Button>
+      {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
-          {/* Header row matches macOS traffic-lights height, same as char */}
-          <header
-            data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center justify-between pl-20 pr-2"
-          >
-            {!settingsOpen && (
-              <Button
-                aria-label="Collapse sidebar"
-                onClick={() => setSidebarCollapsed(true)}
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                type="button"
-              >
-                <PanelLeftClose size={14} />
-              </Button>
-            )}
-            {settingsOpen && (
-              <div className="flex items-center gap-0.5">
-                <Button
-                  aria-label="Back to Knowledge"
-                  onClick={() => {
-                    setActivePanel("knowledge");
-                  }}
-                  size="icon"
-                  variant="ghost"
-                  className="size-7"
-                  type="button"
-                >
-                  <ArrowLeft size={14} />
-                </Button>
-              </div>
-            )}
-            <Button
-              aria-label="Knowledge maintenance"
-              title="Knowledge maintenance"
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              type="button"
-            >
-              <Bell size={14} />
-            </Button>
-          </header>
+          <div className="h-12 w-full shrink-0" />
 
           {/* Navigation content */}
           <div className="flex min-h-0 flex-1 flex-col px-3 overflow-y-auto">
@@ -1344,35 +1357,7 @@ export function App() {
 
       {/* Main content area */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {!showSidebar && (
-          <header
-            data-electron-drag-region
-            className="flex h-9 w-full shrink-0 items-center justify-between pl-20 pr-2"
-          >
-            <Button
-              aria-label="Expand sidebar"
-              onClick={() => setSidebarCollapsed(false)}
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              type="button"
-            >
-              <PanelLeftOpen size={14} />
-            </Button>
-            <Button
-              aria-label="Knowledge maintenance"
-              title="Knowledge maintenance"
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              type="button"
-            >
-              <Bell size={14} />
-            </Button>
-          </header>
-        )}
-
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6 pt-14">
           {settingsOpen ? (
             <SettingsPanel
               config={currentConfig}
