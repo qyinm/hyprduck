@@ -229,7 +229,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               {uiState.inspectorOpen ? (
                 <>
                   <PanelRightClose size={16} />
-                  Hide inspector
+                  Hide right inspector
                 </>
               ) : (
                 <>
@@ -273,7 +273,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <p className="font-medium">Read path stays open while write jobs run.</p>
               <p className="leading-6">
                 You are looking at the most recent stable workspace snapshot. New
-                compile, re-import, or correction writes can finish in the
+                ingest, re-import, or correction writes can finish in the
                 background without freezing the graph.
               </p>
             </div>
@@ -295,29 +295,30 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             graphPaneClass,
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
                 Knowledge Graph
               </h3>
               <p className="text-xs text-muted-foreground">
-                Graph is the primary surface. Wiki, Sources, Claims, and Conflicts
-                are modes over the same evidence-backed knowledge base.
+                Select source files, concepts, or links. The right inspector shows
+                provenance without leaving the graph context.
               </p>
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="order-last flex w-full flex-wrap gap-1 rounded-2xl border border-border/70 bg-muted/10 p-1 sm:order-none sm:w-auto">
               {["Graph", "Wiki", "Sources", "Claims", "Conflicts"].map((mode) => (
-                <span
+                <button
                   key={mode}
+                  type="button"
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-xs font-medium",
+                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
                     mode === "Graph"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground",
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-background hover:text-foreground",
                   )}
                 >
                   {mode}
-                </span>
+                </button>
               ))}
             </div>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -331,6 +332,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
           <div className="relative flex-1 overflow-hidden p-4">
             <div className="absolute inset-4 rounded-[20px] bg-[radial-gradient(circle_at_top,rgba(17,94,89,0.08),transparent_38%),linear-gradient(180deg,rgba(246,244,239,0.7),rgba(255,255,255,0.95))]" />
+            <div className="pointer-events-none absolute inset-4 rounded-[20px] bg-[linear-gradient(rgba(15,23,42,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.04)_1px,transparent_1px)] bg-[size:28px_28px]" />
             <svg
               aria-hidden="true"
               className="absolute inset-4 size-[calc(100%-2rem)]"
@@ -421,11 +423,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </section>
 
         {uiState.inspectorOpen && (
-          <aside className="flex min-h-[26rem] flex-col rounded-[24px] border border-border/80 bg-background">
+          <aside className="flex min-h-[26rem] flex-col rounded-[24px] border border-border/80 bg-background shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
             <div className="border-b border-border/70 px-4 py-3">
-              <h3 className="text-sm font-semibold text-foreground">Inspector</h3>
+              <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
               <p className="text-xs text-muted-foreground">
-                Evidence stays visible even when answers stay cautious.
+                Selection detail, source provenance, and evidence stay visible
+                without leaving the graph.
               </p>
             </div>
 
@@ -480,8 +483,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-foreground">
-                          {evidence.snippet}
+                          {formatEvidenceSnippet(evidence.snippet)}
                         </p>
+                        {extractMarkdownImageLabel(evidence.snippet) ? (
+                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -527,6 +535,24 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         raw markdown, evidence, and linked claims stay adjacent.
                       </p>
                     </div>
+                    <div className="grid gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Original file</span>
+                        <span className="truncate font-medium text-foreground">
+                          {selectedNode.evidence[0]?.sourcePath?.split("/").pop() ?? selectedNode.canonicalName}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Evidence refs</span>
+                        <span className="font-medium text-foreground">
+                          {selectedNode.evidence.length}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Derived artifacts</span>
+                        <span className="font-medium text-foreground">Page images + markdown</span>
+                      </div>
+                    </div>
                     <div className="grid gap-2">
                       <Button size="sm" type="button" variant="outline">
                         Open source detail
@@ -561,8 +587,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-foreground">
-                          {evidence.snippet}
+                          {formatEvidenceSnippet(evidence.snippet)}
                         </p>
+                        {extractMarkdownImageLabel(evidence.snippet) ? (
+                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -722,7 +753,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         )}
       </div>
 
-      <section className="rounded-[24px] border border-border/80 bg-background shadow-lg">
+      <section className="rounded-[28px] border border-teal-200/80 bg-background shadow-[0_22px_60px_rgba(13,148,136,0.16)] ring-1 ring-teal-100/80">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
@@ -750,7 +781,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <label className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 Ask selected graph context or attach files
               </label>
-              <div className="grid gap-2 rounded-2xl border border-border/70 bg-muted/10 p-3 text-xs text-muted-foreground sm:grid-cols-2">
+              <div className="grid gap-2 rounded-2xl border border-teal-200/80 bg-teal-50/60 p-3 text-xs text-teal-900 sm:grid-cols-2">
                 <label className="flex items-center gap-2">
                   <input type="radio" name="attachment-intent" defaultChecked />
                   <span>Add to knowledge base</span>
@@ -775,6 +806,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 value={uiState.answerInput}
               />
               <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={onOpenImport}
+                  type="button"
+                  variant="outline"
+                >
+                  + Attach files
+                </Button>
                 <Button
                   disabled={answerPending || !uiState.answerInput.trim()}
                   onClick={() => void handleAskProject()}
@@ -822,10 +860,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                       key={citation.id}
                       className="rounded-2xl border border-border/70 bg-background px-3 py-3"
                     >
-                      <div className="text-xs text-muted-foreground">
+                      <div className="text-xs font-medium text-muted-foreground">
                         {citation.pageLabel}
+                        {citation.sourcePath ? ` · ${citation.sourcePath.split("/").pop()}` : ""}
                       </div>
-                      <p className="mt-1 text-sm leading-6">{citation.snippet}</p>
+                      {extractMarkdownImageLabel(citation.snippet) ? (
+                        <div className="mt-2 rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                          Page image: {extractMarkdownImageLabel(citation.snippet)}
+                        </div>
+                      ) : null}
+                      <p className="mt-2 text-sm leading-6">{formatEvidenceSnippet(citation.snippet)}</p>
                     </article>
                   ))}
                 </div>
@@ -855,4 +899,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </section>
     </div>
   );
+}
+
+function extractMarkdownImageLabel(value: string): string | null {
+  return value.match(/!\[([^\]]*)\]\(([^)]+)\)/)?.[1]?.trim() || null;
+}
+
+function formatEvidenceSnippet(value: string): string {
+  return value
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "No text evidence is available for this page yet.";
 }

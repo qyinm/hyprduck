@@ -6,6 +6,10 @@ const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const previewSource = readFileSync(
+  new URL("../src/features/workspace/buildWorkspacePreview.ts", import.meta.url),
+  "utf8",
+);
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
 
 test("desktop IA is the committed source of truth for the Knowledge workspace", () => {
@@ -26,7 +30,8 @@ test("Knowledge empty state gives first users add-file and prompt affordances", 
   expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
   expect(graphSource).toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
-  expect(graphSource).not.toMatch(/compile-backed knowledge layer/);
+  expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
+  expect(previewSource).not.toMatch(/compile|compiled|compiler/i);
 });
 
 test("Graph workspace has IA modes and source-file inspector actions", () => {
@@ -34,8 +39,12 @@ test("Graph workspace has IA modes and source-file inspector actions", () => {
     expect(graphSource).toMatch(new RegExp(`>${label}<|${label}`));
   }
   expect(graphSource).toMatch(/Open source detail/);
+  expect(graphSource).toMatch(/Original file/);
+  expect(graphSource).toMatch(/Derived artifacts/);
   expect(graphSource).toMatch(/Open uploaded file/);
   expect(graphSource).toMatch(/Reveal in Finder/);
+  expect(graphSource).toMatch(/Right inspector/);
+  expect(graphSource).toMatch(/without leaving the graph/);
 });
 
 test("bottom prompt composer supports attachment intent and source metadata", () => {
@@ -43,5 +52,12 @@ test("bottom prompt composer supports attachment intent and source metadata", ()
   expect(graphSource).toMatch(/Add to knowledge base/);
   expect(graphSource).toMatch(/Ask only this time/);
   expect(graphSource).toMatch(/File description/);
+  expect(graphSource).toMatch(/\+ Attach files/);
   expect(graphSource).toMatch(/source\.description|source metadata/);
+});
+
+test("evidence is rendered as UI content instead of raw markdown", () => {
+  expect(graphSource).toMatch(/formatEvidenceSnippet/);
+  expect(graphSource).toMatch(/extractMarkdownImageLabel/);
+  expect(graphSource).toMatch(/Page image:/);
 });
