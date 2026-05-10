@@ -12,6 +12,7 @@
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",
     "frontend:build": "tsc --noEmit && vite build",
+    "test:ia": "node --test tests/ia-ui.test.mjs",
     "sync:sidecar:debug": "../../scripts/sync-electron-sidecar.sh debug",
     "sync:sidecar:release": "../../scripts/sync-electron-sidecar.sh release"
   },
