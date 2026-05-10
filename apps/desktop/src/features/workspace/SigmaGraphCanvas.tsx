@@ -1,10 +1,10 @@
 import {
   type Dispatch,
   type PointerEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
-  type WheelEvent,
 } from "react";
 
 import { cn } from "@/lib/utils";
@@ -72,6 +72,31 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
     zoom: 1,
   });
 
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) {
+      return;
+    }
+
+    const handleNativeWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const point = {
+        x: ((event.clientX - rect.left) / rect.width) * 100,
+        y: ((event.clientY - rect.top) / rect.height) * 100,
+      };
+
+      setViewport((current) =>
+        zoomGraphViewportAtPoint(current, event.deltaY, point),
+      );
+    };
+
+    svg.addEventListener("wheel", handleNativeWheel, { passive: false });
+    return () => {
+      svg.removeEventListener("wheel", handleNativeWheel);
+    };
+  }, []);
+
   const handlePointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) {
       return;
@@ -127,24 +152,6 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
     }
   };
 
-  const handleWheel = (event: WheelEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    const svg = svgRef.current;
-    if (!svg) {
-      return;
-    }
-
-    const rect = svg.getBoundingClientRect();
-    const point = {
-      x: ((event.clientX - rect.left) / rect.width) * 100,
-      y: ((event.clientY - rect.top) / rect.height) * 100,
-    };
-
-    setViewport((current) =>
-      zoomGraphViewportAtPoint(current, event.deltaY, point),
-    );
-  };
-
   const selectNode = (node: string) => {
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
@@ -172,7 +179,6 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onWheel={handleWheel}
       role="img"
       viewBox="0 0 100 100"
     >
