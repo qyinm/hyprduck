@@ -1239,7 +1239,7 @@ export function App() {
       />
       <div
         data-electron-no-drag
-        className="fixed left-[76px] top-[10px] z-50 flex h-7 items-center gap-1"
+        className="fixed left-[88px] top-[10px] z-50 flex h-7 items-center gap-1"
       >
         {settingsOpen ? (
           <Button
