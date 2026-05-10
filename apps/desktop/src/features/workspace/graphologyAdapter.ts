@@ -38,12 +38,14 @@ interface BuildSigmaGraphSelection {
 }
 
 const NODE_COLORS: Record<WorkspaceNodeKind, string> = {
+  source: "#111111",
   document: "#111111",
   page: "#6b7280",
   concept: "#111111",
 };
 
 const NODE_BORDER_COLORS: Record<WorkspaceNodeKind, string> = {
+  source: "#111111",
   document: "#111111",
   page: "#9ca3af",
   concept: "#111111",
@@ -71,7 +73,7 @@ export function buildSigmaGraph(
       size: nodeSize(node.kind, node.evidenceCount, selected),
       color: selected ? "#111111" : NODE_COLORS[node.kind],
       borderColor: selected ? "#111111" : NODE_BORDER_COLORS[node.kind],
-      forceLabel: selected || node.kind === "document",
+      forceLabel: selected || node.kind === "source" || node.kind === "document",
       highlighted: selected,
       hidden: false,
       selected,
@@ -79,7 +81,7 @@ export function buildSigmaGraph(
       evidenceCount: node.evidenceCount,
       confidence: node.confidence,
       relatedCount: node.relatedCount,
-      zIndex: selected ? 10 : node.kind === "document" ? 5 : 1,
+      zIndex: selected ? 10 : node.kind === "source" || node.kind === "document" ? 5 : 1,
     });
   }
 
@@ -123,7 +125,7 @@ function nodeSize(
   evidenceCount: number,
   selected: boolean,
 ): number {
-  const base = kind === "document" ? 11 : kind === "concept" ? 9 : 7;
+  const base = kind === "source" || kind === "document" ? 11 : kind === "concept" ? 9 : 7;
   const evidenceBoost = Math.min(4, Math.max(0, evidenceCount - 1));
   return base + evidenceBoost + (selected ? 2 : 0);
 }

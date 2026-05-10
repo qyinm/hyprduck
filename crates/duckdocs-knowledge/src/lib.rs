@@ -13,6 +13,7 @@ pub enum ProjectStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphNodeKind {
+    Source,
     Document,
     Page,
     Concept,
@@ -70,6 +71,26 @@ pub struct EvidenceRef {
     pub snippet: String,
     #[serde(default)]
     pub source_path: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceBacking {
+    pub workspace_id: String,
+    pub source_id: String,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: String,
+    pub status: String,
+    pub page_count: usize,
+    pub success_count: usize,
+    pub failed_count: usize,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub manifest_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +122,8 @@ pub struct GraphNodeDetail {
     pub evidence: Vec<EvidenceRef>,
     #[serde(default)]
     pub actions: Vec<CorrectionAction>,
+    #[serde(default)]
+    pub source: Option<SourceBacking>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +217,7 @@ mod tests {
                 page_label: "Page 1".into(),
                 snippet: "Visible evidence snippet".into(),
                 source_path: Some("sample.pdf".into()),
+                source_id: Some("source-1".into()),
             }],
             related_node_ids: vec!["page-1".into()],
             suggested_actions: vec![SuggestedAction {

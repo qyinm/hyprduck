@@ -13,10 +13,12 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
+import { fileNameFromPath } from "./pathUtils";
 import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceApplyCorrectionRequest,
+  WorkspaceEvidenceRef,
   WorkspaceProject,
 } from "./types";
 
@@ -25,6 +27,7 @@ interface GraphWorkspaceProps {
   uiState: WorkspaceUiState;
   dispatch: Dispatch<WorkspaceUiAction>;
   onOpenImport: () => void;
+  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
 }
@@ -35,6 +38,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     uiState,
     dispatch,
     onOpenImport,
+    onOpenArtifact,
     onApplyCorrection,
     onAskProject,
   } = props;
@@ -49,6 +53,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       uiState.selectedNodeId &&
       project?.detailsByNodeId[uiState.selectedNodeId]) ||
     null;
+  const sourceNodeBySourceId = useMemo(() => {
+    const entries = Object.values(project?.detailsByNodeId ?? {})
+      .map((detail) => [detail.source?.sourceId, detail.node.id] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[0]));
+    return Object.fromEntries(entries);
+  }, [project?.detailsByNodeId]);
   const mergeCandidates = useMemo(
     () =>
       projectNodes.filter(
@@ -67,6 +77,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const defaultAnswerNodeId =
     selectedNode?.node.id ??
+    projectNodes.find((node) => node.kind === "source")?.id ??
     projectNodes.find((node) => node.kind === "document")?.id ??
     null;
   const baseAnswer =
@@ -91,6 +102,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       : answer?.status === "blocked"
       ? "Blocked"
       : "Preview";
+  const selectedSourcePath =
+    selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
+  const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
 
   useEffect(() => {
     setRenameValue(selectedNode?.canonicalName ?? "");
@@ -178,6 +192,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     } finally {
       setAnswerPending(false);
     }
+  }
+
+  async function handleOpenArtifact(path: string | null | undefined, reveal: boolean) {
+    if (!path) {
+      return;
+    }
+    await onOpenArtifact(path, reveal);
   }
 
   return (
@@ -343,41 +364,83 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                 </section>
 
-                {selectedNode.node.kind === "document" ? (
+                {selectedNode.source ||
+                selectedNode.node.kind === "source" ||
+                selectedNode.node.kind === "document" ? (
                   <section className="space-y-3 rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
                     <div>
                       <h5 className="text-sm font-semibold">Source Detail</h5>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        Original uploaded file stays immutable. Derived page images,
-                        raw markdown, evidence, and linked claims stay adjacent.
+                        Original source copy stays immutable. Derived markdown,
+                        evidence, and linked graph nodes stay adjacent.
                       </p>
                     </div>
                     <div className="grid gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Original file</span>
+                        <span className="text-muted-foreground">Source file</span>
                         <span className="truncate font-medium text-foreground">
-                          {selectedNode.evidence[0]?.sourcePath?.split("/").pop() ?? selectedNode.canonicalName}
+                          {fileNameFromPath(
+                            selectedNode.source?.sourcePath ??
+                              selectedNode.evidence[0]?.sourcePath ??
+                              selectedNode.canonicalName,
+                          )}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Evidence refs</span>
+                        <span className="text-muted-foreground">Status</span>
                         <span className="font-medium text-foreground">
-                          {selectedNode.evidence.length}
+                          {selectedNode.source?.status ?? "preview"}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Derived artifacts</span>
-                        <span className="font-medium text-foreground">Page images + markdown</span>
+                        <span className="text-muted-foreground">Pages</span>
+                        <span className="font-medium text-foreground">
+                          {selectedNode.source
+                            ? `${selectedNode.source.successCount}/${selectedNode.source.pageCount} parsed`
+                            : `${selectedNode.evidence.length} evidence refs`}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Raw markdown</span>
+                        <span className="truncate font-medium text-foreground">
+                          {selectedNode.source?.markdownPath
+                            ? fileNameFromPath(selectedNode.source.markdownPath)
+                            : "Unavailable"}
+                        </span>
                       </div>
                     </div>
                     <div className="grid gap-2">
-                      <Button size="sm" type="button" variant="outline">
-                        Open source detail
+                      <Button
+                        disabled={!selectedSourcePath}
+                        onClick={() =>
+                          void handleOpenArtifact(selectedSourcePath, false)
+                        }
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        Open source copy
                       </Button>
-                      <Button size="sm" type="button" variant="outline">
-                        Open uploaded file
+                      <Button
+                        disabled={!selectedMarkdownPath}
+                        onClick={() =>
+                          void handleOpenArtifact(selectedMarkdownPath, false)
+                        }
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        Open raw markdown
                       </Button>
-                      <Button size="sm" type="button" variant="outline">
+                      <Button
+                        disabled={!selectedSourcePath}
+                        onClick={() =>
+                          void handleOpenArtifact(selectedSourcePath, true)
+                        }
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
                         Reveal in Finder
                       </Button>
                     </div>
@@ -558,6 +621,35 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     {correctionError ? (
                       <p className="text-xs leading-5 text-destructive">{correctionError}</p>
                     ) : null}
+                  </section>
+                ) : null}
+
+                {selectedNode.node.kind !== "source" &&
+                selectedNode.node.kind !== "document" &&
+                selectedNode.evidence.some((evidence) => evidence.sourceId || evidence.sourcePath) ? (
+                  <section className="space-y-3">
+                    <h5 className="text-sm font-semibold">Source provenance</h5>
+                    <div className="flex flex-wrap gap-2">
+                      {uniqueSourceProvenance(selectedNode.evidence).map((source) => {
+                        const sourceNodeId =
+                          source.sourceId && sourceNodeBySourceId[source.sourceId];
+                        return (
+                          <Button
+                            disabled={!sourceNodeId}
+                            key={`${source.sourceId ?? "path"}:${source.sourcePath ?? ""}`}
+                            onClick={() =>
+                              sourceNodeId &&
+                              dispatch({ type: "select_node", nodeId: sourceNodeId })
+                            }
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            {fileNameFromPath(source.sourcePath ?? source.sourceId ?? "Source")}
+                          </Button>
+                        );
+                      })}
+                    </div>
                   </section>
                 ) : null}
               </div>
@@ -799,4 +891,21 @@ function formatEvidenceSnippet(value: string): string {
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
     .replace(/\s+/g, " ")
     .trim() || "No text evidence is available for this page yet.";
+}
+
+function uniqueSourceProvenance(evidenceRefs: WorkspaceEvidenceRef[]) {
+  const seen = new Set<string>();
+  return evidenceRefs
+    .map((evidence) => ({
+      sourceId: evidence.sourceId ?? null,
+      sourcePath: evidence.sourcePath ?? null,
+    }))
+    .filter((source) => {
+      const key = source.sourceId ?? source.sourcePath;
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }

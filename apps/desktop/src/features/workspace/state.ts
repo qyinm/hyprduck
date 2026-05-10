@@ -97,6 +97,8 @@ function defaultSelectedNodeId(project: WorkspaceProject | null): string | null 
     return null;
   }
 
-  const nonDocumentNode = project.nodes.find((node) => node.kind !== "document");
-  return nonDocumentNode?.id ?? project.nodes[0]?.id ?? null;
+  const nonSourceNode = project.nodes.find(
+    (node) => node.kind !== "source" && node.kind !== "document",
+  );
+  return nonSourceNode?.id ?? project.nodes[0]?.id ?? null;
 }

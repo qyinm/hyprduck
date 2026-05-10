@@ -59,10 +59,11 @@ test("Knowledge empty state focuses first users on importing source files", () =
 test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
   expect(graphSource).toMatch(/GraphPromptComposer/);
-  expect(graphSource).toMatch(/Open source detail/);
-  expect(graphSource).toMatch(/Original file/);
-  expect(graphSource).toMatch(/Derived artifacts/);
-  expect(graphSource).toMatch(/Open uploaded file/);
+  expect(graphSource).toMatch(/Source Detail/);
+  expect(graphSource).toMatch(/Source file/);
+  expect(graphSource).toMatch(/Raw markdown/);
+  expect(graphSource).toMatch(/Open source copy/);
+  expect(graphSource).toMatch(/Open raw markdown/);
   expect(graphSource).toMatch(/Reveal in Finder/);
   expect(graphSource).toMatch(/Right inspector/);
   expect(graphSource).toMatch(/without leaving the graph/);

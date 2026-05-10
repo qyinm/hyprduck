@@ -218,7 +218,14 @@ Rules:
 
 ## 6. Source Library Surface IA
 
-목표: `Sources`를 별도 navigation page로 두지 않고, Knowledge 안에서 필요할 때 여는 source library surface로 둔다. 원본 파일은 immutable source로 탐색/관리한다. source file은 graph node, evidence provenance, source library row가 모두 같은 객체를 가리킨다.
+목표: `Sources`를 별도 navigation page로 두지 않고, Knowledge graph 안의 first-class source node로 둔다. 원본 파일은 immutable source로 탐색/관리한다. source file은 graph node가 canonical UI object이며, source index/search row/evidence provenance가 모두 같은 객체를 가리키는 projection이다.
+
+기본 규칙:
+
+- Source Library는 default surface가 아니다. 필요하면 `Source Index` / `All sources`로 command/search/inspector/Health에서 여는 projection이다.
+- 모든 `SourceSummary`는 graph에 source node로 나타나야 한다. ingest 실패, stale, 아직 link가 없는 source도 source-only graph node로 남는다.
+- source node 클릭 시 Source Detail은 오른쪽 inspector 안에서 열린다. graph context를 떠나지 않는다.
+- Source Index가 생기더라도 left nav destination이 아니라 graph/search/bulk workflow 보조 surface다.
 
 ```text
 Knowledge / Source Library

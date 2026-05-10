@@ -17,9 +17,9 @@ const project: WorkspaceProject = {
   },
   nodes: [
     {
-      id: "document",
+      id: "source:source-1",
       label: "Source PDF",
-      kind: "document",
+      kind: "source",
       confidence: 0.8,
       relatedCount: 1,
       evidenceCount: 2,
@@ -38,7 +38,7 @@ const project: WorkspaceProject = {
   edges: [
     {
       id: "edge-document-concept",
-      sourceNodeId: "document",
+      sourceNodeId: "source:source-1",
       targetNodeId: "concept",
       kind: "source_document",
       label: "Ingested from source",
@@ -60,10 +60,10 @@ describe("buildSigmaGraph", () => {
 
     expect(graph.order).toBe(2);
     expect(graph.size).toBe(1);
-    expect(graph.getNodeAttribute("document", "x")).toBeCloseTo(-0.04);
-    expect(graph.getNodeAttribute("document", "y")).toBeCloseTo(0.68);
-    expect(graph.getNodeAttribute("document", "nodeKind")).toBe("document");
-    expect(graph.getNodeAttribute("document", "size")).toBeGreaterThan(
+    expect(graph.getNodeAttribute("source:source-1", "x")).toBeCloseTo(-0.04);
+    expect(graph.getNodeAttribute("source:source-1", "y")).toBeCloseTo(0.68);
+    expect(graph.getNodeAttribute("source:source-1", "nodeKind")).toBe("source");
+    expect(graph.getNodeAttribute("source:source-1", "size")).toBeGreaterThan(
       graph.getNodeAttribute("concept", "size"),
     );
     expect(graph.getNodeAttribute("concept", "selected")).toBe(true);
@@ -82,7 +82,7 @@ describe("buildSigmaGraph", () => {
           ...project.edges,
           {
             id: "missing-target",
-            sourceNodeId: "document",
+            sourceNodeId: "source:source-1",
             targetNodeId: "missing",
             kind: "related_to",
             label: "Missing",
@@ -151,8 +151,8 @@ describe("buildSigmaGraph", () => {
       },
     );
 
-    expect(Number.isFinite(graph.getNodeAttribute("document", "x"))).toBe(true);
-    expect(Number.isFinite(graph.getNodeAttribute("document", "y"))).toBe(true);
+    expect(Number.isFinite(graph.getNodeAttribute("source:source-1", "x"))).toBe(true);
+    expect(Number.isFinite(graph.getNodeAttribute("source:source-1", "y"))).toBe(true);
     expect(Number.isFinite(graph.getNodeAttribute("concept", "x"))).toBe(true);
     expect(Number.isFinite(graph.getNodeAttribute("concept", "y"))).toBe(true);
   });
