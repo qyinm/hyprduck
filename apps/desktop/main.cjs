@@ -95,6 +95,12 @@ function registerIpcHandlers() {
           command: "validate_provider",
           payload: { config: args.payload ?? null },
         }).then((response) => response.data);
+      case "engine_readiness":
+        await maybeImportLegacySwiftConfig();
+        return runEngineCommand("check_readiness", {
+          command: "check_readiness",
+          payload: {},
+        }).then((response) => response.data);
       case "get_models_for_provider":
         return getModelsForProvider(args.providerSlug);
       case "load_workspace_project":

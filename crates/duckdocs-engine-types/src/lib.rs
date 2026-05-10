@@ -23,6 +23,7 @@ pub enum EngineCommand {
     SaveConfig,
     ValidateProvider,
     ListProviderModels,
+    CheckReadiness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +235,32 @@ pub struct ProviderModelCatalogResponseData {
     pub ollama_vision_prefixes: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CheckReadinessRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadinessCheck {
+    pub id: String,
+    pub label: String,
+    pub ready: bool,
+    #[serde(default = "default_readiness_required")]
+    pub required: bool,
+    pub message: String,
+}
+
+fn default_readiness_required() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeReadinessResponseData {
+    pub ready: bool,
+    pub provider: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub checks: Vec<ReadinessCheck>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadConfigRequest {}
 
@@ -300,6 +327,7 @@ pub enum EngineRequest {
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
     ListProviderModels(ListProviderModelsRequest),
+    CheckReadiness(CheckReadinessRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -620,6 +648,32 @@ mod tests {
             serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::ListProviderModels);
         assert!(decoded.data.provider_models.contains_key("open_router"));
+    }
+
+    #[test]
+    fn readiness_response_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::CheckReadiness,
+            RuntimeReadinessResponseData {
+                ready: true,
+                provider: "ollama".into(),
+                model_id: "qwen3-vl:8b".into(),
+                checks: vec![ReadinessCheck {
+                    id: "runtime_process".into(),
+                    label: "Runtime process".into(),
+                    ready: true,
+                    required: true,
+                    message: "Runtime process is accepting commands.".into(),
+                }],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"command\":\"check_readiness\""));
+        let decoded: EngineSuccess<RuntimeReadinessResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::CheckReadiness);
+        assert!(decoded.data.ready);
     }
 
     #[test]

@@ -18,11 +18,11 @@ use duckdocs_engine_types::{
     LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
     ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
     ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
-    SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
-    ValidateProviderResponseData, ValidationIssue,
+    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SuggestedAction,
+    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
 };
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -244,6 +244,10 @@ fn encode_success_response(
             EngineCommand::ListProviderModels,
             provider_model_catalog(),
         )),
+        EngineRequest::CheckReadiness(_) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::CheckReadiness,
+            check_readiness(config_store),
+        )),
     }
     .context("failed to encode engine response")?;
     Ok(response)
@@ -278,6 +282,7 @@ fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
         EngineRequest::ListProviderModels(_) => EngineCommand::ListProviderModels,
+        EngineRequest::CheckReadiness(_) => EngineCommand::CheckReadiness,
     }
 }
 
@@ -2300,12 +2305,15 @@ fn parse_text_document(
 fn convert_pdf_to_pngs(path: &Path) -> Result<Vec<PathBuf>> {
     let temp = tempdir().context("failed to create temp directory for pdf conversion")?;
     let prefix = temp.path().join("page");
-    let status = Command::new("/opt/homebrew/bin/pdftoppm")
-        .arg("-png")
-        .arg(path)
-        .arg(&prefix)
-        .status()
-        .context("failed to launch pdftoppm")?;
+    let status = Command::new(resolve_binary(
+        "pdftoppm",
+        &["/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm"],
+    ))
+    .arg("-png")
+    .arg(path)
+    .arg(&prefix)
+    .status()
+    .context("failed to launch pdftoppm")?;
     if !status.success() {
         bail!("pdftoppm failed for {}", path.display());
     }
@@ -2335,7 +2343,7 @@ fn convert_pdf_to_pngs(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn extract_text_via_textutil(path: &Path) -> Result<String> {
-    let output = Command::new("/usr/bin/textutil")
+    let output = Command::new(resolve_binary("textutil", &["/usr/bin/textutil"]))
         .arg("-convert")
         .arg("txt")
         .arg("-stdout")
@@ -2649,7 +2657,7 @@ impl KnowledgeProjectStore {
     }
 
     fn run_sql(&self, sql: &str) -> Result<String> {
-        let output = Command::new("/usr/bin/sqlite3")
+        let output = Command::new(resolve_binary("sqlite3", &["/usr/bin/sqlite3"]))
             .arg(&self.path)
             .arg(sql)
             .output()
@@ -2677,6 +2685,31 @@ fn unix_timestamp_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn resolve_binary(name: &str, common_paths: &[&str]) -> PathBuf {
+    if let Some(path) = find_binary_on_path(name) {
+        return path;
+    }
+
+    common_paths
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn find_binary_on_path(name: &str) -> Option<PathBuf> {
+    if Path::new(name).components().count() > 1 {
+        let path = PathBuf::from(name);
+        return path.exists().then_some(path);
+    }
+
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.exists())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2926,6 +2959,179 @@ fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {
         ready: issues.is_empty(),
         issues,
     }
+}
+
+fn check_readiness(config_store: &EngineConfigStore) -> RuntimeReadinessResponseData {
+    let mut checks = vec![ReadinessCheck {
+        id: "runtime_process".into(),
+        label: "Runtime process".into(),
+        ready: true,
+        required: true,
+        message: "Runtime process is accepting commands.".into(),
+    }];
+
+    let config = match config_store.load() {
+        Ok(config) => {
+            checks.push(ReadinessCheck {
+                id: "config_file".into(),
+                label: "Engine config".into(),
+                ready: true,
+                required: true,
+                message: format!("Loaded {}", config_store.path.display()),
+            });
+            config
+        }
+        Err(error) => {
+            checks.push(ReadinessCheck {
+                id: "config_file".into(),
+                label: "Engine config".into(),
+                ready: false,
+                required: true,
+                message: error.to_string(),
+            });
+            return RuntimeReadinessResponseData {
+                ready: false,
+                provider: "unknown".into(),
+                model_id: String::new(),
+                checks,
+            };
+        }
+    };
+
+    let validation = validate_provider(&config);
+    checks.push(ReadinessCheck {
+        id: "provider_config".into(),
+        label: "Provider config".into(),
+        ready: validation.ready,
+        required: true,
+        message: if validation.ready {
+            format!(
+                "{} is configured with model {}.",
+                config.provider.label(),
+                config.model_id
+            )
+        } else {
+            validation
+                .issues
+                .iter()
+                .map(|issue| issue.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    });
+
+    if matches!(config.provider, ProviderKind::Ollama) {
+        checks.push(check_ollama_endpoint(&config));
+    }
+
+    checks.push(check_path_exists(
+        "pdf_converter",
+        "PDF converter",
+        "pdftoppm",
+        &["/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm"],
+        false,
+    ));
+    checks.push(check_path_exists(
+        "text_converter",
+        "DOC/DOCX text converter",
+        "textutil",
+        &["/usr/bin/textutil"],
+        false,
+    ));
+    checks.push(check_path_exists(
+        "knowledge_store",
+        "Knowledge store",
+        "sqlite3",
+        &["/usr/bin/sqlite3"],
+        true,
+    ));
+
+    RuntimeReadinessResponseData {
+        ready: checks
+            .iter()
+            .filter(|check| check.required)
+            .all(|check| check.ready),
+        provider: config.provider.id_slug().into(),
+        model_id: config.model_id,
+        checks,
+    }
+}
+
+fn check_path_exists(
+    id: &str,
+    label: &str,
+    binary_name: &str,
+    common_paths: &[&str],
+    required: bool,
+) -> ReadinessCheck {
+    let path = resolve_binary(binary_name, common_paths);
+    let ready = path.exists();
+    ReadinessCheck {
+        id: id.into(),
+        label: label.into(),
+        ready,
+        required,
+        message: if ready {
+            format!("Found {}", path.display())
+        } else {
+            format!("Missing {binary_name} in PATH or common install locations")
+        },
+    }
+}
+
+fn check_ollama_endpoint(config: &EngineConfig) -> ReadinessCheck {
+    let endpoint = ollama_models_endpoint(config);
+    let result = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_secs(1))
+        .build()
+        .and_then(|client| client.get(&endpoint).send())
+        .and_then(|response| response.error_for_status().map(|_| ()));
+
+    match result {
+        Ok(()) => ReadinessCheck {
+            id: "ollama_endpoint".into(),
+            label: "Ollama endpoint".into(),
+            ready: true,
+            required: true,
+            message: format!("Ollama responded at {endpoint}."),
+        },
+        Err(error) => ReadinessCheck {
+            id: "ollama_endpoint".into(),
+            label: "Ollama endpoint".into(),
+            ready: false,
+            required: true,
+            message: format!("Ollama is not reachable at {endpoint}: {error}"),
+        },
+    }
+}
+
+fn ollama_models_endpoint(config: &EngineConfig) -> String {
+    let raw = config
+        .base_url
+        .clone()
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| config.provider.default_base_url().to_string())
+        .replace("/v1/chat/completions", "/v1/models")
+        .replace("/api/generate", "/api/tags");
+
+    if let Ok(mut url) = Url::parse(&raw) {
+        let path = url.path().trim_end_matches('/');
+        if path.is_empty() {
+            url.set_path("/v1/models");
+            return url.to_string();
+        }
+        if path == "/v1" {
+            url.set_path("/v1/models");
+            return url.to_string();
+        }
+        if path == "/api" {
+            url.set_path("/api/tags");
+            return url.to_string();
+        }
+    }
+
+    raw
 }
 
 fn parse_image_with_provider(
@@ -3331,5 +3537,52 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("grounded"));
+    }
+
+    #[test]
+    fn ollama_models_endpoint_normalizes_common_base_urls() {
+        let mut config = EngineConfig {
+            provider: ProviderKind::Ollama,
+            model_id: "qwen3-vl:8b".into(),
+            api_key: String::new(),
+            base_url: Some("http://127.0.0.1:11434".into()),
+            prompt_template: "General".into(),
+        };
+
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/v1/models"
+        );
+
+        config.base_url = Some("http://127.0.0.1:11434/api/generate".into());
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/api/tags"
+        );
+
+        config.base_url = Some("http://127.0.0.1:11434/v1/chat/completions".into());
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/v1/models"
+        );
+    }
+
+    #[test]
+    fn resolve_binary_prefers_path_before_common_locations() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        let binary_path = bin_dir.join("duckdocs-test-bin");
+        fs::write(&binary_path, "").expect("test bin");
+
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin_dir);
+        let resolved = resolve_binary("duckdocs-test-bin", &["/definitely/missing"]);
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(resolved, binary_path);
     }
 }

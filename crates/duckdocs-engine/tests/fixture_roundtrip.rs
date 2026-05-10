@@ -6,7 +6,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use duckdocs_engine_types::{EngineConfigPayload, EngineSuccess, ParseResponseData};
+use duckdocs_engine_types::{
+    EngineConfigPayload, EngineSuccess, ParseResponseData, RuntimeReadinessResponseData,
+};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -116,6 +118,73 @@ fn doc_fixture_round_trips_through_engine() {
     let result = run_parse("sample.doc", "doc");
     assert_eq!(result.result.pages.len(), 1);
     assert!(result.saved_output_path.is_some());
+}
+
+#[test]
+fn readiness_reports_runtime_config_and_dependencies() {
+    let config_dir = tempdir().expect("config dir");
+    write_ollama_config(config_dir.path());
+    let request = json!({
+        "command": "check_readiness",
+        "payload": {}
+    });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_duckdocs-engine"))
+        .env("DUCKDOCS_CONFIG_DIR", config_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("engine run");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            serde_json::to_vec(&request)
+                .expect("request json")
+                .as_slice(),
+        )
+        .expect("request write");
+    let output = child.wait_with_output().expect("engine output");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: EngineSuccess<RuntimeReadinessResponseData> =
+        serde_json::from_slice(&output.stdout).expect("readiness success envelope");
+    assert_eq!(
+        response.command,
+        duckdocs_engine_types::EngineCommand::CheckReadiness
+    );
+    assert_eq!(response.data.provider, "ollama");
+    assert!(response
+        .data
+        .checks
+        .iter()
+        .any(|check| check.id == "runtime_process" && check.ready));
+    assert!(response
+        .data
+        .checks
+        .iter()
+        .any(|check| check.id == "config_file" && check.ready));
+    assert!(response
+        .data
+        .checks
+        .iter()
+        .any(|check| check.id == "provider_config" && check.ready));
+    assert!(response
+        .data
+        .checks
+        .iter()
+        .any(|check| check.id == "pdf_converter"));
+    assert!(response
+        .data
+        .checks
+        .iter()
+        .any(|check| check.id == "ollama_endpoint"));
 }
 
 #[test]
