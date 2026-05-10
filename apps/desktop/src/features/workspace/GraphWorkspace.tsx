@@ -102,6 +102,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       : answer?.status === "blocked"
       ? "Blocked"
       : "Preview";
+  const selectedSourcePath =
+    selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
+  const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
 
   useEffect(() => {
     setRenameValue(selectedNode?.canonicalName ?? "");
@@ -408,9 +411,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     </div>
                     <div className="grid gap-2">
                       <Button
-                        disabled={!selectedNode.source?.sourcePath}
+                        disabled={!selectedSourcePath}
                         onClick={() =>
-                          void handleOpenArtifact(selectedNode.source?.sourcePath, false)
+                          void handleOpenArtifact(selectedSourcePath, false)
                         }
                         size="sm"
                         type="button"
@@ -419,9 +422,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         Open source copy
                       </Button>
                       <Button
-                        disabled={!selectedNode.source?.markdownPath}
+                        disabled={!selectedMarkdownPath}
                         onClick={() =>
-                          void handleOpenArtifact(selectedNode.source?.markdownPath, false)
+                          void handleOpenArtifact(selectedMarkdownPath, false)
                         }
                         size="sm"
                         type="button"
@@ -430,9 +433,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         Open raw markdown
                       </Button>
                       <Button
-                        disabled={!selectedNode.source?.sourcePath}
+                        disabled={!selectedSourcePath}
                         onClick={() =>
-                          void handleOpenArtifact(selectedNode.source?.sourcePath, true)
+                          void handleOpenArtifact(selectedSourcePath, true)
                         }
                         size="sm"
                         type="button"
