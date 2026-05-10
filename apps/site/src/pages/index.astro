@@ -26,8 +26,8 @@ const workflow = [
   {
     step: '04',
     title: 'Save agent-ready markdown',
-    body: 'HyprDuck writes markdown and linked image assets under your Documents folder, ready for agents, wikis, notes, and local knowledge workflows.',
-    tag: '~/Documents/HyprDuck',
+    body: 'HyprDuck writes markdown and linked image assets under Application Support, ready for agents, wikis, notes, and local knowledge workflows.',
+    tag: '~/Library/Application Support/HyprDuck',
   },
 ];
 
@@ -35,7 +35,7 @@ const proofLines = [
   '$ hyprduck parse ./board-report.pdf',
   'rendered 18 page images',
   'provider: local',
-  'saved markdown: ~/Documents/HyprDuck/board-report.md',
+  'saved markdown: ~/Library/Application Support/HyprDuck/board-report.md',
 ];
 
 const capabilities = [
@@ -129,7 +129,7 @@ const providers = [
                   <span class="panel-eyebrow">Current job</span>
                   <h2>board-report.pdf</h2>
                 </div>
-                <span class="path-pill">~/Documents/HyprDuck</span>
+                <span class="path-pill">~/Library/Application Support/HyprDuck</span>
               </div>
               <div class="job-grid">
                 <div class="import-panel hairline-card">

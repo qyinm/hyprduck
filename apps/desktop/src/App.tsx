@@ -197,7 +197,7 @@ const WEB_MOCK_BASE_SNAPSHOT: UiSnapshot = {
     },
   ],
   lastResult: {
-    savedOutputPath: "~/Documents/HyprDuck/web-preview/sample.md",
+    savedOutputPath: "~/Library/Application Support/HyprDuck/web-preview/sample.md",
     successCount: 2,
     failedCount: 0,
     markdown: WEB_MOCK_MARKDOWN,
@@ -336,7 +336,7 @@ function createWebMockApi(): HyprDuckDesktopApi {
               activeJob: null,
               lastProjectId: "preview:sample",
               lastResult: {
-                savedOutputPath: `~/Documents/HyprDocs/web-preview/${new Date()
+                savedOutputPath: `~/Library/Application Support/HyprDuck/web-preview/${new Date()
                   .toISOString()
                   .slice(0, 10)}.md`,
                 successCount: 2,

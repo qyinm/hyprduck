@@ -2250,8 +2250,8 @@ fn output_root_candidates(
     if let Some(override_root) = std::env::var_os("DUCKDOCS_OUTPUT_DIR") {
         candidates.push(PathBuf::from(override_root));
     } else {
-        if let Some(documents_root) = dirs::document_dir() {
-            candidates.push(documents_root.join("HyprDuck"));
+        if let Some(application_support_root) = dirs::data_local_dir() {
+            candidates.push(application_support_root.join("HyprDuck"));
         }
         candidates.push(std::env::temp_dir().join("HyprDuck"));
     }
