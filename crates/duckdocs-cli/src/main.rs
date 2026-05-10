@@ -65,6 +65,8 @@ fn run_parse(input: String) -> Result<()> {
             name: std::path::Path::new(&input)
                 .file_stem()
                 .map(|name| name.to_string_lossy().to_string()),
+            workspace_id: None,
+            source_id: None,
         }),
     };
 
