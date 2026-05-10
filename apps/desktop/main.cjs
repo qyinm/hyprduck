@@ -13,6 +13,9 @@ const snapshot = {
   progressLog: [],
   lastResult: null,
   lastProjectId: null,
+  lastWorkspaceId: null,
+  lastSourceId: null,
+  lastSourceManifestPath: null,
 };
 
 let mainWindow = null;
@@ -211,6 +214,9 @@ async function startParse(request) {
       markdown: result.markdown,
     };
     snapshot.lastProjectId = null;
+    snapshot.lastWorkspaceId = data.source_manifest?.workspace_id ?? null;
+    snapshot.lastSourceId = data.source_manifest?.source_id ?? null;
+    snapshot.lastSourceManifestPath = data.source_manifest?.manifest_path ?? null;
     pushProgressEntry(
       "completed",
       data.saved_output_path ?? "Parse completed without a saved output path",
@@ -218,9 +224,15 @@ async function startParse(request) {
 
     if (data.saved_output_path) {
       try {
-        const projectId = await compileWorkspaceProject(data.saved_output_path, request.path);
-        snapshot.lastProjectId = projectId;
-        pushProgressEntry("compile", `Compiled knowledge workspace ${projectId}`);
+        const project = await compileWorkspaceProject(
+          data.saved_output_path,
+          request.path,
+          data.source_manifest ?? null,
+        );
+        snapshot.lastProjectId = project.projectId;
+        snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
+        snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
+        pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
       } catch (error) {
         snapshot.lastProjectId = null;
         pushProgressEntry("compile_failed", `Knowledge compile failed: ${error.message}`);
@@ -475,15 +487,22 @@ async function openSavedOutput(outputPath, reveal) {
   }
 }
 
-async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath) {
+async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, sourceManifest) {
   const response = await runEngineCommand("compile_project", {
     command: "compile_project",
     payload: {
       source_markdown_path: sourceMarkdownPath,
       source_document_path: sourceDocumentPath ?? null,
+      source_manifest_path: sourceManifest?.manifest_path ?? null,
+      workspace_id: sourceManifest?.workspace_id ?? null,
+      source_id: sourceManifest?.source_id ?? null,
     },
   });
-  return response.data.project_id;
+  return {
+    projectId: response.data.project_id,
+    workspaceId: response.data.workspace_id,
+    sourceId: response.data.source_id,
+  };
 }
 
 function runEngineCommand(expectedCommand, request, options = {}) {
