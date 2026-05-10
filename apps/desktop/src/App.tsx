@@ -3,6 +3,7 @@ import {
   type ErrorInfo,
   type ReactNode,
   useEffect,
+  useMemo,
   useReducer,
   useState,
 } from "react";
@@ -429,6 +430,27 @@ function hydrateWorkspaceProjectWithSources(
       relationshipCount: edges.length,
       documentCount: sources.length || project.summary.documentCount,
     },
+  };
+}
+
+function createEmptyWorkspaceProject(workspaceId?: string | null): WorkspaceProject {
+  return {
+    summary: {
+      projectId: workspaceId ? `workspace:${workspaceId}` : "workspace:empty",
+      title: "Workspace sources",
+      status: "preview",
+      stale: false,
+      summary: "Source-only workspace view.",
+      documentCount: 0,
+      nodeCount: 0,
+      relationshipCount: 0,
+      evidenceCount: 0,
+    },
+    nodes: [],
+    edges: [],
+    detailsByNodeId: {},
+    edgeDetailsById: {},
+    answerByNodeId: {},
   };
 }
 
@@ -1240,23 +1262,35 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [healthOpen, setHealthOpen] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
-  const previewWorkspaceProject = buildWorkspacePreview(
-    snapshot.lastResult,
-    Boolean(snapshot.activeJob),
+  const previewWorkspaceProject = useMemo(
+    () => buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob)),
+    [snapshot.activeJob, snapshot.lastResult],
   );
-  const workspaceProject = loadedWorkspaceEnvelope?.project
-    ? hydrateWorkspaceProjectWithSources(
-        {
-          ...loadedWorkspaceEnvelope.project,
-          summary: {
-            ...loadedWorkspaceEnvelope.project.summary,
-            stale:
-              loadedWorkspaceEnvelope.project.summary.stale || Boolean(snapshot.activeJob),
-          },
+  const workspaceProject = useMemo(() => {
+    if (!loadedWorkspaceEnvelope) {
+      return previewWorkspaceProject;
+    }
+
+    const envelopeBaseProject =
+      loadedWorkspaceEnvelope.project ??
+      (loadedWorkspaceEnvelope.sources.length > 0
+        ? createEmptyWorkspaceProject(loadedWorkspaceEnvelope.workspace_id)
+        : null);
+    if (!envelopeBaseProject) {
+      return previewWorkspaceProject;
+    }
+
+    return hydrateWorkspaceProjectWithSources(
+      {
+        ...envelopeBaseProject,
+        summary: {
+          ...envelopeBaseProject.summary,
+          stale: envelopeBaseProject.summary.stale || Boolean(snapshot.activeJob),
         },
-        loadedWorkspaceEnvelope.sources,
-      )
-    : previewWorkspaceProject;
+      },
+      loadedWorkspaceEnvelope.sources,
+    );
+  }, [loadedWorkspaceEnvelope, previewWorkspaceProject, snapshot.activeJob]);
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,
