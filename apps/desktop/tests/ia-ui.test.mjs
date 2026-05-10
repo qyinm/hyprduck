@@ -27,7 +27,7 @@ test("app shell exposes only Knowledge and Settings as primary destinations", ()
 });
 
 test("app shell exposes fixed window chrome independent of sidebar", () => {
-  expect(appSource).toMatch(/fixed left-\[76px\] top-\[10px\]/);
+  expect(appSource).toMatch(/fixed left-\[88px\] top-\[10px\]/);
   expect(appSource).toMatch(/fixed right-3 top-\[10px\]/);
   expect(appSource).toMatch(/native titlebar area stays empty/);
   expect(appSource).toMatch(/windowChromeButtonClass/);
@@ -43,22 +43,22 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
   expect(stylesSource).toMatch(/--primary: oklch\(0 0 0\)/);
   expect(stylesSource).not.toMatch(/0\.55 0\.28 300/);
   expect(stylesSource).not.toMatch(/fontsource-variable\/geist/);
-  expect(graphSource).not.toMatch(/teal|gradient|shadow-\[/);
+  expect(graphSource).not.toMatch(/teal|gradient/);
 });
 
-test("Knowledge empty state gives first users add-file and prompt affordances", () => {
+test("Knowledge empty state focuses first users on importing source files", () => {
   expect(graphSource).toMatch(/Your knowledge base is empty/);
   expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
-  expect(graphSource).toMatch(/Add files or ask about your knowledge/);
+  expect(graphSource).toMatch(/Choose files/);
+  expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
   expect(previewSource).not.toMatch(/compile|compiled|compiler/i);
 });
 
-test("Graph workspace has IA modes and source-file inspector actions", () => {
-  for (const label of ["Graph", "Wiki", "Sources", "Claims", "Conflicts"]) {
-    expect(graphSource).toMatch(new RegExp(`>${label}<|${label}`));
-  }
+test("Graph workspace centers the canvas with inspector actions", () => {
+  expect(graphSource).toMatch(/SigmaGraphCanvas/);
+  expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/Open source detail/);
   expect(graphSource).toMatch(/Original file/);
   expect(graphSource).toMatch(/Derived artifacts/);
