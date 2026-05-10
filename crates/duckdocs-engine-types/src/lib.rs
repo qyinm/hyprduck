@@ -243,7 +243,13 @@ pub struct ReadinessCheck {
     pub id: String,
     pub label: String,
     pub ready: bool,
+    #[serde(default = "default_readiness_required")]
+    pub required: bool,
     pub message: String,
+}
+
+fn default_readiness_required() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -656,6 +662,7 @@ mod tests {
                     id: "runtime_process".into(),
                     label: "Runtime process".into(),
                     ready: true,
+                    required: true,
                     message: "Runtime process is accepting commands.".into(),
                 }],
             },

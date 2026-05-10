@@ -111,6 +111,7 @@ interface RuntimeReadinessCheck {
   id: string;
   label: string;
   ready: boolean;
+  required: boolean;
   message: string;
 }
 
@@ -258,25 +259,30 @@ function deriveWebReadiness(): RuntimeReadinessResponseData {
       id: "runtime_process",
       label: "Runtime process",
       ready: false,
+      required: true,
       message: "Desktop runtime is not available in web preview mode.",
     },
     {
       id: "config_file",
       label: "Engine config",
       ready: true,
+      required: true,
       message: "Preview configuration is loaded in memory.",
     },
     {
       id: "provider_config",
       label: "Provider config",
       ready: validation.ready,
+      required: true,
       message: validation.ready
         ? `${webMockConfig.provider} is configured for preview.`
         : validation.issues.map((issue) => issue.message).join(" "),
     },
   ];
   return {
-    ready: checks.every((check) => check.ready),
+    ready: checks
+      .filter((check) => check.required)
+      .every((check) => check.ready),
     provider: webMockConfig.provider,
     model_id: webMockConfig.model_id,
     checks,
@@ -1447,10 +1453,12 @@ export function App() {
                       "rounded-full border px-2 py-0.5 text-[11px] font-medium",
                       check.ready
                         ? "border-border text-foreground"
-                        : "border-destructive/30 text-destructive",
+                        : check.required
+                          ? "border-destructive/30 text-destructive"
+                          : "border-border text-muted-foreground",
                     )}
                   >
-                    {check.ready ? "Ready" : "Issue"}
+                    {check.ready ? "Ready" : check.required ? "Issue" : "Optional"}
                   </span>
                 </div>
                 <p className="mt-1 text-muted-foreground">{check.message}</p>
