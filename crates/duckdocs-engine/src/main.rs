@@ -12,23 +12,24 @@ use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, CompileProjectRequest,
     CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
-    EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeRequest, EngineSuccess,
-    EvidenceRef, GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary,
-    KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, OutputAsset,
-    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData,
-    ProviderOption, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
+    EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
+    EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, EvidenceRef, GraphNodeDetail,
+    GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, LoadConfigRequest,
+    LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
+    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
+    ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
     SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
     ValidateProviderResponseData, ValidationIssue,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 thread_local! {
-    static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+    static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
 }
 
 fn main() {
@@ -70,28 +71,33 @@ fn run_runtime_server() -> Result<()> {
         }
 
         let response = match decode_runtime_request(&payload) {
-            Ok(envelope) if !is_uuid_v7(envelope.id) => serde_json::to_string(&json!({
-                "id": envelope.id.to_string(),
-                "type": "response",
-                "ok": false,
-                "error": {
-                    "code": "invalid_request_id",
-                    "message": "runtime request id must be a UUIDv7 string"
-                }
-            }))
-            .context("failed to encode invalid runtime request id response")?,
+            Ok(envelope) if !is_uuid_v7(envelope.id) => {
+                let command = request_command(&envelope.request);
+                serde_json::to_string(&EngineRuntimeFailure::new(
+                    envelope.id,
+                    EngineFailure::new(
+                        command,
+                        "invalid_request_id",
+                        "runtime request id must be a UUIDv7 string",
+                    ),
+                ))
+                .context("failed to encode invalid runtime request id response")?
+            }
             Ok(envelope) => {
-                let id = envelope.id.to_string();
+                let id = envelope.id;
                 match envelope.request {
                     EngineRequest::Parse(request) => {
-                        encode_runtime_parse_response(&id, request, &payload, &config_store)?
+                        encode_runtime_parse_response(id, request, &payload, &config_store)
+                            .unwrap_or_else(|error| {
+                                encode_runtime_failure_response(id, EngineCommand::Parse, &error)
+                            })
                     }
                     request => {
                         let command = request_command(&request);
                         encode_success_response(request, &config_store)
-                            .map(|response| wrap_runtime_response(&id, &response))
+                            .and_then(|response| wrap_runtime_response(id, &response))
                             .unwrap_or_else(|error| {
-                                encode_runtime_failure_response(&id, command, &error)
+                                encode_runtime_failure_response(id, command, &error)
                             })
                     }
                 }
@@ -135,16 +141,16 @@ fn is_uuid_v7(value: Uuid) -> bool {
 }
 
 fn encode_runtime_parse_response(
-    request_id: &str,
+    request_id: Uuid,
     request: ParseRequest,
     raw_payload: &str,
     config_store: &EngineConfigStore,
 ) -> Result<String> {
     RUNTIME_EVENT_REQUEST_ID.with(|current| {
-        *current.borrow_mut() = Some(request_id.to_string());
+        *current.borrow_mut() = Some(request_id);
     });
     let response = encode_parse_response(request, raw_payload, config_store)
-        .map(|response| wrap_runtime_response(request_id, &response));
+        .and_then(|response| wrap_runtime_response(request_id, &response));
     RUNTIME_EVENT_REQUEST_ID.with(|current| {
         *current.borrow_mut() = None;
     });
@@ -171,17 +177,16 @@ fn encode_parse_response(
     Ok(response)
 }
 
-fn wrap_runtime_response(request_id: &str, response: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(response) {
-        Ok(mut value) => {
-            if let serde_json::Value::Object(ref mut object) = value {
-                object.insert("id".into(), json!(request_id));
-                object.insert("type".into(), json!("response"));
-            }
-            serde_json::to_string(&value).unwrap_or_else(|_| response.to_string())
-        }
-        Err(_) => response.to_string(),
+fn wrap_runtime_response(request_id: Uuid, response: &str) -> Result<String> {
+    if let Ok(success) = serde_json::from_str::<EngineSuccess<Value>>(response) {
+        return serde_json::to_string(&EngineRuntimeResponse::new(request_id, success))
+            .context("failed to encode runtime response");
     }
+
+    let failure = serde_json::from_str::<EngineFailure>(response)
+        .context("failed to decode engine response for runtime envelope")?;
+    serde_json::to_string(&EngineRuntimeFailure::new(request_id, failure))
+        .context("failed to encode runtime failure response")
 }
 
 fn encode_success_response(
@@ -249,11 +254,15 @@ fn encode_failure_response(command: EngineCommand, error: &anyhow::Error) -> Str
 }
 
 fn encode_runtime_failure_response(
-    request_id: &str,
+    request_id: Uuid,
     command: EngineCommand,
     error: &anyhow::Error,
 ) -> String {
-    wrap_runtime_response(request_id, &encode_failure_response(command, error))
+    serde_json::to_string(&EngineRuntimeFailure::new(
+        request_id,
+        engine_failure(command, error),
+    ))
+    .unwrap_or_else(|_| encode_failure_response(command, error))
 }
 
 fn request_command(request: &EngineRequest) -> EngineCommand {
@@ -284,14 +293,16 @@ fn maybe_write_debug(path: &Option<String>, contents: &str) -> Result<()> {
 
 fn emit_event(event: &ParseEvent) -> Result<()> {
     if let Some(request_id) = RUNTIME_EVENT_REQUEST_ID.with(|current| current.borrow().clone()) {
-        let line = serde_json::to_string(&json!({
-            "id": request_id,
-            "type": "event",
-            "event": event,
-        }))
-        .context("failed to encode runtime parse event")?;
-        println!("{line}");
-        io::stdout()
+        let line = serde_json::to_string(&EngineRuntimeEvent::new(request_id, event.clone()))
+            .context("failed to encode runtime parse event")?;
+        let mut stderr = io::stderr().lock();
+        stderr
+            .write_all(line.as_bytes())
+            .context("failed to write runtime parse event")?;
+        stderr
+            .write_all(b"\n")
+            .context("failed to write runtime parse event newline")?;
+        stderr
             .flush()
             .context("failed to flush runtime parse event")?;
         return Ok(());

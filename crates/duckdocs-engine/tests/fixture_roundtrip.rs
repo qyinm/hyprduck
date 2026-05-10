@@ -2,6 +2,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use duckdocs_engine_types::{EngineConfigPayload, EngineSuccess, ParseResponseData};
 use serde_json::json;
@@ -222,7 +225,17 @@ fn serve_mode_wraps_parse_progress_events_with_request_id() {
 
     let mut stdin = child.stdin.take().expect("stdin");
     let stdout = child.stdout.take().expect("stdout");
+    let stderr = child.stderr.take().expect("stderr");
     let mut reader = BufReader::new(stdout);
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let stderr_reader = BufReader::new(stderr);
+        for line in stderr_reader.lines().map_while(Result::ok) {
+            if stderr_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let request = json!({
         "id": request_id,
         "command": "parse",
@@ -252,17 +265,12 @@ fn serve_mode_wraps_parse_progress_events_with_request_id() {
         .expect("request write");
     stdin.write_all(b"\n").expect("request newline");
 
-    let mut saw_event = false;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).expect("runtime line");
         let envelope: serde_json::Value = serde_json::from_str(&line).expect("runtime envelope");
         assert_eq!(envelope["id"], request_id);
         match envelope["type"].as_str() {
-            Some("event") => {
-                saw_event = true;
-                assert!(envelope["event"]["type"].is_string());
-            }
             Some("response") => {
                 assert_eq!(envelope["command"], "parse");
                 assert_eq!(envelope["ok"], true);
@@ -271,9 +279,24 @@ fn serve_mode_wraps_parse_progress_events_with_request_id() {
             other => panic!("unexpected runtime envelope type: {other:?}"),
         }
     }
+
+    let mut saw_event = false;
+    for line in stderr_rx
+        .recv_timeout(Duration::from_secs(1))
+        .into_iter()
+        .chain(stderr_rx.try_iter())
+    {
+        let envelope: serde_json::Value =
+            serde_json::from_str(&line).expect("runtime event envelope");
+        if envelope["type"] == "event" {
+            assert_eq!(envelope["id"], request_id);
+            assert!(envelope["event"]["type"].is_string());
+            saw_event = true;
+        }
+    }
     assert!(
         saw_event,
-        "parse should emit request-scoped event envelopes"
+        "parse should emit request-scoped event envelopes on stderr"
     );
 
     drop(stdin);

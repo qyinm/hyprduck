@@ -255,6 +255,39 @@ pub struct EngineRuntimeRequest {
     pub request: EngineRequest,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineRuntimeMessageType {
+    Response,
+    Event,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeResponse<T> {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    #[serde(flatten)]
+    pub response: EngineSuccess<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeFailure {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    #[serde(flatten)]
+    pub failure: EngineFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeEvent {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    pub event: ParseEvent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum EngineRequest {
@@ -297,6 +330,36 @@ impl<T> EngineSuccess<T> {
             ok: true,
             command,
             data,
+        }
+    }
+}
+
+impl<T> EngineRuntimeResponse<T> {
+    pub fn new(id: Uuid, response: EngineSuccess<T>) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Response,
+            response,
+        }
+    }
+}
+
+impl EngineRuntimeFailure {
+    pub fn new(id: Uuid, failure: EngineFailure) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Response,
+            failure,
+        }
+    }
+}
+
+impl EngineRuntimeEvent {
+    pub fn new(id: Uuid, event: ParseEvent) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Event,
+            event,
         }
     }
 }
@@ -394,6 +457,40 @@ mod tests {
         assert!(json.contains("\"command\":\"load_config\""));
         let decoded: EngineRuntimeRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn runtime_response_envelope_round_trip() {
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let response = EngineRuntimeResponse::new(
+            id,
+            EngineSuccess::new(
+                EngineCommand::LoadConfig,
+                serde_json::json!({"ready": true}),
+            ),
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"type\":\"response\""));
+        assert!(json.contains("\"command\":\"load_config\""));
+
+        let decoded: EngineRuntimeResponse<serde_json::Value> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn runtime_event_envelope_round_trip() {
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let event = EngineRuntimeEvent::new(id, ParseEvent::Queued);
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"event\""));
+        assert!(json.contains("\"event\":{\"type\":\"queued\"}"));
+
+        let decoded: EngineRuntimeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
     }
 
     #[test]

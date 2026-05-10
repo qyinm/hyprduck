@@ -275,9 +275,17 @@ class EngineRuntime {
       return;
     }
     this.active = this.queue.shift();
-    this.child.stdin.write(
-      `${JSON.stringify({ id: this.active.id, ...this.active.request })}\n`,
-    );
+    try {
+      this.child.stdin.write(
+        `${JSON.stringify({ id: this.active.id, ...this.active.request })}\n`,
+      );
+    } catch (error) {
+      const active = this.active;
+      this.active = null;
+      active?.reject(new Error(`failed writing engine request: ${error.message}`));
+      this.failRuntime("engine runtime stdin is unavailable");
+      this.pump();
+    }
   }
 
   ensureStarted() {
@@ -333,8 +341,27 @@ class EngineRuntime {
       if (!line.trim()) {
         continue;
       }
-      this.active?.onEvent?.(line);
+      this.handleRuntimeEvent(line);
     }
+  }
+
+  handleRuntimeEvent(line) {
+    const active = this.active;
+    if (!active) {
+      return;
+    }
+    try {
+      const message = JSON.parse(line);
+      if (message.type === "event") {
+        if (message.id === active.id) {
+          active.onEvent?.(JSON.stringify(message.event));
+        }
+        return;
+      }
+    } catch {
+      // Legacy one-shot engine mode writes raw parse events to stderr.
+    }
+    active.onEvent?.(line);
   }
 
   completeActive(line) {
