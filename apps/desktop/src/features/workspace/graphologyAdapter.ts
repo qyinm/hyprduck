@@ -88,6 +88,10 @@ export function buildSigmaGraph(
       continue;
     }
 
+    if (edge.sourceNodeId === edge.targetNodeId) {
+      continue;
+    }
+
     const selected = selection.selectedEdgeId === edge.id;
     graph.addEdgeWithKey(edge.id, edge.sourceNodeId, edge.targetNodeId, {
       label: edge.label,

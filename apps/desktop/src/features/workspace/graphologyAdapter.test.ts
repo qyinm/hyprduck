@@ -102,6 +102,34 @@ describe("buildSigmaGraph", () => {
     expect(graph.getEdgeAttribute("edge-document-concept", "selected")).toBe(true);
   });
 
+  test("skips self-loop edges instead of throwing away the graph", () => {
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        edges: [
+          ...project.edges,
+          {
+            id: "self-loop",
+            sourceNodeId: "concept",
+            targetNodeId: "concept",
+            kind: "related_to",
+            label: "Self loop",
+            confidence: null,
+            evidenceCount: 0,
+          },
+        ],
+      },
+      {
+        selectedNodeId: null,
+        selectedEdgeId: null,
+      },
+    );
+
+    expect(graph.order).toBe(2);
+    expect(graph.size).toBe(1);
+    expect(graph.hasEdge("self-loop")).toBe(false);
+  });
+
   test("assigns fallback coordinates when persisted nodes do not have valid positions", () => {
     const graph = buildSigmaGraph(
       {
