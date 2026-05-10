@@ -1297,9 +1297,14 @@ export function App() {
         variant="ghost"
         className={cn(
           "fixed top-[10px] z-50",
-          !settingsOpen && workspaceUiState.inspectorOpen ? "right-[25rem]" : "right-12",
+          !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-12",
           windowChromeButtonClass(),
         )}
+        style={
+          !settingsOpen && workspaceUiState.inspectorOpen
+            ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
+            : undefined
+        }
         type="button"
       >
         <Bell size={14} />
@@ -1339,8 +1344,13 @@ export function App() {
           data-electron-no-drag
           className={cn(
             "fixed top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none",
-            !settingsOpen && workspaceUiState.inspectorOpen ? "right-[25rem]" : "right-3",
+            !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-3",
           )}
+          style={
+            !settingsOpen && workspaceUiState.inspectorOpen
+              ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
+              : undefined
+          }
         >
           <div className="flex items-start justify-between gap-3">
             <div>

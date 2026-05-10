@@ -208,10 +208,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       <div
         className={cn(
           "grid min-h-0 flex-1 overflow-hidden bg-background",
-          uiState.inspectorOpen
-            ? "grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(19rem,24rem)]"
-            : "grid-cols-1",
+          !uiState.inspectorOpen && "grid-cols-1",
         )}
+        style={{
+          gridTemplateColumns: uiState.inspectorOpen
+            ? "minmax(0, 1fr) clamp(18rem, 28vw, 24rem)"
+            : undefined,
+        }}
       >
         <section
           className={cn(
@@ -228,7 +231,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </section>
 
         {uiState.inspectorOpen && (
-          <aside className="flex min-h-0 flex-col border-l border-border bg-background pt-14">
+          <aside
+            className="flex min-h-0 flex-col border-l border-border bg-background pt-14"
+            style={{ width: "clamp(18rem, 28vw, 24rem)" }}
+          >
             <div className="border-b border-border/70 px-4 py-3">
               <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
               <p className="text-xs text-muted-foreground">
