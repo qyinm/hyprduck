@@ -345,6 +345,15 @@ impl EngineLaunchSpec {
     pub fn display(&self) -> &str {
         &self.display
     }
+
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args);
+        if let Some(current_dir) = &self.current_dir {
+            command.current_dir(current_dir);
+        }
+        command
+    }
 }
 
 fn candidate_roots(

@@ -1,9 +1,9 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use duckdocs_engine_types::{EngineSuccess, ParseResponseData};
+use duckdocs_engine_types::{EngineConfigPayload, EngineSuccess, ParseResponseData};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -113,4 +113,43 @@ fn doc_fixture_round_trips_through_engine() {
     let result = run_parse("sample.doc", "doc");
     assert_eq!(result.result.pages.len(), 1);
     assert!(result.saved_output_path.is_some());
+}
+
+#[test]
+fn serve_mode_handles_multiple_requests_without_restarting() {
+    let config_dir = tempdir().expect("config dir");
+    write_ollama_config(config_dir.path());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_duckdocs-engine"))
+        .arg("serve")
+        .env("DUCKDOCS_CONFIG_DIR", config_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("engine server run");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+
+    for _ in 0..2 {
+        stdin
+            .write_all(br#"{"command":"load_config","payload":{}}"#)
+            .expect("request write");
+        stdin.write_all(b"\n").expect("request newline");
+
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("response line");
+        let response: EngineSuccess<EngineConfigPayload> =
+            serde_json::from_str(&line).expect("load config response");
+        assert_eq!(response.data.provider, "ollama");
+    }
+
+    drop(stdin);
+    let status = child.wait().expect("engine server exit");
+    assert!(
+        status.success(),
+        "serve mode should exit cleanly on stdin close"
+    );
 }

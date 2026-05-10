@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -22,6 +22,7 @@ use duckdocs_engine_types::{
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tempfile::tempdir;
 
 fn main() {
@@ -32,89 +33,62 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    if std::env::args().skip(1).any(|arg| arg == "serve") {
+        return run_runtime_server();
+    }
+
     let mut payload = String::new();
     io::stdin()
         .read_to_string(&mut payload)
         .context("failed to read engine request")?;
     let request = decode_request(&payload)?;
     let config_store = EngineConfigStore::default()?;
+    let response = match request {
+        EngineRequest::Parse(request) => encode_parse_response(request, &payload, &config_store)?,
+        request => encode_success_response(request, &config_store)?,
+    };
+    io::stdout()
+        .write_all(response.as_bytes())
+        .context("failed to write engine response")?;
+    Ok(())
+}
 
-    match request {
-        EngineRequest::Parse(request) => {
-            maybe_write_debug(&request.options.debug_request_path, &payload)?;
-            let debug_result_path = request.options.debug_result_path.clone();
-            let response = handle_parse(request, &config_store)
-                .map(|data| {
-                    serde_json::to_string_pretty(&EngineSuccess::new(EngineCommand::Parse, data))
-                })
-                .unwrap_or_else(|error| {
-                    let _ = emit_event(&ParseEvent::Failed {
-                        message: error.to_string(),
-                    });
-                    serde_json::to_string_pretty(&engine_failure(EngineCommand::Parse, &error))
-                })
-                .context("failed to encode parse response")?;
-            maybe_write_debug(&debug_result_path, &response)?;
-            io::stdout()
-                .write_all(response.as_bytes())
-                .context("failed to write parse response")?;
+fn run_runtime_server() -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+    let config_store = EngineConfigStore::default()?;
+
+    for line in stdin.lock().lines() {
+        let payload = line.context("failed to read runtime request")?;
+        if payload.trim().is_empty() {
+            continue;
         }
-        EngineRequest::CompileProject(request) => {
-            let payload = EngineSuccess::new(
-                EngineCommand::CompileProject,
-                handle_compile_project(request)?,
-            );
-            write_response(&payload)?;
-        }
-        EngineRequest::LoadProject(request) => {
-            let payload =
-                EngineSuccess::new(EngineCommand::LoadProject, handle_load_project(request)?);
-            write_response(&payload)?;
-        }
-        EngineRequest::ApplyCorrection(request) => {
-            let payload = EngineSuccess::new(
-                EngineCommand::ApplyCorrection,
-                handle_apply_correction(request)?,
-            );
-            write_response(&payload)?;
-        }
-        EngineRequest::AnswerProject(request) => {
-            let payload = EngineSuccess::new(
-                EngineCommand::AnswerProject,
-                handle_answer_project(request)?,
-            );
-            write_response(&payload)?;
-        }
-        EngineRequest::LoadConfig(LoadConfigRequest {}) => {
-            let config = config_store.load()?;
-            let payload = EngineSuccess::new(EngineCommand::LoadConfig, config.to_payload());
-            write_response(&payload)?;
-        }
-        EngineRequest::SaveConfig(SaveConfigRequest { config }) => {
-            let config = EngineConfig::from_payload(config);
-            config_store.save(&config)?;
-            let payload = EngineSuccess::new(
-                EngineCommand::SaveConfig,
-                SaveConfigResponseData {
-                    config: config.to_payload(),
-                    persisted: true,
-                },
-            );
-            write_response(&payload)?;
-        }
-        EngineRequest::ValidateProvider(ValidateProviderRequest { config }) => {
-            let config = config
-                .map(EngineConfig::from_payload)
-                .unwrap_or(config_store.load()?);
-            let payload =
-                EngineSuccess::new(EngineCommand::ValidateProvider, validate_provider(&config));
-            write_response(&payload)?;
-        }
-        EngineRequest::ListProviderModels(_) => {
-            let payload =
-                EngineSuccess::new(EngineCommand::ListProviderModels, provider_model_catalog());
-            write_response(&payload)?;
-        }
+
+        let response = match decode_request(&payload) {
+            Ok(EngineRequest::Parse(request)) => {
+                encode_parse_response(request, &payload, &config_store)?
+            }
+            Ok(request) => {
+                let command = request_command(&request);
+                encode_success_response(request, &config_store)
+                    .unwrap_or_else(|error| encode_failure_response(command, &error))
+            }
+            Err(error) => serde_json::to_string(&json!({
+                "ok": false,
+                "error": {
+                    "code": "invalid_request",
+                    "message": error.to_string()
+                }
+            }))
+            .context("failed to encode invalid runtime request response")?,
+        };
+        stdout
+            .write_all(response.as_bytes())
+            .context("failed to write runtime response")?;
+        stdout
+            .write_all(b"\n")
+            .context("failed to write runtime response newline")?;
+        stdout.flush().context("failed to flush runtime response")?;
     }
     Ok(())
 }
@@ -125,12 +99,102 @@ fn decode_request(payload: &str) -> Result<EngineRequest> {
         .context("failed to decode engine request JSON")
 }
 
-fn write_response<T: Serialize>(payload: &T) -> Result<()> {
-    let output =
-        serde_json::to_string_pretty(payload).context("failed to encode engine response")?;
-    io::stdout()
-        .write_all(output.as_bytes())
-        .context("failed to write engine response")
+fn encode_parse_response(
+    request: ParseRequest,
+    raw_payload: &str,
+    config_store: &EngineConfigStore,
+) -> Result<String> {
+    maybe_write_debug(&request.options.debug_request_path, raw_payload)?;
+    let debug_result_path = request.options.debug_result_path.clone();
+    let response = handle_parse(request, config_store)
+        .map(|data| serde_json::to_string(&EngineSuccess::new(EngineCommand::Parse, data)))
+        .unwrap_or_else(|error| {
+            let _ = emit_event(&ParseEvent::Failed {
+                message: error.to_string(),
+            });
+            serde_json::to_string(&engine_failure(EngineCommand::Parse, &error))
+        })
+        .context("failed to encode parse response")?;
+    maybe_write_debug(&debug_result_path, &response)?;
+    Ok(response)
+}
+
+fn encode_success_response(
+    request: EngineRequest,
+    config_store: &EngineConfigStore,
+) -> Result<String> {
+    let response = match request {
+        EngineRequest::Parse(request) => return encode_parse_response(request, "", config_store),
+        EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::CompileProject,
+            handle_compile_project(request)?,
+        )),
+        EngineRequest::LoadProject(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::LoadProject,
+            handle_load_project(request)?,
+        )),
+        EngineRequest::ApplyCorrection(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ApplyCorrection,
+            handle_apply_correction(request)?,
+        )),
+        EngineRequest::AnswerProject(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::AnswerProject,
+            handle_answer_project(request)?,
+        )),
+        EngineRequest::LoadConfig(LoadConfigRequest {}) => {
+            let config = config_store.load()?;
+            serde_json::to_string(&EngineSuccess::new(
+                EngineCommand::LoadConfig,
+                config.to_payload(),
+            ))
+        }
+        EngineRequest::SaveConfig(SaveConfigRequest { config }) => {
+            let config = EngineConfig::from_payload(config);
+            config_store.save(&config)?;
+            serde_json::to_string(&EngineSuccess::new(
+                EngineCommand::SaveConfig,
+                SaveConfigResponseData {
+                    config: config.to_payload(),
+                    persisted: true,
+                },
+            ))
+        }
+        EngineRequest::ValidateProvider(ValidateProviderRequest { config }) => {
+            let config = config
+                .map(EngineConfig::from_payload)
+                .unwrap_or(config_store.load()?);
+            serde_json::to_string(&EngineSuccess::new(
+                EngineCommand::ValidateProvider,
+                validate_provider(&config),
+            ))
+        }
+        EngineRequest::ListProviderModels(_) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ListProviderModels,
+            provider_model_catalog(),
+        )),
+    }
+    .context("failed to encode engine response")?;
+    Ok(response)
+}
+
+fn encode_failure_response(command: EngineCommand, error: &anyhow::Error) -> String {
+    serde_json::to_string(&engine_failure(command, error)).unwrap_or_else(|_| {
+        "{\"ok\":false,\"command\":\"validate_provider\",\"error\":{\"code\":\"runtime_error\",\"message\":\"failed to encode engine failure\",\"details\":null}}".to_string()
+    })
+}
+
+fn request_command(request: &EngineRequest) -> EngineCommand {
+    match request {
+        EngineRequest::Parse(_) => EngineCommand::Parse,
+        EngineRequest::CompileProject(_) => EngineCommand::CompileProject,
+        EngineRequest::LoadProject(_) => EngineCommand::LoadProject,
+        EngineRequest::ApplyCorrection(_) => EngineCommand::ApplyCorrection,
+        EngineRequest::AnswerProject(_) => EngineCommand::AnswerProject,
+        EngineRequest::LoadConfig(_) => EngineCommand::LoadConfig,
+        EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
+        EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
+        EngineRequest::ListProviderModels(_) => EngineCommand::ListProviderModels,
+    }
 }
 
 fn maybe_write_debug(path: &Option<String>, contents: &str) -> Result<()> {
