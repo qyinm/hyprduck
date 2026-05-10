@@ -39,7 +39,9 @@ import {
 import type {
   WorkspaceApplyCorrectionRequest,
   WorkspaceAnswerProjectRequest,
+  WorkspaceProjectEnvelope,
   WorkspaceProject,
+  WorkspaceSourceSummary,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +53,9 @@ interface UiSnapshot {
   progressLog: ProgressEntry[];
   lastResult: CompletedResultSnapshot | null;
   lastProjectId?: string | null;
+  lastWorkspaceId?: string | null;
+  lastSourceId?: string | null;
+  lastSourceManifestPath?: string | null;
 }
 
 interface ActiveJobSnapshot {
@@ -303,11 +308,161 @@ function emitWebSnapshot(snapshot: UiSnapshot) {
 
 function getWebWorkspaceFromSnapshot(
   snapshot: UiSnapshot = webMockSnapshot,
-): WorkspaceProject | null {
+): WorkspaceProjectEnvelope {
   if (!snapshot.lastResult) {
-    return null;
+    return { project: null, workspace_id: "web-preview", sources: [] };
   }
-  return buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob));
+  const project = buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob));
+  return {
+    project,
+    workspace_id: "web-preview",
+    sources: project
+      ? [
+          {
+            workspace_id: "web-preview",
+            source_id: "preview",
+            original_path: snapshot.lastResult.savedOutputPath ?? "web-preview.md",
+            source_path: snapshot.lastResult.savedOutputPath ?? "web-preview.md",
+            markdown_path: snapshot.lastResult.savedOutputPath ?? "web-preview.md",
+            format: "markdown",
+            status: snapshot.activeJob ? "ingesting" : "ingested",
+            page_count: snapshot.lastResult.successCount + snapshot.lastResult.failedCount,
+            success_count: snapshot.lastResult.successCount,
+            failed_count: snapshot.lastResult.failedCount,
+            updated_at: 0,
+          },
+        ]
+      : [],
+  };
+}
+
+function hydrateWorkspaceProjectWithSources(
+  project: WorkspaceProject,
+  sources: WorkspaceSourceSummary[],
+): WorkspaceProject {
+  if (sources.length === 0) {
+    return project;
+  }
+
+  const nodes = [...project.nodes];
+  const edges = [...project.edges];
+  const detailsByNodeId = { ...project.detailsByNodeId };
+  const answerByNodeId = { ...project.answerByNodeId };
+  const existingSourceIds = new Set(
+    nodes
+      .map((node) => detailsByNodeId[node.id]?.source?.sourceId)
+      .filter((sourceId): sourceId is string => Boolean(sourceId)),
+  );
+  const existingNodeIds = new Set(nodes.map((node) => node.id));
+  const relatedCountByNodeId = new Map<string, number>();
+  for (const edge of edges) {
+    relatedCountByNodeId.set(
+      edge.sourceNodeId,
+      (relatedCountByNodeId.get(edge.sourceNodeId) ?? 0) + 1,
+    );
+    relatedCountByNodeId.set(
+      edge.targetNodeId,
+      (relatedCountByNodeId.get(edge.targetNodeId) ?? 0) + 1,
+    );
+  }
+
+  for (const [index, source] of sources.entries()) {
+    if (existingSourceIds.has(source.source_id)) {
+      continue;
+    }
+    const nodeId = sourceNodeId(source.source_id);
+    if (existingNodeIds.has(nodeId)) {
+      continue;
+    }
+    const node = {
+      id: nodeId,
+      label: fileNameFromPath(source.original_path || source.source_path),
+      kind: "source" as const,
+      confidence: source.status === "failed" ? 0.18 : 0.72,
+      relatedCount: relatedCountByNodeId.get(nodeId) ?? 0,
+      evidenceCount: source.success_count,
+      position: sourceOnlyNodePosition(index, sources.length),
+    };
+    nodes.push(node);
+    detailsByNodeId[nodeId] = {
+      node,
+      canonicalName: node.label,
+      aliases: ["Workspace source"],
+      description:
+        "Immutable source registered in the workspace. HyprDuck keeps source artifacts addressable even when no graph links have been extracted yet.",
+      evidence: [],
+      actions: [],
+      source: sourceBackingFromSummary(source),
+    };
+    answerByNodeId[nodeId] = {
+      status: source.status === "failed" ? "blocked" : "low_confidence",
+      text: null,
+      explanation:
+        source.status === "failed"
+          ? "This source is present in the workspace, but ingest failed before grounded answers could be built."
+          : "This source is present in the workspace. Select linked graph nodes or inspect derived artifacts for grounded evidence.",
+      citations: [],
+      relatedNodeIds: [],
+      suggestedActions: [
+        {
+          kind: "inspect_evidence",
+          label: "Inspect source artifacts",
+          description:
+            "Open the source detail inspector to review the copied source and raw markdown artifact.",
+        },
+      ],
+    };
+    existingSourceIds.add(source.source_id);
+    existingNodeIds.add(nodeId);
+  }
+
+  return {
+    ...project,
+    nodes,
+    edges,
+    detailsByNodeId,
+    answerByNodeId,
+    summary: {
+      ...project.summary,
+      nodeCount: nodes.length,
+      relationshipCount: edges.length,
+      documentCount: sources.length || project.summary.documentCount,
+    },
+  };
+}
+
+function sourceBackingFromSummary(source: WorkspaceSourceSummary) {
+  return {
+    workspaceId: source.workspace_id,
+    sourceId: source.source_id,
+    originalPath: source.original_path,
+    sourcePath: source.source_path,
+    markdownPath: source.markdown_path,
+    format: source.format,
+    status: source.status,
+    pageCount: source.page_count,
+    successCount: source.success_count,
+    failedCount: source.failed_count,
+    updatedAt: source.updated_at,
+    manifestPath: null,
+  };
+}
+
+function sourceNodeId(sourceId: string) {
+  return `source:${sourceId}`;
+}
+
+function fileNameFromPath(value: string) {
+  return value.split(/[\\/]/).filter(Boolean).pop() ?? value;
+}
+
+function sourceOnlyNodePosition(index: number, total: number) {
+  const radius = 34;
+  const angle = (index / Math.max(1, total)) * Math.PI * 2 - Math.PI / 2;
+  return {
+    x: 50 + Math.cos(angle) * radius,
+    y: 50 + Math.sin(angle) * radius,
+  };
 }
 
 function createWebMockApi(): HyprDuckDesktopApi {
@@ -346,11 +501,14 @@ function createWebMockApi(): HyprDuckDesktopApi {
         }
         case "load_workspace_project": {
           const projectId = args.project_id as string | undefined;
-          const project = getWebWorkspaceFromSnapshot();
-          if (!project || (projectId && project.summary.projectId !== projectId)) {
-            return null as T;
+          const envelope = getWebWorkspaceFromSnapshot();
+          if (
+            !envelope.project ||
+            (projectId && envelope.project.summary.projectId !== projectId)
+          ) {
+            return { project: null, workspace_id: envelope.workspace_id, sources: envelope.sources } as T;
           }
-          return { ...project } as T;
+          return { ...envelope } as T;
         }
         case "pick_import_file": {
           return { ...WEB_MOCK_SAMPLE_FILE } as T;
@@ -441,24 +599,31 @@ function createWebMockApi(): HyprDuckDesktopApi {
           }
           return undefined as T;
         }
+        case "open_local_artifact": {
+          const path = String((args.path as string | undefined) ?? "");
+          if (typeof window !== "undefined") {
+            window.alert(`Cannot open local artifacts from web preview: ${path}`);
+          }
+          return undefined as T;
+        }
         case "apply_workspace_correction": {
           const workspace = getWebWorkspaceFromSnapshot();
-          if (!workspace) {
+          if (!workspace.project) {
             throw new Error("No workspace available in preview mode.");
           }
-          return { ...workspace } as T;
+          return { ...workspace.project } as T;
         }
         case "answer_workspace_project": {
           const request = args.request as
             | WorkspaceAnswerProjectRequest
             | undefined;
           const workspace = getWebWorkspaceFromSnapshot();
-          if (!workspace) {
+          if (!workspace.project) {
             throw new Error("No workspace available in preview mode.");
           }
           const answer = request?.nodeId
-            ? workspace.answerByNodeId[request.nodeId]
-            : workspace.answerByNodeId.document;
+            ? workspace.project.answerByNodeId[request.nodeId]
+            : workspace.project.answerByNodeId["source:preview"];
           if (!answer) {
             throw new Error("No answer available for this node in preview mode.");
           }
@@ -1063,8 +1228,8 @@ function SettingsPanel(props: {
 
 export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
-  const [loadedWorkspaceProject, setLoadedWorkspaceProject] =
-    useState<WorkspaceProject | null>(null);
+  const [loadedWorkspaceEnvelope, setLoadedWorkspaceEnvelope] =
+    useState<WorkspaceProjectEnvelope | null>(null);
   const [currentConfig, setCurrentConfig] =
     useState<EngineConfigPayload | null>(null);
   const [validation, setValidation] =
@@ -1082,15 +1247,18 @@ export function App() {
     snapshot.lastResult,
     Boolean(snapshot.activeJob),
   );
-  const workspaceProject = loadedWorkspaceProject
-    ? {
-        ...loadedWorkspaceProject,
-        summary: {
-          ...loadedWorkspaceProject.summary,
-          stale:
-            loadedWorkspaceProject.summary.stale || Boolean(snapshot.activeJob),
+  const workspaceProject = loadedWorkspaceEnvelope?.project
+    ? hydrateWorkspaceProjectWithSources(
+        {
+          ...loadedWorkspaceEnvelope.project,
+          summary: {
+            ...loadedWorkspaceEnvelope.project.summary,
+            stale:
+              loadedWorkspaceEnvelope.project.summary.stale || Boolean(snapshot.activeJob),
+          },
         },
-      }
+        loadedWorkspaceEnvelope.sources,
+      )
     : previewWorkspaceProject;
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
@@ -1110,13 +1278,13 @@ export function App() {
           invoke<ValidateProviderResponseData>("validate_engine_config"),
           invoke<RuntimeReadinessResponseData>("engine_readiness"),
         ]);
-      const initialWorkspaceProject =
-        await invoke<WorkspaceProject | null>("load_workspace_project");
+      const initialWorkspaceEnvelope =
+        await invoke<WorkspaceProjectEnvelope>("load_workspace_project");
       setSnapshot(initialSnapshot);
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
       setReadiness(initialReadiness);
-      setLoadedWorkspaceProject(initialWorkspaceProject);
+      setLoadedWorkspaceEnvelope(initialWorkspaceEnvelope);
 
       unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
         setSnapshot(message.payload);
@@ -1138,17 +1306,17 @@ export function App() {
     let cancelled = false;
 
     if (snapshot.lastProjectId) {
-      invoke<WorkspaceProject | null>("load_workspace_project", {
+      invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
         project_id: snapshot.lastProjectId,
       })
-        .then((project) => {
+        .then((envelope) => {
           if (!cancelled) {
-            setLoadedWorkspaceProject(project);
+            setLoadedWorkspaceEnvelope(envelope);
           }
         })
         .catch(() => {
           if (!cancelled) {
-            setLoadedWorkspaceProject(null);
+            setLoadedWorkspaceEnvelope(null);
           }
         });
       return () => {
@@ -1157,7 +1325,7 @@ export function App() {
     }
 
     if (snapshot.lastResult) {
-      setLoadedWorkspaceProject(null);
+      setLoadedWorkspaceEnvelope(null);
     }
 
     return () => {
@@ -1220,6 +1388,10 @@ export function App() {
     await invoke<void>("open_saved_output", { path, reveal });
   };
 
+  const openLocalArtifact = async (path: string, reveal: boolean) => {
+    await invoke<void>("open_local_artifact", { path, reveal });
+  };
+
   const applyWorkspaceCorrection = async (
     request: WorkspaceApplyCorrectionRequest,
   ) => {
@@ -1232,7 +1404,11 @@ export function App() {
         value: request.value ?? null,
       },
     });
-    setLoadedWorkspaceProject(project);
+    setLoadedWorkspaceEnvelope((current) => ({
+      project,
+      workspace_id: current?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
+      sources: current?.sources ?? [],
+    }));
   };
 
   const answerWorkspaceProject = async (
@@ -1575,6 +1751,7 @@ export function App() {
                 dispatch={dispatchWorkspaceUi}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onAskProject={answerWorkspaceProject}
+                onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
                 project={workspaceProject}
                 uiState={workspaceUiState}

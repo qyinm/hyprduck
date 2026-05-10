@@ -20,8 +20,9 @@ use duckdocs_engine_types::{
     ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData,
     ProviderOption, ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
-    SourceArtifactManifest, SourceId, SourceSummary, SuggestedAction, SuggestedActionKind,
-    ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue, WorkspaceId,
+    SourceArtifactManifest, SourceBacking, SourceId, SourceSummary, SuggestedAction,
+    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
+    WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
@@ -393,9 +394,9 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
             request.source_markdown_path
         )
     })?;
-    let project = compile_knowledge_project(&request, &markdown);
     let source_manifest = load_source_manifest(&request)?;
     let (workspace_id, source_id) = resolved_source_ids(&request, source_manifest.as_ref())?;
+    let project = compile_knowledge_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
     Ok(CompileProjectResponseData {
@@ -479,22 +480,42 @@ struct EdgeAccumulator {
     page_labels: BTreeSet<String>,
 }
 
-fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) -> KnowledgeProject {
+fn compile_knowledge_project(
+    request: &CompileProjectRequest,
+    markdown: &str,
+    source_manifest: Option<&SourceArtifactManifest>,
+) -> KnowledgeProject {
     let title = infer_markdown_title(&request.source_markdown_path, markdown);
     let page_sections = extract_page_sections(markdown);
     let source_path = request
         .source_document_path
         .clone()
         .unwrap_or_else(|| request.source_markdown_path.clone());
+    let source_node_id = source_manifest
+        .map(|manifest| source_node_id(&manifest.source_id))
+        .unwrap_or_else(|| "document".into());
+    let source_label = source_manifest
+        .map(source_label_from_manifest)
+        .unwrap_or_else(|| title.clone());
+    let source_path_for_evidence = source_manifest
+        .map(|manifest| manifest.source_path.clone())
+        .unwrap_or_else(|| source_path.clone());
+    let source_id_for_evidence = source_manifest.map(|manifest| manifest.source_id.clone());
     let project_id = build_project_id(request);
 
-    let collected = collect_concepts(&page_sections, &source_path);
+    let collected = collect_concepts(
+        &page_sections,
+        &source_path_for_evidence,
+        source_id_for_evidence.as_deref(),
+    );
     let concept_accumulators = collected.concepts;
     let concept_count = concept_accumulators.len();
     let mut document_node = GraphNodeSummary {
-        id: "document".into(),
-        label: title.clone(),
-        kind: GraphNodeKind::Document,
+        id: source_node_id.clone(),
+        label: source_label.clone(),
+        kind: source_manifest
+            .map(|_| GraphNodeKind::Source)
+            .unwrap_or(GraphNodeKind::Document),
         confidence: Some(if concept_count > 0 { 0.78 } else { 0.42 }),
         related_count: 0,
         evidence_count: page_sections.len(),
@@ -534,7 +555,8 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             id: format!("ev-document-{}", index + 1),
             page_label: section.page_label.clone(),
             snippet: excerpt(&section.content, 180),
-            source_path: Some(source_path.clone()),
+            source_path: Some(source_path_for_evidence.clone()),
+            source_id: source_id_for_evidence.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -543,7 +565,8 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             &document_node,
             &concept_accumulators,
             &collected.page_concepts,
-            &source_path,
+            &source_path_for_evidence,
+            source_id_for_evidence.as_deref(),
         );
     edge_details_by_id.extend(built_edge_details_by_id);
     document_node.related_count = related_count_by_node_id
@@ -561,8 +584,12 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
         document_node.id.clone(),
         GraphNodeDetail {
             node: document_node.clone(),
-            canonical_name: title.clone(),
-            aliases: vec!["Imported document".into()],
+            canonical_name: source_label.clone(),
+            aliases: vec![if source_manifest.is_some() {
+                "Immutable source".into()
+            } else {
+                "Imported document".into()
+            }],
             description: format!(
                 "HyprDuck compiled {} concept nodes from {} visible page sections. Every node below keeps direct evidence back to the imported document.",
                 concept_count,
@@ -570,6 +597,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
             ),
             evidence: document_evidence.clone(),
             actions: Vec::new(),
+            source: source_manifest.map(source_backing_from_manifest),
         },
     );
     answer_by_node_id.insert(
@@ -636,6 +664,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 ),
                 evidence: concept.evidence.clone(),
                 actions,
+                source: None,
             },
         );
         answer_by_node_id.insert(
@@ -655,7 +684,7 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
                 related_node_ids: connected_node_ids_by_node_id
                     .get(node.id.as_str())
                     .map(|related| related.iter().cloned().collect())
-                    .unwrap_or_else(|| vec!["document".into()]),
+                    .unwrap_or_else(|| vec![source_node_id.clone()]),
                 suggested_actions: vec![SuggestedAction {
                     kind: SuggestedActionKind::InspectEvidence,
                     label: "Inspect evidence".into(),
@@ -705,7 +734,52 @@ fn compile_knowledge_project(request: &CompileProjectRequest, markdown: &str) ->
     }
 }
 
-fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> CollectedConcepts {
+fn source_node_id(source_id: &str) -> String {
+    format!("source:{source_id}")
+}
+
+fn is_source_like_node_kind(kind: GraphNodeKind) -> bool {
+    matches!(kind, GraphNodeKind::Source | GraphNodeKind::Document)
+}
+
+fn source_label_from_manifest(manifest: &SourceArtifactManifest) -> String {
+    Path::new(&manifest.original_path)
+        .file_name()
+        .or_else(|| Path::new(&manifest.source_path).file_name())
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| manifest.output_name.clone())
+}
+
+fn source_backing_from_manifest(manifest: &SourceArtifactManifest) -> SourceBacking {
+    SourceBacking {
+        workspace_id: manifest.workspace_id.clone(),
+        source_id: manifest.source_id.clone(),
+        original_path: manifest.original_path.clone(),
+        source_path: manifest.source_path.clone(),
+        markdown_path: manifest.markdown_path.clone(),
+        format: document_format_slug(&manifest.format).into(),
+        status: ingest_status_slug(&manifest.status).into(),
+        page_count: manifest.pages.len(),
+        success_count: manifest
+            .pages
+            .iter()
+            .filter(|page| page.error_message.is_none())
+            .count(),
+        failed_count: manifest
+            .pages
+            .iter()
+            .filter(|page| page.error_message.is_some())
+            .count(),
+        updated_at: manifest.updated_at,
+        manifest_path: Some(manifest.manifest_path.clone()),
+    }
+}
+
+fn collect_concepts(
+    page_sections: &[PageSection],
+    source_path: &str,
+    source_id: Option<&str>,
+) -> CollectedConcepts {
     let mut concepts = BTreeMap::<String, ConceptAccumulator>::new();
     let mut page_concepts = Vec::new();
 
@@ -741,6 +815,7 @@ fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Collect
                 page_label: section.page_label.clone(),
                 snippet: excerpt(&section.content, 180),
                 source_path: Some(source_path.to_string()),
+                source_id: source_id.map(ToString::to_string),
             });
             page_concept_ids.push(concept_id);
         }
@@ -769,6 +844,7 @@ fn collect_concepts(page_sections: &[PageSection], source_path: &str) -> Collect
                         page_label: section.page_label.clone(),
                         snippet: excerpt(&section.content, 180),
                         source_path: Some(source_path.to_string()),
+                        source_id: source_id.map(ToString::to_string),
                     }],
                     page_labels: [section.page_label.clone()].into_iter().collect(),
                 },
@@ -811,6 +887,7 @@ fn build_relation_edges(
     concept_accumulators: &[ConceptAccumulator],
     page_concepts: &[PageConceptSet],
     source_path: &str,
+    source_id: Option<&str>,
 ) -> (
     Vec<RelationEdgeSummary>,
     BTreeMap<String, RelationEdgeDetail>,
@@ -828,7 +905,7 @@ fn build_relation_edges(
 
     for concept in concept_accumulators {
         let edge = RelationEdgeSummary {
-            id: format!("edge-document-{}", concept.id),
+            id: relation_edge_id(RelationKind::SourceDocument, &document_node.id, &concept.id),
             source_node_id: document_node.id.clone(),
             target_node_id: concept.id.clone(),
             kind: RelationKind::SourceDocument,
@@ -890,6 +967,7 @@ fn build_relation_edges(
                     page_label: page.page_label.clone(),
                     snippet: page.snippet.clone(),
                     source_path: Some(source_path.to_string()),
+                    source_id: source_id.map(ToString::to_string),
                 });
             }
         }
@@ -1251,7 +1329,7 @@ fn answer_project(
             project
                 .nodes
                 .iter()
-                .find(|node| node.kind == GraphNodeKind::Document)
+                .find(|node| is_source_like_node_kind(node.kind))
                 .map(|node| node.id.clone())
         })
         .ok_or_else(|| {
@@ -1507,6 +1585,7 @@ fn apply_keep_separate_correction(
                 ),
                 evidence: split_evidence.clone(),
                 actions: Vec::new(),
+                source: None,
             },
         );
 
@@ -1646,7 +1725,7 @@ fn refresh_project_after_correction(project: &mut KnowledgeProject) {
     let document_count = project
         .nodes
         .iter()
-        .filter(|node| node.kind == GraphNodeKind::Document)
+        .filter(|node| is_source_like_node_kind(node.kind))
         .count();
     let relationship_count = project.edges.len();
     let evidence_count = project
@@ -1662,7 +1741,7 @@ fn refresh_project_after_correction(project: &mut KnowledgeProject) {
     if let Some(document_title) = project
         .nodes
         .iter()
-        .find(|node| node.kind == GraphNodeKind::Document)
+        .find(|node| is_source_like_node_kind(node.kind))
         .map(|node| node.label.clone())
     {
         project.summary.title = document_title;
@@ -1778,7 +1857,7 @@ fn build_answer_for_detail(
     related_node_ids: Vec<String>,
 ) -> AnswerResponse {
     match detail.node.kind {
-        GraphNodeKind::Document => {
+        GraphNodeKind::Source | GraphNodeKind::Document => {
             let concept_count = project
                 .nodes
                 .iter()
@@ -1910,7 +1989,7 @@ fn answer_text_for_question(
         .len();
 
     match detail.node.kind {
-        GraphNodeKind::Document => {
+        GraphNodeKind::Source | GraphNodeKind::Document => {
             let concept_count = project
                 .nodes
                 .iter()
@@ -2065,7 +2144,7 @@ fn edge_explanation(
 
 fn relation_edge_id(kind: RelationKind, source_node_id: &str, target_node_id: &str) -> String {
     match kind {
-        RelationKind::SourceDocument => format!("edge-document-{}", target_node_id),
+        RelationKind::SourceDocument => format!("edge-{}-{}", source_node_id, target_node_id),
         RelationKind::RelatedTo => format!("edge-{}-{}", source_node_id, target_node_id),
     }
 }
@@ -3638,7 +3717,7 @@ mod tests {
         };
 
         let markdown = fs::read_to_string(&markdown_path).expect("read markdown");
-        compile_knowledge_project(&request, &markdown)
+        compile_knowledge_project(&request, &markdown, None)
     }
 
     fn sample_parse_result() -> ParseResult {
@@ -3782,8 +3861,8 @@ mod tests {
             workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
             source_id: Some("source-test".into()),
         };
-        let project = compile_knowledge_project(&request, markdown);
         let manifest = sample_manifest(&temp);
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
 
         store
@@ -3803,6 +3882,46 @@ mod tests {
         assert_eq!(sources[0].format, DocumentFormat::Pdf);
         assert_eq!(sources[0].success_count, 1);
         assert_eq!(sources[0].failed_count, 0);
+    }
+
+    #[test]
+    fn compile_project_uses_source_manifest_as_graph_node_backing() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nSource evidence belongs to the graph.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let source_node_id = source_node_id(&manifest.source_id);
+        let source_detail = project
+            .details_by_node_id
+            .get(&source_node_id)
+            .expect("source node detail");
+
+        assert_eq!(source_detail.node.kind, GraphNodeKind::Source);
+        assert_eq!(
+            source_detail
+                .source
+                .as_ref()
+                .map(|source| source.source_id.as_str()),
+            Some("source-test")
+        );
+        assert!(source_detail
+            .evidence
+            .iter()
+            .all(|evidence| evidence.source_id.as_deref() == Some("source-test")));
+        assert!(project
+            .edges
+            .iter()
+            .any(|edge| edge.source_node_id == source_node_id));
     }
 
     #[test]

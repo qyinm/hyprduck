@@ -7,8 +7,8 @@ use uuid::Uuid;
 pub use duckdocs_knowledge::{
     AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, ProjectOverview,
-    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SuggestedAction,
-    SuggestedActionKind,
+    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
+    SuggestedAction, SuggestedActionKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

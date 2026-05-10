@@ -31,9 +31,9 @@ export function buildWorkspacePreview(
   const title = inferProjectTitle(result.savedOutputPath, result.markdown);
   const pageSections = extractPageSections(result.markdown);
   const documentNode: WorkspaceNodeSummary = {
-    id: "document",
+    id: "source:preview",
     label: title,
-    kind: "document",
+    kind: "source",
     confidence: 0.42,
     relatedCount: pageSections.length,
     evidenceCount: pageSections.length,
@@ -61,7 +61,7 @@ export function buildWorkspacePreview(
   const nodes = [documentNode, ...pageNodes];
   const edges: WorkspaceEdgeSummary[] = pageNodes.map((node, index) => ({
     id: `edge-document-${node.id}`,
-    sourceNodeId: "document",
+    sourceNodeId: "source:preview",
     targetNodeId: node.id,
     kind: "source_document",
     label: "Ingested from source",
@@ -79,7 +79,7 @@ export function buildWorkspacePreview(
     sourcePath: result.savedOutputPath,
   }));
 
-  detailsByNodeId.document = {
+  detailsByNodeId["source:preview"] = {
     node: documentNode,
     canonicalName: title,
     aliases: ["Latest import", "Preview project"],
@@ -89,8 +89,22 @@ export function buildWorkspacePreview(
     actions: disabledCorrectionActions(
       "Correction actions unlock once merge policy and safe-write review are connected.",
     ),
+    source: {
+      workspaceId: "web-preview",
+      sourceId: "preview",
+      originalPath: result.savedOutputPath ?? title,
+      sourcePath: result.savedOutputPath ?? title,
+      markdownPath: result.savedOutputPath ?? title,
+      format: "markdown",
+      status: stale ? "stale" : "ingested",
+      pageCount: pageSections.length,
+      successCount: result.successCount,
+      failedCount: result.failedCount,
+      updatedAt: 0,
+      manifestPath: null,
+    },
   };
-  answerByNodeId.document = previewAnswer(
+  answerByNodeId["source:preview"] = previewAnswer(
     "HyprDuck can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before trusting this draft.",
     stale,
     pageEvidence.slice(0, 2),

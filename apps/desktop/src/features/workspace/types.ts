@@ -1,6 +1,14 @@
 export type WorkspaceProjectStatus = "preview" | "ready" | "degraded";
-export type WorkspaceNodeKind = "document" | "page" | "concept";
+export type WorkspaceNodeKind = "source" | "document" | "page" | "concept";
 export type WorkspaceRelationKind = "source_document" | "related_to";
+export type WorkspaceSourceStatus =
+  | "added"
+  | "rendering"
+  | "ingesting"
+  | "ingested"
+  | "needs_review"
+  | "failed"
+  | "stale";
 export type WorkspaceAnswerStatus =
   | "grounded"
   | "low_confidence"
@@ -27,6 +35,36 @@ export interface WorkspaceEvidenceRef {
   pageLabel: string;
   snippet: string;
   sourcePath?: string | null;
+  sourceId?: string | null;
+}
+
+export interface WorkspaceSourceBacking {
+  workspaceId: string;
+  sourceId: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  format: string;
+  status: WorkspaceSourceStatus;
+  pageCount: number;
+  successCount: number;
+  failedCount: number;
+  updatedAt: number;
+  manifestPath?: string | null;
+}
+
+export interface WorkspaceSourceSummary {
+  workspace_id: string;
+  source_id: string;
+  original_path: string;
+  source_path: string;
+  markdown_path: string;
+  format: string;
+  status: WorkspaceSourceStatus;
+  page_count: number;
+  success_count: number;
+  failed_count: number;
+  updated_at: number;
 }
 
 export interface WorkspaceCorrectionAction {
@@ -56,6 +94,7 @@ export interface WorkspaceNodeDetail {
   description: string;
   evidence: WorkspaceEvidenceRef[];
   actions: WorkspaceCorrectionAction[];
+  source?: WorkspaceSourceBacking | null;
 }
 
 export interface WorkspaceEdgeSummary {
@@ -112,4 +151,10 @@ export interface WorkspaceProject {
   detailsByNodeId: Record<string, WorkspaceNodeDetail>;
   edgeDetailsById: Record<string, WorkspaceEdgeDetail>;
   answerByNodeId: Record<string, WorkspaceAnswerResponse>;
+}
+
+export interface WorkspaceProjectEnvelope {
+  project: WorkspaceProject | null;
+  workspace_id?: string | null;
+  sources: WorkspaceSourceSummary[];
 }

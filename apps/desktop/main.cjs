@@ -110,7 +110,7 @@ function registerIpcHandlers() {
         return runEngineCommand("load_project", {
           command: "load_project",
           payload: { project_id: args.project_id ?? null },
-        }).then((response) => response.data.project ?? null);
+        }).then((response) => response.data);
       case "apply_workspace_correction":
         return applyWorkspaceCorrection(args.correction);
       case "answer_workspace_project":
@@ -124,6 +124,8 @@ function registerIpcHandlers() {
         return cancelParse();
       case "open_saved_output":
         return openSavedOutput(args.path, Boolean(args.reveal));
+      case "open_local_artifact":
+        return openLocalArtifact(args.path, Boolean(args.reveal));
       default:
         throw new Error(`unknown HyprDuck command: ${command}`);
     }
@@ -487,6 +489,35 @@ async function openSavedOutput(outputPath, reveal) {
   if (error) {
     throw new Error(error);
   }
+}
+
+async function openLocalArtifact(outputPath, reveal) {
+  const safePath = resolveKnownWorkspacePath(outputPath);
+  if (reveal) {
+    shell.showItemInFolder(safePath);
+    return;
+  }
+  const error = await shell.openPath(safePath);
+  if (error) {
+    throw new Error(error);
+  }
+}
+
+function resolveKnownWorkspacePath(candidatePath) {
+  if (!candidatePath || typeof candidatePath !== "string") {
+    throw new Error("Missing local artifact path.");
+  }
+  const storageRoot = path.resolve(ensureHyprduckApplicationSupportPath());
+  const resolvedPath = path.resolve(candidatePath);
+  const relativePath = path.relative(storageRoot, resolvedPath);
+  if (
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath) ||
+    relativePath.length === 0
+  ) {
+    throw new Error("Refusing to open a path outside the HyprDuck workspace.");
+  }
+  return resolvedPath;
 }
 
 async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, sourceManifest) {
