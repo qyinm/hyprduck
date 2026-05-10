@@ -40,7 +40,7 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.623 0.188 259.815);
 
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Apple SD Gothic Neo", "Apple SD Gothic", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: ui-sans-serif, -apple-system, "BlinkMacSystemFont", "SF Pro Text", "Apple SD Gothic Neo", "Apple SD Gothic", "Segoe UI", "Roboto", "Helvetica", "Arial", sans-serif;
 }
 
 * {
@@ -55,7 +55,7 @@ body {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Apple SD Gothic Neo", "Apple SD Gothic", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: ui-sans-serif, -apple-system, "BlinkMacSystemFont", "SF Pro Text", "Apple SD Gothic Neo", "Apple SD Gothic", "Segoe UI", "Roboto", "Helvetica", "Arial", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
