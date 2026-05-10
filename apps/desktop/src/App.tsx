@@ -107,6 +107,20 @@ interface ValidateProviderResponseData {
   issues: ValidationIssue[];
 }
 
+interface RuntimeReadinessCheck {
+  id: string;
+  label: string;
+  ready: boolean;
+  message: string;
+}
+
+interface RuntimeReadinessResponseData {
+  ready: boolean;
+  provider: string;
+  model_id: string;
+  checks: RuntimeReadinessCheck[];
+}
+
 interface DesktopMessage<T> {
   payload: T;
 }
@@ -237,6 +251,38 @@ function deriveWebValidation(
   };
 }
 
+function deriveWebReadiness(): RuntimeReadinessResponseData {
+  const validation = deriveWebValidation(webMockConfig);
+  const checks: RuntimeReadinessCheck[] = [
+    {
+      id: "runtime_process",
+      label: "Runtime process",
+      ready: false,
+      message: "Desktop runtime is not available in web preview mode.",
+    },
+    {
+      id: "config_file",
+      label: "Engine config",
+      ready: true,
+      message: "Preview configuration is loaded in memory.",
+    },
+    {
+      id: "provider_config",
+      label: "Provider config",
+      ready: validation.ready,
+      message: validation.ready
+        ? `${webMockConfig.provider} is configured for preview.`
+        : validation.issues.map((issue) => issue.message).join(" "),
+    },
+  ];
+  return {
+    ready: checks.every((check) => check.ready),
+    provider: webMockConfig.provider,
+    model_id: webMockConfig.model_id,
+    checks,
+  };
+}
+
 function emitWebSnapshot(snapshot: UiSnapshot) {
   webMockSnapshot = snapshot;
   const payload: DesktopMessage<UiSnapshot> = { payload: snapshot };
@@ -280,6 +326,9 @@ function createWebMockApi(): HyprDuckDesktopApi {
           );
           webMockValidation = next;
           return { ...next } as T;
+        }
+        case "engine_readiness": {
+          return deriveWebReadiness() as T;
         }
         case "get_models_for_provider": {
           const key = String(
@@ -1014,6 +1063,8 @@ export function App() {
     useState<EngineConfigPayload | null>(null);
   const [validation, setValidation] =
     useState<ValidateProviderResponseData | null>(null);
+  const [readiness, setReadiness] =
+    useState<RuntimeReadinessResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
   const settingsOpen = activePanel === "settings";
@@ -1046,17 +1097,19 @@ export function App() {
 
     const bootstrap = async () => {
       const desktop = getDesktopApi();
-      const [initialSnapshot, initialConfig, initialValidation] =
+      const [initialSnapshot, initialConfig, initialValidation, initialReadiness] =
         await Promise.all([
           invoke<UiSnapshot>("app_snapshot"),
           invoke<EngineConfigPayload>("load_engine_config"),
           invoke<ValidateProviderResponseData>("validate_engine_config"),
+          invoke<RuntimeReadinessResponseData>("engine_readiness"),
         ]);
       const initialWorkspaceProject =
         await invoke<WorkspaceProject | null>("load_workspace_project");
       setSnapshot(initialSnapshot);
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
+      setReadiness(initialReadiness);
       setLoadedWorkspaceProject(initialWorkspaceProject);
 
       unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
@@ -1199,8 +1252,12 @@ export function App() {
       "validate_engine_config",
       { payload: saved },
     );
+    const nextReadiness = await invoke<RuntimeReadinessResponseData>(
+      "engine_readiness",
+    );
     setCurrentConfig(saved);
     setValidation(nextValidation);
+    setReadiness(nextReadiness);
   };
 
   const validateConfig = async (payload: EngineConfigPayload | null) => {
@@ -1209,6 +1266,13 @@ export function App() {
       { payload },
     );
     setValidation(nextValidation);
+  };
+
+  const refreshReadiness = async () => {
+    const nextReadiness = await invoke<RuntimeReadinessResponseData>(
+      "engine_readiness",
+    );
+    setReadiness(nextReadiness);
   };
 
   if (startupError) {
@@ -1359,18 +1423,54 @@ export function App() {
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">Knowledge maintenance</h2>
+              <h2 className="text-sm font-semibold text-foreground">Local engine</h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Safe ingest repairs run automatically. Only conflicts, failed writes, or risky merges need review.
+                {readiness
+                  ? `${readiness.provider} · ${readiness.model_id || "No model"}`
+                  : "Checking local runtime readiness."}
               </p>
             </div>
             <span className="rounded-full border border-border bg-secondary px-2 py-1 text-[11px] font-medium text-foreground">
-              Quiet
+              {readiness?.ready ? "Ready" : "Needs attention"}
             </span>
           </div>
-          <div className="mt-4 rounded-xl border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
-            No user action needed. The local knowledge base is ready for source updates and grounded answers.
+          <div className="mt-4 space-y-2">
+            {(readiness?.checks ?? []).map((check) => (
+              <div
+                className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5"
+                key={check.id}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-foreground">{check.label}</span>
+                  <span
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                      check.ready
+                        ? "border-border text-foreground"
+                        : "border-destructive/30 text-destructive",
+                    )}
+                  >
+                    {check.ready ? "Ready" : "Issue"}
+                  </span>
+                </div>
+                <p className="mt-1 text-muted-foreground">{check.message}</p>
+              </div>
+            ))}
+            {!readiness && (
+              <div className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
+                Runtime status is loading.
+              </div>
+            )}
           </div>
+          <Button
+            className="mt-3 w-full"
+            onClick={() => void refreshReadiness()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Refresh
+          </Button>
         </section>
       )}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}

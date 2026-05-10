@@ -18,11 +18,11 @@ use duckdocs_engine_types::{
     LoadProjectRequest, LoadProjectResponseData, OutputAsset, ParseEvent, ParseInput,
     ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
     ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SaveConfigRequest,
-    SaveConfigResponseData, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
-    ValidateProviderResponseData, ValidationIssue,
+    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SuggestedAction,
+    SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
 };
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -244,6 +244,10 @@ fn encode_success_response(
             EngineCommand::ListProviderModels,
             provider_model_catalog(),
         )),
+        EngineRequest::CheckReadiness(_) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::CheckReadiness,
+            check_readiness(config_store),
+        )),
     }
     .context("failed to encode engine response")?;
     Ok(response)
@@ -278,6 +282,7 @@ fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
         EngineRequest::ListProviderModels(_) => EngineCommand::ListProviderModels,
+        EngineRequest::CheckReadiness(_) => EngineCommand::CheckReadiness,
     }
 }
 
@@ -2928,6 +2933,156 @@ fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {
     }
 }
 
+fn check_readiness(config_store: &EngineConfigStore) -> RuntimeReadinessResponseData {
+    let mut checks = vec![ReadinessCheck {
+        id: "runtime_process".into(),
+        label: "Runtime process".into(),
+        ready: true,
+        message: "Runtime process is accepting commands.".into(),
+    }];
+
+    let config = match config_store.load() {
+        Ok(config) => {
+            checks.push(ReadinessCheck {
+                id: "config_file".into(),
+                label: "Engine config".into(),
+                ready: true,
+                message: format!("Loaded {}", config_store.path.display()),
+            });
+            config
+        }
+        Err(error) => {
+            checks.push(ReadinessCheck {
+                id: "config_file".into(),
+                label: "Engine config".into(),
+                ready: false,
+                message: error.to_string(),
+            });
+            return RuntimeReadinessResponseData {
+                ready: false,
+                provider: "unknown".into(),
+                model_id: String::new(),
+                checks,
+            };
+        }
+    };
+
+    let validation = validate_provider(&config);
+    checks.push(ReadinessCheck {
+        id: "provider_config".into(),
+        label: "Provider config".into(),
+        ready: validation.ready,
+        message: if validation.ready {
+            format!(
+                "{} is configured with model {}.",
+                config.provider.label(),
+                config.model_id
+            )
+        } else {
+            validation
+                .issues
+                .iter()
+                .map(|issue| issue.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    });
+
+    if matches!(config.provider, ProviderKind::Ollama) {
+        checks.push(check_ollama_endpoint(&config));
+    }
+
+    checks.push(check_path_exists(
+        "pdf_converter",
+        "PDF converter",
+        Path::new("/opt/homebrew/bin/pdftoppm"),
+    ));
+    checks.push(check_path_exists(
+        "text_converter",
+        "DOC/DOCX text converter",
+        Path::new("/usr/bin/textutil"),
+    ));
+    checks.push(check_path_exists(
+        "knowledge_store",
+        "Knowledge store",
+        Path::new("/usr/bin/sqlite3"),
+    ));
+
+    RuntimeReadinessResponseData {
+        ready: checks.iter().all(|check| check.ready),
+        provider: config.provider.id_slug().into(),
+        model_id: config.model_id,
+        checks,
+    }
+}
+
+fn check_path_exists(id: &str, label: &str, path: &Path) -> ReadinessCheck {
+    let ready = path.exists();
+    ReadinessCheck {
+        id: id.into(),
+        label: label.into(),
+        ready,
+        message: if ready {
+            format!("Found {}", path.display())
+        } else {
+            format!("Missing {}", path.display())
+        },
+    }
+}
+
+fn check_ollama_endpoint(config: &EngineConfig) -> ReadinessCheck {
+    let endpoint = ollama_models_endpoint(config);
+    let result = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_millis(600))
+        .build()
+        .and_then(|client| client.get(&endpoint).send())
+        .and_then(|response| response.error_for_status().map(|_| ()));
+
+    match result {
+        Ok(()) => ReadinessCheck {
+            id: "ollama_endpoint".into(),
+            label: "Ollama endpoint".into(),
+            ready: true,
+            message: format!("Ollama responded at {endpoint}."),
+        },
+        Err(error) => ReadinessCheck {
+            id: "ollama_endpoint".into(),
+            label: "Ollama endpoint".into(),
+            ready: false,
+            message: format!("Ollama is not reachable at {endpoint}: {error}"),
+        },
+    }
+}
+
+fn ollama_models_endpoint(config: &EngineConfig) -> String {
+    let raw = config
+        .base_url
+        .clone()
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| config.provider.default_base_url().to_string())
+        .replace("/v1/chat/completions", "/v1/models")
+        .replace("/api/generate", "/api/tags");
+
+    if let Ok(mut url) = Url::parse(&raw) {
+        let path = url.path().trim_end_matches('/');
+        if path.is_empty() {
+            url.set_path("/v1/models");
+            return url.to_string();
+        }
+        if path == "/v1" {
+            url.set_path("/v1/models");
+            return url.to_string();
+        }
+        if path == "/api" {
+            url.set_path("/api/tags");
+            return url.to_string();
+        }
+    }
+
+    raw
+}
+
 fn parse_image_with_provider(
     config: &EngineConfig,
     image_bytes: &[u8],
@@ -3331,5 +3486,33 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("grounded"));
+    }
+
+    #[test]
+    fn ollama_models_endpoint_normalizes_common_base_urls() {
+        let mut config = EngineConfig {
+            provider: ProviderKind::Ollama,
+            model_id: "qwen3-vl:8b".into(),
+            api_key: String::new(),
+            base_url: Some("http://127.0.0.1:11434".into()),
+            prompt_template: "General".into(),
+        };
+
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/v1/models"
+        );
+
+        config.base_url = Some("http://127.0.0.1:11434/api/generate".into());
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/api/tags"
+        );
+
+        config.base_url = Some("http://127.0.0.1:11434/v1/chat/completions".into());
+        assert_eq!(
+            ollama_models_endpoint(&config),
+            "http://127.0.0.1:11434/v1/models"
+        );
     }
 }

@@ -9,10 +9,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
-    ApplyCorrectionResponseData, CompileProjectRequest, CompileProjectResponseData, EngineCommand,
-    EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess, KnowledgeProject,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress,
-    ParseRequest, ParseResponseData, SaveConfigRequest, SaveConfigResponseData,
+    ApplyCorrectionResponseData, CheckReadinessRequest, CompileProjectRequest,
+    CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
+    EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
     ValidateProviderRequest, ValidateProviderResponseData,
 };
 
@@ -34,6 +35,7 @@ pub trait EngineClient {
         &self,
         config: Option<EngineConfigPayload>,
     ) -> Result<ValidateProviderResponseData>;
+    fn check_readiness(&self) -> Result<RuntimeReadinessResponseData>;
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +259,14 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<ValidateProviderResponseData, ValidateProviderResponseData>(
             EngineRequest::ValidateProvider(ValidateProviderRequest { config }),
             EngineCommand::ValidateProvider,
+            None,
+        )
+    }
+
+    fn check_readiness(&self) -> Result<RuntimeReadinessResponseData> {
+        self.run_command::<RuntimeReadinessResponseData, RuntimeReadinessResponseData>(
+            EngineRequest::CheckReadiness(CheckReadinessRequest {}),
+            EngineCommand::CheckReadiness,
             None,
         )
     }
