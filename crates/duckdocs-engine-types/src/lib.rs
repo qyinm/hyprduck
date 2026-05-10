@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 pub use duckdocs_knowledge::{
     AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
@@ -248,6 +249,13 @@ pub struct ValidateProviderRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeRequest {
+    pub id: Uuid,
+    #[serde(flatten)]
+    pub request: EngineRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum EngineRequest {
     Parse(ParseRequest),
@@ -371,6 +379,20 @@ mod tests {
 
         let json = serde_json::to_string(&request).unwrap();
         let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn runtime_request_envelope_round_trip() {
+        let request = EngineRuntimeRequest {
+            id: Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap(),
+            request: EngineRequest::LoadConfig(LoadConfigRequest {}),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"command\":\"load_config\""));
+        let decoded: EngineRuntimeRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, request);
     }
 

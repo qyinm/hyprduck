@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn, execFile } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -251,6 +252,7 @@ class EngineRuntime {
   run(expectedCommand, request, options = {}) {
     return new Promise((resolve, reject) => {
       this.queue.push({
+        id: uuidv7(),
         expectedCommand,
         request,
         onEvent: options.onEvent ?? null,
@@ -273,7 +275,9 @@ class EngineRuntime {
       return;
     }
     this.active = this.queue.shift();
-    this.child.stdin.write(`${JSON.stringify(this.active.request)}\n`);
+    this.child.stdin.write(
+      `${JSON.stringify({ id: this.active.id, ...this.active.request })}\n`,
+    );
   }
 
   ensureStarted() {
@@ -338,22 +342,33 @@ class EngineRuntime {
     if (!active) {
       return;
     }
-    this.active = null;
     try {
       const response = JSON.parse(line);
-      if (response.ok === false) {
+      if (response.id !== active.id) {
+        active.reject(
+          new Error(`engine response id mismatch: expected ${active.id}, got ${response.id}`),
+        );
+        this.active = null;
+      } else if (response.type === "event") {
+        active.onEvent?.(JSON.stringify(response.event));
+        return;
+      } else if (response.ok === false) {
         active.reject(new Error(response.error?.message ?? "engine command failed"));
+        this.active = null;
       } else if (response.command !== active.expectedCommand) {
         active.reject(
           new Error(
             `engine response command mismatch: expected ${active.expectedCommand}, got ${response.command}`,
           ),
         );
+        this.active = null;
       } else {
         active.resolve(response);
+        this.active = null;
       }
     } catch (error) {
       active.reject(new Error(`failed decoding engine response: ${error.message}`));
+      this.active = null;
     }
     this.pump();
   }
@@ -434,6 +449,19 @@ function runEngineCommand(expectedCommand, request, options = {}) {
     engineRuntime = new EngineRuntime();
   }
   return engineRuntime.run(expectedCommand, request, options);
+}
+
+function uuidv7() {
+  const bytes = crypto.randomBytes(16);
+  let timestamp = BigInt(Date.now());
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = Number(timestamp & 0xffn);
+    timestamp >>= 8n;
+  }
+  bytes[6] = 0x70 | (bytes[6] & 0x0f);
+  bytes[8] = 0x80 | (bytes[8] & 0x3f);
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function applyProgressEvent(event) {
