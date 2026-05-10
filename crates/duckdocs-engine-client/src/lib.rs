@@ -79,16 +79,11 @@ impl SubprocessEngineClient {
         T: serde::de::DeserializeOwned,
         R: From<T>,
     {
-        let mut command = Command::new(&self.launch_spec.program);
+        let mut command = self.launch_spec.command();
         command
-            .args(&self.launch_spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
-        if let Some(current_dir) = &self.launch_spec.current_dir {
-            command.current_dir(current_dir);
-        }
 
         let mut child = command.spawn().with_context(|| {
             format!(
@@ -344,6 +339,15 @@ impl EngineLaunchSpec {
 
     pub fn display(&self) -> &str {
         &self.display
+    }
+
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args);
+        if let Some(current_dir) = &self.current_dir {
+            command.current_dir(current_dir);
+        }
+        command
     }
 }
 

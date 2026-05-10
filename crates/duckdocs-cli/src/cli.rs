@@ -11,6 +11,7 @@ impl Cli {
         let command = match args.next().as_deref() {
             None | Some("tui") => None,
             Some("doctor") => Some(Commands::Doctor),
+            Some("serve") => Some(Commands::Serve),
             Some("parse") => {
                 let input = args
                     .next()
@@ -38,6 +39,7 @@ impl Cli {
 #[derive(Debug)]
 pub enum Commands {
     Doctor,
+    Serve,
     Parse { input: String },
     Engines { command: EnginesCommand },
 }

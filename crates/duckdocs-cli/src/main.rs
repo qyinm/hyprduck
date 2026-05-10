@@ -15,10 +15,20 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Doctor) => run_doctor(),
+        Some(Commands::Serve) => run_serve(),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Parse { input }) => run_parse(input),
         None => tui::run_tui(),
     }
+}
+
+fn run_serve() -> Result<()> {
+    let spec = resolve_engine_launch()?;
+    let status = spec.command().arg("serve").status()?;
+    if !status.success() {
+        anyhow::bail!("engine runtime exited with status {status}");
+    }
+    Ok(())
 }
 
 fn run_doctor() -> Result<()> {
