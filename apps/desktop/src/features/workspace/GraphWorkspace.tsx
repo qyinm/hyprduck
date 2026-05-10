@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
+import { fileNameFromPath } from "./pathUtils";
 import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
   WorkspaceAnswerProjectRequest,
@@ -887,10 +888,6 @@ function formatEvidenceSnippet(value: string): string {
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
     .replace(/\s+/g, " ")
     .trim() || "No text evidence is available for this page yet.";
-}
-
-function fileNameFromPath(value: string): string {
-  return value.split(/[\\/]/).filter(Boolean).pop() ?? value;
 }
 
 function uniqueSourceProvenance(evidenceRefs: WorkspaceEvidenceRef[]) {

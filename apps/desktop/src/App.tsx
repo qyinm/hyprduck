@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
+import { fileNameFromPath } from "@/features/workspace/pathUtils";
 import {
   createInitialWorkspaceUiState,
   workspaceUiStateReducer,
@@ -450,10 +451,6 @@ function sourceBackingFromSummary(source: WorkspaceSourceSummary) {
 
 function sourceNodeId(sourceId: string) {
   return `source:${sourceId}`;
-}
-
-function fileNameFromPath(value: string) {
-  return value.split(/[\\/]/).filter(Boolean).pop() ?? value;
 }
 
 function sourceOnlyNodePosition(index: number, total: number) {
