@@ -2718,6 +2718,37 @@ fn source_summary_from_manifest(manifest: &SourceArtifactManifest) -> SourceSumm
     }
 }
 
+fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
+    let columns: Vec<&str> = line.split('|').collect();
+    if columns.len() != 11 {
+        bail!(
+            "expected 11 source summary columns from sqlite, got {}",
+            columns.len()
+        );
+    }
+    Ok(SourceSummary {
+        workspace_id: columns[0].to_string(),
+        source_id: columns[1].to_string(),
+        original_path: columns[2].to_string(),
+        source_path: columns[3].to_string(),
+        markdown_path: columns[4].to_string(),
+        format: document_format_from_slug(columns[5])?,
+        status: ingest_status_from_slug(columns[6])?,
+        page_count: columns[7]
+            .parse()
+            .context("failed to parse source page_count")?,
+        success_count: columns[8]
+            .parse()
+            .context("failed to parse source success_count")?,
+        failed_count: columns[9]
+            .parse()
+            .context("failed to parse source failed_count")?,
+        updated_at: columns[10]
+            .parse()
+            .context("failed to parse source updated_at")?,
+    })
+}
+
 fn ingest_status_slug(status: &IngestStatus) -> &'static str {
     match status {
         IngestStatus::Added => "added",
@@ -2730,12 +2761,35 @@ fn ingest_status_slug(status: &IngestStatus) -> &'static str {
     }
 }
 
+fn ingest_status_from_slug(value: &str) -> Result<IngestStatus> {
+    match value {
+        "added" => Ok(IngestStatus::Added),
+        "rendering" => Ok(IngestStatus::Rendering),
+        "ingesting" => Ok(IngestStatus::Ingesting),
+        "ingested" => Ok(IngestStatus::Ingested),
+        "needs_review" => Ok(IngestStatus::NeedsReview),
+        "failed" => Ok(IngestStatus::Failed),
+        "stale" => Ok(IngestStatus::Stale),
+        _ => bail!("unknown ingest status {value}"),
+    }
+}
+
 fn document_format_slug(format: &DocumentFormat) -> &'static str {
     match format {
         DocumentFormat::Pdf => "pdf",
         DocumentFormat::Docx => "docx",
         DocumentFormat::Doc => "doc",
         DocumentFormat::Image => "image",
+    }
+}
+
+fn document_format_from_slug(value: &str) -> Result<DocumentFormat> {
+    match value {
+        "pdf" => Ok(DocumentFormat::Pdf),
+        "docx" => Ok(DocumentFormat::Docx),
+        "doc" => Ok(DocumentFormat::Doc),
+        "image" => Ok(DocumentFormat::Image),
+        _ => bail!("unknown document format {value}"),
     }
 }
 
@@ -2898,21 +2952,15 @@ impl KnowledgeProjectStore {
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT manifest_base64 FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            "SELECT workspace_id, source_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at \
+             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
         let output = self.run_sql(&sql)?;
         output
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(line.trim())
-                    .context("failed to decode stored source manifest")?;
-                let manifest: SourceArtifactManifest =
-                    serde_json::from_slice(&bytes).context("failed to decode source manifest")?;
-                Ok(source_summary_from_manifest(&manifest))
-            })
+            .map(source_summary_from_sqlite_row)
             .collect()
     }
 
@@ -3752,6 +3800,9 @@ mod tests {
         assert_eq!(sources[0].source_id, "source-test");
         assert_eq!(sources[0].page_count, 1);
         assert_eq!(sources[0].status, IngestStatus::Ingested);
+        assert_eq!(sources[0].format, DocumentFormat::Pdf);
+        assert_eq!(sources[0].success_count, 1);
+        assert_eq!(sources[0].failed_count, 0);
     }
 
     #[test]
