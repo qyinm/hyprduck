@@ -14,6 +14,8 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Save,
   Settings,
   Sparkles,
@@ -1293,15 +1295,52 @@ export function App() {
         onClick={() => setHealthOpen((open) => !open)}
         size="icon"
         variant="ghost"
-        className={cn("fixed right-3 top-[10px] z-50", windowChromeButtonClass())}
+        className={cn(
+          "fixed top-[10px] z-50",
+          !settingsOpen && workspaceUiState.inspectorOpen ? "right-[25rem]" : "right-12",
+          windowChromeButtonClass(),
+        )}
         type="button"
       >
         <Bell size={14} />
       </Button>
+      {!settingsOpen && (
+        <Button
+          aria-expanded={workspaceUiState.inspectorOpen}
+          aria-label={
+            workspaceUiState.inspectorOpen
+              ? "Collapse right inspector"
+              : "Expand right inspector"
+          }
+          title={
+            workspaceUiState.inspectorOpen
+              ? "Collapse right inspector"
+              : "Expand right inspector"
+          }
+          data-electron-no-drag
+          onClick={() => {
+            dispatchWorkspaceUi({ type: "toggle_inspector" });
+            setHealthOpen(false);
+          }}
+          size="icon"
+          variant="ghost"
+          className={cn("fixed right-3 top-[10px] z-50", windowChromeButtonClass())}
+          type="button"
+        >
+          {workspaceUiState.inspectorOpen ? (
+            <PanelRightClose size={14} />
+          ) : (
+            <PanelRightOpen size={14} />
+          )}
+        </Button>
+      )}
       {healthOpen && (
         <section
           data-electron-no-drag
-          className="fixed right-3 top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none"
+          className={cn(
+            "fixed top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none",
+            !settingsOpen && workspaceUiState.inspectorOpen ? "right-[25rem]" : "right-3",
+          )}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1392,7 +1431,12 @@ export function App() {
 
       {/* Main content area */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6 pt-14">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-hidden",
+            settingsOpen ? "p-6 pt-14" : "",
+          )}
+        >
           {settingsOpen ? (
             <SettingsPanel
               config={currentConfig}

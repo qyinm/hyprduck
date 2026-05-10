@@ -187,9 +187,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col">
       {project.summary.stale && (
-        <section className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
+        <section className="mx-6 mt-14 rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" />
             <div className="space-y-1">
@@ -206,7 +206,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
       <div
         className={cn(
-          "grid min-h-0 flex-1 gap-4",
+          "grid min-h-0 flex-1 overflow-hidden bg-background",
           uiState.inspectorOpen
             ? "grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(19rem,24rem)]"
             : "grid-cols-1",
@@ -214,54 +214,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       >
         <section
           className={cn(
-            "flex min-h-[26rem] flex-col rounded-xl border bg-background",
+            "flex min-h-0 flex-col bg-background px-6 pb-6 pt-14",
             graphPaneClass,
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-sm font-semibold tracking-tight text-foreground">
-                {project.summary.title}
-              </h2>
-              {project.summary.stale && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-200 bg-amber-50 text-amber-700"
-                >
-                  Stale
-                </Badge>
-              )}
-            </div>
-            <div className="order-last flex w-full flex-wrap gap-1 rounded-xl border border-border/70 bg-muted/10 p-1 sm:order-none sm:w-auto">
-              {["Graph", "Wiki", "Sources", "Claims", "Conflicts"].map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={cn(
-                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
-                    mode === "Graph"
-                      ? "bg-primary text-primary-foreground "
-                      : "text-muted-foreground hover:bg-background hover:text-foreground",
-                  )}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-              <span>{project.summary.nodeCount} nodes</span>
-              <span>•</span>
-              <span>{project.summary.relationshipCount} relationships</span>
-              <span>•</span>
-              <span>{project.summary.evidenceCount} visible evidence refs</span>
-            </div>
-          </div>
-
-          <div className="relative flex-1 overflow-hidden p-4">
-            <div className="absolute inset-4 rounded-xl border border-border bg-muted/20" />
+          <div className="relative flex-1 overflow-hidden">
             <svg
               aria-hidden="true"
-              className="absolute inset-4 size-[calc(100%-2rem)]"
+              className="absolute inset-0 size-full"
               viewBox="0 0 100 100"
             >
               {project.edges.map((edge) => {
@@ -349,7 +309,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </section>
 
         {uiState.inspectorOpen && (
-          <aside className="flex min-h-[26rem] flex-col rounded-xl border border-border bg-background">
+          <aside className="flex min-h-0 flex-col border-l border-border bg-background pt-14">
             <div className="border-b border-border/70 px-4 py-3">
               <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
               <p className="text-xs text-muted-foreground">
