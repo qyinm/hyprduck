@@ -71,6 +71,10 @@ impl Default for ParseOptions {
 pub struct ParseOutputTarget {
     pub root_dir: Option<String>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -556,6 +560,8 @@ mod tests {
             output: Some(ParseOutputTarget {
                 root_dir: Some("/tmp/out".into()),
                 name: Some("sample".into()),
+                workspace_id: Some("default".into()),
+                source_id: None,
             }),
         });
 

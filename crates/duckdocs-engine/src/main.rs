@@ -395,24 +395,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     })?;
     let project = compile_knowledge_project(&request, &markdown);
     let source_manifest = load_source_manifest(&request)?;
-    let workspace_id = request
-        .workspace_id
-        .clone()
-        .or_else(|| {
-            source_manifest
-                .as_ref()
-                .map(|manifest| manifest.workspace_id.clone())
-        })
-        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.to_string());
-    let source_id = request
-        .source_id
-        .clone()
-        .or_else(|| {
-            source_manifest
-                .as_ref()
-                .map(|manifest| manifest.source_id.clone())
-        })
-        .unwrap_or_else(|| build_source_id(&request.source_markdown_path, 0));
+    let (workspace_id, source_id) = resolved_source_ids(&request, source_manifest.as_ref())?;
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
     Ok(CompileProjectResponseData {
@@ -425,10 +408,10 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
 fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
     let store = KnowledgeProjectStore::default()?;
     let project = store.load_project(request.project_id.as_deref())?;
-    let workspace_id = request
-        .workspace_id
-        .clone()
-        .or_else(|| store.load_latest_workspace_id().ok().flatten());
+    let workspace_id = match request.workspace_id.clone() {
+        Some(workspace_id) => Some(workspace_id),
+        None => store.load_latest_workspace_id()?,
+    };
     let sources = workspace_id
         .as_deref()
         .map(|workspace_id| store.load_sources(workspace_id))
@@ -2508,8 +2491,16 @@ fn write_output_package_to_root(
     request: &ParseRequest,
     result: &ParseResult,
 ) -> Result<SourceArtifactManifest> {
-    let workspace_id = DEFAULT_WORKSPACE_ID.to_string();
-    let source_id = new_source_id();
+    let workspace_id = request
+        .output
+        .as_ref()
+        .and_then(|output| output.workspace_id.clone())
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.to_string());
+    let source_id = request
+        .output
+        .as_ref()
+        .and_then(|output| output.source_id.clone())
+        .unwrap_or_else(new_source_id);
     let workspace_root = output_root.join(&workspace_id);
     let sources_root = workspace_root.join("sources");
     let artifacts_root = workspace_root.join("artifacts");
@@ -2653,6 +2644,44 @@ fn load_source_manifest(request: &CompileProjectRequest) -> Result<Option<Source
     serde_json::from_str(&json)
         .with_context(|| format!("failed decoding source manifest {path}"))
         .map(Some)
+}
+
+fn resolved_source_ids(
+    request: &CompileProjectRequest,
+    manifest: Option<&SourceArtifactManifest>,
+) -> Result<(WorkspaceId, SourceId)> {
+    if let Some(manifest) = manifest {
+        if let Some(request_workspace_id) = &request.workspace_id {
+            if request_workspace_id != &manifest.workspace_id {
+                bail!(
+                    "compile_project workspace_id {} does not match source manifest workspace_id {}",
+                    request_workspace_id,
+                    manifest.workspace_id
+                );
+            }
+        }
+        if let Some(request_source_id) = &request.source_id {
+            if request_source_id != &manifest.source_id {
+                bail!(
+                    "compile_project source_id {} does not match source manifest source_id {}",
+                    request_source_id,
+                    manifest.source_id
+                );
+            }
+        }
+        return Ok((manifest.workspace_id.clone(), manifest.source_id.clone()));
+    }
+
+    Ok((
+        request
+            .workspace_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.to_string()),
+        request
+            .source_id
+            .clone()
+            .unwrap_or_else(|| build_source_id(&request.source_markdown_path, 0)),
+    ))
 }
 
 fn build_source_id(seed: &str, timestamp: u64) -> SourceId {
@@ -3726,6 +3755,24 @@ mod tests {
     }
 
     #[test]
+    fn compile_project_rejects_request_ids_that_conflict_with_manifest() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some("/tmp/source.pdf".into()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some("different-workspace".into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+
+        let error = resolved_source_ids(&request, Some(&manifest)).expect_err("id mismatch");
+        assert!(error
+            .to_string()
+            .contains("does not match source manifest workspace_id"));
+    }
+
+    #[test]
     fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         let temp = tempfile::tempdir().expect("temp dir");
         let blocked_root = temp.path().join("blocked-root");
@@ -3753,6 +3800,37 @@ mod tests {
             .markdown_path
             .as_deref()
             .is_some_and(|path| Path::new(path).exists()));
+    }
+
+    #[test]
+    fn output_packaging_uses_requested_workspace_and_source_ids() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let fallback_root = temp.path().join("output-root");
+        let mut request = sample_parse_request(&temp);
+        request.output = Some(duckdocs_engine_types::ParseOutputTarget {
+            root_dir: Some(fallback_root.display().to_string()),
+            name: Some("sample-import".into()),
+            workspace_id: Some("workspace-alpha".into()),
+            source_id: Some("source-alpha".into()),
+        });
+
+        let manifest = write_output_package_with_fallback(
+            &[fallback_root.clone()],
+            "sample-import",
+            "123",
+            &request,
+            &sample_parse_result(),
+        )
+        .expect("output manifest");
+
+        assert_eq!(manifest.workspace_id, "workspace-alpha");
+        assert_eq!(manifest.source_id, "source-alpha");
+        assert!(manifest
+            .artifact_root
+            .contains("/workspace-alpha/artifacts/source-alpha"));
+        assert!(manifest
+            .source_path
+            .contains("/workspace-alpha/sources/source-alpha"));
     }
 
     #[test]

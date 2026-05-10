@@ -180,6 +180,8 @@ async function startParse(request) {
     output: {
       root_dir: storageRoot,
       name: outputName,
+      workspace_id: "default",
+      source_id: null,
     },
   };
 
