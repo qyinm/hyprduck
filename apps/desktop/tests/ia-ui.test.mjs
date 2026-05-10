@@ -31,6 +31,11 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
   expect(appSource).toMatch(/fixed right-3 top-\[10px\]/);
   expect(appSource).toMatch(/native titlebar area stays empty/);
   expect(appSource).toMatch(/windowChromeButtonClass/);
+  expect(appSource).toMatch(/data-electron-no-drag/);
+  expect(appSource).toMatch(/setHealthOpen\(\(open\) => !open\)/);
+  expect(appSource).toMatch(/setSidebarCollapsed\(true\)/);
+  expect(appSource).toMatch(/setSidebarCollapsed\(false\)/);
+  expect(stylesSource).toMatch(/\[data-electron-no-drag\]/);
   expect(appSource).not.toMatch(/className=\"size-7\"/);
 });
 

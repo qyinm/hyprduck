@@ -1017,6 +1017,7 @@ export function App() {
   const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [healthOpen, setHealthOpen] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = buildWorkspacePreview(
     snapshot.lastResult,
@@ -1236,12 +1237,16 @@ export function App() {
         data-electron-drag-region
         className="fixed inset-x-0 top-0 z-40 h-12"
       />
-      <div className="fixed left-[76px] top-[10px] z-50 flex h-7 items-center gap-1">
+      <div
+        data-electron-no-drag
+        className="fixed left-[76px] top-[10px] z-50 flex h-7 items-center gap-1"
+      >
         {settingsOpen ? (
           <Button
             aria-label="Back to Knowledge"
             onClick={() => {
               setActivePanel("knowledge");
+              setHealthOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -1253,7 +1258,10 @@ export function App() {
         ) : showSidebar ? (
           <Button
             aria-label="Collapse sidebar"
-            onClick={() => setSidebarCollapsed(true)}
+            onClick={() => {
+              setSidebarCollapsed(true);
+              setHealthOpen(false);
+            }}
             size="icon"
             variant="ghost"
             className={windowChromeButtonClass()}
@@ -1264,7 +1272,10 @@ export function App() {
         ) : (
           <Button
             aria-label="Expand sidebar"
-            onClick={() => setSidebarCollapsed(false)}
+            onClick={() => {
+              setSidebarCollapsed(false);
+              setHealthOpen(false);
+            }}
             size="icon"
             variant="ghost"
             className={windowChromeButtonClass()}
@@ -1275,8 +1286,11 @@ export function App() {
         )}
       </div>
       <Button
+        aria-expanded={healthOpen}
         aria-label="Knowledge maintenance"
         title="Knowledge maintenance"
+        data-electron-no-drag
+        onClick={() => setHealthOpen((open) => !open)}
         size="icon"
         variant="ghost"
         className={cn("fixed right-3 top-[10px] z-50", windowChromeButtonClass())}
@@ -1284,6 +1298,27 @@ export function App() {
       >
         <Bell size={14} />
       </Button>
+      {healthOpen && (
+        <section
+          data-electron-no-drag
+          className="fixed right-3 top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Knowledge maintenance</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Safe ingest repairs run automatically. Only conflicts, failed writes, or risky merges need review.
+              </p>
+            </div>
+            <span className="rounded-full border border-border bg-secondary px-2 py-1 text-[11px] font-medium text-foreground">
+              Quiet
+            </span>
+          </div>
+          <div className="mt-4 rounded-xl border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
+            No user action needed. The local knowledge base is ready for source updates and grounded answers.
+          </div>
+        </section>
+      )}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
