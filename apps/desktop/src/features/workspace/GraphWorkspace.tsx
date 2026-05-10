@@ -6,10 +6,6 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
-  PanelBottomClose,
-  PanelBottomOpen,
-  PanelRightClose,
-  PanelRightOpen,
   RefreshCw,
   Share2,
 } from "lucide-react";
@@ -192,79 +188,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <section className="rounded-xl border border-border/80 bg-background/80 px-5 py-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="border-border bg-secondary text-foreground">
-                {project.summary.status === "preview"
-                  ? "Source file"
-                  : "Knowledge node"}
-              </Badge>
-              {project.summary.stale && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-200 bg-amber-50 text-amber-700"
-                >
-                  Stale while new write job runs
-                </Badge>
-              )}
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold tracking-tight text-foreground">
-                {project.summary.title}
-              </h2>
-              <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
-                {project.summary.summary}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={() => dispatch({ type: "toggle_inspector" })}
-              type="button"
-              variant="outline"
-            >
-              {uiState.inspectorOpen ? (
-                <>
-                  <PanelRightClose size={16} />
-                  Hide right inspector
-                </>
-              ) : (
-                <>
-                  <PanelRightOpen size={16} />
-                  Show inspector
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={() =>
-                dispatch({
-                  type: uiState.answerDockOpen
-                    ? "close_answer_dock"
-                    : "open_answer_dock",
-                })
-              }
-              type="button"
-              variant="outline"
-            >
-              {uiState.answerDockOpen ? (
-                <>
-                  <PanelBottomClose size={16} />
-                  Hide answer
-                </>
-              ) : (
-                <>
-                  <PanelBottomOpen size={16} />
-                  Open answer
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      </section>
-
       {project.summary.stale && (
         <section className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
           <div className="flex items-start gap-3">
@@ -296,14 +219,18 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           )}
         >
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">
-                Knowledge Graph
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Select source files, concepts, or links. The right inspector shows
-                provenance without leaving the graph context.
-              </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+                {project.summary.title}
+              </h2>
+              {project.summary.stale && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-200 bg-amber-50 text-amber-700"
+                >
+                  Stale
+                </Badge>
+              )}
             </div>
             <div className="order-last flex w-full flex-wrap gap-1 rounded-xl border border-border/70 bg-muted/10 p-1 sm:order-none sm:w-auto">
               {["Graph", "Wiki", "Sources", "Claims", "Conflicts"].map((mode) => (
@@ -752,7 +679,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         )}
       </div>
 
-      <section className="rounded-xl border border-border bg-background">
+      {uiState.answerDockOpen && (
+        <section className="rounded-xl border border-border bg-background">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
@@ -895,7 +823,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               ) : null}
             </div>
           </div>
-      </section>
+        </section>
+      )}
     </div>
   );
 }
