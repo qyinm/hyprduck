@@ -75,6 +75,7 @@ HyprDuck Desktop
 |   |
 |   +-- Native Titlebar / Drag Region
 |   |   +-- Health Bell / Maintenance Notifications
+|   |   +-- Right Inspector Toggle
 |   +-- Sidebar
 |   +-- Main Content
 |
@@ -82,19 +83,22 @@ HyprDuck Desktop
 |   |
 |   +-- Empty State / Add Files
 |   +-- Graph Canvas
-|   +-- Mode Switcher
-|   |   +-- Graph
-|   |   +-- Wiki
-|   |   +-- Sources
-|   |   +-- Claims
-|   |   +-- Conflicts
-|   +-- Inspector
+|   |   +-- default and primary workspace
+|   |   +-- source nodes
+|   |   +-- concept/entity/topic/claim nodes
+|   |   +-- evidence-backed links
+|   +-- Right Inspector
 |   |   +-- selected node/source/claim/link
 |   |   +-- evidence
 |   |   +-- source provenance
 |   |   +-- open uploaded file
 |   |   +-- reveal in finder
-|   +-- Bottom Prompt Composer
+|   +-- Revealed Surfaces
+|       +-- Source Library
+|       +-- Wiki
+|       +-- Claims
+|       +-- Conflicts
+|       +-- Ask / Add Files Composer
 |       +-- ask selected graph context
 |       +-- ask whole knowledge base
 |       +-- attach files
@@ -135,8 +139,10 @@ Window Bar
 |
 +-- Left: Sidebar Toggle   항상 좌측에 위치한다
 +-- Right: Health Bell     자동 점검/수정 결과와 사용자 개입이 필요한 충돌만 알린다
++-- Far Right: Inspector Toggle   우측 inspector rail을 열고 닫는다
 
 Settings는 window bar에 중복 노출하지 않는다. Settings 진입점은 sidebar 하단에만 둔다.
+Health Bell은 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 bell은 window bar의 독립 status surface로 남고, inspector toggle만 우측 rail을 제어한다.
 ```
 
 첫 MVP에서 너무 많은 탭을 만들기 부담스럽다면 최소형은 아래다.
@@ -149,7 +155,7 @@ MVP Sidebar
 +-- Settings
 ```
 
-사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Knowledge 안의 source library/graph inspector에 노출하고, 실패/충돌만 Health Bell에 올린다. Ask도 별도 navigation page가 아니라 Knowledge/Graph 하단 prompt composer에서 수행한다. Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface다. `Health`도 sidebar page가 아니라 우측 상단 window bar의 bell/notification surface로 둔다.
+사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Knowledge 안의 source library/graph inspector에 노출하고, 실패/충돌만 Health Bell에 올린다. Ask도 별도 navigation page가 아니라 Knowledge/Graph에서 필요할 때 여는 composer에서 수행한다. Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface다. `Health`도 sidebar page가 아니라 우측 상단 window bar의 bell/notification surface로 둔다.
 
 ---
 
@@ -157,32 +163,32 @@ MVP Sidebar
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                                      [health bell 2] |
-+----------------------+---------------------------------------------------------+
-| HyprDuck             | Current Screen                                           |
-|                      |                                                         |
-|  > Knowledge         |                                                         |
-|                      |                                                         |
-|  Settings            |                                                         |
-+----------------------+---------------------------------------------------------+
+| [sidebar] macOS drag region                         [health bell] [inspector]  |
++----------------------+-------------------------------------------+-------------+
+| HyprDuck             | Current Screen                            | Right rail   |
+|                      |                                           | when open    |
+|  > Knowledge         |                                           |             |
+|                      |                                           |             |
+|  Settings            |                                           |             |
++----------------------+-------------------------------------------+-------------+
 ```
 
 Collapsed sidebar:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [open sidebar] macOS drag region                              [health bell]     |
-+--------------------------------------------------------------------------------+
-| Current Screen                                                                  |
-|                                                                                |
-+--------------------------------------------------------------------------------+
+| [open sidebar] macOS drag region                  [health bell] [inspector]    |
++--------------------------------------------------------------+-----------------+
+| Current Screen                                               | Right rail      |
+|                                                              | when open       |
++--------------------------------------------------------------+-----------------+
 ```
 
 ---
 
 ## 5. Knowledge Empty State IA
 
-목표: Sidebar에서 Source/Ask를 제거해도 첫 사용자가 즉시 할 일을 이해하게 한다. 빈 Knowledge 화면은 graph가 비어 있는 상태가 아니라, 파일 추가와 prompt composer가 보이는 시작점이다.
+목표: Sidebar에서 Source/Ask를 제거해도 첫 사용자가 즉시 할 일을 이해하게 한다. 빈 Knowledge 화면도 graph workspace이며, 기본 행동은 파일을 추가해 evidence-backed graph를 만드는 것이다.
 
 ```text
 +--------------------------------------------------------------------------------+
@@ -195,18 +201,15 @@ Collapsed sidebar:
 |             wiki pages, claims, and evidence.                                   |
 |                                                                                |
 |                                  [Choose files]                                 |
-|                                                                                |
-|                  +----------------------------------------------+              |
-|                  | [+] Add files or ask about your knowledge... | [Ask]        |
-|                  +----------------------------------------------+              |
 +--------------------------------------------------------------------------------+
 ```
 
 Rules:
 
 ```text
-+-- Empty state shows Add Files and the bottom prompt composer at the same time.
++-- Empty state shows Add Files as the primary action.
 +-- Dropping files anywhere in the empty graph starts automatic ingest.
++-- Ask/Add Files composer is opened by command/action, not permanently shown by default.
 +-- Asking without files searches existing knowledge; if empty, prompt suggests adding files first.
 +-- Attached files can be added permanently or used temporarily for a one-time answer.
 ```
@@ -215,7 +218,7 @@ Rules:
 
 ## 6. Source Library Surface IA
 
-목표: `Sources`를 별도 navigation page로 두지 않고, Knowledge 안의 `Sources` mode/surface로 둔다. 원본 파일은 immutable source로 탐색/관리한다. source file은 graph node, evidence provenance, source library row가 모두 같은 객체를 가리킨다.
+목표: `Sources`를 별도 navigation page로 두지 않고, Knowledge 안에서 필요할 때 여는 source library surface로 둔다. 원본 파일은 immutable source로 탐색/관리한다. source file은 graph node, evidence provenance, source library row가 모두 같은 객체를 가리킨다.
 
 ```text
 Knowledge / Source Library
@@ -367,22 +370,16 @@ Conflict review is not a page. It opens from the Health Bell only when needed:
 
 ## 8. Knowledge Workspace IA
 
-목표: knowledge base를 graph 중심 workspace로 탐색한다. Graph는 예쁜 보조 시각화가 아니라 구조화된 지식의 primary surface다. Wiki/Sources/Claims/Conflicts는 graph를 보완하는 mode이며, Entities/Topics는 별도 top-level mode가 아니라 graph/wiki filter 또는 facet으로 시작한다.
+목표: knowledge base를 graph 중심 workspace로 탐색한다. Graph는 예쁜 보조 시각화가 아니라 구조화된 지식의 primary surface다. 기본 Knowledge 화면에는 mode switcher, counts header, page-title chrome을 두지 않는다. Wiki/Sources/Claims/Conflicts는 graph를 떠나는 상단 탭이 아니라 graph에서 필요할 때 열리는 contextual surface로 시작한다. Entities/Topics는 별도 top-level mode가 아니라 graph filter 또는 facet으로 시작한다.
 
 ```text
 Knowledge
 |
-+-- Overview
-|   +-- workspace title
-|   +-- counts: sources, pages, entities, topics, claims, links, conflicts
-|   +-- freshness: ready | ingesting | stale | degraded
-|
-+-- Modes
-|   +-- Graph
-|   +-- Wiki
-|   +-- Sources
-|   +-- Claims
-|   +-- Conflicts
++-- Graph Canvas
+|   +-- default screen after app chrome
+|   +-- no rounded outer wrapper
+|   +-- no persistent mode tabs
+|   +-- no persistent counts/title header
 |
 +-- Facets / Filters
 |   +-- Entities
@@ -390,10 +387,7 @@ Knowledge
 |   +-- Link types
 |   +-- Source types
 |
-+-- Main Pane
-|   +-- selected mode content
-|
-+-- Inspector
++-- Right Inspector Rail
 |   +-- selected page/node/link/claim/source
 |   +-- evidence refs
 |   +-- backlinks
@@ -401,7 +395,14 @@ Knowledge
 |   +-- source provenance
 |   +-- edit/reprocess actions
 |
-+-- Bottom Prompt Composer
++-- Revealed Surfaces
+    +-- Source Library
+    +-- Wiki Page
+    +-- Claims Review
+    +-- Conflict Review
+    +-- Ask / Add Files Composer
+
+Ask / Add Files Composer
     +-- prompt input
     +-- ask selected graph context or whole knowledge base
     +-- attach PDF/DOCX/DOC files
@@ -409,79 +410,50 @@ Knowledge
     +-- submit as Ask or Add Source + Ingest
 ```
 
-Knowledge overview wireframe:
+Default Knowledge graph wireframe:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Knowledge Base                                             ready | 42 updates    |
-| Persistent wiki and graph built from your sources.                               |
-|                                                                                |
-| +------------+------------+------------+------------+------------+-------------+ |
-| | Sources    | Wiki pages | Entities   | Topics     | Claims     | Conflicts   | |
-| | 12         | 86         | 41         | 23         | 180        | 3           | |
-| +------------+------------+------------+------------+------------+-------------+ |
-|                                                                                |
-| [Graph] [Wiki] [Sources] [Claims] [Conflicts]                                  |
-|                                                                                |
-| +------------------------------------------------------+-----------------------+ |
-| | Recent updates                                       | Inspector             | |
-| |                                                      |                       | |
-| | + topics/fundraising.md updated                      | Select a page, node,  | |
-| | + people/paul-graham.md created                      | claim, or link to see | |
-| | + link: YC attended Demo Day                         | evidence and backlinks| |
-| | + conflict: pricing claim changed                    |                       | |
-| +------------------------------------------------------+-----------------------+ |
+| [sidebar] macOS drag region                         [health bell] [inspector]  |
++----------------------+------------------------------------------+--------------+
+| Sidebar              | Graph canvas                             | Right rail   |
+|                      |                                          |              |
+|  > Knowledge         |       [yc-memo.pdf]                      | Node detail  |
+|                      |            | source_of                    | Evidence     |
+|  Settings            |      [Fundraising]---related_to---[...]  | Provenance   |
+|                      |            | mentions                     | Actions      |
+|                      |      [Paul Graham]                       |              |
++----------------------+------------------------------------------+--------------+
 +--------------------------------------------------------------------------------+
 ```
 
-Wiki mode:
+Collapsed right inspector:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Knowledge / Wiki                                                                |
-|                                                                                |
-| +--------------------------+-----------------------------+---------------------+ |
-| | Index                    | Page                        | Inspector           | |
-| |                          |                             |                     | |
-| | Overview                 | # Fundraising               | Evidence            | |
-| | Topics                   |                             | - yc-memo p4        | |
-| | > fundraising            | [[people/paul-graham]] ...  | - notes p2          | |
-| |   product-market-fit     |                             |                     | |
-| | Entities                 | ## Claims                   | Backlinks           | |
-| |   people                 | - Demo day moved earlier    | - yc                | |
-| |   companies              | - SAFE terms changed        | - demo-day          | |
-| |                          |                             |                     | |
-| +--------------------------+-----------------------------+---------------------+ |
+| [sidebar] macOS drag region                         [health bell] [inspector]  |
++----------------------+---------------------------------------------------------+
+| Sidebar              | Graph canvas                                            |
+|                      |                                                         |
+|  > Knowledge         |       [yc-memo.pdf]                                     |
+|                      |            | source_of                                   |
+|  Settings            |      [Fundraising]---related_to---[Demo Day]            |
+|                      |            | mentions                                    |
+|                      |      [Paul Graham]                                      |
++----------------------+---------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 ```
 
-Graph mode:
+Graph canvas rules:
 
 ```text
-+--------------------------------------------------------------------------------+
-| Knowledge / Graph                                                               |
-|                                                                                |
-| +------------------------------------------------------+-----------------------+ |
-| | Graph canvas                                         | Inspector             | |
-| |                                                      |                       | |
-| |       [yc-memo.pdf]                                  | Node: yc-memo.pdf     | |
-| |            | source_of                              | Kind: source file     | |
-| |      [Fundraising]---related_to---[Demo Day]         |                       | |
-| |            | mentions                                | Original source       | |
-| |      [Paul Graham]---advises------[Founders]         | - yc-memo.pdf         | |
-| |                                                      | - 18 pages            | |
-| |      [SAFE terms]---conflicts_with---[Risk note]     |                       | |
-| |                                                      | Actions               | |
-| |                                                      | [Open source detail]  | |
-| |                                                      | [Open uploaded file]  | |
-| |                                                      | [Reveal in Finder]    | |
-| +------------------------------------------------------+-----------------------+ |
-|                                                                                |
-|                  +----------------------------------------------+              |
-|                  | [+] Ask or add files to this knowledge base  | [Ask]        |
-|                  | e.g. compare this contract with selected node|              |
-|                  +----------------------------------------------+              |
-+--------------------------------------------------------------------------------+
++-- The canvas is the workspace, not a card inside the workspace.
++-- Do not wrap the graph view in a large rounded bordered container.
++-- Default graph view should show only the graph and minimal app chrome.
++-- Title, mode tabs, counts, and status summaries are hidden from the default canvas.
++-- Inspector opens as a right rail with a clear border-left, matching the left sidebar separation.
++-- Health Bell stays in the window bar outside the right inspector rail.
++-- Source Library, Wiki, Claims, and Conflicts are opened from graph selection, inspector actions, search, command palette, or health review.
 ```
 
 Graph source behavior:
@@ -498,8 +470,8 @@ Graph source behavior:
 Graph prompt composer behavior:
 
 ```text
-+-- The prompt input sits at the bottom center of Knowledge / Graph.
-+-- It is the primary Ask surface; no separate Ask navigation is required for MVP.
++-- The prompt input is hidden by default and opens from command/action.
++-- It is the primary Ask surface once opened; no separate Ask navigation is required for MVP.
 +-- Default scope follows current context: selected node/edge/source, visible graph cluster, or whole knowledge base.
 +-- The [+] attachment action accepts PDF/DOCX/DOC files.
 +-- Attached files require an intent: Add to knowledge base or Ask only this time.
@@ -512,11 +484,11 @@ Graph prompt composer behavior:
 +-- The response can be saved back as a wiki page, claim, note, or source description.
 ```
 
-Claims mode:
+Claims and conflicts surface:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Knowledge / Claims                                                              |
+| Claims / Conflicts Surface                                                      |
 |                                                                                |
 | +----------+----------------------------------+------------+---------+---------+ |
 | | Status   | Claim                            | Topic      | Source  | Updated | |
@@ -539,7 +511,7 @@ Claims mode:
 
 ## 9. Embedded Graph Prompt Composer IA
 
-목표: Ask를 별도 navigation page/screen으로 두지 않고 Knowledge/Graph 하단 prompt composer에 통합한다. raw chunks에 매번 RAG하는 느낌이 아니라, 선택된 graph context와 유지되는 wiki/graph를 기반으로 질문하고 답변을 다시 knowledge base에 축적한다.
+목표: Ask를 별도 navigation page/screen으로 두지 않고 Knowledge/Graph에서 필요할 때 열리는 composer로 통합한다. raw chunks에 매번 RAG하는 느낌이 아니라, 선택된 graph context와 유지되는 wiki/graph를 기반으로 질문하고 답변을 다시 knowledge base에 축적한다. 기본 graph view는 Obsidian graph처럼 canvas가 중심이고, composer는 상시 점유하지 않는다.
 
 ```text
 Knowledge / Graph Prompt Composer
@@ -578,15 +550,21 @@ Wireframe:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Knowledge / Graph Prompt Composer                                               |
-| Ask from graph context or attach files with instructions for automatic ingest.    |
-|                                                                                |
-| +----------------------------------------------------------------------------+ |
-| | Scope: [Selected graph v] Output: [Briefing v] Attach: [+ files]             | |
-| | File intent: (x) Add to knowledge base  ( ) Ask only this time               | |
-| | Compare this node with the attached contract. Focus on payment terms.         | |
-| |                                                            [Ask]            | |
-| +----------------------------------------------------------------------------+ |
+| [sidebar] macOS drag region                         [health bell] [inspector]  |
++----------------------+---------------------------------------------------------+
+| Sidebar              | Graph canvas                                            |
+|                      |                                                         |
+|  > Knowledge         |       [selected node cluster]                           |
+|                      |                                                         |
+|                      | +---------------------------------------------------+   |
+|                      | | Scope: Selected graph  Attach: [+ files]          |   |
+|                      | | Compare this node with the attached contract.     |   |
+|                      | | [Add to knowledge base] [Ask only this time] [Ask]|   |
+|                      | +---------------------------------------------------+   |
++----------------------+---------------------------------------------------------+
++--------------------------------------------------------------------------------+
+| Composer result / retrieval trace opens as an overlay, dock, or inspector-linked |
+| answer surface after submit.                                                     |
 |                                                                                |
 | Retrieval trace                                                                 |
 | +-- index.md -> topics/fundraising.md, entities/yc.md                           |
@@ -638,16 +616,21 @@ Custom Window Bar
 |   +-- collapsed: open sidebar icon
 |
 +-- Right: Health Bell
++-- Far Right: Inspector Toggle
+
+Health Bell
+|
++-- status: clean | working | attention_needed | failed
++-- badge count: user action required count
++-- popover
     |
-    +-- status: clean | working | attention_needed | failed
-    +-- badge count: user action required count
-    +-- popover
-        |
-        +-- Auto-fixed summary
-        +-- Needs review
-        +-- Failed maintenance jobs
-        +-- Open maintenance log
+    +-- Auto-fixed summary
+    +-- Needs review
+    +-- Failed maintenance jobs
+    +-- Open maintenance log
 ```
+
+Health Bell은 right inspector rail 안에 배치하지 않는다. Inspector가 열려 있을 때도 Health Bell은 window bar의 독립 버튼이고, 필요하면 inspector rail 너비만큼 좌측으로 밀려 rail 밖에 남는다.
 
 Bell states:
 
@@ -673,7 +656,7 @@ Popover wireframe:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                                       [bell 3]       |
+| [sidebar] macOS drag region                         [bell 3] [inspector]        |
 +--------------------------------------------------------------------------------+
                                            |
                                            v
@@ -895,7 +878,7 @@ Only conflicts/failures appear in Health Bell
 Knowledge base now has wiki pages + graph + evidence
   |
   v
-Graph prompt composer can answer from built knowledge
+Command-opened graph composer can answer from built knowledge
 ```
 
 ### 13.2 Add a new source to an existing knowledge base
@@ -920,7 +903,7 @@ HyprDuck automatically ingests against existing index/wiki/graph
 ### 13.3 Ask and save answer
 
 ```text
-Ask from the graph prompt composer
+Open the graph composer from command/action
   |
   v
 HyprDuck reads index/wiki/graph/evidence
@@ -1124,11 +1107,13 @@ apps/desktop/src/App.tsx
 |   target: knowledge | settings
 |   note: health is not a panel; it is a top-right bell/popover
 |   note: sidebar toggle is not right-aligned; it stays on the left side of the custom window bar
+|   note: right inspector toggle lives at the far right of the custom window bar
+|   note: health bell stays outside the right inspector rail
 |
 +-- MAIN_NAV_ITEMS
 |   current labels likely Import / Graph
 |   target labels Knowledge
-|   top-right window bar adds HealthBell
+|   top-right window bar has HealthBell and InspectorToggle
 |
 +-- ImportPanel
 |   current role: file selection + latest markdown
@@ -1141,12 +1126,13 @@ apps/desktop/src/App.tsx
 apps/desktop/src/features/workspace/GraphWorkspace.tsx
 |
 +-- current role: graph workspace preview
-+-- target role: Knowledge screen graph mode
-+-- rename user-facing copy from graph preview to knowledge base / evidence graph
-+-- add mode concepts: Graph / Wiki / Sources / Claims / Conflicts
++-- target role: Knowledge screen graph canvas
++-- graph canvas is the default surface and should not be wrapped in a large rounded card
++-- remove persistent mode tabs, counts, page-title chrome, and overview header from the default graph view
++-- expose Wiki / Sources / Claims / Conflicts as contextual surfaces, not default tabs
 +-- keep Entities / Topics as filters/facets before making them full modes
 +-- source-file nodes open Source Detail in the inspector, with actions to open/reveal the uploaded file
-+-- bottom prompt composer handles Ask, file attachment, attachment intent, and source metadata prompts
++-- Ask/Add Files composer opens on command/action and handles file attachment, attachment intent, and source metadata prompts
 
 apps/desktop/src/features/workspace/types.ts
 |
@@ -1173,7 +1159,7 @@ P1: Add automatic ingest mental model
 +-- Show source row status: ingesting / ingested / needs review / failed
 +-- Show extracted nodes/edges/evidence as knowledge items, not graph demo
 +-- Make source-file graph nodes clickable and route them to Source Detail / uploaded file preview
-+-- Add bottom-center graph prompt composer for Ask, file attachment, attachment intent, and source metadata prompts
++-- Add command-opened graph prompt composer for Ask, file attachment, attachment intent, and source metadata prompts
 +-- Auto-approve safe updates; route only conflicts/failures to Health Bell
 +
 P2: Add real knowledge artifacts
@@ -1203,8 +1189,12 @@ A redesigned HyprDuck UI is acceptable only if:
 [ ] Evidence is attached to every meaningful claim/node/link in the UI.
 [ ] The graph is connected to wiki pages, claims, backlinks, and source provenance.
 [ ] Clicking a source-file node in the graph exposes the uploaded file and its Source Detail without losing graph context.
-[ ] Ask happens from the Knowledge/Graph bottom prompt composer, not a separate required navigation page.
+[ ] Ask happens from the Knowledge/Graph composer when invoked, not a separate required navigation page.
+[ ] The graph prompt composer is not permanently visible in the default graph canvas.
 [ ] The graph prompt composer supports file attachments plus an optional file-description prompt before automatic ingest.
+[ ] Default Knowledge view does not show persistent mode tabs, overview counts, or page-title chrome above the graph.
+[ ] Default graph canvas is not wrapped in a large rounded card.
+[ ] The right inspector is a separate rail with a clear left border, and Health Bell remains outside that rail.
 [ ] File attachment distinguishes Add to knowledge base from Ask only this time, with Add to knowledge base as the default for supported docs.
 [ ] File description prompts are saved as source metadata, not consumed as disposable prompts.
 [ ] Ask answers can be saved back into the knowledge base.
