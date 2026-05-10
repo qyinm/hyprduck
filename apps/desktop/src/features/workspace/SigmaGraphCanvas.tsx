@@ -17,7 +17,7 @@ import {
   type SigmaNodeAttributes,
   type SigmaWorkspaceGraph,
 } from "./graphologyAdapter";
-import { nextGraphZoom, pointerDeltaToViewBox } from "./graphViewport";
+import { pointerDeltaToViewBox, zoomGraphViewportAtPoint } from "./graphViewport";
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import type { WorkspaceProject } from "./types";
 
@@ -220,11 +220,20 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
 
   const handleWheel = (event: WheelEvent<SVGSVGElement>) => {
     event.preventDefault();
+    const svg = svgRef.current;
+    if (!svg) {
+      return;
+    }
 
-    setViewport((current) => ({
-      ...current,
-      zoom: nextGraphZoom(current.zoom, event.deltaY),
-    }));
+    const rect = svg.getBoundingClientRect();
+    const point = {
+      x: ((event.clientX - rect.left) / rect.width) * 100,
+      y: ((event.clientY - rect.top) / rect.height) * 100,
+    };
+
+    setViewport((current) =>
+      zoomGraphViewportAtPoint(current, event.deltaY, point),
+    );
   };
 
   const selectNode = (node: string) => {
