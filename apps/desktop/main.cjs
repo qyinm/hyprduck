@@ -151,6 +151,7 @@ async function startParse(request) {
   }
 
   const outputName = path.basename(request.path, path.extname(request.path)) || "document";
+  const storageRoot = ensureHyprduckApplicationSupportPath();
   const parseRequest = {
     version: "1",
     template: "General",
@@ -167,13 +168,14 @@ async function startParse(request) {
       debug_result_path: null,
     },
     output: {
-      root_dir: null,
+      root_dir: storageRoot,
       name: outputName,
     },
   };
 
   const child = spawn(resolveEnginePath(), [], {
     stdio: ["pipe", "pipe", "pipe"],
+    env: engineEnvironment(),
   });
   activeChild = child;
 
@@ -283,6 +285,23 @@ async function startParse(request) {
   });
 }
 
+function hyprduckApplicationSupportPath() {
+  return path.join(app.getPath("appData"), "HyprDuck");
+}
+
+function ensureHyprduckApplicationSupportPath() {
+  const storageRoot = hyprduckApplicationSupportPath();
+  fs.mkdirSync(storageRoot, { recursive: true });
+  return storageRoot;
+}
+
+function engineEnvironment() {
+  return {
+    ...process.env,
+    DUCKDOCS_OUTPUT_DIR: ensureHyprduckApplicationSupportPath(),
+  };
+}
+
 async function cancelParse() {
   if (!activeChild) {
     return;
@@ -316,6 +335,7 @@ function runEngineCommand(expectedCommand, request) {
   return new Promise((resolve, reject) => {
     const child = spawn(resolveEnginePath(), [], {
       stdio: ["pipe", "pipe", "pipe"],
+      env: engineEnvironment(),
     });
     let stdout = "";
     let stderr = "";

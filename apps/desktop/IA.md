@@ -231,7 +231,7 @@ Knowledge / Source Library
 +-- Source Intake
 |   +-- Dropzone / Choose files
 |   +-- Supported: PDF, DOCX, DOC
-|   +-- Destination: ~/Documents/HyprDuck/<workspace>/sources
+|   +-- Destination: ~/Library/Application Support/HyprDuck/<workspace>/sources
 |
 +-- Source Library
 |   +-- Source rows
@@ -796,7 +796,7 @@ Wireframe:
 HyprDuck는 아래 산출물을 명시적으로 다룬다.
 
 ```text
-~/Documents/HyprDuck/<workspace>/
+~/Library/Application Support/HyprDuck/<workspace>/
 |
 +-- sources/
 |   +-- original files
