@@ -194,7 +194,9 @@ fn encode_success_response(
     config_store: &EngineConfigStore,
 ) -> Result<String> {
     let response = match request {
-        EngineRequest::Parse(request) => return encode_parse_response(request, "", config_store),
+        EngineRequest::Parse(_) => {
+            unreachable!("parse requests are handled by encode_parse_response")
+        }
         EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::CompileProject,
             handle_compile_project(request)?,

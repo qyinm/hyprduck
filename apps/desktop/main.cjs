@@ -233,7 +233,8 @@ async function startParse(request) {
 
 function applyRuntimeProgressLine(line) {
   try {
-    applyProgressEvent(JSON.parse(line));
+    const event = typeof line === "string" ? JSON.parse(line) : line;
+    applyProgressEvent(event);
   } catch {
     // Non-event stderr is ignored; engine failures still arrive on stdout.
   }
@@ -306,9 +307,15 @@ class EngineRuntime {
     child.stdout.on("data", (chunk) => this.handleStdout(chunk));
     child.stderr.on("data", (chunk) => this.handleStderr(chunk));
     child.on("error", (error) => {
+      if (this.child !== child) {
+        return;
+      }
       this.failRuntime(`failed to spawn duckdocs-engine: ${error.message}`);
     });
     child.on("close", (code) => {
+      if (this.child !== child) {
+        return;
+      }
       const message = this.stopping
         ? "engine runtime stopped"
         : `duckdocs-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
@@ -354,7 +361,7 @@ class EngineRuntime {
       const message = JSON.parse(line);
       if (message.type === "event") {
         if (message.id === active.id) {
-          active.onEvent?.(JSON.stringify(message.event));
+          active.onEvent?.(message.event);
         }
         return;
       }
@@ -376,8 +383,10 @@ class EngineRuntime {
           new Error(`engine response id mismatch: expected ${active.id}, got ${response.id}`),
         );
         this.active = null;
+        this.stop();
+        return;
       } else if (response.type === "event") {
-        active.onEvent?.(JSON.stringify(response.event));
+        active.onEvent?.(response.event);
         return;
       } else if (response.ok === false) {
         active.reject(new Error(response.error?.message ?? "engine command failed"));
