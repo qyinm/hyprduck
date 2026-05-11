@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
 #[test]
-fn mcp_server_exposes_read_only_brain_tools() {
+fn mcp_server_exposes_brain_tools_and_policy_proposals() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_duckdocs-cli"))
         .args(["mcp", "serve"])
         .stdin(Stdio::piped())
@@ -66,16 +66,23 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "read_wiki_page",
             "read_node",
             "read_recent_events",
-            "read_health"
+            "read_health",
+            "propose_memory",
+            "propose_claim",
+            "propose_link",
+            "append_observation",
+            "add_source_note",
+            "request_consolidation",
         ]
     );
-    assert!(!names.iter().any(|name| name.contains("propose")));
-    assert!(tools.iter().all(|tool| {
-        tool["annotations"]["readOnlyHint"] == true
-            && tool["annotations"]["destructiveHint"] == false
-    }));
+    assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
+    assert_eq!(tools[7]["annotations"]["readOnlyHint"], false);
+    assert!(tools
+        .iter()
+        .all(|tool| tool["annotations"]["destructiveHint"] == false));
 
     let root_dir = std::env::temp_dir().join(format!("duckdocs-mcp-empty-{}", std::process::id()));
+    let root_dir_arg = root_dir.to_string_lossy().to_string();
     std::fs::create_dir_all(&root_dir).expect("temp root");
     write_message(
         &mut stdin,
@@ -87,7 +94,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
                 "name": "read_health",
                 "arguments": {
                     "workspaceId": "default",
-                    "rootDir": root_dir
+                    "rootDir": root_dir_arg.clone()
                 }
             }
         }),
@@ -100,6 +107,64 @@ fn mcp_server_exposes_read_only_brain_tools() {
     let payload: Value = serde_json::from_str(text).expect("health payload");
     assert_eq!(payload["status"], "clean");
     assert_eq!(payload["attentionCount"], 0);
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "propose_memory",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "actorId": "mcp-test-agent",
+                    "title": "Remember MCP contract",
+                    "body": "The MCP server should route safe memory through the policy path."
+                }
+            }
+        }),
+    );
+    let memory = read_message(&mut reader);
+    assert_eq!(memory["result"]["isError"], false);
+    let text = memory["result"]["content"][0]["text"]
+        .as_str()
+        .expect("tool text");
+    let payload: Value = serde_json::from_str(text).expect("memory payload");
+    assert_eq!(payload["proposal"]["kind"], "memory");
+    assert_eq!(payload["proposal"]["status"], "accepted");
+    assert_eq!(payload["event"]["policyResult"], "auto_applied");
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "propose_claim",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "actorId": "mcp-test-agent",
+                    "title": "Claim needs review",
+                    "body": "Claims should wait for review before becoming trusted graph state.",
+                    "evidenceRefs": ["evidence-test"]
+                }
+            }
+        }),
+    );
+    let claim = read_message(&mut reader);
+    assert_eq!(claim["result"]["isError"], false);
+    let text = claim["result"]["content"][0]["text"]
+        .as_str()
+        .expect("tool text");
+    let payload: Value = serde_json::from_str(text).expect("claim payload");
+    assert_eq!(payload["proposal"]["kind"], "claim");
+    assert_eq!(payload["proposal"]["status"], "pending_review");
+    assert_eq!(payload["event"]["policyResult"], "needs_review");
+    assert!(std::path::Path::new(payload["proposalPath"].as_str().unwrap()).exists());
 
     drop(stdin);
     let status = child.wait().expect("server exit");
