@@ -841,6 +841,36 @@ function windowChromeButtonClass(): string {
   return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
 }
 
+function modelTaskGuidance(providerId: string, modelId: string) {
+  const model = modelId.toLowerCase();
+
+  if (providerId === "ollama") {
+    if (
+      model.includes("8b") ||
+      model.includes("ocr") ||
+      model.includes("llama3.1")
+    ) {
+      return {
+        tone: "warning",
+        title: "Local model caution",
+        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before trusting durable graph writes.",
+      };
+    }
+
+    return {
+      tone: "local",
+      title: "Local-first path",
+      body: "Good for private parsing and retrieval checks. Keep risky merges and project memory writes on review until the golden corpus is clean.",
+    };
+  }
+
+  return {
+    tone: "hosted",
+    title: "Hosted quality path",
+    body: "Recommended for high-recall page parsing, structured extraction, and merge review when privacy policy allows hosted inference.",
+  };
+}
+
 function ImportPanel(props: {
   snapshot: UiSnapshot;
   selectedFile: FileSelection | null;
@@ -987,7 +1017,7 @@ function SettingsPanel(props: {
             apiKey: config.api_key,
             baseUrl: "",
             expanded: false,
-          showAdvanced: false,
+            showAdvanced: false,
           });
         }
         return next;
@@ -1109,6 +1139,8 @@ function SettingsPanel(props: {
     );
   }
 
+  const modelGuidance = modelTaskGuidance(activeProvider, selectedModel);
+
   return (
     <div className="space-y-8">
       {tab === "general" && (
@@ -1190,7 +1222,8 @@ function SettingsPanel(props: {
           <div>
             <h2 className="text-base font-semibold mb-1">AI provider</h2>
             <p className="text-sm text-muted-foreground mb-4">
-              Select the provider and model for document parsing.
+              Select the provider and model for parsing, extraction, merge
+              review, and grounded answer workflows.
             </p>
             <div className="grid gap-4 grid-cols-2">
               <div className="space-y-2">
@@ -1223,6 +1256,19 @@ function SettingsPanel(props: {
                   ))}
                 </select>
               </div>
+            </div>
+            <div
+              className={cn(
+                "mt-3 rounded-lg border px-3 py-2 text-xs leading-5",
+                modelGuidance.tone === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-border bg-secondary/50 text-muted-foreground",
+              )}
+            >
+              <div className="font-medium text-foreground">
+                {modelGuidance.title}
+              </div>
+              <p>{modelGuidance.body}</p>
             </div>
           </div>
 
