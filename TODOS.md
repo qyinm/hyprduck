@@ -9,9 +9,8 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Read-only MCP v0
-2. Proposed-write MCP and policy engine
-3. Team/company brain governance
+1. Proposed-write MCP and policy engine
+2. Team/company brain governance
 ```
 
 ---
@@ -136,7 +135,7 @@ Current roadmap order:
 
 ---
 
-## P2 - Read-only MCP v0
+## P2 - Read-only MCP v0 - Done
 
 **What:** Expose HyprDuck's local brain through a read-only MCP surface after extraction and retrieval stabilize.
 
@@ -154,11 +153,11 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] MCP tools return the same evidence-backed IDs as the engine/CLI.
-- [ ] Tools cannot mutate brain artifacts.
-- [ ] Context packs are useful in Claude Code, Codex, Cursor, or another MCP client.
-- [ ] Tool responses include source/evidence provenance.
-- [ ] The contract is documented with examples.
+- [x] MCP tools return the same evidence-backed IDs as the engine/CLI.
+- [x] Tools cannot mutate brain artifacts.
+- [x] Context packs are useful in Claude Code, Codex, Cursor, or another MCP client.
+- [x] Tool responses include source/evidence provenance.
+- [x] The contract is documented with examples.
 
 **Effort:** M
 **Priority:** P2
