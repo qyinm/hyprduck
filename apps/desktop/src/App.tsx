@@ -129,6 +129,31 @@ interface RuntimeReadinessResponseData {
   checks: RuntimeReadinessCheck[];
 }
 
+type BrainProposalKind = "memory" | "claim" | "link" | "observation" | "source_note";
+type BrainProposalStatus = "pending_review" | "accepted" | "rejected";
+type BrainHealthStatus = "clean" | "attention_needed";
+
+interface BrainReviewItem {
+  reviewId: string;
+  proposalId: string;
+  workspaceId: string;
+  kind: BrainProposalKind;
+  status: BrainProposalStatus;
+  title: string;
+  body: string;
+  proposalPath: string;
+  sourceRefs: string[];
+  nodeRefs: string[];
+  evidenceRefs: string[];
+  createdAt: number;
+}
+
+interface BrainHealthResponseData {
+  status: BrainHealthStatus;
+  attentionCount: number;
+  reviewItems: BrainReviewItem[];
+}
+
 interface DesktopMessage<T> {
   payload: T;
 }
@@ -509,6 +534,13 @@ function createWebMockApi(): HyprDuckDesktopApi {
         }
         case "engine_readiness": {
           return deriveWebReadiness() as T;
+        }
+        case "brain_health": {
+          return {
+            status: "clean",
+            attentionCount: 0,
+            reviewItems: [],
+          } as T;
         }
         case "get_models_for_provider": {
           const key = String(
@@ -904,16 +936,20 @@ interface ProviderState {
 function SettingsPanel(props: {
   config: EngineConfigPayload | null;
   validation: ValidateProviderResponseData | null;
+  readiness: RuntimeReadinessResponseData | null;
   onSave: (payload: EngineConfigPayload) => Promise<void>;
   onValidate: (payload: EngineConfigPayload | null) => Promise<void>;
+  onRefreshReadiness: () => Promise<void>;
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
 }) {
   const {
     config,
     validation,
+    readiness,
     onSave,
     onValidate,
+    onRefreshReadiness,
     tab,
     onTabChange: setTab,
   } = props;
@@ -1086,6 +1122,55 @@ function SettingsPanel(props: {
 
       {tab === "ai" && (
         <section className="space-y-8">
+          <div>
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold mb-1">Runtime readiness</h2>
+                <p className="text-sm text-muted-foreground">
+                  Local parser and provider checks for document processing.
+                </p>
+              </div>
+              <Button
+                onClick={() => void onRefreshReadiness()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Refresh
+              </Button>
+            </div>
+            <div className="grid gap-2">
+              {(readiness?.checks ?? []).map((check) => (
+                <div
+                  className="rounded-lg border border-border bg-secondary/50 p-3 text-xs leading-5"
+                  key={check.id}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-foreground">{check.label}</span>
+                    <span
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                        check.ready
+                          ? "border-border text-foreground"
+                          : check.required
+                            ? "border-destructive/30 text-destructive"
+                            : "border-border text-muted-foreground",
+                      )}
+                    >
+                      {check.ready ? "Ready" : check.required ? "Issue" : "Optional"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">{check.message}</p>
+                </div>
+              ))}
+              {!readiness && (
+                <div className="rounded-lg border border-border bg-secondary/50 p-3 text-sm text-muted-foreground">
+                  Runtime status is loading.
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Active Provider & Model Selector */}
           <div>
             <h2 className="text-base font-semibold mb-1">AI provider</h2>
@@ -1255,6 +1340,8 @@ export function App() {
     useState<ValidateProviderResponseData | null>(null);
   const [readiness, setReadiness] =
     useState<RuntimeReadinessResponseData | null>(null);
+  const [brainHealth, setBrainHealth] =
+    useState<BrainHealthResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
   const settingsOpen = activePanel === "settings";
@@ -1302,12 +1389,19 @@ export function App() {
 
     const bootstrap = async () => {
       const desktop = getDesktopApi();
-      const [initialSnapshot, initialConfig, initialValidation, initialReadiness] =
+      const [
+        initialSnapshot,
+        initialConfig,
+        initialValidation,
+        initialReadiness,
+        initialBrainHealth,
+      ] =
         await Promise.all([
           invoke<UiSnapshot>("app_snapshot"),
           invoke<EngineConfigPayload>("load_engine_config"),
           invoke<ValidateProviderResponseData>("validate_engine_config"),
           invoke<RuntimeReadinessResponseData>("engine_readiness"),
+          invoke<BrainHealthResponseData>("brain_health"),
         ]);
       const initialWorkspaceEnvelope =
         await invoke<WorkspaceProjectEnvelope>("load_workspace_project");
@@ -1315,6 +1409,7 @@ export function App() {
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
       setReadiness(initialReadiness);
+      setBrainHealth(initialBrainHealth);
       setLoadedWorkspaceEnvelope(initialWorkspaceEnvelope);
 
       unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
@@ -1498,6 +1593,14 @@ export function App() {
     setReadiness(nextReadiness);
   };
 
+  const refreshBrainHealth = async () => {
+    const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
+      workspace_id:
+        loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
+    });
+    setBrainHealth(nextHealth);
+  };
+
   if (startupError) {
     return (
       <main className="grid min-h-screen place-items-center bg-background p-6">
@@ -1581,10 +1684,13 @@ export function App() {
       </div>
       <Button
         aria-expanded={healthOpen}
-        aria-label="Knowledge maintenance"
-        title="Knowledge maintenance"
+        aria-label="Brain health"
+        title="Brain health"
         data-electron-no-drag
-        onClick={() => setHealthOpen((open) => !open)}
+        onClick={() => {
+          setHealthOpen((open) => !open);
+          void refreshBrainHealth();
+        }}
         size="icon"
         variant="ghost"
         className={cn(
@@ -1600,6 +1706,11 @@ export function App() {
         type="button"
       >
         <Bell size={14} />
+        {brainHealth && brainHealth.attentionCount > 0 && (
+          <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
+            {brainHealth.attentionCount}
+          </span>
+        )}
       </Button>
       {!settingsOpen && (
         <Button
@@ -1646,50 +1757,44 @@ export function App() {
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">Local engine</h2>
+              <h2 className="text-sm font-semibold text-foreground">Brain health</h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {readiness
-                  ? `${readiness.provider} · ${readiness.model_id || "No model"}`
-                  : "Checking local runtime readiness."}
+                Pending agent-written claims and links that need human review.
               </p>
             </div>
             <span className="rounded-full border border-border bg-secondary px-2 py-1 text-[11px] font-medium text-foreground">
-              {readiness?.ready ? "Ready" : "Needs attention"}
+              {brainHealth?.status === "clean" ? "Clean" : "Attention"}
             </span>
           </div>
           <div className="mt-4 space-y-2">
-            {(readiness?.checks ?? []).map((check) => (
+            {(brainHealth?.reviewItems ?? []).map((item) => (
               <div
                 className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5"
-                key={check.id}
+                key={item.reviewId}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-foreground">{check.label}</span>
-                  <span
-                    className={cn(
-                      "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                      check.ready
-                        ? "border-border text-foreground"
-                        : check.required
-                          ? "border-destructive/30 text-destructive"
-                          : "border-border text-muted-foreground",
-                    )}
-                  >
-                    {check.ready ? "Ready" : check.required ? "Issue" : "Optional"}
+                  <span className="font-medium text-foreground">{item.title}</span>
+                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {item.kind === "claim" ? "Claim" : "Link"}
                   </span>
                 </div>
-                <p className="mt-1 text-muted-foreground">{check.message}</p>
+                <p className="mt-1 line-clamp-3 text-muted-foreground">{item.body}</p>
               </div>
             ))}
-            {!readiness && (
+            {brainHealth && brainHealth.reviewItems.length === 0 && (
               <div className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
-                Runtime status is loading.
+                No pending claim or link reviews.
+              </div>
+            )}
+            {!brainHealth && (
+              <div className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
+                Brain health is loading.
               </div>
             )}
           </div>
           <Button
             className="mt-3 w-full"
-            onClick={() => void refreshReadiness()}
+            onClick={() => void refreshBrainHealth()}
             size="sm"
             type="button"
             variant="outline"
@@ -1782,6 +1887,8 @@ export function App() {
               config={currentConfig}
               onSave={saveConfig}
               onValidate={validateConfig}
+              onRefreshReadiness={refreshReadiness}
+              readiness={readiness}
               validation={validation}
               tab={settingsTab}
               onTabChange={setSettingsTab}

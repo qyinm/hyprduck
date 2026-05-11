@@ -11,11 +11,13 @@ use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
     ApplyCorrectionResponseData, BrainContextPack, CheckReadinessRequest, CompileProjectRequest,
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
-    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
-    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadNodeRequest,
+    EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, KnowledgeProject,
+    ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
+    LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest,
+    ParseResponseData, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadNodeRequest,
     ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
     ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
     SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
 };
@@ -48,6 +50,18 @@ pub trait EngineClient {
         &self,
         request: ProposeBrainUpdateRequest,
     ) -> Result<ProposeBrainUpdateResponseData>;
+    fn list_brain_review_items(
+        &self,
+        request: ListBrainReviewItemsRequest,
+    ) -> Result<ListBrainReviewItemsResponseData>;
+    fn resolve_brain_review_item(
+        &self,
+        request: ResolveBrainReviewItemRequest,
+    ) -> Result<ResolveBrainReviewItemResponseData>;
+    fn get_brain_health(
+        &self,
+        request: GetBrainHealthRequest,
+    ) -> Result<GetBrainHealthResponseData>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
     fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
     fn validate_provider(
@@ -322,6 +336,39 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<ProposeBrainUpdateResponseData, ProposeBrainUpdateResponseData>(
             EngineRequest::ProposeBrainUpdate(request),
             EngineCommand::ProposeBrainUpdate,
+            None,
+        )
+    }
+
+    fn list_brain_review_items(
+        &self,
+        request: ListBrainReviewItemsRequest,
+    ) -> Result<ListBrainReviewItemsResponseData> {
+        self.run_command::<ListBrainReviewItemsResponseData, ListBrainReviewItemsResponseData>(
+            EngineRequest::ListBrainReviewItems(request),
+            EngineCommand::ListBrainReviewItems,
+            None,
+        )
+    }
+
+    fn resolve_brain_review_item(
+        &self,
+        request: ResolveBrainReviewItemRequest,
+    ) -> Result<ResolveBrainReviewItemResponseData> {
+        self.run_command::<ResolveBrainReviewItemResponseData, ResolveBrainReviewItemResponseData>(
+            EngineRequest::ResolveBrainReviewItem(request),
+            EngineCommand::ResolveBrainReviewItem,
+            None,
+        )
+    }
+
+    fn get_brain_health(
+        &self,
+        request: GetBrainHealthRequest,
+    ) -> Result<GetBrainHealthResponseData> {
+        self.run_command::<GetBrainHealthResponseData, GetBrainHealthResponseData>(
+            EngineRequest::GetBrainHealth(request),
+            EngineCommand::GetBrainHealth,
             None,
         )
     }

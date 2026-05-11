@@ -29,6 +29,9 @@ pub enum EngineCommand {
     ReadRecentEvents,
     GetContextPack,
     ProposeBrainUpdate,
+    ListBrainReviewItems,
+    ResolveBrainReviewItem,
+    GetBrainHealth,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -463,6 +466,89 @@ pub struct ProposeBrainUpdateResponseData {
     pub proposal_path: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainReviewDecision {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainHealthStatus {
+    Clean,
+    AttentionNeeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainReviewItem {
+    pub review_id: String,
+    pub proposal_id: String,
+    pub workspace_id: WorkspaceId,
+    pub kind: BrainProposalKind,
+    pub status: BrainProposalStatus,
+    pub title: String,
+    pub body: String,
+    pub proposal_path: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBrainReviewItemsRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBrainReviewItemsResponseData {
+    #[serde(default)]
+    pub items: Vec<BrainReviewItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveBrainReviewItemRequest {
+    pub scope: BrainReadScope,
+    pub proposal_id: String,
+    pub decision: BrainReviewDecision,
+    pub actor: BrainActor,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveBrainReviewItemResponseData {
+    pub proposal: BrainUpdateProposal,
+    pub event: BrainEvent,
+    pub proposal_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBrainHealthRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBrainHealthResponseData {
+    pub status: BrainHealthStatus,
+    pub attention_count: usize,
+    #[serde(default)]
+    pub review_items: Vec<BrainReviewItem>,
+    #[serde(default)]
+    pub recent_events: Vec<BrainEvent>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
@@ -610,6 +696,9 @@ pub enum EngineRequest {
     ReadRecentEvents(ReadRecentEventsRequest),
     GetContextPack(GetContextPackRequest),
     ProposeBrainUpdate(ProposeBrainUpdateRequest),
+    ListBrainReviewItems(ListBrainReviewItemsRequest),
+    ResolveBrainReviewItem(ResolveBrainReviewItemRequest),
+    GetBrainHealth(GetBrainHealthRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
@@ -994,7 +1083,7 @@ mod tests {
                 budget: Some(8000),
             }),
             EngineRequest::ProposeBrainUpdate(ProposeBrainUpdateRequest {
-                scope,
+                scope: scope.clone(),
                 kind: BrainProposalKind::Memory,
                 title: "Remember project decision".into(),
                 body: "The agent should retain this decision for later sessions.".into(),
@@ -1009,6 +1098,20 @@ mod tests {
                 node_refs: vec!["project-hyprduck".into()],
                 evidence_refs: vec![],
             }),
+            EngineRequest::ListBrainReviewItems(ListBrainReviewItemsRequest {
+                scope: scope.clone(),
+            }),
+            EngineRequest::ResolveBrainReviewItem(ResolveBrainReviewItemRequest {
+                scope: scope.clone(),
+                proposal_id: "proposal-123".into(),
+                decision: BrainReviewDecision::Accept,
+                actor: BrainActor {
+                    actor_type: BrainActorType::User,
+                    actor_id: "local-user".into(),
+                },
+                reason: Some("Looks correct".into()),
+            }),
+            EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
         ];
         for request in requests {
             let json = serde_json::to_string(&request).unwrap();

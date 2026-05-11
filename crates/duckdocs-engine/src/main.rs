@@ -12,24 +12,27 @@ use base64::Engine;
 use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventKind, BrainNodeKind, BrainNodeRecord,
-    BrainProposalKind, BrainProposalStatus, BrainReadScope, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal,
-    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
-    EngineSuccess, EvidenceRef, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
+    BrainContextPack, BrainEvent, BrainEventKind, BrainHealthStatus, BrainNodeKind,
+    BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainReadScope, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainReviewDecision, BrainReviewItem, BrainScope,
+    BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal, CompileProjectRequest,
+    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
+    EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
+    EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, EvidenceRef, GetBrainHealthRequest,
+    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, MemoryRecord, OutputAsset,
-    PageArtifact, ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
-    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ProviderModelCatalogResponseData,
-    ProviderOption, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary,
-    RelationKind, RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
-    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
-    SourceRecord, SourceSummary, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
+    LoadProjectRequest, LoadProjectResponseData, MemoryRecord, OutputAsset, PageArtifact,
+    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
+    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest,
+    ProposeBrainUpdateResponseData, ProviderModelCatalogResponseData, ProviderOption,
+    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
+    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
+    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
+    SourceSummary, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
     ValidateProviderResponseData, ValidationIssue, WikiPage, WorkspaceCorrection, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
@@ -254,6 +257,20 @@ fn encode_success_response(
             EngineCommand::ProposeBrainUpdate,
             handle_propose_brain_update(request)?,
         )),
+        EngineRequest::ListBrainReviewItems(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ListBrainReviewItems,
+            handle_list_brain_review_items(request)?,
+        )),
+        EngineRequest::ResolveBrainReviewItem(request) => {
+            serde_json::to_string(&EngineSuccess::new(
+                EngineCommand::ResolveBrainReviewItem,
+                handle_resolve_brain_review_item(request)?,
+            ))
+        }
+        EngineRequest::GetBrainHealth(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::GetBrainHealth,
+            handle_get_brain_health(request)?,
+        )),
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
             let config = config_store.load()?;
             serde_json::to_string(&EngineSuccess::new(
@@ -326,6 +343,9 @@ fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::ReadRecentEvents(_) => EngineCommand::ReadRecentEvents,
         EngineRequest::GetContextPack(_) => EngineCommand::GetContextPack,
         EngineRequest::ProposeBrainUpdate(_) => EngineCommand::ProposeBrainUpdate,
+        EngineRequest::ListBrainReviewItems(_) => EngineCommand::ListBrainReviewItems,
+        EngineRequest::ResolveBrainReviewItem(_) => EngineCommand::ResolveBrainReviewItem,
+        EngineRequest::GetBrainHealth(_) => EngineCommand::GetBrainHealth,
         EngineRequest::LoadConfig(_) => EngineCommand::LoadConfig,
         EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
@@ -808,6 +828,137 @@ fn handle_propose_brain_update(
     })
 }
 
+fn handle_list_brain_review_items(
+    request: ListBrainReviewItemsRequest,
+) -> Result<ListBrainReviewItemsResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    Ok(ListBrainReviewItemsResponseData {
+        items: list_pending_brain_review_items(&root, &request.scope.workspace_id)?,
+    })
+}
+
+fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let review_items = list_pending_brain_review_items(&root, &request.scope.workspace_id)?;
+    let attention_count = review_items.len();
+    let mut recent_events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    recent_events.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.event_id.cmp(&left.event_id))
+    });
+    recent_events.truncate(10);
+    Ok(GetBrainHealthResponseData {
+        status: if attention_count == 0 {
+            BrainHealthStatus::Clean
+        } else {
+            BrainHealthStatus::AttentionNeeded
+        },
+        attention_count,
+        review_items,
+        recent_events,
+    })
+}
+
+fn handle_resolve_brain_review_item(
+    request: ResolveBrainReviewItemRequest,
+) -> Result<ResolveBrainReviewItemResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let writer = BrainWorkspaceWriter::open(root)?;
+    let proposal_path = writer.proposal_path(&request.proposal_id);
+    let mut proposal: BrainUpdateProposal = read_json_artifact(&proposal_path)
+        .with_context(|| format!("failed reading review proposal {}", request.proposal_id))?;
+    if proposal.workspace_id != request.scope.workspace_id {
+        bail!(
+            "proposal workspace_id {} does not match requested workspace {}",
+            proposal.workspace_id,
+            request.scope.workspace_id
+        );
+    }
+    if !is_reviewable_brain_proposal(&proposal) {
+        bail!(
+            "proposal {} is not a pending claim or link review item",
+            proposal.proposal_id
+        );
+    }
+    proposal.status = match request.decision {
+        BrainReviewDecision::Accept => BrainProposalStatus::Accepted,
+        BrainReviewDecision::Reject => BrainProposalStatus::Rejected,
+    };
+    let proposal_path = writer.write_proposal(&proposal)?;
+    let event = brain_review_resolved_event(&proposal, &request)?;
+    writer.append_event(&event)?;
+    Ok(ResolveBrainReviewItemResponseData {
+        proposal,
+        event,
+        proposal_path: proposal_path.display().to_string(),
+    })
+}
+
+fn list_pending_brain_review_items(
+    root: &Path,
+    workspace_id: &str,
+) -> Result<Vec<BrainReviewItem>> {
+    let mut items = read_brain_update_proposals(root)?
+        .into_iter()
+        .filter(|(proposal, _)| proposal.workspace_id == workspace_id)
+        .filter(|(proposal, _)| is_reviewable_brain_proposal(proposal))
+        .map(|(proposal, path)| brain_review_item_for_proposal(&proposal, &path))
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.proposal_id.cmp(&right.proposal_id))
+    });
+    Ok(items)
+}
+
+fn read_brain_update_proposals(root: &Path) -> Result<Vec<(BrainUpdateProposal, PathBuf)>> {
+    let proposals_dir = root.join("reviews/proposed-updates");
+    if !proposals_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut proposals = Vec::new();
+    for entry in fs::read_dir(&proposals_dir)
+        .with_context(|| format!("failed reading {}", proposals_dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("failed reading {}", proposals_dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        proposals.push((read_json_artifact(&path)?, path));
+    }
+    Ok(proposals)
+}
+
+fn is_reviewable_brain_proposal(proposal: &BrainUpdateProposal) -> bool {
+    proposal.status == BrainProposalStatus::PendingReview
+        && matches!(
+            proposal.kind,
+            BrainProposalKind::Claim | BrainProposalKind::Link
+        )
+}
+
+fn brain_review_item_for_proposal(proposal: &BrainUpdateProposal, path: &Path) -> BrainReviewItem {
+    BrainReviewItem {
+        review_id: proposal.proposal_id.clone(),
+        proposal_id: proposal.proposal_id.clone(),
+        workspace_id: proposal.workspace_id.clone(),
+        kind: proposal.kind,
+        status: proposal.status,
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        proposal_path: path.display().to_string(),
+        source_refs: proposal.source_refs.clone(),
+        node_refs: proposal.node_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        created_at: proposal.created_at,
+    }
+}
+
 fn is_auto_apply_brain_proposal(kind: BrainProposalKind) -> bool {
     matches!(
         kind,
@@ -915,6 +1066,37 @@ fn brain_memory_accepted_event(proposal: &BrainUpdateProposal) -> Result<BrainEv
     })
 }
 
+fn brain_review_resolved_event(
+    proposal: &BrainUpdateProposal,
+    request: &ResolveBrainReviewItemRequest,
+) -> Result<BrainEvent> {
+    let decision = match request.decision {
+        BrainReviewDecision::Accept => "accept",
+        BrainReviewDecision::Reject => "reject",
+    };
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        event_type: BrainEventKind::ReviewResolved,
+        actor: request.actor.clone(),
+        source_refs: proposal.source_refs.clone(),
+        node_refs: proposal.node_refs.clone(),
+        relation_refs: Vec::new(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(&json!({
+            "proposalId": proposal.proposal_id,
+            "decision": decision,
+            "reason": request.reason,
+            "status": proposal.status,
+        }))
+        .context("failed to encode review resolved event payload")?,
+        confidence: None,
+        policy_result: decision.into(),
+        created_at: unix_timestamp_seconds(),
+    })
+}
+
 fn brain_proposal_fingerprint(proposal: &BrainUpdateProposal) -> String {
     let mut parts = vec![
         proposal.workspace_id.clone(),
@@ -959,12 +1141,15 @@ impl BrainWorkspaceWriter {
     }
 
     fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
-        let path = self
-            .root
-            .join("reviews/proposed-updates")
-            .join(format!("{}.json", proposal.proposal_id));
+        let path = self.proposal_path(&proposal.proposal_id);
         write_json_pretty(&path, proposal)?;
         Ok(path)
+    }
+
+    fn proposal_path(&self, proposal_id: &str) -> PathBuf {
+        self.root
+            .join("reviews/proposed-updates")
+            .join(format!("{proposal_id}.json"))
     }
 
     fn append_event(&self, event: &BrainEvent) -> Result<()> {
@@ -7212,6 +7397,228 @@ mod tests {
         assert!(claim_event_ids
             .iter()
             .all(|event_id| rematerialized_event_ids.contains(event_id)));
+    }
+
+    #[test]
+    fn brain_review_health_lists_pending_claims_and_links_only() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "claude-code".into(),
+        };
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Memory,
+            title: "Remember accepted memory".into(),
+            body: "Safe memory proposals are auto-applied.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose memory");
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Claim needs review".into(),
+            body: "Durable claims require human attention before write-through.".into(),
+            actor: actor.clone(),
+            target_node_id: Some(concept_node_id.clone()),
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id.clone()],
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose claim");
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Link,
+            title: "Link needs review".into(),
+            body: "Typed graph links require review before graph mutation.".into(),
+            actor,
+            target_node_id: Some(concept_node_id.clone()),
+            target_source_id: None,
+            relation_kind: Some(BrainRelationKind::RelatedTo),
+            source_refs: vec![manifest.source_id],
+            node_refs: vec!["document".into()],
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose link");
+
+        let reviews = handle_list_brain_review_items(ListBrainReviewItemsRequest {
+            scope: scope.clone(),
+        })
+        .expect("list reviews");
+        assert_eq!(reviews.items.len(), 2);
+        assert!(reviews
+            .items
+            .iter()
+            .all(|item| item.status == BrainProposalStatus::PendingReview));
+        assert!(reviews
+            .items
+            .iter()
+            .any(|item| item.kind == BrainProposalKind::Claim));
+        assert!(reviews
+            .items
+            .iter()
+            .any(|item| item.kind == BrainProposalKind::Link));
+        assert!(!reviews
+            .items
+            .iter()
+            .any(|item| item.kind == BrainProposalKind::Memory));
+
+        let health =
+            handle_get_brain_health(GetBrainHealthRequest { scope }).expect("get brain health");
+        assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
+        assert_eq!(health.attention_count, 2);
+        assert_eq!(health.review_items.len(), 2);
+    }
+
+    #[test]
+    fn resolving_brain_review_updates_proposal_and_audit_without_mutating_artifacts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let nodes_before =
+            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes before");
+        let edges_before =
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges before");
+        let wiki_before =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki before");
+        let memory_before = fs::read_to_string(workspace_root.join("memory/records.json"))
+            .unwrap_or_else(|_| "[]".into());
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "claude-code".into(),
+        };
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let proposed = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Claim needs review".into(),
+            body: "Accepted claim proposals still do not mutate graph or wiki in v0.".into(),
+            actor,
+            target_node_id: Some(concept_node_id.clone()),
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![manifest.source_id],
+            node_refs: vec![concept_node_id],
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose claim");
+        assert_eq!(proposed.proposal.status, BrainProposalStatus::PendingReview);
+
+        let human = BrainActor {
+            actor_type: BrainActorType::User,
+            actor_id: "local-user".into(),
+        };
+        let resolved = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+            scope: scope.clone(),
+            proposal_id: proposed.proposal.proposal_id.clone(),
+            decision: BrainReviewDecision::Accept,
+            actor: human,
+            reason: Some("Evidence is enough for the proposal ledger.".into()),
+        })
+        .expect("resolve claim review");
+        assert_eq!(resolved.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(resolved.event.event_type, BrainEventKind::ReviewResolved);
+        assert_eq!(resolved.event.policy_result, "accept");
+
+        let persisted: BrainUpdateProposal =
+            read_json_artifact(&PathBuf::from(&resolved.proposal_path)).expect("read proposal");
+        assert_eq!(persisted.status, BrainProposalStatus::Accepted);
+
+        let health = handle_get_brain_health(GetBrainHealthRequest {
+            scope: scope.clone(),
+        })
+        .expect("get health after resolve");
+        assert_eq!(health.status, BrainHealthStatus::Clean);
+        assert_eq!(health.attention_count, 0);
+
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(20),
+        })
+        .expect("read events");
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::ReviewResolved));
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes after"),
+            nodes_before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges after"),
+            edges_before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki after"),
+            wiki_before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("memory/records.json"))
+                .unwrap_or_else(|_| "[]".into()),
+            memory_before
+        );
     }
 
     #[test]
