@@ -128,7 +128,8 @@ HyprDuck currently focuses on:
 - **Ollama** for local-first and privacy-sensitive workflows
 
 Provider settings are shared across parsing and knowledge workflows. Ollama does
-not require an API key.
+not require an API key. Task-specific model guidance and latency budgets live in
+[`docs/model-task-matrix.md`](docs/model-task-matrix.md).
 
 ---
 
