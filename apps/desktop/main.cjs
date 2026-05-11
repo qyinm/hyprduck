@@ -104,6 +104,37 @@ function registerIpcHandlers() {
           command: "check_readiness",
           payload: {},
         }).then((response) => response.data);
+      case "brain_health": {
+        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("get_brain_health", {
+          command: "get_brain_health",
+          payload: {
+            scope: {
+              workspace_id: workspaceId,
+              root_dir: ensureHyprduckApplicationSupportPath(),
+            },
+          },
+        }).then((response) => response.data);
+      }
+      case "resolve_brain_review": {
+        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("resolve_brain_review_item", {
+          command: "resolve_brain_review_item",
+          payload: {
+            scope: {
+              workspace_id: workspaceId,
+              root_dir: ensureHyprduckApplicationSupportPath(),
+            },
+            proposal_id: args.proposal_id,
+            decision: args.decision,
+            actor: {
+              actor_type: "user",
+              actor_id: "local-user",
+            },
+            reason: args.reason ?? null,
+          },
+        }).then((response) => response.data);
+      }
       case "get_models_for_provider":
         return getModelsForProvider(args.providerSlug);
       case "load_workspace_project":
