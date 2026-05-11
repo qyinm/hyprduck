@@ -1706,18 +1706,16 @@ fn collected_concepts_from_artifact(artifact: &ExtractionArtifact) -> CollectedC
             continue;
         }
         for page_label in &relation.page_labels {
-            let relation_evidence = relation
+            let evidence_refs = relation
                 .evidence_ids
                 .iter()
                 .filter_map(|id| artifact.evidence_refs.get(id))
+                .collect::<Vec<_>>();
+            let relation_evidence = evidence_refs
+                .iter()
                 .find(|evidence| &evidence.page_label == page_label)
-                .or_else(|| {
-                    relation
-                        .evidence_ids
-                        .iter()
-                        .filter_map(|id| artifact.evidence_refs.get(id))
-                        .next()
-                });
+                .copied()
+                .or_else(|| evidence_refs.first().copied());
             let Some(evidence) = relation_evidence else {
                 continue;
             };
