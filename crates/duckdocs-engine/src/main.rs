@@ -7190,12 +7190,155 @@ mod tests {
         let rematerialized_events =
             read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
                 .expect("read rematerialized events");
-        assert!(rematerialized_events
+        let accepted_event_ids = events
+            .events
+            .iter()
+            .filter(|event| event.event_type == BrainEventKind::MemoryAccepted)
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        let claim_event_ids = events
+            .events
+            .iter()
+            .filter(|event| event.event_type == BrainEventKind::ClaimProposed)
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        let rematerialized_event_ids = rematerialized_events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(accepted_event_ids
+            .iter()
+            .all(|event_id| rematerialized_event_ids.contains(event_id)));
+        assert!(claim_event_ids
+            .iter()
+            .all(|event_id| rematerialized_event_ids.contains(event_id)));
+    }
+
+    #[test]
+    fn brain_writer_bootstraps_missing_memory_and_events_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::remove_file(workspace_root.join("memory/records.json")).expect("remove memory file");
+        fs::remove_file(workspace_root.join("events/brain_events.jsonl")).expect("remove events");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Memory,
+            title: "Remember bootstrap behavior".into(),
+            body: "Missing memory and event files should be recreated safely.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "claude-code".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: Vec::new(),
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose memory with missing files");
+        assert_eq!(response.proposal.status, BrainProposalStatus::Accepted);
+
+        let memories = read_memory_records(&workspace_root).expect("read bootstrapped memories");
+        assert_eq!(memories.len(), 1);
+        assert!(workspace_root.join("events/brain_events.jsonl").exists());
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(10),
+        })
+        .expect("read bootstrapped events");
+        assert!(events
+            .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
-        assert!(rematerialized_events
+        assert!(!workspace_root.join("brain.lock").exists());
+    }
+
+    #[test]
+    fn brain_writer_deduplicates_concurrent_safe_proposals_by_fingerprint() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let proposal_request = ProposeBrainUpdateRequest {
+            scope,
+            kind: BrainProposalKind::Memory,
+            title: "Remember duplicate write".into(),
+            body: "The same agent memory should collapse to one memory record.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "claude-code".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        };
+
+        let handles = (0..8)
+            .map(|_| {
+                let request = proposal_request.clone();
+                std::thread::spawn(move || {
+                    handle_propose_brain_update(request).expect("concurrent safe proposal")
+                })
+            })
+            .collect::<Vec<_>>();
+        let responses = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join concurrent proposal"))
+            .collect::<Vec<_>>();
+        assert!(responses
             .iter()
-            .any(|event| event.event_type == BrainEventKind::ClaimProposed));
+            .all(|response| response.proposal.status == BrainProposalStatus::Accepted));
+
+        let memories = read_memory_records(&workspace_root).expect("read memory records");
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].title, "Remember duplicate write");
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events remain valid JSONL");
+        assert!(events.len() >= 16);
+        assert!(!workspace_root.join("brain.lock").exists());
     }
 
     #[test]
