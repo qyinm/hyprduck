@@ -135,6 +135,34 @@ function registerIpcHandlers() {
           },
         }).then((response) => response.data);
       }
+      case "propose_brain_update": {
+        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("propose_brain_update", {
+          command: "propose_brain_update",
+          payload: {
+            scope: {
+              workspace_id: workspaceId,
+              root_dir: ensureHyprduckApplicationSupportPath(),
+            },
+            kind: args.kind,
+            title: args.title,
+            body: args.body,
+            actor: {
+              actor_type: "user",
+              actor_id: "local-user",
+            },
+            target_node_id: args.target_node_id ?? null,
+            target_source_id: args.target_source_id ?? null,
+            relation_kind: args.relation_kind ?? null,
+            source_description: args.source_description ?? null,
+            source_user_context: args.source_user_context ?? null,
+            source_ingest_instruction: args.source_ingest_instruction ?? null,
+            source_refs: args.source_refs ?? [],
+            node_refs: args.node_refs ?? [],
+            evidence_refs: args.evidence_refs ?? [],
+          },
+        }).then((response) => response.data);
+      }
       case "get_models_for_provider":
         return getModelsForProvider(args.providerSlug);
       case "load_workspace_project":

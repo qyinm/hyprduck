@@ -53,6 +53,9 @@ export interface WorkspaceSourceBacking {
   pageCount: number;
   successCount: number;
   failedCount: number;
+  description: string;
+  userContext: string;
+  ingestInstruction: string;
   updatedAt: number;
   manifestPath?: string | null;
 }
@@ -68,6 +71,9 @@ export interface WorkspaceSourceSummary {
   page_count: number;
   success_count: number;
   failed_count: number;
+  description: string;
+  user_context: string;
+  ingest_instruction: string;
   updated_at: number;
 }
 
@@ -89,6 +95,22 @@ export interface WorkspaceAnswerProjectRequest {
   projectId: string;
   nodeId?: string | null;
   question: string;
+}
+
+export interface WorkspaceProposeBrainUpdateRequest {
+  workspaceId?: string | null;
+  kind: "memory" | "claim" | "link" | "observation" | "source_note";
+  title: string;
+  body: string;
+  targetNodeId?: string | null;
+  targetSourceId?: string | null;
+  relationKind?: WorkspaceRelationKind | null;
+  sourceDescription?: string | null;
+  sourceUserContext?: string | null;
+  sourceIngestInstruction?: string | null;
+  sourceRefs?: string[];
+  nodeRefs?: string[];
+  evidenceRefs?: string[];
 }
 
 export interface WorkspaceNodeDetail {

@@ -20,6 +20,7 @@ import type {
   WorkspaceApplyCorrectionRequest,
   WorkspaceEvidenceRef,
   WorkspaceProject,
+  WorkspaceProposeBrainUpdateRequest,
 } from "./types";
 
 interface GraphWorkspaceProps {
@@ -30,6 +31,7 @@ interface GraphWorkspaceProps {
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
+  onProposeBrainUpdate: (request: WorkspaceProposeBrainUpdateRequest) => Promise<void>;
 }
 
 export function GraphWorkspace(props: GraphWorkspaceProps) {
@@ -41,6 +43,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenArtifact,
     onApplyCorrection,
     onAskProject,
+    onProposeBrainUpdate,
   } = props;
   const projectNodes = project?.nodes ?? [];
   const nodeById = Object.fromEntries(projectNodes.map((node) => [node.id, node]));
@@ -88,6 +91,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
+  const [composerIntent, setComposerIntent] = useState<"ephemeral" | "durable">(
+    "ephemeral",
+  );
   const answer = liveAnswer ?? baseAnswer;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
@@ -105,6 +111,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const selectedSourcePath =
     selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
   const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
+  const selectedSourceId =
+    selectedNode?.source?.sourceId ?? selectedNode?.evidence[0]?.sourceId ?? null;
 
   useEffect(() => {
     setRenameValue(selectedNode?.canonicalName ?? "");
@@ -178,13 +186,50 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       return;
     }
 
+    const prompt = uiState.answerInput.trim();
+    if (!prompt) {
+      return;
+    }
+
     setAnswerPending(true);
     setAnswerError(null);
     try {
+      if (composerIntent === "durable") {
+        await onProposeBrainUpdate({
+          workspaceId: project.summary.projectId.startsWith("workspace:")
+            ? project.summary.projectId.replace(/^workspace:/, "")
+            : null,
+          kind: selectedSourceId ? "source_note" : "memory",
+          title: selectedSourceId ? "Source metadata note" : "Brain memory",
+          body: prompt,
+          targetNodeId: selectedNode?.node.id ?? null,
+          targetSourceId: selectedSourceId,
+          sourceDescription: selectedSourceId ? prompt : null,
+          sourceUserContext: selectedSourceId
+            ? `Added from graph composer while inspecting ${selectedNode?.node.label ?? "workspace"}.`
+            : null,
+          sourceIngestInstruction: null,
+          sourceRefs: selectedSourceId ? [selectedSourceId] : [],
+          nodeRefs: selectedNode?.node.id ? [selectedNode.node.id] : [],
+          evidenceRefs: selectedNode?.evidence.map((evidence) => evidence.id) ?? [],
+        });
+        setLiveAnswer({
+          status: "grounded",
+          text: "Saved to the brain.",
+          explanation: selectedSourceId
+            ? "Saved as source metadata for the selected source."
+            : "Saved as a durable memory record.",
+          citations: [],
+          relatedNodeIds: selectedNode?.node.id ? [selectedNode.node.id] : [],
+          suggestedActions: [],
+        });
+        dispatch({ type: "set_answer_input", value: "" });
+        return;
+      }
       const nextAnswer = await onAskProject({
         projectId: project.summary.projectId,
         nodeId: selectedNode?.node.id ?? null,
-        question: uiState.answerInput,
+        question: prompt,
       });
       setLiveAnswer(nextAnswer);
     } catch (error) {
@@ -245,9 +290,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           <GraphPromptComposer
             answerError={answerError}
             answerPending={answerPending}
+            intent={composerIntent}
             inputValue={uiState.answerInput}
             onAsk={() => void handleAskProject()}
             onAttachFiles={onOpenImport}
+            onIntentChange={setComposerIntent}
             onInputChange={(value) =>
               dispatch({
                 type: "set_answer_input",
@@ -394,6 +441,30 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                             : "Unavailable"}
                         </span>
                       </div>
+                      {selectedNode.source?.description ? (
+                        <div className="border-t border-border/70 pt-2">
+                          <span className="text-muted-foreground">Description</span>
+                          <p className="mt-1 leading-5 text-foreground">
+                            {selectedNode.source.description}
+                          </p>
+                        </div>
+                      ) : null}
+                      {selectedNode.source?.userContext ? (
+                        <div className="border-t border-border/70 pt-2">
+                          <span className="text-muted-foreground">User context</span>
+                          <p className="mt-1 leading-5 text-foreground">
+                            {selectedNode.source.userContext}
+                          </p>
+                        </div>
+                      ) : null}
+                      {selectedNode.source?.ingestInstruction ? (
+                        <div className="border-t border-border/70 pt-2">
+                          <span className="text-muted-foreground">Ingest instruction</span>
+                          <p className="mt-1 leading-5 text-foreground">
+                            {selectedNode.source.ingestInstruction}
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="grid gap-2">
                       <Button
@@ -777,9 +848,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 interface GraphPromptComposerProps {
   answerError: string | null;
   answerPending: boolean;
+  intent: "ephemeral" | "durable";
   inputValue: string;
   onAsk: () => void;
   onAttachFiles: () => void;
+  onIntentChange: (intent: "ephemeral" | "durable") => void;
   onInputChange: (value: string) => void;
 }
 
@@ -787,9 +860,11 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
   const {
     answerError,
     answerPending,
+    intent,
     inputValue,
     onAsk,
     onAttachFiles,
+    onIntentChange,
     onInputChange,
   } = props;
   const canAsk = inputValue.trim().length > 0 && !answerPending;
@@ -818,16 +893,31 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         aria-label="Ask knowledge graph"
         className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
         onChange={(event) => onInputChange(event.target.value)}
-        placeholder="Ask this knowledge graph..."
+        placeholder={
+          intent === "durable"
+            ? "Describe source metadata or memory..."
+            : "Ask this knowledge graph..."
+        }
         value={inputValue}
       />
+      <select
+        aria-label="Composer intent"
+        className="hidden h-9 rounded-xl border border-border bg-secondary/80 px-2 text-xs font-medium text-foreground outline-none sm:block"
+        onChange={(event) =>
+          onIntentChange(event.target.value === "durable" ? "durable" : "ephemeral")
+        }
+        value={intent}
+      >
+        <option value="ephemeral">Ask only</option>
+        <option value="durable">Add to brain</option>
+      </select>
       {answerPending ? (
         <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-          Answering...
+          {intent === "durable" ? "Saving..." : "Answering..."}
         </span>
       ) : null}
       <Button
-        aria-label="Ask"
+        aria-label={intent === "durable" ? "Save to brain" : "Ask"}
         className="size-10 rounded-xl"
         disabled={!canAsk}
         size="icon"
