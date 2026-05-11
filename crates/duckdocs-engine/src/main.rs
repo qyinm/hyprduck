@@ -844,6 +844,14 @@ fn handle_list_brain_review_items(
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    if !root.join("brain-manifest.json").exists() {
+        return Ok(GetBrainHealthResponseData {
+            status: BrainHealthStatus::Clean,
+            attention_count: 0,
+            review_items: Vec::new(),
+            recent_events: Vec::new(),
+        });
+    }
     run_brain_maintenance(&request.scope)?;
     let review_items = list_pending_brain_review_items(&root, &request.scope.workspace_id)?;
     let attention_count = review_items.len();
@@ -8451,6 +8459,23 @@ mod tests {
         assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
         assert_eq!(health.attention_count, 2);
         assert_eq!(health.review_items.len(), 2);
+    }
+
+    #[test]
+    fn brain_health_is_clean_for_empty_workspace() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let health =
+            handle_get_brain_health(GetBrainHealthRequest { scope }).expect("get brain health");
+
+        assert_eq!(health.status, BrainHealthStatus::Clean);
+        assert_eq!(health.attention_count, 0);
+        assert!(health.review_items.is_empty());
+        assert!(health.recent_events.is_empty());
     }
 
     #[test]

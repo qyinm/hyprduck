@@ -109,10 +109,7 @@ function registerIpcHandlers() {
         return runEngineCommand("get_brain_health", {
           command: "get_brain_health",
           payload: {
-            scope: {
-              workspace_id: workspaceId,
-              root_dir: ensureHyprduckApplicationSupportPath(),
-            },
+            scope: brainReadScope(workspaceId),
           },
         }).then((response) => response.data);
       }
@@ -121,15 +118,12 @@ function registerIpcHandlers() {
         return runEngineCommand("resolve_brain_review_item", {
           command: "resolve_brain_review_item",
           payload: {
-            scope: {
-              workspace_id: workspaceId,
-              root_dir: ensureHyprduckApplicationSupportPath(),
-            },
-            proposal_id: args.proposal_id,
+            scope: brainReadScope(workspaceId),
+            proposalId: args.proposal_id,
             decision: args.decision,
             actor: {
-              actor_type: "user",
-              actor_id: "local-user",
+              actorType: "user",
+              actorId: "local-user",
             },
             reason: args.reason ?? null,
           },
@@ -140,26 +134,23 @@ function registerIpcHandlers() {
         return runEngineCommand("propose_brain_update", {
           command: "propose_brain_update",
           payload: {
-            scope: {
-              workspace_id: workspaceId,
-              root_dir: ensureHyprduckApplicationSupportPath(),
-            },
+            scope: brainReadScope(workspaceId),
             kind: args.kind,
             title: args.title,
             body: args.body,
             actor: {
-              actor_type: "user",
-              actor_id: "local-user",
+              actorType: "user",
+              actorId: "local-user",
             },
-            target_node_id: args.target_node_id ?? null,
-            target_source_id: args.target_source_id ?? null,
-            relation_kind: args.relation_kind ?? null,
-            source_description: args.source_description ?? null,
-            source_user_context: args.source_user_context ?? null,
-            source_ingest_instruction: args.source_ingest_instruction ?? null,
-            source_refs: args.source_refs ?? [],
-            node_refs: args.node_refs ?? [],
-            evidence_refs: args.evidence_refs ?? [],
+            targetNodeId: args.target_node_id ?? null,
+            targetSourceId: args.target_source_id ?? null,
+            relationKind: args.relation_kind ?? null,
+            sourceDescription: args.source_description ?? null,
+            sourceUserContext: args.source_user_context ?? null,
+            sourceIngestInstruction: args.source_ingest_instruction ?? null,
+            sourceRefs: args.source_refs ?? [],
+            nodeRefs: args.node_refs ?? [],
+            evidenceRefs: args.evidence_refs ?? [],
           },
         }).then((response) => response.data);
       }
@@ -192,6 +183,13 @@ function registerIpcHandlers() {
         throw new Error(`unknown HyprDuck command: ${command}`);
     }
   });
+}
+
+function brainReadScope(workspaceId) {
+  return {
+    workspaceId,
+    rootDir: ensureHyprduckApplicationSupportPath(),
+  };
 }
 
 async function pickImportFile() {
