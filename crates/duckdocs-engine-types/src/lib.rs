@@ -327,6 +327,9 @@ pub enum BrainSearchResultKind {
     Memory,
     WikiPage,
     Node,
+    Entity,
+    Claim,
+    Relation,
     Evidence,
     Event,
 }
@@ -434,6 +437,12 @@ pub struct BrainContextPack {
     pub sources: Vec<SourceRecord>,
     #[serde(default)]
     pub memories: Vec<MemoryRecord>,
+    #[serde(default)]
+    pub entities: Vec<EntityRecord>,
+    #[serde(default)]
+    pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub relations: Vec<BrainRelationRecord>,
     #[serde(default)]
     pub evidence: Vec<EvidenceRef>,
     #[serde(default)]
