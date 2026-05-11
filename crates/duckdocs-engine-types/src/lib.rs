@@ -22,6 +22,12 @@ pub enum EngineCommand {
     LoadProject,
     ApplyCorrection,
     AnswerProject,
+    SearchBrain,
+    ReadSource,
+    ReadWikiPage,
+    ReadNode,
+    ReadRecentEvents,
+    GetContextPack,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -282,6 +288,148 @@ pub struct AnswerProjectResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainReadScope {
+    pub workspace_id: WorkspaceId,
+    #[serde(default)]
+    pub root_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchBrainRequest {
+    pub scope: BrainReadScope,
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainSearchResultKind {
+    Source,
+    WikiPage,
+    Node,
+    Evidence,
+    Event,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainSearchResult {
+    pub kind: BrainSearchResultKind,
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub score: usize,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchBrainResponseData {
+    pub results: Vec<BrainSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSourceRequest {
+    pub scope: BrainReadScope,
+    pub source_id: SourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSourceResponseData {
+    pub source: SourceRecord,
+    #[serde(default)]
+    pub wiki_page: Option<WikiPage>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadWikiPageRequest {
+    pub scope: BrainReadScope,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadWikiPageResponseData {
+    pub page: WikiPage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadNodeRequest {
+    pub scope: BrainReadScope,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadNodeResponseData {
+    pub node: BrainNodeRecord,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub relations: Vec<BrainRelationRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadRecentEventsRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadRecentEventsResponseData {
+    pub events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetContextPackRequest {
+    pub scope: BrainReadScope,
+    pub query: String,
+    #[serde(default)]
+    pub budget: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainContextPack {
+    pub workspace_id: WorkspaceId,
+    pub query: String,
+    pub token_budget: usize,
+    pub summary: String,
+    #[serde(default)]
+    pub wiki_pages: Vec<WikiPage>,
+    #[serde(default)]
+    pub nodes: Vec<BrainNodeRecord>,
+    #[serde(default)]
+    pub sources: Vec<SourceRecord>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub recent_events: Vec<BrainEvent>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetContextPackResponseData {
+    pub context_pack: BrainContextPack,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
     pub label: String,
@@ -421,6 +569,12 @@ pub enum EngineRequest {
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),
     AnswerProject(AnswerProjectRequest),
+    SearchBrain(SearchBrainRequest),
+    ReadSource(ReadSourceRequest),
+    ReadWikiPage(ReadWikiPageRequest),
+    ReadNode(ReadNodeRequest),
+    ReadRecentEvents(ReadRecentEventsRequest),
+    GetContextPack(GetContextPackRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
@@ -769,6 +923,68 @@ mod tests {
             serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::AnswerProject);
         assert_eq!(decoded.data.answer.status, AnswerStatus::Grounded);
+    }
+
+    #[test]
+    fn read_only_brain_requests_round_trip() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: Some("/tmp/HyprDuck".into()),
+        };
+        let requests = vec![
+            EngineRequest::SearchBrain(SearchBrainRequest {
+                scope: scope.clone(),
+                query: "agent context".into(),
+                limit: Some(5),
+            }),
+            EngineRequest::ReadSource(ReadSourceRequest {
+                scope: scope.clone(),
+                source_id: "source-123".into(),
+            }),
+            EngineRequest::ReadWikiPage(ReadWikiPageRequest {
+                scope: scope.clone(),
+                path: "wiki/index.md".into(),
+            }),
+            EngineRequest::ReadNode(ReadNodeRequest {
+                scope: scope.clone(),
+                node_id: "concept-agent-context".into(),
+            }),
+            EngineRequest::ReadRecentEvents(ReadRecentEventsRequest {
+                scope: scope.clone(),
+                limit: Some(3),
+            }),
+            EngineRequest::GetContextPack(GetContextPackRequest {
+                scope,
+                query: "agent context".into(),
+                budget: Some(8000),
+            }),
+        ];
+        for request in requests {
+            let json = serde_json::to_string(&request).unwrap();
+            let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, request);
+        }
+
+        let response = EngineSuccess::new(
+            EngineCommand::SearchBrain,
+            SearchBrainResponseData {
+                results: vec![BrainSearchResult {
+                    kind: BrainSearchResultKind::WikiPage,
+                    id: "wiki-index".into(),
+                    title: "Brain Index".into(),
+                    path: Some("wiki/index.md".into()),
+                    score: 2,
+                    snippet: "Agent context".into(),
+                }],
+            },
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<SearchBrainResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::SearchBrain);
+        assert_eq!(
+            decoded.data.results[0].kind,
+            BrainSearchResultKind::WikiPage
+        );
     }
 
     #[test]

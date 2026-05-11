@@ -9,12 +9,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
-    ApplyCorrectionResponseData, CheckReadinessRequest, CompileProjectRequest,
+    ApplyCorrectionResponseData, BrainContextPack, CheckReadinessRequest, CompileProjectRequest,
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
     LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
-    ValidateProviderRequest, ValidateProviderResponseData,
+    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
+    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
+    SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -29,6 +31,18 @@ pub trait EngineClient {
     fn load_project(&self, project_id: Option<String>) -> Result<LoadProjectResponseData>;
     fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject>;
     fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
+    fn search_brain(&self, request: SearchBrainRequest) -> Result<SearchBrainResponseData>;
+    fn read_source(&self, request: ReadSourceRequest) -> Result<ReadSourceResponseData>;
+    fn read_wiki_page(&self, request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData>;
+    fn read_node(&self, request: ReadNodeRequest) -> Result<ReadNodeResponseData>;
+    fn read_recent_events(
+        &self,
+        request: ReadRecentEventsRequest,
+    ) -> Result<ReadRecentEventsResponseData>;
+    fn get_context_pack(
+        &self,
+        request: duckdocs_engine_types::GetContextPackRequest,
+    ) -> Result<BrainContextPack>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
     fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
     fn validate_provider(
@@ -236,6 +250,64 @@ impl EngineClient for SubprocessEngineClient {
             None,
         )?;
         Ok(response.answer)
+    }
+
+    fn search_brain(&self, request: SearchBrainRequest) -> Result<SearchBrainResponseData> {
+        self.run_command::<SearchBrainResponseData, SearchBrainResponseData>(
+            EngineRequest::SearchBrain(request),
+            EngineCommand::SearchBrain,
+            None,
+        )
+    }
+
+    fn read_source(&self, request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
+        self.run_command::<ReadSourceResponseData, ReadSourceResponseData>(
+            EngineRequest::ReadSource(request),
+            EngineCommand::ReadSource,
+            None,
+        )
+    }
+
+    fn read_wiki_page(&self, request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
+        self.run_command::<ReadWikiPageResponseData, ReadWikiPageResponseData>(
+            EngineRequest::ReadWikiPage(request),
+            EngineCommand::ReadWikiPage,
+            None,
+        )
+    }
+
+    fn read_node(&self, request: ReadNodeRequest) -> Result<ReadNodeResponseData> {
+        self.run_command::<ReadNodeResponseData, ReadNodeResponseData>(
+            EngineRequest::ReadNode(request),
+            EngineCommand::ReadNode,
+            None,
+        )
+    }
+
+    fn read_recent_events(
+        &self,
+        request: ReadRecentEventsRequest,
+    ) -> Result<ReadRecentEventsResponseData> {
+        self.run_command::<ReadRecentEventsResponseData, ReadRecentEventsResponseData>(
+            EngineRequest::ReadRecentEvents(request),
+            EngineCommand::ReadRecentEvents,
+            None,
+        )
+    }
+
+    fn get_context_pack(
+        &self,
+        request: duckdocs_engine_types::GetContextPackRequest,
+    ) -> Result<BrainContextPack> {
+        let response = self.run_command::<
+            duckdocs_engine_types::GetContextPackResponseData,
+            duckdocs_engine_types::GetContextPackResponseData,
+        >(
+            EngineRequest::GetContextPack(request),
+            EngineCommand::GetContextPack,
+            None,
+        )?;
+        Ok(response.context_pack)
     }
 
     fn load_config(&self) -> Result<EngineConfigPayload> {
