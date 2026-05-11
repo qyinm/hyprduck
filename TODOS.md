@@ -9,10 +9,9 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Model-task matrix and latency budget
-2. Read-only MCP v0
-3. Proposed-write MCP and policy engine
-4. Team/company brain governance
+1. Read-only MCP v0
+2. Proposed-write MCP and policy engine
+3. Team/company brain governance
 ```
 
 ---
@@ -111,7 +110,7 @@ Current roadmap order:
 
 ---
 
-## P1 - Model-task matrix and latency budget
+## P1 - Model-task matrix and latency budget - Done
 
 **What:** Measure and document which hosted and local models are good enough for parse, extraction, merge, review, and answer workloads.
 
@@ -126,10 +125,10 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] Each major task has a recommended default model path.
-- [ ] Local model limits are explicit.
-- [ ] The benchmark reports latency and quality together.
-- [ ] Settings copy can warn users when a model is likely too weak for a task.
+- [x] Each major task has a recommended default model path.
+- [x] Local model limits are explicit.
+- [x] The benchmark reports latency and quality together.
+- [x] Settings copy can warn users when a model is likely too weak for a task.
 
 **Effort:** M
 **Priority:** P1
