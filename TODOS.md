@@ -4,60 +4,19 @@
 
 HyprDuck is moving from a document parser into a local-first brain repo and trust console for AI agents.
 
-The parser remains the wedge, but the next product milestone is not "more chat" or "open MCP immediately." The next milestone is making the materialized brain semantically reliable: structured extraction, evidence-backed claims, typed relations, retrieval quality, evaluation, and reviewable save-back.
+The parser remains the wedge, but the next product milestone is not "more chat" or "open MCP immediately." The next milestone is making the materialized brain measurable and retrievable: golden-corpus evaluation, local retrieval quality, context-pack hardening, and reviewable save-back.
 
-Roadmap order:
+Current roadmap order:
 
 ```text
-1. Structured extraction artifact
-2. Golden corpus and eval harness
-3. Local retrieval baseline and context-pack hardening
-4. Reviewable save-back and correction persistence
+1. Golden corpus and eval harness
+2. Local retrieval baseline and context-pack hardening
+3. Reviewable save-back and correction persistence
+4. Model-task matrix and latency budget
 5. Read-only MCP v0
 6. Proposed-write MCP and policy engine
 7. Team/company brain governance
 ```
-
----
-
-## P0 - Structured extraction artifact
-
-**What:** Define and persist a first-class `StructuredExtractionArtifact` for each imported source.
-
-The artifact should contain:
-
-- entities
-- topics
-- claims
-- typed relations
-- evidence refs
-- source/page refs
-- confidence
-- provenance
-- extraction model or extractor name
-- created timestamp
-
-**Why:** The current brain repo, graph records, claims, review items, and maintenance loop are structurally present, but the semantic extraction path is still too heuristic. External agent access should not be opened until entities, claims, and relations have a stable evidence-backed contract.
-
-**Scope:**
-
-- Add the artifact type to `crates/duckdocs-knowledge`.
-- Re-export the contract through `crates/duckdocs-engine-types` if the desktop or CLI needs it.
-- Write `artifacts/<source_id>/extraction.json` during source compile/materialization.
-- Keep the current line/concept heuristic as a fallback extractor, not the canonical brain extraction contract.
-- Require every claim and relation to carry source/evidence provenance.
-
-**Acceptance:**
-
-- [ ] Every imported source can produce an extraction artifact.
-- [ ] The artifact includes entities, claims, relations, evidence refs, confidence, and provenance.
-- [ ] Current heuristic extraction is represented as `extractor=heuristic` or equivalent.
-- [ ] Missing evidence prevents a claim/relation from becoming trusted brain context.
-- [ ] Unit tests verify artifact shape and source/evidence round trip.
-
-**Effort:** M
-**Priority:** P0
-**Depends on:** Existing source records, evidence refs, brain materialization
 
 ---
 
@@ -287,3 +246,10 @@ The artifact should contain:
 - [x] Brain review health queue
 - [x] Brain maintenance lint loop
 - [x] README and repository metadata aligned with agent-brain positioning
+- [x] Structured extraction artifact
+  - Added `StructuredExtractionArtifact` and nested entity/topic/claim/relation/page-ref contracts.
+  - Re-exported the contract through `duckdocs-engine-types`.
+  - Persisted per-source `artifacts/<source_id>/extraction.json`.
+  - Marked the current extractor as `extractor=heuristic`.
+  - Prevented evidence-free claims/relations from becoming trusted brain context.
+  - Covered artifact shape and source/evidence round trip in unit tests.
