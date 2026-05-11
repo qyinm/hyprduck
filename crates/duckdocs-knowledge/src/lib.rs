@@ -303,6 +303,10 @@ pub enum BrainEventKind {
     WikiMaterialized,
     CorrectionApplied,
     MemoryProposed,
+    ClaimProposed,
+    LinkProposed,
+    ObservationAppended,
+    SourceNoteProposed,
     MemoryAccepted,
     ReviewCreated,
     ReviewResolved,
@@ -468,6 +472,50 @@ pub struct BrainRepoSnapshot {
     pub claims: Vec<ClaimRecord>,
     #[serde(default)]
     pub events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainProposalKind {
+    Memory,
+    Claim,
+    Link,
+    Observation,
+    SourceNote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainProposalStatus {
+    PendingReview,
+    Accepted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainUpdateProposal {
+    pub proposal_id: String,
+    pub workspace_id: String,
+    pub kind: BrainProposalKind,
+    pub status: BrainProposalStatus,
+    pub actor: BrainActor,
+    pub scope: BrainScope,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub target_source_id: Option<String>,
+    #[serde(default)]
+    pub relation_kind: Option<BrainRelationKind>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub created_at: u64,
 }
 
 #[cfg(test)]

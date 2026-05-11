@@ -6,12 +6,12 @@ use uuid::Uuid;
 
 pub use duckdocs_knowledge::{
     AnswerResponse, AnswerStatus, BrainActor, BrainActorType, BrainEvent, BrainEventKind,
-    BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
-    BrainScope, ClaimRecord, CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef,
-    GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject,
-    MemoryRecord, ProjectOverview, ProjectStatus, RelationEdgeDetail, RelationEdgeSummary,
-    RelationKind, SourceBacking, SourceRecord, SuggestedAction, SuggestedActionKind, WikiPage,
-    WorkspaceCorrection,
+    BrainNodeKind, BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainUpdateProposal, ClaimRecord,
+    CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, ProjectOverview,
+    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
+    SourceRecord, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +28,7 @@ pub enum EngineCommand {
     ReadNode,
     ReadRecentEvents,
     GetContextPack,
+    ProposeBrainUpdate,
     LoadConfig,
     SaveConfig,
     ValidateProvider,
@@ -430,6 +431,36 @@ pub struct GetContextPackResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeBrainUpdateRequest {
+    pub scope: BrainReadScope,
+    pub kind: BrainProposalKind,
+    pub title: String,
+    pub body: String,
+    pub actor: BrainActor,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub target_source_id: Option<SourceId>,
+    #[serde(default)]
+    pub relation_kind: Option<BrainRelationKind>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeBrainUpdateResponseData {
+    pub proposal: BrainUpdateProposal,
+    pub event: BrainEvent,
+    pub proposal_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub id: String,
     pub label: String,
@@ -575,6 +606,7 @@ pub enum EngineRequest {
     ReadNode(ReadNodeRequest),
     ReadRecentEvents(ReadRecentEventsRequest),
     GetContextPack(GetContextPackRequest),
+    ProposeBrainUpdate(ProposeBrainUpdateRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
     ValidateProvider(ValidateProviderRequest),
@@ -926,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_brain_requests_round_trip() {
+    fn brain_api_requests_round_trip() {
         let scope = BrainReadScope {
             workspace_id: "default".into(),
             root_dir: Some("/tmp/HyprDuck".into()),
@@ -954,9 +986,25 @@ mod tests {
                 limit: Some(3),
             }),
             EngineRequest::GetContextPack(GetContextPackRequest {
-                scope,
+                scope: scope.clone(),
                 query: "agent context".into(),
                 budget: Some(8000),
+            }),
+            EngineRequest::ProposeBrainUpdate(ProposeBrainUpdateRequest {
+                scope,
+                kind: BrainProposalKind::Memory,
+                title: "Remember project decision".into(),
+                body: "The agent should retain this decision for later sessions.".into(),
+                actor: BrainActor {
+                    actor_type: BrainActorType::Agent,
+                    actor_id: "duckdocs-cli".into(),
+                },
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: vec![],
+                node_refs: vec!["project-hyprduck".into()],
+                evidence_refs: vec![],
             }),
         ];
         for request in requests {

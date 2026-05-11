@@ -7,8 +7,9 @@ use anyhow::Result;
 use cli::{Cli, Commands};
 use duckdocs_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    BrainReadScope, DocumentFormat, GetContextPackRequest, ParseInput, ParseOptions,
-    ParseOutputTarget, ParseProgress, ParseRequest, SearchBrainRequest,
+    BrainActor, BrainActorType, BrainReadScope, DocumentFormat, GetContextPackRequest, ParseInput,
+    ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest, ProposeBrainUpdateRequest,
+    SearchBrainRequest,
 };
 
 fn main() -> Result<()> {
@@ -103,6 +104,44 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             println!("sources: {}", pack.sources.len());
             println!("evidence: {}", pack.evidence.len());
             println!("recent-events: {}", pack.recent_events.len());
+        }
+        cli::BrainCommand::ProposeUpdate {
+            workspace,
+            root_dir,
+            kind,
+            title,
+            body,
+            actor,
+            target_node_id,
+            target_source_id,
+            relation_kind,
+            source_refs,
+            node_refs,
+            evidence_refs,
+        } => {
+            let response = client.propose_brain_update(ProposeBrainUpdateRequest {
+                scope: BrainReadScope {
+                    workspace_id: workspace,
+                    root_dir,
+                },
+                kind,
+                title,
+                body,
+                actor: BrainActor {
+                    actor_type: BrainActorType::Agent,
+                    actor_id: actor,
+                },
+                target_node_id,
+                target_source_id,
+                relation_kind,
+                source_refs,
+                node_refs,
+                evidence_refs,
+            })?;
+            println!("proposal: {}", response.proposal.proposal_id);
+            println!("event: {}", response.event.event_id);
+            println!("status: {:?}", response.proposal.status);
+            println!("path: {}", response.proposal_path);
         }
     }
     Ok(())
