@@ -5007,6 +5007,35 @@ mod tests {
         }
     }
 
+    fn multi_source_fixture_pages(temp: &tempfile::TempDir, source_id: &str) -> Vec<PageArtifact> {
+        (0..2)
+            .map(|index| PageArtifact {
+                index,
+                label: format!("Page {}", index + 1),
+                image_path: Some(
+                    temp.path()
+                        .join(format!(
+                            "default/artifacts/{source_id}/images/page-{}.png",
+                            index + 1
+                        ))
+                        .display()
+                        .to_string(),
+                ),
+                markdown_path: Some(
+                    temp.path()
+                        .join(format!(
+                            "default/artifacts/{source_id}/pages/page-{}.md",
+                            index + 1
+                        ))
+                        .display()
+                        .to_string(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            })
+            .collect()
+    }
+
     fn rename_first_concept_for_test(
         project: &mut KnowledgeProject,
         canonical_name: &str,
@@ -5326,6 +5355,89 @@ mod tests {
             loaded_source_project.summary.project_id,
             project_a.summary.project_id
         );
+    }
+
+    #[test]
+    fn workspace_aggregate_smoke_uses_real_multi_source_markdown_fixtures() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("multisource");
+        let fixture_a_path = fixture_root.join("agent-context.md");
+        let fixture_b_path = fixture_root.join("review-notes.md");
+        let markdown_a = fs::read_to_string(&fixture_a_path).expect("read agent context fixture");
+        let markdown_b = fs::read_to_string(&fixture_b_path).expect("read review notes fixture");
+        let mut manifest_a =
+            sample_manifest_with_source(&temp, "source-agent-context", "agent-context", 10);
+        let mut manifest_b =
+            sample_manifest_with_source(&temp, "source-review-notes", "review-notes", 20);
+        manifest_a.markdown_path = fixture_a_path.display().to_string();
+        manifest_b.markdown_path = fixture_b_path.display().to_string();
+        manifest_a.pages = multi_source_fixture_pages(&temp, "source-agent-context");
+        manifest_b.pages = multi_source_fixture_pages(&temp, "source-review-notes");
+
+        for (markdown, fixture_path, manifest) in [
+            (&markdown_a, &fixture_a_path, &manifest_a),
+            (&markdown_b, &fixture_b_path, &manifest_b),
+        ] {
+            let request = CompileProjectRequest {
+                source_markdown_path: fixture_path.display().to_string(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(manifest.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+            };
+            let project = compile_knowledge_project(&request, markdown, Some(manifest));
+            store
+                .save_project(&project, &request, Some(manifest))
+                .expect("save source-backed fixture project");
+        }
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+
+        assert_eq!(aggregate.summary.document_count, 2);
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-agent-context"));
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-review-notes"));
+
+        let shared = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| {
+                normalize_key(&detail.canonical_name) == "shared-team-context-layer-keeps-agents"
+            })
+            .expect("shared team context layer concept");
+        for source_id in ["source-agent-context", "source-review-notes"] {
+            assert!(shared
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some(source_id)));
+        }
+        assert!(shared.evidence.iter().any(|evidence| {
+            evidence
+                .markdown_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("page-1.md"))
+                && evidence
+                    .image_path
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("page-1.png"))
+        }));
+        assert!(aggregate.edges.iter().any(|edge| {
+            edge.kind == RelationKind::RelatedTo
+                && (edge.source_node_id == shared.node.id || edge.target_node_id == shared.node.id)
+                && edge.evidence_count > 0
+        }));
     }
 
     #[test]
