@@ -10,19 +10,21 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
-    ApplyCorrectionRequest, ApplyCorrectionResponseData, CompileProjectRequest,
-    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
-    EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
-    EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, EvidenceRef, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, OutputAsset, PageArtifact,
-    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData,
-    ProviderOption, ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType, BrainEvent,
+    BrainEventKind, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
+    BrainRepoSnapshot, BrainScope, CompileProjectRequest, CompileProjectResponseData,
+    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload,
+    EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest,
+    EngineRuntimeResponse, EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject, LoadConfigRequest,
+    LoadProjectRequest, LoadProjectResponseData, OutputAsset, PageArtifact, ParseEvent, ParseInput,
+    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
+    ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
+    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
-    SourceArtifactManifest, SourceBacking, SourceId, SourceSummary, SuggestedAction,
+    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceSummary, SuggestedAction,
     SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
-    WorkspaceCorrection, WorkspaceId,
+    WikiPage, WorkspaceCorrection, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
@@ -480,6 +482,9 @@ fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorre
         .ok_or_else(|| anyhow!("project {} was not found", request.project_id))?;
     apply_correction(&mut project, &request)?;
     store.update_project(&project)?;
+    if let Some(workspace_id) = store.load_workspace_id_for_project(&project.summary.project_id)? {
+        store.materialize_workspace_brain_repo(&workspace_id)?;
+    }
     Ok(ApplyCorrectionResponseData { project })
 }
 
@@ -586,6 +591,7 @@ fn handle_apply_workspace_correction(
         source_node_ids: replayed_source_node_ids.into_iter().collect(),
         created_at: unix_timestamp_seconds(),
     })?;
+    store.materialize_workspace_brain_repo(workspace_id)?;
 
     let project = store
         .load_workspace_project(workspace_id)?
@@ -1575,6 +1581,456 @@ fn source_backing_from_summary(summary: &SourceSummary, manifest_path: &str) -> 
         updated_at: summary.updated_at,
         manifest_path: Some(manifest_path.to_string()),
     }
+}
+
+fn build_brain_repo_snapshot(
+    workspace_id: &str,
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+    aggregate: &KnowledgeProject,
+    corrections: &[WorkspaceCorrection],
+) -> BrainRepoSnapshot {
+    let generated_at = unix_timestamp_seconds();
+    let sources = rows
+        .iter()
+        .map(|(row, _)| SourceRecord {
+            source_id: row.summary.source_id.clone(),
+            workspace_id: row.summary.workspace_id.clone(),
+            original_path: row.summary.original_path.clone(),
+            source_path: row.summary.source_path.clone(),
+            markdown_path: row.summary.markdown_path.clone(),
+            format: document_format_slug(&row.summary.format).into(),
+            status: ingest_status_slug(&row.summary.status).into(),
+            page_count: row.summary.page_count,
+            updated_at: row.summary.updated_at,
+        })
+        .collect::<Vec<_>>();
+
+    let mut evidence_by_id = BTreeMap::<String, EvidenceRef>::new();
+    for detail in aggregate.details_by_node_id.values() {
+        for evidence in &detail.evidence {
+            evidence_by_id.insert(evidence.id.clone(), evidence.clone());
+        }
+    }
+    for detail in aggregate.edge_details_by_id.values() {
+        for evidence in &detail.evidence {
+            evidence_by_id.insert(evidence.id.clone(), evidence.clone());
+        }
+    }
+
+    let nodes = aggregate
+        .details_by_node_id
+        .values()
+        .map(|detail| {
+            let evidence_ids = detail
+                .evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let source_ids = detail
+                .evidence
+                .iter()
+                .filter_map(|evidence| evidence.source_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            BrainNodeRecord {
+                node_id: detail.node.id.clone(),
+                kind: brain_node_kind_for_graph_kind(detail.node.kind),
+                label: detail.canonical_name.clone(),
+                scope: BrainScope::Project,
+                aliases: detail.aliases.clone(),
+                evidence_ids,
+                source_ids,
+                confidence: detail.node.confidence,
+                updated_at: generated_at,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let relations = aggregate
+        .edges
+        .iter()
+        .map(|edge| {
+            let evidence_ids = aggregate
+                .edge_details_by_id
+                .get(&edge.id)
+                .map(|detail| {
+                    detail
+                        .evidence
+                        .iter()
+                        .map(|evidence| evidence.id.clone())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            BrainRelationRecord {
+                relation_id: edge.id.clone(),
+                kind: brain_relation_kind_for_relation_kind(edge.kind),
+                source_node_id: edge.source_node_id.clone(),
+                target_node_id: edge.target_node_id.clone(),
+                label: edge.label.clone(),
+                evidence_ids,
+                confidence: edge.confidence,
+                updated_at: generated_at,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let wiki_pages = build_materialized_wiki_pages(workspace_id, &sources, &nodes, generated_at);
+    let mut events = vec![
+        BrainEvent {
+            event_id: format!("evt-{workspace_id}-graph-materialized-{generated_at}"),
+            workspace_id: workspace_id.to_string(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-engine".into(),
+            },
+            source_refs: sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect::<Vec<_>>(),
+            node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
+            relation_refs: relations
+                .iter()
+                .map(|relation| relation.relation_id.clone())
+                .collect(),
+            evidence_refs: evidence_by_id.keys().cloned().collect(),
+            payload_json: format!(
+                "{{\"nodeCount\":{},\"relationCount\":{},\"sourceCount\":{}}}",
+                nodes.len(),
+                relations.len(),
+                sources.len()
+            ),
+            confidence: None,
+            policy_result: "materialized".into(),
+            created_at: generated_at,
+        },
+        BrainEvent {
+            event_id: format!("evt-{workspace_id}-wiki-materialized-{generated_at}"),
+            workspace_id: workspace_id.to_string(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::WikiMaterialized,
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-engine".into(),
+            },
+            source_refs: Vec::new(),
+            node_refs: wiki_pages
+                .iter()
+                .flat_map(|page| page.node_refs.clone())
+                .collect(),
+            relation_refs: Vec::new(),
+            evidence_refs: wiki_pages
+                .iter()
+                .flat_map(|page| page.evidence_refs.clone())
+                .collect(),
+            payload_json: format!("{{\"pageCount\":{}}}", wiki_pages.len()),
+            confidence: None,
+            policy_result: "materialized".into(),
+            created_at: generated_at,
+        },
+    ];
+    events.extend(corrections.iter().map(|correction| {
+        BrainEvent {
+            event_id: format!("evt-{}", correction.id),
+            workspace_id: correction.workspace_id.clone(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::CorrectionApplied,
+            actor: BrainActor {
+                actor_type: BrainActorType::User,
+                actor_id: "local-user".into(),
+            },
+            source_refs: Vec::new(),
+            node_refs: std::iter::once(correction.aggregate_node_id.clone())
+                .chain(correction.target_node_id.clone())
+                .chain(correction.source_node_ids.clone())
+                .collect(),
+            relation_refs: Vec::new(),
+            evidence_refs: correction.evidence_ids.clone(),
+            payload_json: format!(
+                "{{\"kind\":\"{}\",\"value\":{}}}",
+                correction_kind_slug(&correction.kind),
+                correction
+                    .value
+                    .as_ref()
+                    .map(|value| json!(value).to_string())
+                    .unwrap_or_else(|| "null".into())
+            ),
+            confidence: None,
+            policy_result: "applied".into(),
+            created_at: correction.created_at,
+        }
+    }));
+
+    BrainRepoSnapshot {
+        workspace_id: workspace_id.to_string(),
+        generated_at,
+        sources,
+        nodes,
+        relations,
+        evidence: evidence_by_id.into_values().collect(),
+        memories: Vec::new(),
+        wiki_pages,
+        entities: Vec::new(),
+        claims: Vec::new(),
+        events,
+    }
+}
+
+fn brain_node_kind_for_graph_kind(kind: GraphNodeKind) -> BrainNodeKind {
+    match kind {
+        GraphNodeKind::Source | GraphNodeKind::Document => BrainNodeKind::Source,
+        GraphNodeKind::Page => BrainNodeKind::Topic,
+        GraphNodeKind::Concept => BrainNodeKind::Concept,
+    }
+}
+
+fn brain_relation_kind_for_relation_kind(kind: RelationKind) -> BrainRelationKind {
+    match kind {
+        RelationKind::SourceDocument => BrainRelationKind::DerivedFrom,
+        RelationKind::RelatedTo => BrainRelationKind::RelatedTo,
+    }
+}
+
+fn build_materialized_wiki_pages(
+    workspace_id: &str,
+    sources: &[SourceRecord],
+    nodes: &[BrainNodeRecord],
+    generated_at: u64,
+) -> Vec<WikiPage> {
+    let mut pages = vec![
+        WikiPage {
+            page_id: "wiki-overview".into(),
+            workspace_id: workspace_id.into(),
+            path: "wiki/overview.md".into(),
+            title: "Workspace Overview".into(),
+            body: format!(
+                "# Workspace Overview\n\n- Workspace: `{workspace_id}`\n- Sources: {}\n- Nodes: {}\n",
+                sources.len(),
+                nodes.len()
+            ),
+            node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
+            source_refs: sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            evidence_refs: nodes
+                .iter()
+                .flat_map(|node| node.evidence_ids.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            updated_at: generated_at,
+        },
+        WikiPage {
+            page_id: "wiki-index".into(),
+            workspace_id: workspace_id.into(),
+            path: "wiki/index.md".into(),
+            title: "Brain Index".into(),
+            body: String::new(),
+            node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
+            source_refs: sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            evidence_refs: Vec::new(),
+            updated_at: generated_at,
+        },
+        WikiPage {
+            page_id: "wiki-log".into(),
+            workspace_id: workspace_id.into(),
+            path: "wiki/log.md".into(),
+            title: "Brain Log".into(),
+            body: String::new(),
+            node_refs: Vec::new(),
+            source_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            updated_at: generated_at,
+        },
+    ];
+    pages.extend(sources.iter().map(|source| WikiPage {
+        page_id: format!("wiki-source-{}", source.source_id),
+        workspace_id: workspace_id.into(),
+        path: format!("wiki/sources/{}.md", sanitize_name(&source.source_id)),
+        title: source.source_id.clone(),
+        body: format!(
+            "# {}\n\n- Original: `{}`\n- Source: `{}`\n- Markdown: `{}`\n- Status: `{}`\n",
+            source.source_id,
+            source.original_path,
+            source.source_path,
+            source.markdown_path,
+            source.status
+        ),
+        node_refs: Vec::new(),
+        source_refs: vec![source.source_id.clone()],
+        evidence_refs: Vec::new(),
+        updated_at: generated_at,
+    }));
+    pages.extend(
+        nodes
+            .iter()
+            .filter(|node| node.kind == BrainNodeKind::Concept)
+            .map(|node| WikiPage {
+                page_id: format!("wiki-topic-{}", node.node_id),
+                workspace_id: workspace_id.into(),
+                path: format!("wiki/topics/{}.md", sanitize_name(&node.node_id)),
+                title: node.label.clone(),
+                body: format!(
+                    "# {}\n\n- Node: `{}`\n- Sources: {}\n- Evidence refs: {}\n",
+                    node.label,
+                    node.node_id,
+                    node.source_ids.join(", "),
+                    node.evidence_ids.len()
+                ),
+                node_refs: vec![node.node_id.clone()],
+                source_refs: node.source_ids.clone(),
+                evidence_refs: node.evidence_ids.clone(),
+                updated_at: generated_at,
+            }),
+    );
+    pages
+}
+
+fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
+    let wiki_root = root.join("wiki");
+    for dir in [
+        root.join("graph"),
+        root.join("events"),
+        root.join("memory"),
+        root.join("reviews/proposed-updates"),
+        root.join("reviews/lint-reports"),
+        wiki_root.join("sources"),
+        wiki_root.join("entities"),
+        wiki_root.join("topics"),
+        wiki_root.join("claims"),
+        wiki_root.join("questions"),
+    ] {
+        fs::create_dir_all(&dir).with_context(|| format!("failed creating {}", dir.display()))?;
+    }
+
+    write_json_pretty(&root.join("brain-manifest.json"), snapshot)?;
+    write_json_pretty(&root.join("graph/nodes.json"), &snapshot.nodes)?;
+    write_json_pretty(&root.join("graph/edges.json"), &snapshot.relations)?;
+    write_json_pretty(&root.join("graph/evidence.json"), &snapshot.evidence)?;
+    write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
+
+    for page in &snapshot.wiki_pages {
+        let path = root.join(&page.path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed creating {}", parent.display()))?;
+        }
+        fs::write(&path, materialized_wiki_page_body(page, snapshot))
+            .with_context(|| format!("failed writing wiki page {}", path.display()))?;
+    }
+    fs::write(root.join("reviews/proposed-updates/.gitkeep"), "")
+        .context("failed writing proposed updates placeholder")?;
+    fs::write(root.join("reviews/lint-reports/.gitkeep"), "")
+        .context("failed writing lint reports placeholder")?;
+    fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
+    Ok(())
+}
+
+fn materialized_wiki_page_body(page: &WikiPage, snapshot: &BrainRepoSnapshot) -> String {
+    if page.path == "wiki/index.md" {
+        let source_links = snapshot
+            .sources
+            .iter()
+            .map(|source| {
+                format!(
+                    "- [{}](sources/{}.md)",
+                    source.source_id,
+                    sanitize_name(&source.source_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let topic_links = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.kind == BrainNodeKind::Concept)
+            .map(|node| {
+                format!(
+                    "- [{}](topics/{}.md)",
+                    node.label,
+                    sanitize_name(&node.node_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return format!(
+            "# Brain Index\n\n## Sources\n\n{}\n\n## Topics\n\n{}\n",
+            source_links, topic_links
+        );
+    }
+    if page.path == "wiki/log.md" {
+        return snapshot
+            .events
+            .iter()
+            .map(|event| {
+                format!(
+                    "- {} `{}` by `{}`",
+                    event.created_at, event.event_id, event.actor.actor_id
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    page.body.clone()
+}
+
+fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(value).context("failed to encode JSON artifact")?;
+    fs::write(path, json).with_context(|| format!("failed writing {}", path.display()))
+}
+
+fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
+    let mut lines = String::new();
+    for event in events {
+        lines.push_str(
+            &serde_json::to_string(event).context("failed to encode brain event JSONL row")?,
+        );
+        lines.push('\n');
+    }
+    fs::write(path, lines).with_context(|| format!("failed writing {}", path.display()))
+}
+
+fn workspace_root_for_rows(
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+) -> Option<PathBuf> {
+    rows.iter()
+        .find_map(|(row, _)| workspace_root_from_summary(&row.summary))
+}
+
+fn workspace_root_from_summary(summary: &SourceSummary) -> Option<PathBuf> {
+    workspace_root_from_path_segments(&summary.source_path, "sources", &summary.source_id).or_else(
+        || {
+            workspace_root_from_path_segments(
+                &summary.markdown_path,
+                "artifacts",
+                &summary.source_id,
+            )
+        },
+    )
+}
+
+fn workspace_root_from_path_segments(path: &str, marker: &str, source_id: &str) -> Option<PathBuf> {
+    let marker = format!("/{marker}/{source_id}");
+    path.find(&marker)
+        .filter(|index| *index > 0)
+        .map(|index| PathBuf::from(&path[..index]))
+}
+
+fn fallback_workspace_root(store_path: &Path, workspace_id: &str) -> PathBuf {
+    store_path
+        .parent()
+        .map(|parent| parent.join(workspace_id))
+        .unwrap_or_else(|| PathBuf::from(workspace_id))
 }
 
 fn concept_identity_keys(detail: &GraphNodeDetail) -> Vec<String> {
@@ -4018,7 +4474,6 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     })
 }
 
-#[cfg(test)]
 fn workspace_correction_from_sqlite_row(line: &str) -> Result<WorkspaceCorrection> {
     let columns: Vec<&str> = line.split('|').collect();
     if columns.len() != 9 {
@@ -4056,7 +4511,6 @@ fn correction_kind_slug(kind: &CorrectionKind) -> &'static str {
     }
 }
 
-#[cfg(test)]
 fn correction_kind_from_slug(value: &str) -> Result<CorrectionKind> {
     match value {
         "merge" => Ok(CorrectionKind::Merge),
@@ -4232,6 +4686,7 @@ impl KnowledgeProjectStore {
         self.run_sql(&sql)?;
         if let Some(source_manifest) = source_manifest {
             self.save_source(project, source_manifest)?;
+            self.materialize_workspace_brain_repo(&source_manifest.workspace_id)?;
         }
         Ok(())
     }
@@ -4470,7 +4925,6 @@ impl KnowledgeProjectStore {
         self.run_sql(&sql).map(|_| ())
     }
 
-    #[cfg(test)]
     fn load_workspace_corrections(&self, workspace_id: &str) -> Result<Vec<WorkspaceCorrection>> {
         self.ensure_schema()?;
         let sql = format!(
@@ -4484,6 +4938,19 @@ impl KnowledgeProjectStore {
             .filter(|line| !line.trim().is_empty())
             .map(workspace_correction_from_sqlite_row)
             .collect()
+    }
+
+    fn materialize_workspace_brain_repo(&self, workspace_id: &str) -> Result<()> {
+        let rows = self.load_projects_for_workspace(workspace_id)?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let workspace_root = workspace_root_for_rows(&rows)
+            .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id));
+        let aggregate = aggregate_workspace_project(workspace_id, rows.clone());
+        let corrections = self.load_workspace_corrections(workspace_id)?;
+        let snapshot = build_brain_repo_snapshot(workspace_id, &rows, &aggregate, &corrections);
+        write_materialized_brain_repo(&workspace_root, &snapshot)
     }
 
     fn ensure_schema(&self) -> Result<()> {
@@ -5405,6 +5872,62 @@ mod tests {
     }
 
     #[test]
+    fn project_store_materializes_brain_repo_artifacts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        assert!(workspace_root.join("brain-manifest.json").exists());
+        assert!(workspace_root.join("graph/nodes.json").exists());
+        assert!(workspace_root.join("graph/edges.json").exists());
+        assert!(workspace_root.join("graph/evidence.json").exists());
+        assert!(workspace_root.join("events/brain_events.jsonl").exists());
+        assert!(workspace_root.join("wiki/index.md").exists());
+        assert!(workspace_root.join("wiki/log.md").exists());
+        assert!(workspace_root.join("wiki/overview.md").exists());
+        assert!(workspace_root
+            .join("reviews/proposed-updates/.gitkeep")
+            .exists());
+        assert!(workspace_root
+            .join("reviews/lint-reports/.gitkeep")
+            .exists());
+
+        let manifest_json =
+            fs::read_to_string(workspace_root.join("brain-manifest.json")).expect("brain manifest");
+        let snapshot: BrainRepoSnapshot =
+            serde_json::from_str(&manifest_json).expect("decode brain manifest");
+        assert_eq!(snapshot.workspace_id, DEFAULT_WORKSPACE_ID);
+        assert_eq!(snapshot.sources.len(), 1);
+        assert!(snapshot
+            .nodes
+            .iter()
+            .any(|node| node.kind == BrainNodeKind::Concept));
+        assert!(snapshot
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::GraphMaterialized));
+        let index = fs::read_to_string(workspace_root.join("wiki/index.md")).expect("wiki index");
+        assert!(index.contains("## Sources"));
+        assert!(index.contains("## Topics"));
+    }
+
+    #[test]
     fn compile_project_uses_source_manifest_as_graph_node_backing() {
         let temp = tempfile::tempdir().expect("temp dir");
         let markdown = "# Sample import\n\n## Page 1\n\nSource evidence belongs to the graph.\n";
@@ -6201,6 +6724,14 @@ mod tests {
         assert_eq!(corrections[0].kind, CorrectionKind::Rename);
         assert_eq!(corrections[0].source_node_ids.len(), 2);
         assert!(!corrections[0].evidence_ids.is_empty());
+
+        let events_path = temp
+            .path()
+            .join(DEFAULT_WORKSPACE_ID)
+            .join("events/brain_events.jsonl");
+        let events = fs::read_to_string(events_path).expect("brain events");
+        assert!(events.contains("\"eventType\":\"correction_applied\""));
+        assert!(events.contains("\"policyResult\":\"applied\""));
     }
 
     #[test]
