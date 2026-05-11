@@ -1826,24 +1826,7 @@ fn answer_project(
         });
     }
 
-    let focal_node_id = request
-        .node_id
-        .as_deref()
-        .filter(|node_id| project.details_by_node_id.contains_key(*node_id))
-        .map(str::to_string)
-        .or_else(|| {
-            project
-                .nodes
-                .iter()
-                .find(|node| is_source_like_node_kind(node.kind))
-                .map(|node| node.id.clone())
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "no answerable node was found in project {}",
-                request.project_id
-            )
-        })?;
+    let focal_node_id = select_focal_node_id(project, request, question)?;
 
     let detail = project
         .details_by_node_id
@@ -1892,6 +1875,61 @@ fn answer_project(
         related_node_ids,
         suggested_actions: answer_suggested_actions(status),
     })
+}
+
+fn select_focal_node_id(
+    project: &KnowledgeProject,
+    request: &AnswerProjectRequest,
+    question: &str,
+) -> Result<String> {
+    if let Some(node_id) = request.node_id.as_deref() {
+        if project.details_by_node_id.contains_key(node_id) {
+            return Ok(node_id.to_string());
+        }
+        bail!("node {node_id} was not found in project {}", request.project_id);
+    }
+
+    if project.summary.project_id.starts_with("workspace:") {
+        if let Some(node_id) = best_matching_detail_node_id(project, question) {
+            return Ok(node_id);
+        }
+    }
+
+    project
+        .nodes
+        .iter()
+        .find(|node| is_source_like_node_kind(node.kind))
+        .map(|node| node.id.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "no answerable node was found in project {}",
+                request.project_id
+            )
+        })
+}
+
+fn best_matching_detail_node_id(project: &KnowledgeProject, question: &str) -> Option<String> {
+    let terms = question_terms(question);
+    if terms.is_empty() {
+        return None;
+    }
+
+    project
+        .details_by_node_id
+        .values()
+        .map(|detail| {
+            let mut score = overlap_score(&terms, &detail.canonical_name);
+            for alias in &detail.aliases {
+                score += overlap_score(&terms, alias);
+            }
+            for evidence in &detail.evidence {
+                score += overlap_score(&terms, &evidence.snippet);
+            }
+            (score, detail.node.id.clone())
+        })
+        .filter(|(score, _)| *score > 0)
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
+        .map(|(_, node_id)| node_id)
 }
 
 fn apply_rename_correction(
@@ -4934,6 +4972,68 @@ mod tests {
 
         assert_ne!(answer.status, AnswerStatus::Blocked);
         assert!(answer
+            .citations
+            .iter()
+            .any(|citation| citation.source_id.as_deref() == Some("source-a")));
+    }
+
+    #[test]
+    fn workspace_answer_without_node_uses_matching_source_evidence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha planning context stays evidence backed.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nBeta architecture context stays evidence backed.\n",
+            "source-b",
+            "beta",
+            11,
+        );
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+        let aggregate =
+            load_answerable_project(&store, &workspace_project_id(DEFAULT_WORKSPACE_ID))
+                .expect("load workspace answerable project");
+        let answer = answer_project(
+            &aggregate,
+            &AnswerProjectRequest {
+                project_id: aggregate.summary.project_id.clone(),
+                node_id: None,
+                question: "What does the beta architecture context say?".into(),
+            },
+        )
+        .expect("answer workspace project");
+
+        assert_ne!(answer.status, AnswerStatus::Blocked);
+        assert!(answer
+            .citations
+            .iter()
+            .any(|citation| citation.source_id.as_deref() == Some("source-b")));
+        assert!(!answer
             .citations
             .iter()
             .any(|citation| citation.source_id.as_deref() == Some("source-a")));
