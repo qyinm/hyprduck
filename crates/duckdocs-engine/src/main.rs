@@ -1507,7 +1507,7 @@ fn build_extraction_artifact(
         let mut page_concept_ids = Vec::new();
         let mut page_evidence_ids = Vec::new();
         let candidates = concept_candidates(&section.content);
-        for (candidate_index, candidate) in candidates.into_iter().enumerate() {
+        for candidate in candidates {
             let key = normalize_key(&candidate);
             if key.is_empty() || !seen_on_page.insert(key.clone()) {
                 continue;
@@ -1526,11 +1526,7 @@ fn build_extraction_artifact(
                 concept.aliases.insert(candidate.clone());
             }
             concept.page_labels.insert(section.page_label.clone());
-            let evidence_id = format!(
-                "ev-{}-{}",
-                key,
-                candidate_index + concept.evidence_ids.len() + 1
-            );
+            let evidence_id = format!("ev-{}-{}", key, concept.evidence_ids.len() + 1);
             evidence_refs.insert(
                 evidence_id.clone(),
                 ExtractionEvidenceRef {
@@ -5261,6 +5257,39 @@ mod tests {
             .page_concepts
             .iter()
             .any(|page| page.page_label == "Page 1" && page.concept_ids.len() >= 2));
+    }
+
+    #[test]
+    fn structured_extraction_uses_unique_evidence_ids_across_pages() {
+        let markdown = "# Source import\n\n## Page 1\n\nAlpha Planning Notes stay local.\nShared Context Layer keeps agents grounded.\n\n## Page 2\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n";
+        let sections = extract_page_sections(markdown);
+        let artifact = build_extraction_artifact(&sections, "/tmp/source.pdf", Some("source-test"));
+        let shared = artifact
+            .concepts
+            .iter()
+            .find(|concept| {
+                normalize_key(&concept.label) == "shared-context-layer-keeps-agents-grounded"
+            })
+            .expect("shared context concept");
+
+        assert_eq!(shared.evidence_ids.len(), 2);
+        assert_eq!(
+            shared.evidence_ids.iter().collect::<BTreeSet<_>>().len(),
+            shared.evidence_ids.len()
+        );
+        for evidence_id in &shared.evidence_ids {
+            assert!(artifact.evidence_refs.contains_key(evidence_id));
+        }
+        assert_eq!(
+            artifact
+                .evidence_refs
+                .values()
+                .filter(|evidence| evidence
+                    .provenance
+                    .contains("Shared Context Layer keeps agents"))
+                .count(),
+            2
+        );
     }
 
     #[test]
