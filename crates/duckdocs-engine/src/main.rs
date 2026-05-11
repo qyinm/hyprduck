@@ -810,6 +810,7 @@ fn aggregate_workspace_project(
     let mut source_details = BTreeMap::new();
     let mut source_answers = BTreeMap::new();
     let mut concept_accumulators = BTreeMap::<String, WorkspaceConceptAccumulator>::new();
+    let mut aggregate_key_by_concept_key = BTreeMap::<String, String>::new();
     let mut source_concept_edges = BTreeMap::<String, StoredEdgeAccumulator>::new();
     let mut relation_edges = BTreeMap::<String, StoredEdgeAccumulator>::new();
 
@@ -886,15 +887,24 @@ fn aggregate_workspace_project(
             if detail.node.kind != GraphNodeKind::Concept {
                 continue;
             }
-            let key = normalize_key(&detail.canonical_name);
-            if key.is_empty() {
+            let concept_keys = concept_identity_keys(detail);
+            let Some(canonical_key) = concept_keys.first().cloned() else {
                 continue;
+            };
+            let aggregate_key = concept_keys
+                .iter()
+                .find_map(|key| aggregate_key_by_concept_key.get(key).cloned())
+                .unwrap_or_else(|| canonical_key.clone());
+            for key in &concept_keys {
+                aggregate_key_by_concept_key
+                    .entry(key.clone())
+                    .or_insert_with(|| aggregate_key.clone());
             }
-            let aggregate_node_id = format!("concept-{key}");
+            let aggregate_node_id = format!("concept-{aggregate_key}");
             concept_id_map.insert(detail.node.id.clone(), aggregate_node_id.clone());
             let accumulator =
                 concept_accumulators
-                    .entry(key)
+                    .entry(aggregate_key)
                     .or_insert_with(|| WorkspaceConceptAccumulator {
                         node_id: aggregate_node_id.clone(),
                         canonical_name: detail.canonical_name.clone(),
@@ -1230,6 +1240,21 @@ fn source_backing_from_summary(summary: &SourceSummary, manifest_path: &str) -> 
         updated_at: summary.updated_at,
         manifest_path: Some(manifest_path.to_string()),
     }
+}
+
+fn concept_identity_keys(detail: &GraphNodeDetail) -> Vec<String> {
+    let mut keys = Vec::new();
+    let canonical_key = normalize_key(&detail.canonical_name);
+    if !canonical_key.is_empty() {
+        keys.push(canonical_key);
+    }
+    for alias in &detail.aliases {
+        let key = normalize_key(alias);
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 fn source_node_position(index: usize, total: usize) -> GraphNodePosition {
@@ -4874,6 +4899,112 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].manifest_path, manifest.manifest_path);
         assert_eq!(rows[0].project_id, project.summary.project_id);
+    }
+
+    #[test]
+    fn workspace_aggregate_merges_concepts_by_alias_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nFoo keeps project knowledge grounded.\n",
+            "source-a",
+            "alpha",
+            20,
+        );
+        let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nBar keeps project knowledge grounded.\n",
+            "source-b",
+            "beta",
+            10,
+        );
+        let source_a_concept_id = project_a
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("source a concept")
+            .id
+            .clone();
+        let source_a_node = project_a
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == source_a_concept_id)
+            .expect("source a concept node");
+        source_a_node.label = "Foo".into();
+        let source_a_detail = project_a
+            .details_by_node_id
+            .get_mut(&source_a_concept_id)
+            .expect("source a concept detail");
+        source_a_detail.canonical_name = "Foo".into();
+        source_a_detail.aliases = vec!["Bar".into()];
+        source_a_detail.node.label = "Foo".into();
+        let source_b_concept_id = project_b
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("source b concept")
+            .id
+            .clone();
+        let source_b_node = project_b
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == source_b_concept_id)
+            .expect("source b concept node");
+        source_b_node.label = "Bar".into();
+        let source_b_detail = project_b
+            .details_by_node_id
+            .get_mut(&source_b_concept_id)
+            .expect("source b concept detail");
+        source_b_detail.canonical_name = "Bar".into();
+        source_b_detail.node.label = "Bar".into();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let merged = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Foo")
+            .expect("merged foo concept");
+        assert!(merged.aliases.contains(&"Bar".into()));
+        assert!(merged
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a")));
+        assert!(merged
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b")));
+        assert_eq!(
+            aggregate
+                .nodes
+                .iter()
+                .filter(|node| node.kind == GraphNodeKind::Concept)
+                .count(),
+            1
+        );
     }
 
     #[test]
