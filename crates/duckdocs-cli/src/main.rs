@@ -104,6 +104,10 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             println!("wiki-pages: {}", pack.wiki_pages.len());
             println!("nodes: {}", pack.nodes.len());
             println!("sources: {}", pack.sources.len());
+            println!("memories: {}", pack.memories.len());
+            println!("entities: {}", pack.entities.len());
+            println!("claims: {}", pack.claims.len());
+            println!("relations: {}", pack.relations.len());
             println!("evidence: {}", pack.evidence.len());
             println!("recent-events: {}", pack.recent_events.len());
         }
