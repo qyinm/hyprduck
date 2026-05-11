@@ -31,6 +31,7 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
+const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -408,11 +409,54 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
 
 fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
     let store = KnowledgeProjectStore::default()?;
-    let project = store.load_project(request.project_id.as_deref())?;
+    if let Some(project_id) = request.project_id.as_deref() {
+        if let Some(workspace_id) = project_id.strip_prefix("workspace:") {
+            let project = store.load_workspace_project(workspace_id)?;
+            let sources = store.load_sources(workspace_id)?;
+            return Ok(LoadProjectResponseData {
+                project,
+                workspace_id: Some(workspace_id.to_string()),
+                sources,
+            });
+        }
+
+        let project = store.load_project(Some(project_id))?;
+        let stored_workspace_id = store.load_workspace_id_for_project(project_id)?;
+        if let (Some(request_workspace_id), Some(actual_workspace_id)) = (
+            request.workspace_id.as_deref(),
+            stored_workspace_id.as_deref(),
+        ) {
+            if request_workspace_id != actual_workspace_id {
+                bail!(
+                    "project {project_id} belongs to workspace {actual_workspace_id}, not {request_workspace_id}"
+                );
+            }
+        }
+        let workspace_id = stored_workspace_id.or(request.workspace_id.clone());
+        let sources = workspace_id
+            .as_deref()
+            .map(|workspace_id| store.load_sources(workspace_id))
+            .transpose()?
+            .unwrap_or_default();
+        return Ok(LoadProjectResponseData {
+            project,
+            workspace_id,
+            sources,
+        });
+    }
+
     let workspace_id = match request.workspace_id.clone() {
         Some(workspace_id) => Some(workspace_id),
         None => store.load_latest_workspace_id()?,
     };
+    let mut project = workspace_id
+        .as_deref()
+        .map(|workspace_id| store.load_workspace_project(workspace_id))
+        .transpose()?
+        .flatten();
+    if project.is_none() && request.workspace_id.is_none() {
+        project = store.load_project(None)?;
+    }
     let sources = workspace_id
         .as_deref()
         .map(|workspace_id| store.load_sources(workspace_id))
@@ -426,6 +470,10 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
 }
 
 fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorrectionResponseData> {
+    if request.project_id.starts_with("workspace:") {
+        bail!("workspace-level correction writes are not supported yet");
+    }
+
     let store = KnowledgeProjectStore::default()?;
     let mut project = store
         .load_project(Some(&request.project_id))?
@@ -437,11 +485,24 @@ fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorre
 
 fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectResponseData> {
     let store = KnowledgeProjectStore::default()?;
-    let project = store
-        .load_project(Some(&request.project_id))?
-        .ok_or_else(|| anyhow!("project {} was not found", request.project_id))?;
+    let project = load_answerable_project(&store, &request.project_id)?;
     let answer = answer_project(&project, &request)?;
     Ok(AnswerProjectResponseData { answer })
+}
+
+fn load_answerable_project(
+    store: &KnowledgeProjectStore,
+    project_id: &str,
+) -> Result<KnowledgeProject> {
+    if let Some(workspace_id) = project_id.strip_prefix("workspace:") {
+        return store
+            .load_workspace_project(workspace_id)?
+            .ok_or_else(|| anyhow!("workspace {workspace_id} was not found"));
+    }
+
+    store
+        .load_project(Some(project_id))?
+        .ok_or_else(|| anyhow!("project {project_id} was not found"))
 }
 
 #[derive(Debug, Clone)]
@@ -480,6 +541,22 @@ struct EdgeAccumulator {
     page_labels: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct StoredSourceRow {
+    summary: SourceSummary,
+    project_id: String,
+    manifest_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceConceptAccumulator {
+    node_id: String,
+    canonical_name: String,
+    aliases: BTreeSet<String>,
+    evidence: Vec<EvidenceRef>,
+    confidence: Option<f32>,
+}
+
 fn compile_knowledge_project(
     request: &CompileProjectRequest,
     markdown: &str,
@@ -501,7 +578,9 @@ fn compile_knowledge_project(
         .map(|manifest| manifest.source_path.clone())
         .unwrap_or_else(|| source_path.clone());
     let source_id_for_evidence = source_manifest.map(|manifest| manifest.source_id.clone());
-    let project_id = build_project_id(request);
+    let project_id = source_manifest
+        .map(|manifest| build_source_backed_project_id(&manifest.workspace_id, &manifest.source_id))
+        .unwrap_or_else(|| build_project_id(request));
 
     let collected = collect_concepts(
         &page_sections,
@@ -732,6 +811,583 @@ fn compile_knowledge_project(
         edge_details_by_id,
         answer_by_node_id,
     }
+}
+
+fn aggregate_workspace_project(
+    workspace_id: &str,
+    rows: Vec<(StoredSourceRow, Option<KnowledgeProject>)>,
+) -> KnowledgeProject {
+    let source_count = rows.len();
+    let mut source_nodes = Vec::new();
+    let mut source_details = BTreeMap::new();
+    let mut source_answers = BTreeMap::new();
+    let mut concept_accumulators = BTreeMap::<String, WorkspaceConceptAccumulator>::new();
+    let mut aggregate_key_by_concept_key = BTreeMap::<String, String>::new();
+    let mut source_concept_edges = BTreeMap::<String, StoredEdgeAccumulator>::new();
+    let mut relation_edges = BTreeMap::<String, StoredEdgeAccumulator>::new();
+
+    for (source_index, (row, project)) in rows.iter().enumerate() {
+        let source_node_id = source_node_id(&row.summary.source_id);
+        let source_label = source_label_from_summary(&row.summary);
+        let source_detail_from_project = project.as_ref().and_then(|project| {
+            project.details_by_node_id.get(&source_node_id).or_else(|| {
+                project
+                    .details_by_node_id
+                    .values()
+                    .find(|detail| is_source_like_node_kind(detail.node.kind))
+            })
+        });
+        let source_evidence = source_detail_from_project
+            .map(|detail| detail.evidence.clone())
+            .unwrap_or_default();
+        let source_node = GraphNodeSummary {
+            id: source_node_id.clone(),
+            label: source_label.clone(),
+            kind: GraphNodeKind::Source,
+            confidence: Some(if project.is_some() { 0.72 } else { 0.28 }),
+            related_count: 0,
+            evidence_count: source_evidence.len().max(row.summary.success_count),
+            position: source_node_position(source_index, source_count),
+        };
+        source_nodes.push(source_node.clone());
+        source_details.insert(
+            source_node_id.clone(),
+            GraphNodeDetail {
+                node: source_node.clone(),
+                canonical_name: source_label.clone(),
+                aliases: vec!["Workspace source".into()],
+                description: format!(
+                    "Immutable source in workspace {workspace_id}. HyprDuck keeps source artifacts addressable while graph evidence is aggregated across the workspace."
+                ),
+                evidence: source_evidence.clone(),
+                actions: Vec::new(),
+                source: Some(source_backing_from_summary(&row.summary, &row.manifest_path)),
+            },
+        );
+        source_answers.insert(
+            source_node_id.clone(),
+            AnswerResponse {
+                status: if project.is_some() {
+                    AnswerStatus::LowConfidence
+                } else {
+                    AnswerStatus::Blocked
+                },
+                text: None,
+                explanation: if project.is_some() {
+                    "This source contributes evidence to the workspace graph.".into()
+                } else {
+                    "This source is registered in the workspace, but no compiled graph snapshot was found yet.".into()
+                },
+                citations: source_evidence.iter().take(3).cloned().collect(),
+                related_node_ids: Vec::new(),
+                suggested_actions: vec![SuggestedAction {
+                    kind: SuggestedActionKind::InspectEvidence,
+                    label: "Inspect source artifacts".into(),
+                    description:
+                        "Open the source detail inspector to review copied source and derived artifacts."
+                            .into(),
+                }],
+            },
+        );
+
+        let Some(project) = project else {
+            continue;
+        };
+
+        let mut concept_id_map = BTreeMap::<String, String>::new();
+        for detail in project.details_by_node_id.values() {
+            if detail.node.kind != GraphNodeKind::Concept {
+                continue;
+            }
+            let concept_keys = concept_identity_keys(detail);
+            let Some(canonical_key) = concept_keys.first().cloned() else {
+                continue;
+            };
+            let existing_aggregate_keys = concept_keys
+                .iter()
+                .filter_map(|key| aggregate_key_by_concept_key.get(key).cloned())
+                .collect::<BTreeSet<_>>();
+            let aggregate_key = existing_aggregate_keys
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or(canonical_key);
+            if !existing_aggregate_keys.is_empty() {
+                merge_workspace_concept_groups(
+                    &aggregate_key,
+                    &existing_aggregate_keys,
+                    &mut concept_accumulators,
+                    &mut aggregate_key_by_concept_key,
+                );
+            }
+            for key in &concept_keys {
+                aggregate_key_by_concept_key.insert(key.clone(), aggregate_key.clone());
+            }
+            let aggregate_node_id = format!("concept-{aggregate_key}");
+            concept_id_map.insert(detail.node.id.clone(), aggregate_node_id.clone());
+            let accumulator = concept_accumulators
+                .entry(aggregate_key)
+                .or_insert_with(|| WorkspaceConceptAccumulator {
+                    node_id: aggregate_node_id.clone(),
+                    canonical_name: detail.canonical_name.clone(),
+                    aliases: BTreeSet::new(),
+                    evidence: Vec::new(),
+                    confidence: detail.node.confidence,
+                });
+            accumulator.aliases.extend(detail.aliases.iter().cloned());
+            if accumulator.canonical_name != detail.canonical_name {
+                accumulator.aliases.insert(detail.canonical_name.clone());
+            }
+            accumulator.evidence.extend(detail.evidence.iter().cloned());
+            accumulator.confidence = match (accumulator.confidence, detail.node.confidence) {
+                (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+                (Some(left), None) => Some(left),
+                (None, Some(right)) => Some(right),
+                (None, None) => None,
+            };
+
+            let edge_id = relation_edge_id(
+                RelationKind::SourceDocument,
+                &source_node_id,
+                &aggregate_node_id,
+            );
+            let edge_accumulator =
+                source_concept_edges
+                    .entry(edge_id)
+                    .or_insert_with(|| StoredEdgeAccumulator {
+                        kind: RelationKind::SourceDocument,
+                        source_node_id: source_node_id.clone(),
+                        target_node_id: aggregate_node_id.clone(),
+                        label: "Compiled from source".into(),
+                        confidence: Some(0.76),
+                        evidence: Vec::new(),
+                    });
+            edge_accumulator
+                .evidence
+                .extend(detail.evidence.iter().cloned());
+        }
+
+        for edge in &project.edges {
+            if edge.kind != RelationKind::RelatedTo {
+                continue;
+            }
+            let Some(left) = concept_id_map.get(&edge.source_node_id).cloned() else {
+                continue;
+            };
+            let Some(right) = concept_id_map.get(&edge.target_node_id).cloned() else {
+                continue;
+            };
+            if left == right {
+                continue;
+            }
+            let (source_node_id, target_node_id) = if left <= right {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            let edge_id =
+                relation_edge_id(RelationKind::RelatedTo, &source_node_id, &target_node_id);
+            let evidence = project
+                .edge_details_by_id
+                .get(&edge.id)
+                .map(|detail| detail.evidence.clone())
+                .unwrap_or_default();
+            let accumulator =
+                relation_edges
+                    .entry(edge_id)
+                    .or_insert_with(|| StoredEdgeAccumulator {
+                        kind: RelationKind::RelatedTo,
+                        source_node_id: source_node_id.clone(),
+                        target_node_id: target_node_id.clone(),
+                        label: normalized_edge_label(RelationKind::RelatedTo, &edge.label),
+                        confidence: edge.confidence,
+                        evidence: Vec::new(),
+                    });
+            accumulator.label =
+                preferred_edge_label(&accumulator.label, &edge.label, RelationKind::RelatedTo);
+            accumulator.confidence = match (accumulator.confidence, edge.confidence) {
+                (Some(left), Some(right)) => Some(left.max(right)),
+                (Some(left), None) => Some(left),
+                (None, Some(right)) => Some(right),
+                (None, None) => None,
+            };
+            accumulator.evidence.extend(evidence.into_iter());
+        }
+    }
+
+    source_concept_edges =
+        remap_workspace_edge_accumulators(source_concept_edges, &aggregate_key_by_concept_key);
+    relation_edges =
+        remap_workspace_edge_accumulators(relation_edges, &aggregate_key_by_concept_key);
+    for accumulator in concept_accumulators.values_mut() {
+        accumulator.evidence = dedupe_evidence(std::mem::take(&mut accumulator.evidence));
+    }
+
+    let concept_positions = layout_concept_positions(concept_accumulators.len().max(1));
+    let mut concept_nodes = Vec::new();
+    let mut details_by_node_id = source_details;
+    let mut answer_by_node_id = source_answers;
+    for (index, accumulator) in concept_accumulators.values().enumerate() {
+        let aliases = accumulator
+            .aliases
+            .iter()
+            .filter(|alias| alias.as_str() != accumulator.canonical_name)
+            .cloned()
+            .collect::<Vec<_>>();
+        let source_ids = accumulator
+            .evidence
+            .iter()
+            .filter_map(|evidence| evidence.source_id.clone())
+            .collect::<BTreeSet<_>>();
+        let node = GraphNodeSummary {
+            id: accumulator.node_id.clone(),
+            label: accumulator.canonical_name.clone(),
+            kind: GraphNodeKind::Concept,
+            confidence: accumulator.confidence,
+            related_count: 0,
+            evidence_count: accumulator.evidence.len(),
+            position: concept_positions
+                .get(index)
+                .cloned()
+                .unwrap_or(GraphNodePosition { x: 50.0, y: 54.0 }),
+        };
+        concept_nodes.push(node.clone());
+        details_by_node_id.insert(
+            node.id.clone(),
+            GraphNodeDetail {
+                node: node.clone(),
+                canonical_name: accumulator.canonical_name.clone(),
+                aliases,
+                description: format!(
+                    "Workspace concept compiled from {} evidence refs across {} source(s).",
+                    accumulator.evidence.len(),
+                    source_ids.len()
+                ),
+                evidence: accumulator.evidence.clone(),
+                actions: Vec::new(),
+                source: None,
+            },
+        );
+        answer_by_node_id.insert(
+            node.id.clone(),
+            AnswerResponse {
+                status: AnswerStatus::Grounded,
+                text: Some(format!(
+                    "{} appears in {} evidence refs across {} source(s).",
+                    accumulator.canonical_name,
+                    accumulator.evidence.len(),
+                    source_ids.len()
+                )),
+                explanation:
+                    "This workspace answer is grounded in evidence aggregated from source-backed imports."
+                        .into(),
+                citations: accumulator.evidence.iter().take(3).cloned().collect(),
+                related_node_ids: Vec::new(),
+                suggested_actions: vec![SuggestedAction {
+                    kind: SuggestedActionKind::InspectEvidence,
+                    label: "Inspect evidence".into(),
+                    description:
+                        "Use the cited snippets to verify the workspace concept before acting on it."
+                            .into(),
+                }],
+            },
+        );
+    }
+
+    let mut edges = Vec::new();
+    let mut edge_details_by_id = BTreeMap::new();
+    for accumulator in source_concept_edges
+        .into_values()
+        .chain(relation_edges.into_values())
+    {
+        let edge_id = relation_edge_id(
+            accumulator.kind,
+            &accumulator.source_node_id,
+            &accumulator.target_node_id,
+        );
+        let edge = RelationEdgeSummary {
+            id: edge_id.clone(),
+            source_node_id: accumulator.source_node_id,
+            target_node_id: accumulator.target_node_id,
+            kind: accumulator.kind,
+            label: accumulator.label,
+            confidence: accumulator.confidence,
+            evidence_count: accumulator.evidence.len(),
+        };
+        edge_details_by_id.insert(
+            edge_id,
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: String::new(),
+                evidence: accumulator.evidence,
+            },
+        );
+        edges.push(edge);
+    }
+
+    let mut nodes = Vec::with_capacity(source_nodes.len() + concept_nodes.len());
+    nodes.extend(source_nodes);
+    nodes.extend(concept_nodes);
+    finalize_workspace_project(
+        workspace_id,
+        nodes,
+        edges,
+        details_by_node_id,
+        edge_details_by_id,
+        answer_by_node_id,
+        source_count,
+    )
+}
+
+fn merge_workspace_concept_groups(
+    aggregate_key: &str,
+    existing_aggregate_keys: &BTreeSet<String>,
+    concept_accumulators: &mut BTreeMap<String, WorkspaceConceptAccumulator>,
+    aggregate_key_by_concept_key: &mut BTreeMap<String, String>,
+) {
+    if existing_aggregate_keys.len() <= 1 {
+        return;
+    }
+
+    let mut merged_accumulator = concept_accumulators
+        .remove(aggregate_key)
+        .unwrap_or_else(|| WorkspaceConceptAccumulator {
+            node_id: format!("concept-{aggregate_key}"),
+            canonical_name: aggregate_key.to_string(),
+            aliases: BTreeSet::new(),
+            evidence: Vec::new(),
+            confidence: None,
+        });
+
+    for stale_key in existing_aggregate_keys {
+        if stale_key == aggregate_key {
+            continue;
+        }
+        if let Some(stale_accumulator) = concept_accumulators.remove(stale_key) {
+            merged_accumulator
+                .aliases
+                .insert(stale_accumulator.canonical_name.clone());
+            merged_accumulator
+                .aliases
+                .extend(stale_accumulator.aliases.into_iter());
+            merged_accumulator
+                .evidence
+                .extend(stale_accumulator.evidence.into_iter());
+            merged_accumulator.confidence =
+                match (merged_accumulator.confidence, stale_accumulator.confidence) {
+                    (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+                    (Some(left), None) => Some(left),
+                    (None, Some(right)) => Some(right),
+                    (None, None) => None,
+                };
+        }
+    }
+
+    merged_accumulator.evidence = dedupe_evidence(merged_accumulator.evidence);
+    for mapped_aggregate_key in aggregate_key_by_concept_key.values_mut() {
+        if existing_aggregate_keys.contains(mapped_aggregate_key) {
+            *mapped_aggregate_key = aggregate_key.to_string();
+        }
+    }
+    concept_accumulators.insert(aggregate_key.to_string(), merged_accumulator);
+}
+
+fn remap_workspace_edge_accumulators(
+    accumulators: BTreeMap<String, StoredEdgeAccumulator>,
+    aggregate_key_by_concept_key: &BTreeMap<String, String>,
+) -> BTreeMap<String, StoredEdgeAccumulator> {
+    let mut remapped = BTreeMap::<String, StoredEdgeAccumulator>::new();
+    for mut accumulator in accumulators.into_values() {
+        accumulator.source_node_id = remap_workspace_concept_node_id(
+            &accumulator.source_node_id,
+            aggregate_key_by_concept_key,
+        );
+        accumulator.target_node_id = remap_workspace_concept_node_id(
+            &accumulator.target_node_id,
+            aggregate_key_by_concept_key,
+        );
+        if accumulator.source_node_id == accumulator.target_node_id {
+            continue;
+        }
+        let edge_id = relation_edge_id(
+            accumulator.kind,
+            &accumulator.source_node_id,
+            &accumulator.target_node_id,
+        );
+        let existing = remapped
+            .entry(edge_id)
+            .or_insert_with(|| StoredEdgeAccumulator {
+                kind: accumulator.kind,
+                source_node_id: accumulator.source_node_id.clone(),
+                target_node_id: accumulator.target_node_id.clone(),
+                label: accumulator.label.clone(),
+                confidence: accumulator.confidence,
+                evidence: Vec::new(),
+            });
+        existing.label =
+            preferred_edge_label(&existing.label, &accumulator.label, accumulator.kind);
+        existing.confidence = match (existing.confidence, accumulator.confidence) {
+            (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+        existing.evidence.extend(accumulator.evidence.into_iter());
+    }
+    for accumulator in remapped.values_mut() {
+        accumulator.evidence = dedupe_evidence(std::mem::take(&mut accumulator.evidence));
+    }
+    remapped
+}
+
+fn remap_workspace_concept_node_id(
+    node_id: &str,
+    aggregate_key_by_concept_key: &BTreeMap<String, String>,
+) -> String {
+    let Some(key) = node_id.strip_prefix("concept-") else {
+        return node_id.to_string();
+    };
+    aggregate_key_by_concept_key
+        .get(key)
+        .map(|aggregate_key| format!("concept-{aggregate_key}"))
+        .unwrap_or_else(|| node_id.to_string())
+}
+
+fn finalize_workspace_project(
+    workspace_id: &str,
+    mut nodes: Vec<GraphNodeSummary>,
+    edges: Vec<RelationEdgeSummary>,
+    mut details_by_node_id: BTreeMap<String, GraphNodeDetail>,
+    mut edge_details_by_id: BTreeMap<String, RelationEdgeDetail>,
+    mut answer_by_node_id: BTreeMap<String, AnswerResponse>,
+    source_count: usize,
+) -> KnowledgeProject {
+    let mut related_count_by_node_id = BTreeMap::<String, usize>::new();
+    let mut connected_node_ids_by_node_id = BTreeMap::<String, BTreeSet<String>>::new();
+    for edge in &edges {
+        note_relation(
+            &mut related_count_by_node_id,
+            &mut connected_node_ids_by_node_id,
+            &edge.source_node_id,
+            &edge.target_node_id,
+        );
+    }
+    for node in &mut nodes {
+        node.related_count = related_count_by_node_id.get(&node.id).copied().unwrap_or(0);
+        if let Some(detail) = details_by_node_id.get_mut(&node.id) {
+            detail.node = node.clone();
+        }
+        if let Some(answer) = answer_by_node_id.get_mut(&node.id) {
+            answer.related_node_ids = connected_node_ids_by_node_id
+                .get(&node.id)
+                .map(|related| related.iter().cloned().collect())
+                .unwrap_or_default();
+        }
+    }
+
+    let label_by_node_id = nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.label.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for edge in &edges {
+        if let Some(detail) = edge_details_by_id.get_mut(&edge.id) {
+            detail.edge = edge.clone();
+            detail.explanation = edge_explanation(edge, &label_by_node_id, &detail.evidence);
+        }
+    }
+
+    let concept_count = nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+    let evidence_count = details_by_node_id
+        .values()
+        .map(|detail| detail.evidence.len())
+        .sum::<usize>()
+        + edge_details_by_id
+            .values()
+            .map(|detail| detail.evidence.len())
+            .sum::<usize>();
+
+    KnowledgeProject {
+        summary: ProjectOverview {
+            project_id: workspace_project_id(workspace_id),
+            title: "Workspace knowledge".into(),
+            status: if concept_count > 0 {
+                ProjectStatus::Ready
+            } else {
+                ProjectStatus::Degraded
+            },
+            stale: false,
+            summary: format!(
+                "Workspace contains {} sources, {} concept nodes, and {} evidence-backed relationships.",
+                source_count,
+                concept_count,
+                edges.len()
+            ),
+            document_count: source_count,
+            node_count: nodes.len(),
+            relationship_count: edges.len(),
+            evidence_count,
+        },
+        nodes,
+        edges,
+        details_by_node_id,
+        edge_details_by_id,
+        answer_by_node_id,
+    }
+}
+
+fn workspace_project_id(workspace_id: &str) -> String {
+    format!("workspace:{workspace_id}")
+}
+
+fn source_label_from_summary(summary: &SourceSummary) -> String {
+    Path::new(&summary.original_path)
+        .file_name()
+        .or_else(|| Path::new(&summary.source_path).file_name())
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| summary.source_id.clone())
+}
+
+fn source_backing_from_summary(summary: &SourceSummary, manifest_path: &str) -> SourceBacking {
+    SourceBacking {
+        workspace_id: summary.workspace_id.clone(),
+        source_id: summary.source_id.clone(),
+        original_path: summary.original_path.clone(),
+        source_path: summary.source_path.clone(),
+        markdown_path: summary.markdown_path.clone(),
+        format: document_format_slug(&summary.format).into(),
+        status: ingest_status_slug(&summary.status).into(),
+        page_count: summary.page_count,
+        success_count: summary.success_count,
+        failed_count: summary.failed_count,
+        updated_at: summary.updated_at,
+        manifest_path: Some(manifest_path.to_string()),
+    }
+}
+
+fn concept_identity_keys(detail: &GraphNodeDetail) -> Vec<String> {
+    let mut keys = Vec::new();
+    let canonical_key = normalize_key(&detail.canonical_name);
+    if !canonical_key.is_empty() {
+        keys.push(canonical_key);
+    }
+    for alias in &detail.aliases {
+        let key = normalize_key(alias);
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+fn source_node_position(index: usize, total: usize) -> GraphNodePosition {
+    if total <= 1 {
+        return GraphNodePosition { x: 50.0, y: 12.0 };
+    }
+    let x = 14.0 + (72.0 / (total.saturating_sub(1) as f32)) * (index as f32);
+    GraphNodePosition { x, y: 12.0 }
 }
 
 fn source_node_id(source_id: &str) -> String {
@@ -1320,24 +1976,7 @@ fn answer_project(
         });
     }
 
-    let focal_node_id = request
-        .node_id
-        .as_deref()
-        .filter(|node_id| project.details_by_node_id.contains_key(*node_id))
-        .map(str::to_string)
-        .or_else(|| {
-            project
-                .nodes
-                .iter()
-                .find(|node| is_source_like_node_kind(node.kind))
-                .map(|node| node.id.clone())
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "no answerable node was found in project {}",
-                request.project_id
-            )
-        })?;
+    let focal_node_id = select_focal_node_id(project, request, question)?;
 
     let detail = project
         .details_by_node_id
@@ -1386,6 +2025,63 @@ fn answer_project(
         related_node_ids,
         suggested_actions: answer_suggested_actions(status),
     })
+}
+
+fn select_focal_node_id(
+    project: &KnowledgeProject,
+    request: &AnswerProjectRequest,
+    question: &str,
+) -> Result<String> {
+    if let Some(node_id) = request.node_id.as_deref() {
+        if project.details_by_node_id.contains_key(node_id) {
+            return Ok(node_id.to_string());
+        }
+        bail!(
+            "node {node_id} was not found in project {}",
+            request.project_id
+        );
+    }
+
+    if project.summary.project_id.starts_with("workspace:") {
+        if let Some(node_id) = best_matching_detail_node_id(project, question) {
+            return Ok(node_id);
+        }
+    }
+
+    project
+        .nodes
+        .iter()
+        .find(|node| is_source_like_node_kind(node.kind))
+        .map(|node| node.id.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "no answerable node was found in project {}",
+                request.project_id
+            )
+        })
+}
+
+fn best_matching_detail_node_id(project: &KnowledgeProject, question: &str) -> Option<String> {
+    let terms = question_terms(question);
+    if terms.is_empty() {
+        return None;
+    }
+
+    project
+        .details_by_node_id
+        .values()
+        .map(|detail| {
+            let mut detail_terms = text_terms(&detail.canonical_name);
+            detail_terms.extend(detail.aliases.iter().flat_map(|alias| text_terms(alias)));
+            for evidence in &detail.evidence {
+                detail_terms.extend(text_terms(&evidence.snippet));
+            }
+            let score = terms.intersection(&detail_terms).count();
+            (score, detail.node.id.clone())
+        })
+        .filter(|(score, _)| *score > 0)
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
+        .map(|(_, node_id)| node_id)
 }
 
 fn apply_rename_correction(
@@ -2136,7 +2832,11 @@ fn answer_suggested_actions(status: AnswerStatus) -> Vec<SuggestedAction> {
 }
 
 fn question_terms(question: &str) -> BTreeSet<String> {
-    question
+    text_terms(question)
+}
+
+fn text_terms(value: &str) -> BTreeSet<String> {
+    value
         .split(|char: char| !char.is_ascii_alphanumeric())
         .map(|term| term.trim().to_ascii_lowercase())
         .filter(|term| term.len() >= 3)
@@ -2295,6 +2995,13 @@ fn build_project_id(request: &CompileProjectRequest) -> String {
         .as_deref()
         .unwrap_or(&request.source_markdown_path);
     format!("project-{:016x}", fnv1a_hash(stable_source.as_bytes()))
+}
+
+fn build_source_backed_project_id(workspace_id: &str, source_id: &str) -> String {
+    format!(
+        "project-{:016x}",
+        fnv1a_hash(format!("{workspace_id}/{source_id}").as_bytes())
+    )
 }
 
 fn fnv1a_hash(bytes: &[u8]) -> u64 {
@@ -2848,13 +3555,13 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
         );
     }
     Ok(SourceSummary {
-        workspace_id: columns[0].to_string(),
-        source_id: columns[1].to_string(),
-        original_path: columns[2].to_string(),
-        source_path: columns[3].to_string(),
-        markdown_path: columns[4].to_string(),
-        format: document_format_from_slug(columns[5])?,
-        status: ingest_status_from_slug(columns[6])?,
+        workspace_id: decode_sqlite_hex_text(columns[0])?,
+        source_id: decode_sqlite_hex_text(columns[1])?,
+        original_path: decode_sqlite_hex_text(columns[2])?,
+        source_path: decode_sqlite_hex_text(columns[3])?,
+        markdown_path: decode_sqlite_hex_text(columns[4])?,
+        format: document_format_from_slug(&decode_sqlite_hex_text(columns[5])?)?,
+        status: ingest_status_from_slug(&decode_sqlite_hex_text(columns[6])?)?,
         page_count: columns[7]
             .parse()
             .context("failed to parse source page_count")?,
@@ -2868,6 +3575,62 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
             .parse()
             .context("failed to parse source updated_at")?,
     })
+}
+
+fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
+    let columns: Vec<&str> = line.split('|').collect();
+    if columns.len() != 13 {
+        bail!(
+            "expected 13 stored source columns from sqlite, got {}",
+            columns.len()
+        );
+    }
+    Ok(StoredSourceRow {
+        summary: SourceSummary {
+            workspace_id: decode_sqlite_hex_text(columns[0])?,
+            source_id: decode_sqlite_hex_text(columns[1])?,
+            original_path: decode_sqlite_hex_text(columns[2])?,
+            source_path: decode_sqlite_hex_text(columns[3])?,
+            markdown_path: decode_sqlite_hex_text(columns[4])?,
+            format: document_format_from_slug(&decode_sqlite_hex_text(columns[5])?)?,
+            status: ingest_status_from_slug(&decode_sqlite_hex_text(columns[6])?)?,
+            page_count: columns[7]
+                .parse()
+                .context("failed to parse source page_count")?,
+            success_count: columns[8]
+                .parse()
+                .context("failed to parse source success_count")?,
+            failed_count: columns[9]
+                .parse()
+                .context("failed to parse source failed_count")?,
+            updated_at: columns[10]
+                .parse()
+                .context("failed to parse source updated_at")?,
+        },
+        project_id: decode_sqlite_hex_text(columns[11])?,
+        manifest_path: decode_sqlite_hex_text(columns[12])?,
+    })
+}
+
+fn decode_project_snapshot(encoded: &str) -> Result<KnowledgeProject> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("failed to decode stored project snapshot")?;
+    serde_json::from_slice(&bytes).context("failed to decode stored project")
+}
+
+fn decode_sqlite_hex_text(value: &str) -> Result<String> {
+    if value.len() % 2 != 0 {
+        bail!("sqlite hex text had an odd byte count");
+    }
+    let bytes = (0..value.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&value[index..index + 2], 16)
+                .context("failed to decode sqlite hex text byte")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    String::from_utf8(bytes).context("sqlite hex text was not valid UTF-8")
 }
 
 fn ingest_status_slug(status: &IngestStatus) -> &'static str {
@@ -3055,11 +3818,49 @@ impl KnowledgeProjectStore {
         if encoded.is_empty() {
             return Ok(None);
         }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .context("failed to decode stored project snapshot")?;
-        let project = serde_json::from_slice(&bytes).context("failed to decode stored project")?;
-        Ok(Some(project))
+        decode_project_snapshot(encoded).map(Some)
+    }
+
+    fn load_projects_by_ids(
+        &self,
+        project_ids: &[String],
+    ) -> Result<BTreeMap<String, KnowledgeProject>> {
+        self.ensure_schema()?;
+        let unique_project_ids = project_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if unique_project_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut projects = BTreeMap::new();
+        for chunk in unique_project_ids.chunks(PROJECT_SNAPSHOT_BATCH_SIZE) {
+            let quoted_ids = chunk
+                .iter()
+                .map(|project_id| format!("'{}'", escape_sqlite(project_id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT hex(project_id), snapshot_base64 FROM projects WHERE project_id IN ({quoted_ids});"
+            );
+            let output = self.run_sql(&sql)?;
+            for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                let columns = line.split('|').collect::<Vec<_>>();
+                if columns.len() != 2 {
+                    bail!(
+                        "expected 2 project snapshot columns from sqlite, got {}",
+                        columns.len()
+                    );
+                }
+                projects.insert(
+                    decode_sqlite_hex_text(columns[0])?,
+                    decode_project_snapshot(columns[1])?,
+                );
+            }
+        }
+        Ok(projects)
     }
 
     fn load_latest_workspace_id(&self) -> Result<Option<WorkspaceId>> {
@@ -3070,10 +3871,21 @@ impl KnowledgeProjectStore {
         Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
     }
 
+    fn load_workspace_id_for_project(&self, project_id: &str) -> Result<Option<WorkspaceId>> {
+        self.ensure_schema()?;
+        let sql = format!(
+            "SELECT workspace_id FROM sources WHERE project_id = '{}' ORDER BY updated_at DESC LIMIT 1;",
+            escape_sqlite(project_id)
+        );
+        let output = self.run_sql(&sql)?;
+        let workspace_id = output.trim();
+        Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
+    }
+
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT workspace_id, source_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at \
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at \
              FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
@@ -3083,6 +3895,47 @@ impl KnowledgeProjectStore {
             .filter(|line| !line.trim().is_empty())
             .map(source_summary_from_sqlite_row)
             .collect()
+    }
+
+    fn load_source_rows(&self, workspace_id: &str) -> Result<Vec<StoredSourceRow>> {
+        self.ensure_schema()?;
+        let sql = format!(
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path) \
+             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            escape_sqlite(workspace_id)
+        );
+        let output = self.run_sql(&sql)?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(stored_source_row_from_sqlite_row)
+            .collect()
+    }
+
+    fn load_projects_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<(StoredSourceRow, Option<KnowledgeProject>)>> {
+        let rows = self.load_source_rows(workspace_id)?;
+        let project_ids = rows
+            .iter()
+            .map(|row| row.project_id.clone())
+            .collect::<Vec<_>>();
+        let projects_by_id = self.load_projects_by_ids(&project_ids)?;
+        rows.into_iter()
+            .map(|row| {
+                let project = projects_by_id.get(&row.project_id).cloned();
+                Ok((row, project))
+            })
+            .collect()
+    }
+
+    fn load_workspace_project(&self, workspace_id: &str) -> Result<Option<KnowledgeProject>> {
+        let rows = self.load_projects_for_workspace(workspace_id)?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(aggregate_workspace_project(workspace_id, rows)))
     }
 
     fn save_source(
@@ -3766,9 +4619,19 @@ mod tests {
         temp: &tempfile::TempDir,
         markdown: &str,
     ) -> (KnowledgeProject, SourceArtifactManifest) {
+        compile_manifest_fixture_project_with_source(temp, markdown, "source-test", "source", 2)
+    }
+
+    fn compile_manifest_fixture_project_with_source(
+        temp: &tempfile::TempDir,
+        markdown: &str,
+        source_id: &str,
+        output_name: &str,
+        updated_at: u64,
+    ) -> (KnowledgeProject, SourceArtifactManifest) {
         let markdown_path = temp.path().join("sample.md");
         fs::write(&markdown_path, markdown).expect("write markdown");
-        let manifest = sample_manifest(temp);
+        let manifest = sample_manifest_with_source(temp, source_id, output_name, updated_at);
         let request = CompileProjectRequest {
             source_markdown_path: markdown_path.display().to_string(),
             source_document_path: Some(manifest.source_path.clone()),
@@ -3826,32 +4689,47 @@ mod tests {
     }
 
     fn sample_manifest(temp: &tempfile::TempDir) -> SourceArtifactManifest {
+        sample_manifest_with_source(temp, "source-test", "source", 2)
+    }
+
+    fn sample_manifest_with_source(
+        temp: &tempfile::TempDir,
+        source_id: &str,
+        output_name: &str,
+        updated_at: u64,
+    ) -> SourceArtifactManifest {
         SourceArtifactManifest {
             workspace_id: DEFAULT_WORKSPACE_ID.into(),
-            source_id: "source-test".into(),
-            original_path: temp.path().join("source.pdf").display().to_string(),
+            source_id: source_id.into(),
+            original_path: temp
+                .path()
+                .join(format!("{output_name}.pdf"))
+                .display()
+                .to_string(),
             source_path: temp
                 .path()
-                .join("default/sources/source-test/source.pdf")
+                .join(format!("default/sources/{source_id}/{output_name}.pdf"))
                 .display()
                 .to_string(),
             markdown_path: temp
                 .path()
-                .join("default/artifacts/source-test/source.md")
+                .join(format!("default/artifacts/{source_id}/source.md"))
                 .display()
                 .to_string(),
             artifact_root: temp
                 .path()
-                .join("default/artifacts/source-test")
+                .join(format!("default/artifacts/{source_id}"))
                 .display()
                 .to_string(),
             manifest_path: temp
                 .path()
-                .join("default/artifacts/source-test/source-manifest.json")
+                .join(format!(
+                    "default/artifacts/{source_id}/source-manifest.json"
+                ))
                 .display()
                 .to_string(),
             format: DocumentFormat::Pdf,
-            output_name: "source".into(),
+            output_name: output_name.into(),
             status: IngestStatus::Ingested,
             pages: vec![PageArtifact {
                 index: 0,
@@ -3862,8 +4740,35 @@ mod tests {
                 error_message: None,
             }],
             created_at: 1,
-            updated_at: 2,
+            updated_at,
         }
+    }
+
+    fn rename_first_concept_for_test(
+        project: &mut KnowledgeProject,
+        canonical_name: &str,
+        aliases: &[&str],
+    ) {
+        let concept_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let node = project
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == concept_id)
+            .expect("mutable concept node");
+        node.label = canonical_name.into();
+        let detail = project
+            .details_by_node_id
+            .get_mut(&concept_id)
+            .expect("concept detail");
+        detail.canonical_name = canonical_name.into();
+        detail.aliases = aliases.iter().map(|alias| (*alias).to_string()).collect();
+        detail.node.label = canonical_name.into();
     }
 
     #[test]
@@ -3985,6 +4890,677 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.source_node_id == source_node_id));
+    }
+
+    #[test]
+    fn load_project_defaults_to_workspace_graph_aggregate() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nAlpha Planning Notes mention source specific work.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nShared context layer keeps agents grounded.\nBeta Review Notes mention separate work.\n",
+            "source-b",
+            "beta",
+            20,
+        );
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save project a");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save project b");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace aggregate")
+            .expect("workspace aggregate");
+        assert_eq!(
+            aggregate.summary.project_id,
+            workspace_project_id(DEFAULT_WORKSPACE_ID)
+        );
+        assert_eq!(aggregate.summary.document_count, 2);
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-a"));
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-b"));
+
+        let shared = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| {
+                normalize_key(&detail.canonical_name)
+                    == "shared-context-layer-keeps-agents-grounded"
+            })
+            .expect("shared aggregate concept");
+        assert!(shared
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a")));
+        assert!(shared
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b")));
+        assert!(aggregate.edges.iter().any(|edge| {
+            edge.kind == RelationKind::SourceDocument
+                && edge.source_node_id == "source:source-a"
+                && edge.target_node_id == shared.node.id
+        }));
+        assert!(aggregate.edges.iter().any(|edge| {
+            edge.kind == RelationKind::SourceDocument
+                && edge.source_node_id == "source:source-b"
+                && edge.target_node_id == shared.node.id
+        }));
+
+        let loaded_source_project = store
+            .load_project(Some(&project_a.summary.project_id))
+            .expect("load exact project")
+            .expect("exact source project");
+        assert_eq!(
+            loaded_source_project.summary.project_id,
+            project_a.summary.project_id
+        );
+    }
+
+    #[test]
+    fn source_backed_project_id_uses_manifest_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let shared_original = temp
+            .path()
+            .join("shared-original.pdf")
+            .display()
+            .to_string();
+        let markdown_a =
+            "# Source A\n\n## Page 1\n\nAlpha planning context stays evidence backed.\n";
+        let markdown_b =
+            "# Source B\n\n## Page 1\n\nBeta architecture context stays evidence backed.\n";
+        let markdown_path_a = temp.path().join("source-a.md");
+        let markdown_path_b = temp.path().join("source-b.md");
+        fs::write(&markdown_path_a, markdown_a).expect("write source a markdown");
+        fs::write(&markdown_path_b, markdown_b).expect("write source b markdown");
+
+        let mut manifest_a = sample_manifest_with_source(&temp, "source-a", "alpha", 10);
+        let mut manifest_b = sample_manifest_with_source(&temp, "source-b", "beta", 11);
+        manifest_a.original_path = shared_original.clone();
+        manifest_b.original_path = shared_original.clone();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: markdown_path_a.display().to_string(),
+            source_document_path: Some(shared_original.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: markdown_path_b.display().to_string(),
+            source_document_path: Some(shared_original),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+
+        let project_a = compile_knowledge_project(&request_a, markdown_a, Some(&manifest_a));
+        let project_b = compile_knowledge_project(&request_b, markdown_b, Some(&manifest_b));
+        assert_ne!(project_a.summary.project_id, project_b.summary.project_id);
+        assert_eq!(
+            project_a.summary.project_id,
+            build_source_backed_project_id(DEFAULT_WORKSPACE_ID, "source-a")
+        );
+        assert_eq!(
+            project_b.summary.project_id,
+            build_source_backed_project_id(DEFAULT_WORKSPACE_ID, "source-b")
+        );
+
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        assert!(aggregate.details_by_node_id.values().any(|detail| detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))));
+        assert!(aggregate.details_by_node_id.values().any(|detail| detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
+    }
+
+    #[test]
+    fn source_rows_round_trip_paths_with_pipe_characters() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let markdown = "# Source A\n\n## Page 1\n\nPipe path evidence stays readable.\n";
+        let markdown_path = temp.path().join("pipe-source.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let mut manifest = sample_manifest_with_source(&temp, "source-pipe", "alpha", 10);
+        manifest.original_path = temp.path().join("a|b.pdf").display().to_string();
+        manifest.source_path = temp
+            .path()
+            .join("default/sources/source-pipe/a|b.pdf")
+            .display()
+            .to_string();
+        manifest.markdown_path = temp
+            .path()
+            .join("default/artifacts/source-pipe/a|b.md")
+            .display()
+            .to_string();
+        manifest.manifest_path = temp
+            .path()
+            .join("default/artifacts/source-pipe/source|manifest.json")
+            .display()
+            .to_string();
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save pipe path source");
+
+        let sources = store
+            .load_sources(DEFAULT_WORKSPACE_ID)
+            .expect("load sources");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].original_path, manifest.original_path);
+        assert_eq!(sources[0].source_path, manifest.source_path);
+        assert_eq!(sources[0].markdown_path, manifest.markdown_path);
+
+        let rows = store
+            .load_source_rows(DEFAULT_WORKSPACE_ID)
+            .expect("load source rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].manifest_path, manifest.manifest_path);
+        assert_eq!(rows[0].project_id, project.summary.project_id);
+    }
+
+    #[test]
+    fn workspace_aggregate_merges_concepts_by_alias_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nFoo keeps project knowledge grounded.\n",
+            "source-a",
+            "alpha",
+            20,
+        );
+        let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nBar keeps project knowledge grounded.\n",
+            "source-b",
+            "beta",
+            10,
+        );
+        let source_a_concept_id = project_a
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("source a concept")
+            .id
+            .clone();
+        let source_a_node = project_a
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == source_a_concept_id)
+            .expect("source a concept node");
+        source_a_node.label = "Foo".into();
+        let source_a_detail = project_a
+            .details_by_node_id
+            .get_mut(&source_a_concept_id)
+            .expect("source a concept detail");
+        source_a_detail.canonical_name = "Foo".into();
+        source_a_detail.aliases = vec!["Bar".into()];
+        source_a_detail.node.label = "Foo".into();
+        let source_b_concept_id = project_b
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("source b concept")
+            .id
+            .clone();
+        let source_b_node = project_b
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == source_b_concept_id)
+            .expect("source b concept node");
+        source_b_node.label = "Bar".into();
+        let source_b_detail = project_b
+            .details_by_node_id
+            .get_mut(&source_b_concept_id)
+            .expect("source b concept detail");
+        source_b_detail.canonical_name = "Bar".into();
+        source_b_detail.node.label = "Bar".into();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let merged = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Foo")
+            .expect("merged foo concept");
+        assert!(merged.aliases.contains(&"Bar".into()));
+        assert!(merged
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a")));
+        assert!(merged
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b")));
+        assert_eq!(
+            aggregate
+                .nodes
+                .iter()
+                .filter(|node| node.kind == GraphNodeKind::Concept)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn workspace_aggregate_merges_transitive_alias_groups() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha concept keeps project knowledge grounded.\n",
+            "source-a",
+            "alpha",
+            30,
+        );
+        let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nGamma concept keeps project knowledge grounded.\n",
+            "source-b",
+            "beta",
+            20,
+        );
+        let (mut project_c, manifest_c) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source C\n\n## Page 1\n\nBeta concept bridges gamma evidence.\n",
+            "source-c",
+            "gamma",
+            10,
+        );
+
+        rename_first_concept_for_test(&mut project_a, "Alpha", &["Beta"]);
+        rename_first_concept_for_test(&mut project_b, "Gamma", &["Delta"]);
+        rename_first_concept_for_test(&mut project_c, "Beta", &["Gamma"]);
+
+        for (project, manifest) in [
+            (&project_a, &manifest_a),
+            (&project_b, &manifest_b),
+            (&project_c, &manifest_c),
+        ] {
+            let request = CompileProjectRequest {
+                source_markdown_path: manifest.markdown_path.clone(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(manifest.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+            };
+            store
+                .save_project(project, &request, Some(manifest))
+                .expect("save source project");
+        }
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let concept_details = aggregate
+            .details_by_node_id
+            .values()
+            .filter(|detail| detail.node.kind == GraphNodeKind::Concept)
+            .collect::<Vec<_>>();
+        assert_eq!(concept_details.len(), 1);
+        let merged = concept_details[0];
+        assert!(merged.aliases.contains(&"Beta".into()));
+        assert!(merged.aliases.contains(&"Gamma".into()));
+        for source_id in ["source-a", "source-b", "source-c"] {
+            assert!(merged
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some(source_id)));
+        }
+    }
+
+    #[test]
+    fn handle_load_project_defaults_to_workspace_graph_aggregate() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save project");
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response = handle_load_project(LoadProjectRequest::default())
+            .expect("load project through handler");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let project = response.project.expect("workspace aggregate project");
+        assert_eq!(response.workspace_id.as_deref(), Some(DEFAULT_WORKSPACE_ID));
+        assert_eq!(
+            project.summary.project_id,
+            workspace_project_id(DEFAULT_WORKSPACE_ID)
+        );
+        assert!(project
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-a"));
+    }
+
+    #[test]
+    fn default_load_project_falls_back_to_latest_legacy_project() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let project = compile_fixture_project(
+            &temp,
+            "# Legacy import\n\n## Page 1\n\nLegacy project snapshots remain visible.\n",
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: temp.path().join("legacy.md").display().to_string(),
+            source_document_path: None,
+            source_manifest_path: None,
+            workspace_id: None,
+            source_id: None,
+        };
+        store
+            .save_project(&project, &request, None)
+            .expect("save legacy project");
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response =
+            handle_load_project(LoadProjectRequest::default()).expect("load default project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        assert_eq!(response.sources.len(), 0);
+        assert_eq!(
+            response.project.expect("legacy project").summary.project_id,
+            project.summary.project_id
+        );
+    }
+
+    #[test]
+    fn apply_correction_rejects_workspace_project_id() {
+        let error = handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: "concept:shared-context-layer".into(),
+            kind: CorrectionKind::Rename,
+            target_node_id: None,
+            value: Some("Shared Context Layer".into()),
+        })
+        .expect_err("workspace aggregate corrections should stay disabled");
+
+        assert!(error
+            .to_string()
+            .contains("workspace-level correction writes are not supported yet"));
+    }
+
+    #[test]
+    fn exact_project_load_uses_project_workspace_sources() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nWorkspace A evidence stays separate.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (project_b, mut manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nWorkspace B evidence is newer.\n",
+            "source-b",
+            "beta",
+            99,
+        );
+        manifest_b.workspace_id = "workspace-b".into();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save workspace a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save workspace b project");
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response = handle_load_project(LoadProjectRequest {
+            project_id: Some(project_a.summary.project_id.clone()),
+            workspace_id: None,
+        })
+        .expect("load exact project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        assert_eq!(response.workspace_id.as_deref(), Some(DEFAULT_WORKSPACE_ID));
+        assert_eq!(response.sources.len(), 1);
+        assert_eq!(response.sources[0].source_id, "source-a");
+        assert_eq!(
+            response.project.expect("exact project").summary.project_id,
+            project_a.summary.project_id
+        );
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let error = handle_load_project(LoadProjectRequest {
+            project_id: Some(project_a.summary.project_id.clone()),
+            workspace_id: Some("workspace-b".into()),
+        })
+        .expect_err("stale workspace should not hydrate exact project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+        assert!(error
+            .to_string()
+            .contains("belongs to workspace default, not workspace-b"));
+    }
+
+    #[test]
+    fn answer_project_supports_workspace_project_id() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save project");
+        let aggregate =
+            load_answerable_project(&store, &workspace_project_id(DEFAULT_WORKSPACE_ID))
+                .expect("load workspace answerable project");
+        let answer = answer_project(
+            &aggregate,
+            &AnswerProjectRequest {
+                project_id: aggregate.summary.project_id.clone(),
+                node_id: None,
+                question: "What does the shared context layer say?".into(),
+            },
+        )
+        .expect("answer workspace project");
+
+        assert_ne!(answer.status, AnswerStatus::Blocked);
+        assert!(answer
+            .citations
+            .iter()
+            .any(|citation| citation.source_id.as_deref() == Some("source-a")));
+    }
+
+    #[test]
+    fn workspace_answer_without_node_uses_matching_source_evidence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha planning context stays evidence backed.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nBeta architecture context stays evidence backed.\n",
+            "source-b",
+            "beta",
+            11,
+        );
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+        let aggregate =
+            load_answerable_project(&store, &workspace_project_id(DEFAULT_WORKSPACE_ID))
+                .expect("load workspace answerable project");
+        let answer = answer_project(
+            &aggregate,
+            &AnswerProjectRequest {
+                project_id: aggregate.summary.project_id.clone(),
+                node_id: None,
+                question: "What does the beta architecture context say?".into(),
+            },
+        )
+        .expect("answer workspace project");
+
+        assert_ne!(answer.status, AnswerStatus::Blocked);
+        assert!(answer
+            .citations
+            .iter()
+            .any(|citation| citation.source_id.as_deref() == Some("source-b")));
+        assert!(!answer
+            .citations
+            .iter()
+            .any(|citation| citation.source_id.as_deref() == Some("source-a")));
     }
 
     #[test]

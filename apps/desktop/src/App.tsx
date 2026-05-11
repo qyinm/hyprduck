@@ -1336,9 +1336,15 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
 
-    if (snapshot.lastProjectId) {
+    const workspaceProjectId = snapshot.lastWorkspaceId
+      ? `workspace:${snapshot.lastWorkspaceId}`
+      : null;
+    const projectIdToLoad = workspaceProjectId ?? snapshot.lastProjectId ?? null;
+
+    if (projectIdToLoad) {
       invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
-        project_id: snapshot.lastProjectId,
+        project_id: projectIdToLoad,
+        workspace_id: snapshot.lastWorkspaceId ?? undefined,
       })
         .then((envelope) => {
           if (!cancelled) {
@@ -1362,7 +1368,11 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [snapshot.lastProjectId, snapshot.lastResult?.savedOutputPath]);
+  }, [
+    snapshot.lastProjectId,
+    snapshot.lastWorkspaceId,
+    snapshot.lastResult?.savedOutputPath,
+  ]);
 
   useEffect(() => {
     dispatchWorkspaceUi({
