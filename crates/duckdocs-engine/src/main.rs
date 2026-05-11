@@ -5009,7 +5009,7 @@ mod tests {
                 image_path: Some(
                     temp.path()
                         .join(format!(
-                            "default/artifacts/{source_id}/images/page-{}.png",
+                            "default/artifacts/{source_id}/images/page_{}.png",
                             index + 1
                         ))
                         .display()
@@ -5018,7 +5018,7 @@ mod tests {
                 markdown_path: Some(
                     temp.path()
                         .join(format!(
-                            "default/artifacts/{source_id}/pages/page-{}.md",
+                            "default/artifacts/{source_id}/pages/page_{}.md",
                             index + 1
                         ))
                         .display()
@@ -5454,11 +5454,11 @@ mod tests {
             evidence
                 .markdown_path
                 .as_deref()
-                .is_some_and(|path| path.ends_with("page-1.md"))
+                .is_some_and(|path| path.ends_with("page_1.md"))
                 && evidence
                     .image_path
                     .as_deref()
-                    .is_some_and(|path| path.ends_with("page-1.png"))
+                    .is_some_and(|path| path.ends_with("page_1.png"))
         }));
         assert!(aggregate.edges.iter().any(|edge| {
             edge.kind == RelationKind::RelatedTo
