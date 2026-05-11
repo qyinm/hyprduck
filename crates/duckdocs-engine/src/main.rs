@@ -420,10 +420,18 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
         }
 
         let project = store.load_project(Some(project_id))?;
-        let workspace_id = match request.workspace_id.clone() {
-            Some(workspace_id) => Some(workspace_id),
-            None => store.load_workspace_id_for_project(project_id)?,
-        };
+        let stored_workspace_id = store.load_workspace_id_for_project(project_id)?;
+        if let (Some(request_workspace_id), Some(actual_workspace_id)) = (
+            request.workspace_id.as_deref(),
+            stored_workspace_id.as_deref(),
+        ) {
+            if request_workspace_id != actual_workspace_id {
+                bail!(
+                    "project {project_id} belongs to workspace {actual_workspace_id}, not {request_workspace_id}"
+                );
+            }
+        }
+        let workspace_id = stored_workspace_id.or(request.workspace_id.clone());
         let sources = workspace_id
             .as_deref()
             .map(|workspace_id| store.load_sources(workspace_id))
@@ -5181,6 +5189,21 @@ mod tests {
             response.project.expect("exact project").summary.project_id,
             project_a.summary.project_id
         );
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let error = handle_load_project(LoadProjectRequest {
+            project_id: Some(project_a.summary.project_id.clone()),
+            workspace_id: Some("workspace-b".into()),
+        })
+        .expect_err("stale workspace should not hydrate exact project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+        assert!(error
+            .to_string()
+            .contains("belongs to workspace default, not workspace-b"));
     }
 
     #[test]
