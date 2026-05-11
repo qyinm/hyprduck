@@ -96,6 +96,12 @@ pub struct SourceBacking {
     pub page_count: usize,
     pub success_count: usize,
     pub failed_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
     pub updated_at: u64,
     #[serde(default)]
     pub manifest_path: Option<String>,
@@ -347,6 +353,12 @@ pub struct SourceRecord {
     pub format: String,
     pub status: String,
     pub page_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
     pub updated_at: u64,
 }
 

@@ -179,6 +179,12 @@ pub struct SourceArtifactManifest {
     pub format: DocumentFormat,
     pub output_name: String,
     pub status: IngestStatus,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
     pub pages: Vec<PageArtifact>,
     pub created_at: u64,
     pub updated_at: u64,
@@ -196,6 +202,12 @@ pub struct SourceSummary {
     pub page_count: usize,
     pub success_count: usize,
     pub failed_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
     pub updated_at: u64,
 }
 
@@ -450,6 +462,12 @@ pub struct ProposeBrainUpdateRequest {
     pub target_source_id: Option<SourceId>,
     #[serde(default)]
     pub relation_kind: Option<BrainRelationKind>,
+    #[serde(default)]
+    pub source_description: Option<String>,
+    #[serde(default)]
+    pub source_user_context: Option<String>,
+    #[serde(default)]
+    pub source_ingest_instruction: Option<String>,
     #[serde(default)]
     pub source_refs: Vec<String>,
     #[serde(default)]
@@ -995,6 +1013,9 @@ mod tests {
             format: DocumentFormat::Pdf,
             output_name: "input".into(),
             status: IngestStatus::Ingested,
+            description: "Project brief".into(),
+            user_context: "Used for planning".into(),
+            ingest_instruction: "Extract decisions".into(),
             pages: vec![PageArtifact {
                 index: 0,
                 label: "Page 1".into(),
@@ -1014,6 +1035,7 @@ mod tests {
         let json = serde_json::to_string(&manifest).unwrap();
         assert!(json.contains("\"status\":\"ingested\""));
         assert!(json.contains("\"format\":\"pdf\""));
+        assert!(json.contains("\"description\":\"Project brief\""));
         let decoded: SourceArtifactManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, manifest);
     }
@@ -1094,6 +1116,9 @@ mod tests {
                 target_node_id: None,
                 target_source_id: None,
                 relation_kind: None,
+                source_description: None,
+                source_user_context: None,
+                source_ingest_instruction: None,
                 source_refs: vec![],
                 node_refs: vec!["project-hyprduck".into()],
                 evidence_refs: vec![],

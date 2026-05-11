@@ -800,12 +800,12 @@ fn handle_propose_brain_update(
         scope: BrainScope::Project,
         title: request.title.trim().to_string(),
         body: request.body.trim().to_string(),
-        target_node_id: request.target_node_id,
-        target_source_id: request.target_source_id,
+        target_node_id: request.target_node_id.clone(),
+        target_source_id: request.target_source_id.clone(),
         relation_kind: request.relation_kind,
         source_refs,
         node_refs,
-        evidence_refs: request.evidence_refs,
+        evidence_refs: request.evidence_refs.clone(),
         created_at,
     };
     let mut event = brain_event_for_proposal(&proposal)?;
@@ -815,10 +815,14 @@ fn handle_propose_brain_update(
     let proposal_path = writer.write_proposal(&proposal)?;
     writer.append_event(&event)?;
     if auto_apply {
-        let memory = memory_record_for_proposal(&proposal);
-        writer.upsert_memory_record(memory)?;
-        let accepted_event = brain_memory_accepted_event(&proposal)?;
-        writer.append_event(&accepted_event)?;
+        if proposal.kind == BrainProposalKind::SourceNote {
+            writer.apply_source_note_metadata(&proposal, &request)?;
+        } else {
+            let memory = memory_record_for_proposal(&proposal);
+            writer.upsert_memory_record(memory)?;
+            let accepted_event = brain_memory_accepted_event(&proposal)?;
+            writer.append_event(&accepted_event)?;
+        }
     }
 
     Ok(ProposeBrainUpdateResponseData {
@@ -1174,6 +1178,74 @@ impl BrainWorkspaceWriter {
                 .then_with(|| left.memory_id.cmp(&right.memory_id))
         });
         write_json_pretty(&path, &memories)
+    }
+
+    fn apply_source_note_metadata(
+        &self,
+        proposal: &BrainUpdateProposal,
+        request: &ProposeBrainUpdateRequest,
+    ) -> Result<()> {
+        let source_id = proposal
+            .target_source_id
+            .as_ref()
+            .or_else(|| proposal.source_refs.first())
+            .context("source note proposal needs a source id")?;
+        let manifest_path = self
+            .root
+            .join("artifacts")
+            .join(source_id)
+            .join("source-manifest.json");
+        let mut manifest: SourceArtifactManifest = read_json_artifact(&manifest_path)?;
+        merge_source_metadata(
+            &mut manifest.description,
+            request
+                .source_description
+                .as_deref()
+                .unwrap_or(&proposal.body),
+        );
+        merge_source_metadata(
+            &mut manifest.user_context,
+            request.source_user_context.as_deref().unwrap_or(""),
+        );
+        merge_source_metadata(
+            &mut manifest.ingest_instruction,
+            request.source_ingest_instruction.as_deref().unwrap_or(""),
+        );
+        manifest.updated_at = unix_timestamp_seconds();
+        write_source_manifest(&manifest)?;
+        if let Some(output_root) = self.root.parent() {
+            let store = KnowledgeProjectStore::new(output_root.join("knowledge.sqlite3"));
+            store.update_source_manifest_snapshot(&manifest)?;
+        }
+        self.update_brain_manifest_source(&manifest)?;
+        Ok(())
+    }
+
+    fn update_brain_manifest_source(&self, manifest: &SourceArtifactManifest) -> Result<()> {
+        let path = self.root.join("brain-manifest.json");
+        if !path.exists() {
+            return Ok(());
+        }
+        let mut snapshot: BrainRepoSnapshot = read_json_artifact(&path)?;
+        if let Some(source) = snapshot
+            .sources
+            .iter_mut()
+            .find(|source| source.source_id == manifest.source_id)
+        {
+            source.description = manifest.description.clone();
+            source.user_context = manifest.user_context.clone();
+            source.ingest_instruction = manifest.ingest_instruction.clone();
+            source.updated_at = manifest.updated_at;
+            write_json_pretty(&path, &snapshot)?;
+        }
+        Ok(())
+    }
+}
+
+fn merge_source_metadata(target: &mut String, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        *target = value.to_string();
     }
 }
 
@@ -2606,6 +2678,9 @@ fn source_backing_from_summary(summary: &SourceSummary, manifest_path: &str) -> 
         page_count: summary.page_count,
         success_count: summary.success_count,
         failed_count: summary.failed_count,
+        description: summary.description.clone(),
+        user_context: summary.user_context.clone(),
+        ingest_instruction: summary.ingest_instruction.clone(),
         updated_at: summary.updated_at,
         manifest_path: Some(manifest_path.to_string()),
     }
@@ -2629,6 +2704,9 @@ fn build_brain_repo_snapshot(
             format: document_format_slug(&row.summary.format).into(),
             status: ingest_status_slug(&row.summary.status).into(),
             page_count: row.summary.page_count,
+            description: row.summary.description.clone(),
+            user_context: row.summary.user_context.clone(),
+            ingest_instruction: row.summary.ingest_instruction.clone(),
             updated_at: row.summary.updated_at,
         })
         .collect::<Vec<_>>();
@@ -3229,6 +3307,9 @@ fn source_backing_from_manifest(manifest: &SourceArtifactManifest) -> SourceBack
             .iter()
             .filter(|page| page.error_message.is_some())
             .count(),
+        description: manifest.description.clone(),
+        user_context: manifest.user_context.clone(),
+        ingest_instruction: manifest.ingest_instruction.clone(),
         updated_at: manifest.updated_at,
         manifest_path: Some(manifest.manifest_path.clone()),
     }
@@ -5437,6 +5518,9 @@ fn write_output_package_to_root(
         format: request.input.format.clone(),
         output_name: safe_name.to_string(),
         status,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
         pages: page_artifacts,
         created_at: now,
         updated_at: now,
@@ -5458,6 +5542,14 @@ fn ingest_status_for_result(result: &ParseResult) -> IngestStatus {
 fn write_source_manifest(manifest: &SourceArtifactManifest) -> Result<()> {
     let json =
         serde_json::to_string_pretty(manifest).context("failed to encode source manifest")?;
+    if let Some(parent) = Path::new(&manifest.manifest_path).parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed creating source manifest directory {}",
+                parent.display()
+            )
+        })?;
+    }
     fs::write(&manifest.manifest_path, json)
         .with_context(|| format!("failed writing source manifest {}", manifest.manifest_path))
 }
@@ -5541,18 +5633,25 @@ fn source_summary_from_manifest(manifest: &SourceArtifactManifest) -> SourceSumm
         page_count: manifest.pages.len(),
         success_count: manifest.pages.len().saturating_sub(failed_count),
         failed_count,
+        description: manifest.description.clone(),
+        user_context: manifest.user_context.clone(),
+        ingest_instruction: manifest.ingest_instruction.clone(),
         updated_at: manifest.updated_at,
     }
 }
 
 fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 11 {
+    if columns.len() != 11 && columns.len() != 12 {
         bail!(
-            "expected 11 source summary columns from sqlite, got {}",
+            "expected 11 or 12 source summary columns from sqlite, got {}",
             columns.len()
         );
     }
+    let manifest = columns
+        .get(11)
+        .map(|encoded| decode_source_manifest_snapshot(encoded))
+        .transpose()?;
     Ok(SourceSummary {
         workspace_id: decode_sqlite_hex_text(columns[0])?,
         source_id: decode_sqlite_hex_text(columns[1])?,
@@ -5570,6 +5669,18 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
         failed_count: columns[9]
             .parse()
             .context("failed to parse source failed_count")?,
+        description: manifest
+            .as_ref()
+            .map(|manifest| manifest.description.clone())
+            .unwrap_or_default(),
+        user_context: manifest
+            .as_ref()
+            .map(|manifest| manifest.user_context.clone())
+            .unwrap_or_default(),
+        ingest_instruction: manifest
+            .as_ref()
+            .map(|manifest| manifest.ingest_instruction.clone())
+            .unwrap_or_default(),
         updated_at: columns[10]
             .parse()
             .context("failed to parse source updated_at")?,
@@ -5578,12 +5689,16 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
 
 fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 13 {
+    if columns.len() != 13 && columns.len() != 14 {
         bail!(
-            "expected 13 stored source columns from sqlite, got {}",
+            "expected 13 or 14 stored source columns from sqlite, got {}",
             columns.len()
         );
     }
+    let manifest = columns
+        .get(13)
+        .map(|encoded| decode_source_manifest_snapshot(encoded))
+        .transpose()?;
     Ok(StoredSourceRow {
         summary: SourceSummary {
             workspace_id: decode_sqlite_hex_text(columns[0])?,
@@ -5602,6 +5717,18 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
             failed_count: columns[9]
                 .parse()
                 .context("failed to parse source failed_count")?,
+            description: manifest
+                .as_ref()
+                .map(|manifest| manifest.description.clone())
+                .unwrap_or_default(),
+            user_context: manifest
+                .as_ref()
+                .map(|manifest| manifest.user_context.clone())
+                .unwrap_or_default(),
+            ingest_instruction: manifest
+                .as_ref()
+                .map(|manifest| manifest.ingest_instruction.clone())
+                .unwrap_or_default(),
             updated_at: columns[10]
                 .parse()
                 .context("failed to parse source updated_at")?,
@@ -5662,6 +5789,13 @@ fn decode_project_snapshot(encoded: &str) -> Result<KnowledgeProject> {
         .decode(encoded)
         .context("failed to decode stored project snapshot")?;
     serde_json::from_slice(&bytes).context("failed to decode stored project")
+}
+
+fn decode_source_manifest_snapshot(encoded: &str) -> Result<SourceArtifactManifest> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("failed to decode stored source manifest snapshot")?;
+    serde_json::from_slice(&bytes).context("failed to decode stored source manifest")
 }
 
 fn decode_sqlite_hex_text(value: &str) -> Result<String> {
@@ -5777,7 +5911,6 @@ impl KnowledgeProjectStore {
         })
     }
 
-    #[cfg(test)]
     fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -5931,7 +6064,7 @@ impl KnowledgeProjectStore {
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at \
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, manifest_base64 \
              FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
@@ -5946,7 +6079,7 @@ impl KnowledgeProjectStore {
     fn load_source_rows(&self, workspace_id: &str) -> Result<Vec<StoredSourceRow>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path) \
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path), manifest_base64 \
              FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
@@ -6026,6 +6159,23 @@ impl KnowledgeProjectStore {
             updated_at = summary.updated_at,
             manifest_path = escape_sqlite(&manifest.manifest_path),
             manifest_base64 = manifest_base64,
+        );
+        self.run_sql(&sql).map(|_| ())
+    }
+
+    fn update_source_manifest_snapshot(&self, manifest: &SourceArtifactManifest) -> Result<()> {
+        self.ensure_schema()?;
+        let manifest_json =
+            serde_json::to_string(manifest).context("failed to encode source manifest snapshot")?;
+        let manifest_base64 = base64::engine::general_purpose::STANDARD.encode(manifest_json);
+        let status = ingest_status_slug(&manifest.status);
+        let sql = format!(
+            "UPDATE sources SET status = '{status}', updated_at = {updated_at}, manifest_base64 = '{manifest_base64}' \
+             WHERE source_id = '{source_id}';",
+            status = status,
+            updated_at = manifest.updated_at,
+            manifest_base64 = manifest_base64,
+            source_id = escape_sqlite(&manifest.source_id),
         );
         self.run_sql(&sql).map(|_| ())
     }
@@ -6849,6 +6999,9 @@ mod tests {
             format: DocumentFormat::Pdf,
             output_name: output_name.into(),
             status: IngestStatus::Ingested,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
             pages: vec![PageArtifact {
                 index: 0,
                 label: "Page 1".into(),
@@ -7080,6 +7233,7 @@ mod tests {
         };
         let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        write_source_manifest(&manifest).expect("write source manifest");
         store
             .save_project(&project, &request, Some(&manifest))
             .expect("save source-backed project");
@@ -7162,6 +7316,7 @@ mod tests {
         };
         let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        write_source_manifest(&manifest).expect("write source manifest");
         store
             .save_project(&project, &request, Some(&manifest))
             .expect("save source-backed project");
@@ -7249,6 +7404,9 @@ mod tests {
                 target_node_id,
                 target_source_id,
                 relation_kind,
+                source_description: None,
+                source_user_context: None,
+                source_ingest_instruction: None,
                 source_refs: vec![manifest.source_id.clone()],
                 node_refs,
                 evidence_refs: Vec::new(),
@@ -7288,16 +7446,68 @@ mod tests {
         let memory_records: Vec<MemoryRecord> =
             read_json_artifact(&workspace_root.join("memory/records.json"))
                 .expect("read memory records");
-        assert_eq!(memory_records.len(), 3);
+        assert_eq!(memory_records.len(), 2);
         assert!(memory_records
             .iter()
             .any(|memory| memory.title == "Remember parser wedge"));
         assert!(memory_records
             .iter()
             .any(|memory| memory.title == "Append session observation"));
-        assert!(memory_records
+        assert!(!memory_records
             .iter()
             .any(|memory| memory.title == "Annotate source"));
+        let updated_manifest: SourceArtifactManifest =
+            read_json_artifact(&PathBuf::from(&manifest.manifest_path))
+                .expect("read updated source manifest");
+        assert_eq!(
+            updated_manifest.description,
+            "This source should seed the local brain."
+        );
+        let stored_sources = store
+            .load_sources(DEFAULT_WORKSPACE_ID)
+            .expect("load source summaries after source note");
+        assert_eq!(
+            stored_sources[0].description,
+            "This source should seed the local brain."
+        );
+        let read_source = handle_read_source(ReadSourceRequest {
+            scope: scope.clone(),
+            source_id: manifest.source_id.clone(),
+        })
+        .expect("read source after source note");
+        assert_eq!(
+            read_source.source.description,
+            "This source should seed the local brain."
+        );
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::SourceNote,
+            title: "Update source metadata fields".into(),
+            body: "Fallback source note body.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: Some(manifest.source_id.clone()),
+            relation_kind: None,
+            source_description: Some("Reader guide".into()),
+            source_user_context: Some("Imported for agent planning.".into()),
+            source_ingest_instruction: Some("Extract decisions and open questions.".into()),
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose explicit source metadata");
+        let explicit_manifest: SourceArtifactManifest =
+            read_json_artifact(&PathBuf::from(&manifest.manifest_path))
+                .expect("read explicit source manifest");
+        assert_eq!(explicit_manifest.description, "Reader guide");
+        assert_eq!(
+            explicit_manifest.user_context,
+            "Imported for agent planning."
+        );
+        assert_eq!(
+            explicit_manifest.ingest_instruction,
+            "Extract decisions and open questions."
+        );
 
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope: scope.clone(),
@@ -7371,7 +7581,7 @@ mod tests {
         let rematerialized_memory_records: Vec<MemoryRecord> =
             read_json_artifact(&workspace_root.join("memory/records.json"))
                 .expect("read rematerialized memory records");
-        assert_eq!(rematerialized_memory_records.len(), 3);
+        assert_eq!(rematerialized_memory_records.len(), 2);
         let rematerialized_events =
             read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
                 .expect("read rematerialized events");
@@ -7443,6 +7653,9 @@ mod tests {
             target_node_id: None,
             target_source_id: None,
             relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: vec![manifest.source_id.clone()],
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
@@ -7457,6 +7670,9 @@ mod tests {
             target_node_id: Some(concept_node_id.clone()),
             target_source_id: None,
             relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: vec![manifest.source_id.clone()],
             node_refs: vec![concept_node_id.clone()],
             evidence_refs: Vec::new(),
@@ -7471,6 +7687,9 @@ mod tests {
             target_node_id: Some(concept_node_id.clone()),
             target_source_id: None,
             relation_kind: Some(BrainRelationKind::RelatedTo),
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: vec![manifest.source_id],
             node_refs: vec!["document".into()],
             evidence_refs: Vec::new(),
@@ -7559,6 +7778,9 @@ mod tests {
             target_node_id: Some(concept_node_id.clone()),
             target_source_id: None,
             relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: vec![manifest.source_id],
             node_refs: vec![concept_node_id],
             evidence_refs: Vec::new(),
@@ -7660,6 +7882,9 @@ mod tests {
             target_node_id: None,
             target_source_id: None,
             relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: Vec::new(),
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
@@ -7718,6 +7943,9 @@ mod tests {
             target_node_id: None,
             target_source_id: None,
             relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
             source_refs: vec![manifest.source_id.clone()],
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),

@@ -43,6 +43,7 @@ import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
   WorkspaceProject,
+  WorkspaceProposeBrainUpdateRequest,
   WorkspaceSourceSummary,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
@@ -356,6 +357,9 @@ function getWebWorkspaceFromSnapshot(
             page_count: snapshot.lastResult.successCount + snapshot.lastResult.failedCount,
             success_count: snapshot.lastResult.successCount,
             failed_count: snapshot.lastResult.failedCount,
+            description: "",
+            user_context: "",
+            ingest_instruction: "",
             updated_at: 0,
           },
         ]
@@ -491,6 +495,9 @@ function sourceBackingFromSummary(source: WorkspaceSourceSummary) {
     pageCount: source.page_count,
     successCount: source.success_count,
     failedCount: source.failed_count,
+    description: source.description ?? "",
+    userContext: source.user_context ?? "",
+    ingestInstruction: source.ingest_instruction ?? "",
     updatedAt: source.updated_at,
     manifestPath: null,
   };
@@ -540,6 +547,14 @@ function createWebMockApi(): HyprDuckDesktopApi {
             status: "clean",
             attentionCount: 0,
             reviewItems: [],
+          } as T;
+        }
+        case "propose_brain_update": {
+          return {
+            proposal: {
+              proposalId: "proposal-web-preview",
+              status: "accepted",
+            },
           } as T;
         }
         case "get_models_for_provider": {
@@ -1562,6 +1577,39 @@ export function App() {
     );
   };
 
+  const proposeBrainUpdate = async (
+    request: WorkspaceProposeBrainUpdateRequest,
+  ) => {
+    await invoke<unknown>("propose_brain_update", {
+      workspace_id:
+        request.workspaceId ??
+        loadedWorkspaceEnvelope?.workspace_id ??
+        snapshot.lastWorkspaceId ??
+        "default",
+      kind: request.kind,
+      title: request.title,
+      body: request.body,
+      target_node_id: request.targetNodeId ?? null,
+      target_source_id: request.targetSourceId ?? null,
+      relation_kind: request.relationKind ?? null,
+      source_description: request.sourceDescription ?? null,
+      source_user_context: request.sourceUserContext ?? null,
+      source_ingest_instruction: request.sourceIngestInstruction ?? null,
+      source_refs: request.sourceRefs ?? [],
+      node_refs: request.nodeRefs ?? [],
+      evidence_refs: request.evidenceRefs ?? [],
+    });
+    const nextEnvelope = await invoke<WorkspaceProjectEnvelope>(
+      "load_workspace_project",
+      {
+        project_id: loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
+        workspace_id:
+          loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? undefined,
+      },
+    );
+    setLoadedWorkspaceEnvelope(nextEnvelope);
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke<EngineConfigPayload>("save_engine_config", {
       payload,
@@ -1901,6 +1949,7 @@ export function App() {
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
+                onProposeBrainUpdate={proposeBrainUpdate}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />
