@@ -60,7 +60,7 @@ memory.
 
 ### Agent Context Surface
 - Provides brain search and context-pack contracts through the Rust engine
-- Exposes a read-only MCP stdio server for external agents: [`docs/mcp-readonly.md`](docs/mcp-readonly.md)
+- Exposes an MCP stdio server for external agents: [`docs/mcp.md`](docs/mcp.md)
 - Keeps proposal writes reviewable instead of letting agents mutate source truth directly
 - Separates safe memory updates from risky claims and links
 - Preserves provenance so agents can cite the source of durable context
