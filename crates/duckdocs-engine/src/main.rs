@@ -1869,7 +1869,7 @@ impl BrainReader {
                     title: node.label.clone(),
                     path: None,
                     score,
-                    snippet: format!("{} evidence refs", node.evidence_ids.len()),
+                    snippet: evidence_snippet(&node.evidence_ids),
                 });
             }
         }
@@ -1889,7 +1889,7 @@ impl BrainReader {
                     title: entity.name.clone(),
                     path: None,
                     score,
-                    snippet: format!("{} evidence refs", entity.evidence_refs.len()),
+                    snippet: evidence_snippet(&entity.evidence_refs),
                 });
             }
         }
@@ -1909,7 +1909,11 @@ impl BrainReader {
                     title: claim.statement.clone(),
                     path: Some("graph/claims.json".into()),
                     score,
-                    snippet: best_snippet(&claim.statement, &terms),
+                    snippet: format!(
+                        "{}; {}",
+                        evidence_snippet(&claim.evidence_refs),
+                        best_snippet(&claim.statement, &terms)
+                    ),
                 });
             }
         }
@@ -1931,8 +1935,11 @@ impl BrainReader {
                     path: Some("graph/edges.json".into()),
                     score,
                     snippet: format!(
-                        "{:?}: {} -> {}",
-                        relation.kind, relation.source_node_id, relation.target_node_id
+                        "{:?}: {} -> {}; {}",
+                        relation.kind,
+                        relation.source_node_id,
+                        relation.target_node_id,
+                        evidence_snippet(&relation.evidence_ids)
                     ),
                 });
             }
@@ -1953,7 +1960,11 @@ impl BrainReader {
                     title: memory.title.clone(),
                     path: Some("memory/records.json".into()),
                     score,
-                    snippet: best_snippet(&memory.body, &terms),
+                    snippet: format!(
+                        "{}; {}",
+                        evidence_snippet(&memory.evidence_refs),
+                        best_snippet(&memory.body, &terms)
+                    ),
                 });
             }
         }
@@ -2047,7 +2058,7 @@ impl BrainReader {
     }
 
     fn context_pack(&self, query: &str, budget: usize) -> Result<BrainContextPack> {
-        let results = self.search(query, 12);
+        let results = self.search(query, 24);
         let mut page_paths = BTreeSet::new();
         let mut node_ids = BTreeSet::new();
         let mut entity_ids = BTreeSet::new();
@@ -2055,6 +2066,7 @@ impl BrainReader {
         let mut relation_ids = BTreeSet::new();
         let mut source_ids = BTreeSet::new();
         let mut evidence_ids = BTreeSet::new();
+        let mut memory_ids = BTreeSet::new();
         for result in &results {
             match result.kind {
                 BrainSearchResultKind::WikiPage => {
@@ -2077,25 +2089,115 @@ impl BrainReader {
                 BrainSearchResultKind::Source => {
                     source_ids.insert(result.id.clone());
                 }
-                BrainSearchResultKind::Memory => {}
+                BrainSearchResultKind::Memory => {
+                    memory_ids.insert(result.id.clone());
+                }
                 BrainSearchResultKind::Evidence => {
                     evidence_ids.insert(result.id.clone());
                 }
-                BrainSearchResultKind::Event => {}
+                BrainSearchResultKind::Event => {
+                    if let Some(event) =
+                        self.events.iter().find(|event| event.event_id == result.id)
+                    {
+                        source_ids.extend(event.source_refs.iter().cloned());
+                        node_ids.extend(event.node_refs.iter().cloned());
+                        relation_ids.extend(event.relation_refs.iter().cloned());
+                        evidence_ids.extend(event.evidence_refs.iter().cloned());
+                    }
+                }
             }
         }
 
-        let mut nodes = self
-            .snapshot
-            .nodes
-            .iter()
-            .filter(|node| node_ids.contains(&node.node_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        for node in &nodes {
-            source_ids.extend(node.source_ids.iter().cloned());
-            evidence_ids.extend(node.evidence_ids.iter().cloned());
+        for evidence in &self.snapshot.evidence {
+            if evidence_ids.contains(&evidence.id) {
+                if let Some(source_id) = &evidence.source_id {
+                    source_ids.insert(source_id.clone());
+                }
+            }
+            if evidence
+                .source_id
+                .as_ref()
+                .is_some_and(|source_id| source_ids.contains(source_id))
+            {
+                evidence_ids.insert(evidence.id.clone());
+            }
         }
+        for node in &self.snapshot.nodes {
+            if node_ids.contains(&node.node_id)
+                || node
+                    .source_ids
+                    .iter()
+                    .any(|source_id| source_ids.contains(source_id))
+                || node
+                    .evidence_ids
+                    .iter()
+                    .any(|evidence_id| evidence_ids.contains(evidence_id))
+            {
+                node_ids.insert(node.node_id.clone());
+                source_ids.extend(node.source_ids.iter().cloned());
+                evidence_ids.extend(node.evidence_ids.iter().cloned());
+            }
+        }
+        for entity in &self.snapshot.entities {
+            if entity_ids.contains(&entity.entity_id)
+                || entity
+                    .source_refs
+                    .iter()
+                    .any(|source_id| source_ids.contains(source_id))
+                || entity
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence_id| evidence_ids.contains(evidence_id))
+            {
+                entity_ids.insert(entity.entity_id.clone());
+                node_ids.insert(entity.entity_id.clone());
+                source_ids.extend(entity.source_refs.iter().cloned());
+                evidence_ids.extend(entity.evidence_refs.iter().cloned());
+            }
+        }
+        for claim in &self.snapshot.claims {
+            if claim_ids.contains(&claim.claim_id)
+                || claim
+                    .topic_refs
+                    .iter()
+                    .any(|node_id| node_ids.contains(node_id))
+                || claim
+                    .source_refs
+                    .iter()
+                    .any(|source_id| source_ids.contains(source_id))
+                || claim
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence_id| evidence_ids.contains(evidence_id))
+            {
+                claim_ids.insert(claim.claim_id.clone());
+                node_ids.extend(claim.topic_refs.iter().cloned());
+                source_ids.extend(claim.source_refs.iter().cloned());
+                evidence_ids.extend(claim.evidence_refs.iter().cloned());
+            }
+        }
+        for relation in &self.snapshot.relations {
+            if relation_ids.contains(&relation.relation_id)
+                || node_ids.contains(&relation.source_node_id)
+                || node_ids.contains(&relation.target_node_id)
+                || relation
+                    .evidence_ids
+                    .iter()
+                    .any(|evidence_id| evidence_ids.contains(evidence_id))
+            {
+                relation_ids.insert(relation.relation_id.clone());
+                node_ids.insert(relation.source_node_id.clone());
+                node_ids.insert(relation.target_node_id.clone());
+                evidence_ids.extend(relation.evidence_ids.iter().cloned());
+            }
+        }
+        for node in &self.snapshot.nodes {
+            if node_ids.contains(&node.node_id) {
+                source_ids.extend(node.source_ids.iter().cloned());
+                evidence_ids.extend(node.evidence_ids.iter().cloned());
+            }
+        }
+
         let entities = self
             .snapshot
             .entities
@@ -2103,10 +2205,6 @@ impl BrainReader {
             .filter(|entity| entity_ids.contains(&entity.entity_id))
             .cloned()
             .collect::<Vec<_>>();
-        for entity in &entities {
-            source_ids.extend(entity.source_refs.iter().cloned());
-            evidence_ids.extend(entity.evidence_refs.iter().cloned());
-        }
         let claims = self
             .snapshot
             .claims
@@ -2114,22 +2212,13 @@ impl BrainReader {
             .filter(|claim| claim_ids.contains(&claim.claim_id))
             .cloned()
             .collect::<Vec<_>>();
-        for claim in &claims {
-            node_ids.extend(claim.topic_refs.iter().cloned());
-            source_ids.extend(claim.source_refs.iter().cloned());
-            evidence_ids.extend(claim.evidence_refs.iter().cloned());
-        }
-        nodes = self
+        let mut nodes = self
             .snapshot
             .nodes
             .iter()
             .filter(|node| node_ids.contains(&node.node_id))
             .cloned()
             .collect::<Vec<_>>();
-        for node in &nodes {
-            source_ids.extend(node.source_ids.iter().cloned());
-            evidence_ids.extend(node.evidence_ids.iter().cloned());
-        }
         let selected_node_ids = nodes
             .iter()
             .map(|node| node.node_id.clone())
@@ -2145,16 +2234,6 @@ impl BrainReader {
             })
             .cloned()
             .collect::<Vec<_>>();
-        for relation in &relations {
-            evidence_ids.extend(relation.evidence_ids.iter().cloned());
-        }
-        let sources = self
-            .snapshot
-            .sources
-            .iter()
-            .filter(|source| source_ids.contains(&source.source_id))
-            .cloned()
-            .collect::<Vec<_>>();
         let memory_terms = search_terms(query);
         let memories = self
             .snapshot
@@ -2162,8 +2241,20 @@ impl BrainReader {
             .iter()
             .filter(|memory| {
                 let haystack = format!("{} {}", memory.title, memory.body);
-                !memory_terms.is_empty() && match_score(&memory_terms, &haystack).is_some()
+                memory_ids.contains(&memory.memory_id)
+                    || (!memory_terms.is_empty() && match_score(&memory_terms, &haystack).is_some())
             })
+            .cloned()
+            .collect::<Vec<_>>();
+        for memory in &memories {
+            source_ids.extend(memory.source_refs.iter().cloned());
+            evidence_ids.extend(memory.evidence_refs.iter().cloned());
+        }
+        let sources = self
+            .snapshot
+            .sources
+            .iter()
+            .filter(|source| source_ids.contains(&source.source_id))
             .cloned()
             .collect::<Vec<_>>();
         let evidence = self
@@ -2175,6 +2266,23 @@ impl BrainReader {
             .collect::<Vec<_>>();
 
         let mut wiki_pages = Vec::new();
+        for page in &self.snapshot.wiki_pages {
+            if page
+                .node_refs
+                .iter()
+                .any(|node_id| node_ids.contains(node_id))
+                || page
+                    .source_refs
+                    .iter()
+                    .any(|source_id| source_ids.contains(source_id))
+                || page
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence_id| evidence_ids.contains(evidence_id))
+            {
+                page_paths.insert(page.path.clone());
+            }
+        }
         for path in page_paths {
             if let Ok(page) = self.read_wiki_page(&path) {
                 wiki_pages.push(page);
@@ -2283,20 +2391,78 @@ fn normalize_wiki_path(path: &str) -> Result<String> {
 fn search_terms(query: &str) -> Vec<String> {
     query
         .split(|char: char| !char.is_ascii_alphanumeric())
-        .map(|term| term.to_ascii_lowercase())
-        .filter(|term| term.len() > 1)
+        .filter_map(normalize_search_token)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
 fn match_score(terms: &[String], haystack: &str) -> Option<usize> {
-    let haystack = haystack.to_ascii_lowercase();
-    let score = terms
-        .iter()
-        .filter(|term| haystack.contains(term.as_str()))
-        .count();
+    let frequencies = search_token_frequencies(haystack);
+    let mut matched_terms = 0usize;
+    let mut score = 0usize;
+    for term in terms {
+        if let Some(frequency) = frequencies.get(term) {
+            matched_terms += 1;
+            score += 8 + frequency.saturating_mul(2);
+            continue;
+        }
+        if term.len() > 3
+            && frequencies
+                .keys()
+                .any(|token| token.starts_with(term) || term.starts_with(token))
+        {
+            matched_terms += 1;
+            score += 3;
+        }
+    }
+    score += matched_terms.saturating_mul(matched_terms);
+    if matched_terms == terms.len() {
+        score += 10;
+    }
     (score > 0).then_some(score)
+}
+
+fn evidence_snippet(evidence_ids: &[String]) -> String {
+    if evidence_ids.is_empty() {
+        return "evidence: none".into();
+    }
+    format!("evidence: {}", evidence_ids.join(", "))
+}
+
+fn search_token_frequencies(text: &str) -> BTreeMap<String, usize> {
+    let mut frequencies = BTreeMap::new();
+    for token in text
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .filter_map(normalize_search_token)
+    {
+        *frequencies.entry(token).or_insert(0) += 1;
+    }
+    frequencies
+}
+
+fn normalize_search_token(raw: &str) -> Option<String> {
+    let mut token = raw.trim().to_ascii_lowercase();
+    if token.len() <= 1 {
+        return None;
+    }
+    if token.ends_with("ies") && token.len() > 4 {
+        token.truncate(token.len() - 3);
+        token.push('y');
+    } else if token.ends_with("ing") && token.len() > 5 {
+        token.truncate(token.len() - 3);
+    } else if token.ends_with("ed") && token.len() > 4 {
+        token.truncate(token.len() - 2);
+    } else if token.ends_with("es") && token.len() > 4 && !token.ends_with("ses") {
+        token.truncate(token.len() - 2);
+    } else if token.ends_with('s')
+        && token.len() > 4
+        && !token.ends_with("ss")
+        && !token.ends_with("us")
+    {
+        token.truncate(token.len() - 1);
+    }
+    (token.len() > 1).then_some(token)
 }
 
 fn best_snippet(text: &str, terms: &[String]) -> String {
@@ -8402,6 +8568,65 @@ mod tests {
         assert!(!context_pack.claims.is_empty());
         assert!(!context_pack.relations.is_empty());
         assert!(!context_pack.recent_events.is_empty());
+    }
+
+    #[test]
+    fn brain_search_uses_tokenized_retrieval_and_context_expansion() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Planning memo\n\n## Page 1\n\nAgent brain context stays source backed.\nProject retrieval packs cite evidence for the graph.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        write_source_manifest(&manifest).expect("write source manifest");
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let search = handle_search_brain(SearchBrainRequest {
+            scope: scope.clone(),
+            query: "agents".into(),
+            limit: Some(10),
+        })
+        .expect("search plural query");
+        assert!(search.results.iter().any(|result| {
+            result.kind == BrainSearchResultKind::Entity && result.title.contains("Agent brain")
+        }));
+        assert!(search
+            .results
+            .iter()
+            .any(|result| result.kind == BrainSearchResultKind::Evidence));
+        assert!(search.results.iter().any(|result| {
+            result.kind == BrainSearchResultKind::Claim && result.snippet.contains("evidence:")
+        }));
+
+        let context_pack = handle_get_context_pack(GetContextPackRequest {
+            scope,
+            query: "agents".into(),
+            budget: Some(4000),
+        })
+        .expect("context pack")
+        .context_pack;
+        assert!(context_pack
+            .entities
+            .iter()
+            .any(|entity| entity.name.contains("Agent brain")));
+        assert!(!context_pack.claims.is_empty());
+        assert!(!context_pack.relations.is_empty());
+        assert!(!context_pack.sources.is_empty());
+        assert!(!context_pack.evidence.is_empty());
     }
 
     #[test]
