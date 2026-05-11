@@ -5299,6 +5299,15 @@ mod tests {
             .expect("concept node")
             .id
             .clone();
+        rename_concept_for_test(project, &concept_id, canonical_name, aliases);
+    }
+
+    fn rename_concept_for_test(
+        project: &mut KnowledgeProject,
+        concept_id: &str,
+        canonical_name: &str,
+        aliases: &[&str],
+    ) {
         let node = project
             .nodes
             .iter_mut()
@@ -5307,7 +5316,7 @@ mod tests {
         node.label = canonical_name.into();
         let detail = project
             .details_by_node_id
-            .get_mut(&concept_id)
+            .get_mut(concept_id)
             .expect("concept detail");
         detail.canonical_name = canonical_name.into();
         detail.aliases = aliases.iter().map(|alias| (*alias).to_string()).collect();
@@ -6192,6 +6201,99 @@ mod tests {
         assert_eq!(corrections[0].kind, CorrectionKind::Rename);
         assert_eq!(corrections[0].source_node_ids.len(), 2);
         assert!(!corrections[0].evidence_ids.is_empty());
+    }
+
+    #[test]
+    fn workspace_merge_correction_replays_to_source_snapshot_and_ledger() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha planning context keeps agents grounded.\n\n## Page 2\n\nBeta review context keeps evidence visible.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let concept_ids = project
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        assert!(concept_ids.len() >= 2);
+        rename_concept_for_test(&mut project, &concept_ids[0], "Alpha Context", &[]);
+        rename_concept_for_test(&mut project, &concept_ids[1], "Beta Context", &[]);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source project");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let source_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Alpha Context")
+            .expect("workspace source concept")
+            .clone();
+        let target_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Beta Context")
+            .expect("workspace target concept")
+            .clone();
+        let node_count_before = project.nodes.len();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: source_detail.node.id.clone(),
+            kind: CorrectionKind::Merge,
+            target_node_id: Some(target_detail.node.id.clone()),
+            value: None,
+        })
+        .expect("apply workspace merge correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let source_project = store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load source project")
+            .expect("source project");
+        assert_eq!(source_project.nodes.len(), node_count_before - 1);
+        assert!(!source_project
+            .details_by_node_id
+            .values()
+            .any(|detail| detail.canonical_name == "Alpha Context"));
+        assert!(source_project
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Beta Context")
+            .expect("merged target concept")
+            .aliases
+            .contains(&"Alpha Context".into()));
+
+        let corrections = store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace corrections");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].kind, CorrectionKind::Merge);
+        assert_eq!(corrections[0].target_node_id, Some(target_detail.node.id));
+        assert_eq!(corrections[0].source_node_ids.len(), 1);
     }
 
     #[test]
