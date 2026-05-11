@@ -462,6 +462,121 @@ pub struct ClaimRecord {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionPageRef {
+    pub page_label: String,
+    #[serde(default)]
+    pub page_index: Option<usize>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionEntity {
+    pub entity_id: String,
+    pub kind: BrainNodeKind,
+    pub name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionTopic {
+    pub topic_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionClaim {
+    pub claim_id: String,
+    pub statement: String,
+    #[serde(default)]
+    pub subject_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub status: String,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionRelation {
+    pub relation_id: String,
+    pub kind: BrainRelationKind,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionArtifact {
+    pub artifact_id: String,
+    pub workspace_id: String,
+    pub source_id: String,
+    pub extractor: String,
+    #[serde(default)]
+    pub extractor_model: Option<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub entities: Vec<StructuredExtractionEntity>,
+    #[serde(default)]
+    pub topics: Vec<StructuredExtractionTopic>,
+    #[serde(default)]
+    pub claims: Vec<StructuredExtractionClaim>,
+    #[serde(default)]
+    pub relations: Vec<StructuredExtractionRelation>,
+    #[serde(default)]
+    pub evidence_refs: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub provenance: String,
+    pub created_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainRepoSnapshot {
@@ -483,6 +598,8 @@ pub struct BrainRepoSnapshot {
     pub entities: Vec<EntityRecord>,
     #[serde(default)]
     pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub extractions: Vec<StructuredExtractionArtifact>,
     #[serde(default)]
     pub events: Vec<BrainEvent>,
 }
