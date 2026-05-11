@@ -6654,6 +6654,167 @@ mod tests {
     }
 
     #[test]
+    fn proposed_brain_updates_queue_review_items_without_mutating_materialized_repo() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let nodes_before =
+            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes before");
+        let edges_before =
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges before");
+        let wiki_before =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki before");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "claude-code".into(),
+        };
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let proposal_specs = [
+            (
+                BrainProposalKind::Memory,
+                "Remember parser wedge",
+                "HyprDuck starts from source-backed document parsing.",
+                None,
+                None,
+                None,
+                Vec::new(),
+            ),
+            (
+                BrainProposalKind::Claim,
+                "Claim source backing",
+                "Every durable brain fact should point back to source evidence.",
+                Some(concept_node_id.clone()),
+                None,
+                None,
+                vec![concept_node_id.clone()],
+            ),
+            (
+                BrainProposalKind::Link,
+                "Relate document and concept",
+                "The concept is derived from the imported document.",
+                Some(concept_node_id.clone()),
+                None,
+                Some(BrainRelationKind::RelatedTo),
+                vec!["document".into()],
+            ),
+            (
+                BrainProposalKind::Observation,
+                "Append session observation",
+                "The agent saw the user prioritize a review queue.",
+                None,
+                None,
+                None,
+                Vec::new(),
+            ),
+            (
+                BrainProposalKind::SourceNote,
+                "Annotate source",
+                "This source should seed the local brain.",
+                None,
+                Some(manifest.source_id.clone()),
+                None,
+                Vec::new(),
+            ),
+        ];
+
+        let mut proposal_paths = Vec::new();
+        for (kind, title, body, target_node_id, target_source_id, relation_kind, node_refs) in
+            proposal_specs
+        {
+            let response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+                scope: scope.clone(),
+                kind,
+                title: title.into(),
+                body: body.into(),
+                actor: actor.clone(),
+                target_node_id,
+                target_source_id,
+                relation_kind,
+                source_refs: vec![manifest.source_id.clone()],
+                node_refs,
+                evidence_refs: Vec::new(),
+            })
+            .expect("propose brain update");
+            assert_eq!(response.proposal.status, BrainProposalStatus::PendingReview);
+            assert_eq!(response.event.policy_result, "needs_review");
+            proposal_paths.push(PathBuf::from(response.proposal_path));
+        }
+
+        for path in &proposal_paths {
+            assert!(path.exists(), "missing proposal {}", path.display());
+            let proposal_json = fs::read_to_string(path).expect("read proposal");
+            let proposal: BrainUpdateProposal =
+                serde_json::from_str(&proposal_json).expect("decode proposal");
+            assert_eq!(proposal.status, BrainProposalStatus::PendingReview);
+        }
+
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(10),
+        })
+        .expect("read proposal events");
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::MemoryProposed));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::ClaimProposed));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::LinkProposed));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::ObservationAppended));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::SourceNoteProposed));
+
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes after"),
+            nodes_before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges after"),
+            edges_before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki after"),
+            wiki_before
+        );
+    }
+
+    #[test]
     fn compile_project_uses_source_manifest_as_graph_node_backing() {
         let temp = tempfile::tempdir().expect("temp dir");
         let markdown = "# Sample import\n\n## Page 1\n\nSource evidence belongs to the graph.\n";
