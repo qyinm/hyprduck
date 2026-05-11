@@ -33,9 +33,13 @@ export interface WorkspaceNodeSummary {
 export interface WorkspaceEvidenceRef {
   id: string;
   pageLabel: string;
+  pageIndex?: number | null;
   snippet: string;
   sourcePath?: string | null;
   sourceId?: string | null;
+  markdownPath?: string | null;
+  imagePath?: string | null;
+  provenance?: string | null;
 }
 
 export interface WorkspaceSourceBacking {

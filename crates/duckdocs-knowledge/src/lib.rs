@@ -68,11 +68,19 @@ pub struct GraphNodeSummary {
 pub struct EvidenceRef {
     pub id: String,
     pub page_label: String,
+    #[serde(default)]
+    pub page_index: Option<usize>,
     pub snippet: String,
     #[serde(default)]
     pub source_path: Option<String>,
     #[serde(default)]
     pub source_id: Option<String>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,9 +223,13 @@ mod tests {
             citations: vec![EvidenceRef {
                 id: "ev-1".into(),
                 page_label: "Page 1".into(),
+                page_index: Some(0),
                 snippet: "Visible evidence snippet".into(),
                 source_path: Some("sample.pdf".into()),
                 source_id: Some("source-1".into()),
+                markdown_path: Some("pages/page_1.md".into()),
+                image_path: Some("images/page_1.png".into()),
+                provenance: Some("Test evidence".into()),
             }],
             related_node_ids: vec!["page-1".into()],
             suggested_actions: vec![SuggestedAction {
