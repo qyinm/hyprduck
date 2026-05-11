@@ -2068,13 +2068,12 @@ fn best_matching_detail_node_id(project: &KnowledgeProject, question: &str) -> O
         .details_by_node_id
         .values()
         .map(|detail| {
-            let mut score = overlap_score(&terms, &detail.canonical_name);
-            for alias in &detail.aliases {
-                score += overlap_score(&terms, alias);
-            }
+            let mut detail_terms = text_terms(&detail.canonical_name);
+            detail_terms.extend(detail.aliases.iter().flat_map(|alias| text_terms(alias)));
             for evidence in &detail.evidence {
-                score += overlap_score(&terms, &evidence.snippet);
+                detail_terms.extend(text_terms(&evidence.snippet));
             }
+            let score = terms.intersection(&detail_terms).count();
             (score, detail.node.id.clone())
         })
         .filter(|(score, _)| *score > 0)
@@ -2830,7 +2829,11 @@ fn answer_suggested_actions(status: AnswerStatus) -> Vec<SuggestedAction> {
 }
 
 fn question_terms(question: &str) -> BTreeSet<String> {
-    question
+    text_terms(question)
+}
+
+fn text_terms(value: &str) -> BTreeSet<String> {
+    value
         .split(|char: char| !char.is_ascii_alphanumeric())
         .map(|term| term.trim().to_ascii_lowercase())
         .filter(|term| term.len() >= 3)
