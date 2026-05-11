@@ -844,6 +844,7 @@ fn handle_list_brain_review_items(
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    run_brain_maintenance(&request.scope)?;
     let review_items = list_pending_brain_review_items(&root, &request.scope.workspace_id)?;
     let attention_count = review_items.len();
     let mut recent_events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
@@ -962,6 +963,498 @@ fn brain_review_item_for_proposal(proposal: &BrainUpdateProposal, path: &Path) -
         evidence_refs: proposal.evidence_refs.clone(),
         created_at: proposal.created_at,
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrainLintIssue {
+    issue_id: String,
+    kind: String,
+    severity: String,
+    title: String,
+    body: String,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    #[serde(default)]
+    node_refs: Vec<String>,
+    #[serde(default)]
+    relation_refs: Vec<String>,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrainMaintenanceReport {
+    workspace_id: String,
+    generated_at: u64,
+    issue_count: usize,
+    repair_count: usize,
+    new_review_count: usize,
+    #[serde(default)]
+    repairs: Vec<String>,
+    #[serde(default)]
+    issues: Vec<BrainLintIssue>,
+}
+
+fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceReport> {
+    let root = resolve_brain_workspace_root(scope)?;
+    let writer = BrainWorkspaceWriter::open(root.clone())?;
+    let snapshot = read_materialized_brain_snapshot(&root, &scope.workspace_id)?;
+    let mut report = lint_brain_snapshot(&snapshot);
+    report.repair_count += repair_generated_brain_artifacts(&root, &snapshot, &mut report.repairs)?;
+    report.new_review_count += write_lint_review_items(&writer, &snapshot, &report.issues)?;
+    report.issue_count = report.issues.len();
+    write_json_pretty(&root.join("reviews/lint-reports/latest.json"), &report)?;
+    if report.repair_count > 0 || report.new_review_count > 0 {
+        writer.append_event(&brain_maintenance_event(&snapshot, &report)?)?;
+    }
+    Ok(report)
+}
+
+fn read_materialized_brain_snapshot(root: &Path, workspace_id: &str) -> Result<BrainRepoSnapshot> {
+    let manifest_path = root.join("brain-manifest.json");
+    let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
+    if snapshot.workspace_id != workspace_id {
+        bail!(
+            "brain manifest workspace_id {} does not match requested workspace {}",
+            snapshot.workspace_id,
+            workspace_id
+        );
+    }
+    if root.join("graph/nodes.json").exists() {
+        snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
+    }
+    if root.join("graph/edges.json").exists() {
+        snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
+    }
+    if root.join("graph/evidence.json").exists() {
+        snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
+    }
+    if root.join("graph/entities.json").exists() {
+        snapshot.entities = read_json_artifact(&root.join("graph/entities.json"))?;
+    }
+    if root.join("graph/claims.json").exists() {
+        snapshot.claims = read_json_artifact(&root.join("graph/claims.json"))?;
+    }
+    snapshot.memories = read_memory_records(root)?;
+    snapshot.events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    Ok(snapshot)
+}
+
+fn lint_brain_snapshot(snapshot: &BrainRepoSnapshot) -> BrainMaintenanceReport {
+    let mut issues = Vec::new();
+    let generated_at = unix_timestamp_seconds();
+    let evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    let source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let connected_node_ids = snapshot
+        .relations
+        .iter()
+        .flat_map(|relation| {
+            [
+                relation.source_node_id.clone(),
+                relation.target_node_id.clone(),
+            ]
+        })
+        .collect::<BTreeSet<_>>();
+
+    for claim in &snapshot.claims {
+        let missing_evidence = missing_refs(&claim.evidence_refs, &evidence_ids);
+        if claim.evidence_refs.is_empty() || !missing_evidence.is_empty() {
+            issues.push(BrainLintIssue {
+                issue_id: stable_lint_issue_id(
+                    "missing-evidence",
+                    &claim.claim_id,
+                    &missing_evidence,
+                ),
+                kind: "missing_evidence".into(),
+                severity: "risky".into(),
+                title: format!("Claim needs evidence: {}", claim.statement),
+                body: if claim.evidence_refs.is_empty() {
+                    "This claim has no evidence refs. Review it before agents use it as durable brain context.".into()
+                } else {
+                    format!(
+                        "This claim references missing evidence ids: {}.",
+                        missing_evidence.join(", ")
+                    )
+                },
+                source_refs: claim.source_refs.clone(),
+                node_refs: claim.topic_refs.clone(),
+                relation_refs: Vec::new(),
+                evidence_refs: claim.evidence_refs.clone(),
+            });
+        }
+    }
+
+    for relation in &snapshot.relations {
+        let mut missing_nodes = missing_refs(
+            &[
+                relation.source_node_id.clone(),
+                relation.target_node_id.clone(),
+            ],
+            &node_ids,
+        );
+        let missing_evidence = missing_refs(&relation.evidence_ids, &evidence_ids);
+        if !missing_nodes.is_empty() || !missing_evidence.is_empty() {
+            missing_nodes.extend(missing_evidence);
+            issues.push(BrainLintIssue {
+                issue_id: stable_lint_issue_id("orphan-relation", &relation.relation_id, &missing_nodes),
+                kind: "orphan".into(),
+                severity: "risky".into(),
+                title: format!("Typed relation needs review: {}", relation.label),
+                body: "This relation points at a missing node or evidence ref. Review it before keeping it in the durable graph.".into(),
+                source_refs: Vec::new(),
+                node_refs: vec![relation.source_node_id.clone(), relation.target_node_id.clone()],
+                relation_refs: vec![relation.relation_id.clone()],
+                evidence_refs: relation.evidence_ids.clone(),
+            });
+        }
+    }
+
+    for node in &snapshot.nodes {
+        if matches!(node.kind, BrainNodeKind::Concept | BrainNodeKind::Topic)
+            && node.evidence_ids.is_empty()
+            && node.source_ids.is_empty()
+            && !connected_node_ids.contains(&node.node_id)
+        {
+            issues.push(BrainLintIssue {
+                issue_id: stable_lint_issue_id("orphan-node", &node.node_id, &[]),
+                kind: "orphan".into(),
+                severity: "risky".into(),
+                title: format!("Orphan node needs review: {}", node.label),
+                body: "This node is not connected to a source, evidence ref, or typed relation."
+                    .into(),
+                source_refs: Vec::new(),
+                node_refs: vec![node.node_id.clone()],
+                relation_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+            });
+        }
+        let missing_sources = missing_refs(&node.source_ids, &source_ids);
+        if !missing_sources.is_empty() {
+            issues.push(BrainLintIssue {
+                issue_id: stable_lint_issue_id("missing-source", &node.node_id, &missing_sources),
+                kind: "missing_evidence".into(),
+                severity: "risky".into(),
+                title: format!("Node references missing source: {}", node.label),
+                body: format!("Missing source refs: {}.", missing_sources.join(", ")),
+                source_refs: node.source_ids.clone(),
+                node_refs: vec![node.node_id.clone()],
+                relation_refs: Vec::new(),
+                evidence_refs: node.evidence_ids.clone(),
+            });
+        }
+    }
+
+    for source in &snapshot.sources {
+        if source.status == "stale" || source.updated_at > snapshot.generated_at {
+            issues.push(BrainLintIssue {
+                issue_id: stable_lint_issue_id("stale-source", &source.source_id, &[]),
+                kind: "stale".into(),
+                severity: "risky".into(),
+                title: format!("Source may need recompilation: {}", source.source_id),
+                body: "This source is stale or newer than the materialized brain snapshot.".into(),
+                source_refs: vec![source.source_id.clone()],
+                node_refs: Vec::new(),
+                relation_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+            });
+        }
+    }
+
+    for (left_index, left) in snapshot.claims.iter().enumerate() {
+        for right in snapshot.claims.iter().skip(left_index + 1) {
+            if claims_may_conflict(left, right) {
+                issues.push(BrainLintIssue {
+                    issue_id: stable_lint_issue_id(
+                        "conflict",
+                        &left.claim_id,
+                        std::slice::from_ref(&right.claim_id),
+                    ),
+                    kind: "conflict".into(),
+                    severity: "risky".into(),
+                    title: "Claims may conflict".into(),
+                    body: format!(
+                        "Review potentially conflicting claims: `{}` vs `{}`.",
+                        left.statement, right.statement
+                    ),
+                    source_refs: left
+                        .source_refs
+                        .iter()
+                        .chain(right.source_refs.iter())
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                    node_refs: left
+                        .topic_refs
+                        .iter()
+                        .chain(right.topic_refs.iter())
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                    relation_refs: Vec::new(),
+                    evidence_refs: left
+                        .evidence_refs
+                        .iter()
+                        .chain(right.evidence_refs.iter())
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                });
+            }
+        }
+    }
+
+    BrainMaintenanceReport {
+        workspace_id: snapshot.workspace_id.clone(),
+        generated_at,
+        issue_count: issues.len(),
+        repair_count: 0,
+        new_review_count: 0,
+        repairs: Vec::new(),
+        issues,
+    }
+}
+
+fn missing_refs(refs: &[String], existing: &BTreeSet<String>) -> Vec<String> {
+    refs.iter()
+        .filter(|value| !existing.contains(*value))
+        .cloned()
+        .collect()
+}
+
+fn stable_lint_issue_id(kind: &str, primary: &str, rest: &[String]) -> String {
+    let mut parts = vec![kind.to_string(), primary.to_string()];
+    parts.extend(rest.iter().cloned());
+    format!("lint-{}", sanitize_name(&parts.join("-")))
+}
+
+fn claims_may_conflict(left: &ClaimRecord, right: &ClaimRecord) -> bool {
+    if left.topic_refs.is_empty()
+        || right.topic_refs.is_empty()
+        || left
+            .topic_refs
+            .iter()
+            .all(|topic| !right.topic_refs.contains(topic))
+    {
+        return false;
+    }
+    let left_negative = contains_negative_claim_marker(&left.statement);
+    let right_negative = contains_negative_claim_marker(&right.statement);
+    left_negative != right_negative && shared_claim_terms(&left.statement, &right.statement) >= 3
+}
+
+fn contains_negative_claim_marker(value: &str) -> bool {
+    value
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .any(|word| {
+            matches!(
+                word.to_ascii_lowercase().as_str(),
+                "no" | "not" | "never" | "without"
+            )
+        })
+}
+
+fn shared_claim_terms(left: &str, right: &str) -> usize {
+    let left_terms = claim_terms(left);
+    let right_terms = claim_terms(right);
+    left_terms.intersection(&right_terms).count()
+}
+
+fn claim_terms(value: &str) -> BTreeSet<String> {
+    value
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .map(|word| word.to_ascii_lowercase())
+        .filter(|word| word.len() >= 4)
+        .filter(|word| {
+            !matches!(
+                word.as_str(),
+                "this" | "that" | "with" | "from" | "into" | "evidence" | "backed"
+            )
+        })
+        .collect()
+}
+
+fn repair_generated_brain_artifacts(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    repairs: &mut Vec<String>,
+) -> Result<usize> {
+    let mut count = 0;
+    for page in snapshot
+        .wiki_pages
+        .iter()
+        .filter(|page| page.path == "wiki/index.md" || page.path == "wiki/log.md")
+    {
+        let path = root.join(&page.path);
+        let next = materialized_wiki_page_body(page, snapshot);
+        if fs::read_to_string(&path).unwrap_or_default() != next {
+            write_file_atomic(&path, next.as_bytes())?;
+            repairs.push(page.path.clone());
+            count += 1;
+        }
+    }
+    count += repair_json_artifact(
+        &root.join("graph/nodes.json"),
+        &snapshot.nodes,
+        "graph/nodes.json",
+        repairs,
+    )?;
+    count += repair_json_artifact(
+        &root.join("graph/edges.json"),
+        &snapshot.relations,
+        "graph/edges.json",
+        repairs,
+    )?;
+    count += repair_json_artifact(
+        &root.join("graph/evidence.json"),
+        &snapshot.evidence,
+        "graph/evidence.json",
+        repairs,
+    )?;
+    count += repair_json_artifact(
+        &root.join("graph/entities.json"),
+        &snapshot.entities,
+        "graph/entities.json",
+        repairs,
+    )?;
+    count += repair_json_artifact(
+        &root.join("graph/claims.json"),
+        &snapshot.claims,
+        "graph/claims.json",
+        repairs,
+    )?;
+    Ok(count)
+}
+
+fn repair_json_artifact<T: Serialize>(
+    path: &Path,
+    value: &T,
+    label: &str,
+    repairs: &mut Vec<String>,
+) -> Result<usize> {
+    let next = serde_json::to_string_pretty(value).context("failed to encode repair artifact")?;
+    if fs::read_to_string(path).unwrap_or_default() == next {
+        return Ok(0);
+    }
+    write_file_atomic(path, next.as_bytes())?;
+    repairs.push(label.into());
+    Ok(1)
+}
+
+fn write_lint_review_items(
+    writer: &BrainWorkspaceWriter,
+    snapshot: &BrainRepoSnapshot,
+    issues: &[BrainLintIssue],
+) -> Result<usize> {
+    let mut created = 0;
+    for issue in issues.iter().filter(|issue| issue.severity == "risky") {
+        let proposal_id = format!("proposal-{}", issue.issue_id);
+        let proposal_path = writer.proposal_path(&proposal_id);
+        if proposal_path.exists() {
+            continue;
+        }
+        let kind = if issue.kind == "orphan" {
+            BrainProposalKind::Link
+        } else {
+            BrainProposalKind::Claim
+        };
+        let proposal = BrainUpdateProposal {
+            proposal_id: proposal_id.clone(),
+            workspace_id: snapshot.workspace_id.clone(),
+            kind,
+            status: BrainProposalStatus::PendingReview,
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-maintenance".into(),
+            },
+            scope: BrainScope::Project,
+            title: issue.title.clone(),
+            body: issue.body.clone(),
+            target_node_id: issue.node_refs.first().cloned(),
+            target_source_id: issue.source_refs.first().cloned(),
+            relation_kind: if kind == BrainProposalKind::Link {
+                Some(BrainRelationKind::RelatedTo)
+            } else {
+                None
+            },
+            source_refs: issue.source_refs.clone(),
+            node_refs: issue.node_refs.clone(),
+            evidence_refs: issue.evidence_refs.clone(),
+            created_at: unix_timestamp_seconds(),
+        };
+        writer.write_proposal(&proposal)?;
+        writer.append_event(&brain_review_created_event(&proposal, issue)?)?;
+        created += 1;
+    }
+    Ok(created)
+}
+
+fn brain_review_created_event(
+    proposal: &BrainUpdateProposal,
+    issue: &BrainLintIssue,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        event_type: BrainEventKind::ReviewCreated,
+        actor: proposal.actor.clone(),
+        source_refs: proposal.source_refs.clone(),
+        node_refs: proposal.node_refs.clone(),
+        relation_refs: issue.relation_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(issue)
+            .context("failed to encode lint review event payload")?,
+        confidence: None,
+        policy_result: "needs_review".into(),
+        created_at: proposal.created_at,
+    })
+}
+
+fn brain_maintenance_event(
+    snapshot: &BrainRepoSnapshot,
+    report: &BrainMaintenanceReport,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        workspace_id: snapshot.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::BrainMaintenanceRun,
+        actor: BrainActor {
+            actor_type: BrainActorType::System,
+            actor_id: "duckdocs-maintenance".into(),
+        },
+        source_refs: Vec::new(),
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        evidence_refs: Vec::new(),
+        payload_json: serde_json::to_string(report)
+            .context("failed to encode maintenance event payload")?,
+        confidence: None,
+        policy_result: if report.issue_count == 0 {
+            "auto_repaired".into()
+        } else {
+            "attention_needed".into()
+        },
+        created_at: report.generated_at,
+    })
 }
 
 fn is_auto_apply_brain_proposal(kind: BrainProposalKind) -> bool {
@@ -3307,6 +3800,7 @@ fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
             | BrainEventKind::MemoryAccepted
             | BrainEventKind::ReviewCreated
             | BrainEventKind::ReviewResolved
+            | BrainEventKind::BrainMaintenanceRun
     )
 }
 
@@ -7957,6 +8451,221 @@ mod tests {
         assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
         assert_eq!(health.attention_count, 2);
         assert_eq!(health.review_items.len(), 2);
+    }
+
+    #[test]
+    fn brain_maintenance_repairs_generated_index_log_and_structured_artifacts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::write(workspace_root.join("wiki/index.md"), "# Broken\n").expect("break index");
+        fs::write(workspace_root.join("wiki/log.md"), "# Broken log\n").expect("break log");
+        fs::remove_file(workspace_root.join("graph/nodes.json")).expect("remove nodes");
+        fs::remove_file(workspace_root.join("graph/evidence.json")).expect("remove evidence");
+        fs::remove_file(workspace_root.join("graph/claims.json")).expect("remove claims");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let health = handle_get_brain_health(GetBrainHealthRequest { scope })
+            .expect("health runs maintenance");
+        assert_eq!(health.status, BrainHealthStatus::Clean);
+        assert!(fs::read_to_string(workspace_root.join("wiki/index.md"))
+            .expect("read repaired index")
+            .contains("Brain Index"));
+        assert!(fs::read_to_string(workspace_root.join("wiki/log.md"))
+            .expect("read repaired log")
+            .contains("graph-materialized"));
+        let claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json")).expect("read claims");
+        assert!(!claims.is_empty());
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("read nodes");
+        assert!(!nodes.is_empty());
+        let evidence: Vec<EvidenceRef> =
+            read_json_artifact(&workspace_root.join("graph/evidence.json")).expect("read evidence");
+        assert!(!evidence.is_empty());
+        let report: BrainMaintenanceReport =
+            read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
+                .expect("read lint report");
+        assert!(report.repair_count >= 5);
+        assert!(report.repairs.contains(&"wiki/index.md".into()));
+        assert!(report.repairs.contains(&"wiki/log.md".into()));
+        assert!(report.repairs.contains(&"graph/nodes.json".into()));
+        assert!(report.repairs.contains(&"graph/evidence.json".into()));
+        assert!(report.repairs.contains(&"graph/claims.json".into()));
+    }
+
+    #[test]
+    fn brain_maintenance_promotes_risky_lint_findings_to_health_review() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let claims_path = workspace_root.join("graph/claims.json");
+        let mut claims: Vec<ClaimRecord> =
+            read_json_artifact(&claims_path).expect("read materialized claims");
+        claims.first_mut().expect("claim").evidence_refs.clear();
+        write_json_pretty(&claims_path, &claims).expect("write broken claims");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let health = handle_get_brain_health(GetBrainHealthRequest {
+            scope: scope.clone(),
+        })
+        .expect("health runs maintenance");
+        assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
+        assert!(health
+            .review_items
+            .iter()
+            .any(|item| item.title.contains("Claim needs evidence")));
+        let report: BrainMaintenanceReport =
+            read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
+                .expect("read lint report");
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.kind == "missing_evidence"));
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(20),
+        })
+        .expect("read maintenance events");
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::ReviewCreated));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::BrainMaintenanceRun));
+    }
+
+    #[test]
+    fn brain_maintenance_detects_orphan_conflict_and_stale_cases() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+
+        let manifest_path = workspace_root.join("brain-manifest.json");
+        let mut snapshot: BrainRepoSnapshot =
+            read_json_artifact(&manifest_path).expect("read brain manifest");
+        snapshot.sources[0].status = "stale".into();
+        snapshot.sources[0].updated_at = snapshot.generated_at + 1;
+        write_json_pretty(&manifest_path, &snapshot).expect("write stale manifest");
+
+        let nodes_path = workspace_root.join("graph/nodes.json");
+        let mut nodes: Vec<BrainNodeRecord> = read_json_artifact(&nodes_path).expect("read nodes");
+        nodes.push(BrainNodeRecord {
+            node_id: "orphan-concept".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Orphan Concept".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: Vec::new(),
+            source_ids: Vec::new(),
+            confidence: None,
+            updated_at: snapshot.generated_at,
+        });
+        write_json_pretty(&nodes_path, &nodes).expect("write orphan node");
+
+        let claims_path = workspace_root.join("graph/claims.json");
+        let mut claims: Vec<ClaimRecord> = read_json_artifact(&claims_path).expect("read claims");
+        let base_claim = claims.first().expect("base claim").clone();
+        claims.push(ClaimRecord {
+            claim_id: "claim-positive-agent-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: "Agent brain context is source backed".into(),
+            topic_refs: base_claim.topic_refs.clone(),
+            source_refs: base_claim.source_refs.clone(),
+            evidence_refs: base_claim.evidence_refs.clone(),
+            status: "supported".into(),
+            updated_at: snapshot.generated_at,
+        });
+        claims.push(ClaimRecord {
+            claim_id: "claim-negative-agent-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: "Agent brain context is not source backed".into(),
+            topic_refs: base_claim.topic_refs,
+            source_refs: base_claim.source_refs,
+            evidence_refs: base_claim.evidence_refs,
+            status: "supported".into(),
+            updated_at: snapshot.generated_at,
+        });
+        write_json_pretty(&claims_path, &claims).expect("write conflicting claims");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let health = handle_get_brain_health(GetBrainHealthRequest { scope })
+            .expect("health runs maintenance");
+        assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
+        let report: BrainMaintenanceReport =
+            read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
+                .expect("read lint report");
+        assert!(report.issues.iter().any(|issue| issue.kind == "orphan"));
+        assert!(report.issues.iter().any(|issue| issue.kind == "conflict"));
+        assert!(report.issues.iter().any(|issue| issue.kind == "stale"));
+        assert!(health
+            .review_items
+            .iter()
+            .any(|item| item.kind == BrainProposalKind::Link));
+        assert!(health
+            .review_items
+            .iter()
+            .any(|item| item.title.contains("Claims may conflict")));
+        assert!(health
+            .review_items
+            .iter()
+            .any(|item| item.title.contains("Source may need recompilation")));
     }
 
     #[test]
