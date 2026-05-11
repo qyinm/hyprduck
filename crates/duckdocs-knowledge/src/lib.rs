@@ -313,6 +313,7 @@ pub enum BrainEventKind {
     LinkProposed,
     ObservationAppended,
     SourceNoteProposed,
+    WikiPageProposed,
     MemoryAccepted,
     ReviewCreated,
     ReviewResolved,
@@ -612,6 +613,7 @@ pub enum BrainProposalKind {
     Link,
     Observation,
     SourceNote,
+    WikiPage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

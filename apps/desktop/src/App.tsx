@@ -130,7 +130,7 @@ interface RuntimeReadinessResponseData {
   checks: RuntimeReadinessCheck[];
 }
 
-type BrainProposalKind = "memory" | "claim" | "link" | "observation" | "source_note";
+type BrainProposalKind = "memory" | "claim" | "link" | "observation" | "source_note" | "wiki_page";
 type BrainProposalStatus = "pending_review" | "accepted" | "rejected";
 type BrainHealthStatus = "clean" | "attention_needed";
 

@@ -41,7 +41,7 @@ impl Cli {
             Some("brain") => {
                 let subcommand = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: duckdocs brain <search|context-pack|propose-memory|propose-claim|propose-link|append-observation|add-source-note>"))?;
+                    .ok_or_else(|| anyhow!("usage: duckdocs brain <search|context-pack|propose-memory|propose-claim|propose-link|propose-wiki-page|append-observation|add-source-note>"))?;
                 Some(Commands::Brain {
                     command: parse_brain_command(subcommand, args.collect())?,
                 })
@@ -237,6 +237,19 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
         ),
         "propose-link" => proposal_command(
             BrainProposalKind::Link,
+            workspace,
+            root_dir,
+            actor,
+            target_node_id,
+            target_source_id,
+            relation_kind,
+            source_refs,
+            node_refs,
+            evidence_refs,
+            positional,
+        ),
+        "propose-wiki-page" => proposal_command(
+            BrainProposalKind::WikiPage,
             workspace,
             root_dir,
             actor,

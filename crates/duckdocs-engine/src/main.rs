@@ -902,6 +902,9 @@ fn handle_resolve_brain_review_item(
         BrainReviewDecision::Accept => BrainProposalStatus::Accepted,
         BrainReviewDecision::Reject => BrainProposalStatus::Rejected,
     };
+    if request.decision == BrainReviewDecision::Accept {
+        writer.apply_accepted_proposal(&proposal)?;
+    }
     let proposal_path = writer.write_proposal(&proposal)?;
     let event = brain_review_resolved_event(&proposal, &request)?;
     writer.append_event(&event)?;
@@ -954,7 +957,7 @@ fn is_reviewable_brain_proposal(proposal: &BrainUpdateProposal) -> bool {
     proposal.status == BrainProposalStatus::PendingReview
         && matches!(
             proposal.kind,
-            BrainProposalKind::Claim | BrainProposalKind::Link
+            BrainProposalKind::Claim | BrainProposalKind::Link | BrainProposalKind::WikiPage
         )
 }
 
@@ -1515,7 +1518,10 @@ fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result
                 bail!("source note proposal needs --source");
             }
         }
-        BrainProposalKind::Memory | BrainProposalKind::Claim | BrainProposalKind::Observation => {}
+        BrainProposalKind::Memory
+        | BrainProposalKind::Claim
+        | BrainProposalKind::Observation
+        | BrainProposalKind::WikiPage => {}
     }
     Ok(())
 }
@@ -1527,6 +1533,7 @@ fn brain_event_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainEvent
         BrainProposalKind::Link => BrainEventKind::LinkProposed,
         BrainProposalKind::Observation => BrainEventKind::ObservationAppended,
         BrainProposalKind::SourceNote => BrainEventKind::SourceNoteProposed,
+        BrainProposalKind::WikiPage => BrainEventKind::WikiPageProposed,
     };
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
@@ -1730,6 +1737,36 @@ impl BrainWorkspaceWriter {
         Ok(())
     }
 
+    fn apply_accepted_proposal(&self, proposal: &BrainUpdateProposal) -> Result<()> {
+        if proposal.status != BrainProposalStatus::Accepted {
+            return Ok(());
+        }
+        let manifest_path = self.root.join("brain-manifest.json");
+        if !manifest_path.exists() {
+            return Ok(());
+        }
+        let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
+        apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
+        write_json_pretty(&manifest_path, &snapshot)?;
+        match proposal.kind {
+            BrainProposalKind::Claim => {
+                write_json_pretty(&self.root.join("graph/claims.json"), &snapshot.claims)?;
+            }
+            BrainProposalKind::Link => {
+                write_json_pretty(&self.root.join("graph/edges.json"), &snapshot.relations)?;
+            }
+            BrainProposalKind::WikiPage => {
+                let page = wiki_page_for_proposal(proposal);
+                let page_path = self.root.join(&page.path);
+                write_file_atomic(&page_path, page.body.as_bytes())?;
+            }
+            BrainProposalKind::Memory
+            | BrainProposalKind::Observation
+            | BrainProposalKind::SourceNote => {}
+        }
+        Ok(())
+    }
+
     fn update_brain_manifest_source(&self, manifest: &SourceArtifactManifest) -> Result<()> {
         let path = self.root.join("brain-manifest.json");
         if !path.exists() {
@@ -1755,6 +1792,174 @@ fn merge_source_metadata(target: &mut String, value: &str) {
     let value = value.trim();
     if !value.is_empty() {
         *target = value.to_string();
+    }
+}
+
+fn apply_accepted_proposals_to_snapshot(
+    root: &Path,
+    snapshot: &mut BrainRepoSnapshot,
+) -> Result<()> {
+    for (proposal, _) in read_brain_update_proposals(root)? {
+        if proposal.workspace_id == snapshot.workspace_id
+            && proposal.status == BrainProposalStatus::Accepted
+        {
+            apply_accepted_proposal_to_snapshot(&proposal, snapshot)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_accepted_proposal_to_snapshot(
+    proposal: &BrainUpdateProposal,
+    snapshot: &mut BrainRepoSnapshot,
+) -> Result<()> {
+    match proposal.kind {
+        BrainProposalKind::Claim => {
+            let claim = claim_record_for_proposal(proposal);
+            if let Some(existing) = snapshot
+                .claims
+                .iter_mut()
+                .find(|existing| existing.claim_id == claim.claim_id)
+            {
+                *existing = claim;
+            } else {
+                snapshot.claims.push(claim);
+            }
+            snapshot.claims.sort_by(|left, right| {
+                left.claim_id
+                    .cmp(&right.claim_id)
+                    .then_with(|| left.statement.cmp(&right.statement))
+            });
+        }
+        BrainProposalKind::Link => {
+            let relation = relation_record_for_proposal(proposal)?;
+            if let Some(existing) = snapshot
+                .relations
+                .iter_mut()
+                .find(|existing| existing.relation_id == relation.relation_id)
+            {
+                *existing = relation;
+            } else {
+                snapshot.relations.push(relation);
+            }
+            snapshot.relations.sort_by(|left, right| {
+                left.relation_id
+                    .cmp(&right.relation_id)
+                    .then_with(|| left.label.cmp(&right.label))
+            });
+        }
+        BrainProposalKind::WikiPage => {
+            let page = wiki_page_for_proposal(proposal);
+            if let Some(existing) = snapshot
+                .wiki_pages
+                .iter_mut()
+                .find(|existing| existing.page_id == page.page_id)
+            {
+                *existing = page;
+            } else {
+                snapshot.wiki_pages.push(page);
+            }
+            snapshot.wiki_pages.sort_by(|left, right| {
+                left.path
+                    .cmp(&right.path)
+                    .then_with(|| left.page_id.cmp(&right.page_id))
+            });
+        }
+        BrainProposalKind::Memory
+        | BrainProposalKind::Observation
+        | BrainProposalKind::SourceNote => {}
+    }
+    Ok(())
+}
+
+fn claim_record_for_proposal(proposal: &BrainUpdateProposal) -> ClaimRecord {
+    ClaimRecord {
+        claim_id: format!("claim-{}", brain_proposal_fingerprint(proposal)),
+        workspace_id: proposal.workspace_id.clone(),
+        statement: proposal.body.clone(),
+        topic_refs: proposal.node_refs.clone(),
+        source_refs: proposal.source_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        status: if proposal.evidence_refs.is_empty() {
+            "accepted".into()
+        } else {
+            "supported".into()
+        },
+        updated_at: proposal.created_at,
+    }
+}
+
+fn relation_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainRelationRecord> {
+    let source_node_id = proposal
+        .node_refs
+        .first()
+        .cloned()
+        .context("accepted link proposal needs a source node ref")?;
+    let target_node_id = proposal
+        .target_node_id
+        .clone()
+        .context("accepted link proposal needs a target node ref")?;
+    Ok(BrainRelationRecord {
+        relation_id: format!("relation-{}", brain_proposal_fingerprint(proposal)),
+        kind: proposal
+            .relation_kind
+            .unwrap_or(BrainRelationKind::RelatedTo),
+        source_node_id,
+        target_node_id,
+        label: proposal.title.clone(),
+        evidence_ids: proposal.evidence_refs.clone(),
+        confidence: None,
+        updated_at: proposal.created_at,
+    })
+}
+
+fn wiki_page_for_proposal(proposal: &BrainUpdateProposal) -> WikiPage {
+    let page_id = format!("wiki-save-back-{}", brain_proposal_fingerprint(proposal));
+    WikiPage {
+        page_id,
+        workspace_id: proposal.workspace_id.clone(),
+        path: format!("wiki/save-back/{}.md", wiki_slug(&proposal.title)),
+        title: proposal.title.clone(),
+        body: format!(
+            "# {}\n\n{}\n\n## Provenance\n\n- Sources: {}\n- Nodes: {}\n- Evidence: {}\n",
+            proposal.title,
+            proposal.body,
+            join_or_none(&proposal.source_refs),
+            join_or_none(&proposal.node_refs),
+            join_or_none(&proposal.evidence_refs)
+        ),
+        node_refs: proposal.node_refs.clone(),
+        source_refs: proposal.source_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        updated_at: proposal.created_at,
+    }
+}
+
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn wiki_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for char in value.chars() {
+        if char.is_ascii_alphanumeric() {
+            slug.push(char.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "page".into()
+    } else {
+        slug
     }
 }
 
@@ -4159,6 +4364,7 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         snapshot.events.clone(),
         &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
     );
+    apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
 
     write_json_pretty(&root.join("brain-manifest.json"), &effective_snapshot)?;
     write_json_pretty(&root.join("graph/nodes.json"), &effective_snapshot.nodes)?;
@@ -4262,6 +4468,7 @@ fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
             | BrainEventKind::LinkProposed
             | BrainEventKind::ObservationAppended
             | BrainEventKind::SourceNoteProposed
+            | BrainEventKind::WikiPageProposed
             | BrainEventKind::MemoryAccepted
             | BrainEventKind::ReviewCreated
             | BrainEventKind::ReviewResolved
@@ -8492,7 +8699,6 @@ mod tests {
         };
         let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
-        write_source_manifest(&manifest).expect("write source manifest");
         store
             .save_project(&project, &request, Some(&manifest))
             .expect("save source-backed project");
@@ -8586,7 +8792,6 @@ mod tests {
         };
         let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
-        write_source_manifest(&manifest).expect("write source manifest");
         store
             .save_project(&project, &request, Some(&manifest))
             .expect("save source-backed project");
@@ -9287,7 +9492,7 @@ mod tests {
     }
 
     #[test]
-    fn resolving_brain_review_updates_proposal_and_audit_without_mutating_artifacts() {
+    fn resolving_brain_review_applies_save_back_artifacts() {
         let temp = tempfile::tempdir().expect("temp dir");
         let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
         let markdown_path = temp.path().join("sample.md");
@@ -9302,16 +9507,13 @@ mod tests {
         };
         let project = compile_knowledge_project(&request, markdown, Some(&manifest));
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        write_source_manifest(&manifest).expect("write source manifest");
         store
             .save_project(&project, &request, Some(&manifest))
             .expect("save source-backed project");
         let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
-        let nodes_before =
-            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes before");
-        let edges_before =
-            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges before");
-        let wiki_before =
-            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki before");
+        let source_manifest_before =
+            fs::read_to_string(&manifest.manifest_path).expect("read source manifest before");
         let memory_before = fs::read_to_string(workspace_root.join("memory/records.json"))
             .unwrap_or_else(|_| "[]".into());
 
@@ -9330,11 +9532,19 @@ mod tests {
             .expect("concept node")
             .id
             .clone();
+        let concept_evidence_ids = project
+            .details_by_node_id
+            .get(&concept_node_id)
+            .expect("concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
         let proposed = handle_propose_brain_update(ProposeBrainUpdateRequest {
             scope: scope.clone(),
             kind: BrainProposalKind::Claim,
-            title: "Claim needs review".into(),
-            body: "Accepted claim proposals still do not mutate graph or wiki in v0.".into(),
+            title: "Accepted source-backed claim".into(),
+            body: "Accepted claim proposals become durable claim records.".into(),
             actor,
             target_node_id: Some(concept_node_id.clone()),
             target_source_id: None,
@@ -9342,9 +9552,9 @@ mod tests {
             source_description: None,
             source_user_context: None,
             source_ingest_instruction: None,
-            source_refs: vec![manifest.source_id],
-            node_refs: vec![concept_node_id],
-            evidence_refs: Vec::new(),
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id.clone()],
+            evidence_refs: concept_evidence_ids.clone(),
         })
         .expect("propose claim");
         assert_eq!(proposed.proposal.status, BrainProposalStatus::PendingReview);
@@ -9353,21 +9563,82 @@ mod tests {
             actor_type: BrainActorType::User,
             actor_id: "local-user".into(),
         };
-        let resolved = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+        let resolved_claim = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
             scope: scope.clone(),
             proposal_id: proposed.proposal.proposal_id.clone(),
             decision: BrainReviewDecision::Accept,
-            actor: human,
+            actor: human.clone(),
             reason: Some("Evidence is enough for the proposal ledger.".into()),
         })
         .expect("resolve claim review");
-        assert_eq!(resolved.proposal.status, BrainProposalStatus::Accepted);
-        assert_eq!(resolved.event.event_type, BrainEventKind::ReviewResolved);
-        assert_eq!(resolved.event.policy_result, "accept");
+        assert_eq!(
+            resolved_claim.proposal.status,
+            BrainProposalStatus::Accepted
+        );
+        assert_eq!(
+            resolved_claim.event.event_type,
+            BrainEventKind::ReviewResolved
+        );
+        assert_eq!(resolved_claim.event.policy_result, "accept");
 
         let persisted: BrainUpdateProposal =
-            read_json_artifact(&PathBuf::from(&resolved.proposal_path)).expect("read proposal");
+            read_json_artifact(&PathBuf::from(&resolved_claim.proposal_path))
+                .expect("read proposal");
         assert_eq!(persisted.status, BrainProposalStatus::Accepted);
+        let claims_after_accept: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read claims after accept");
+        assert!(claims_after_accept.iter().any(|claim| {
+            claim.statement == "Accepted claim proposals become durable claim records."
+                && claim.topic_refs.contains(&concept_node_id)
+                && claim.evidence_refs == concept_evidence_ids
+        }));
+
+        let wiki = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::WikiPage,
+            title: "Accepted answer page".into(),
+            body: "Accepted answer text becomes a durable wiki page.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "claude-code".into(),
+            },
+            target_node_id: Some(concept_node_id.clone()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id.clone()],
+            evidence_refs: concept_evidence_ids.clone(),
+        })
+        .expect("propose wiki page");
+        let resolved_wiki = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+            scope: scope.clone(),
+            proposal_id: wiki.proposal.proposal_id.clone(),
+            decision: BrainReviewDecision::Accept,
+            actor: human,
+            reason: Some("Save answer as durable wiki page.".into()),
+        })
+        .expect("resolve wiki review");
+        assert_eq!(resolved_wiki.proposal.status, BrainProposalStatus::Accepted);
+        let saved_page = workspace_root.join("wiki/save-back/accepted-answer-page.md");
+        assert!(saved_page.exists());
+        assert!(fs::read_to_string(&saved_page)
+            .expect("read saved wiki page")
+            .contains("Accepted answer text becomes a durable wiki page."));
+
+        store
+            .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+            .expect("rematerialize workspace brain repo");
+        let rematerialized_claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read rematerialized claims");
+        assert!(rematerialized_claims.iter().any(|claim| {
+            claim.statement == "Accepted claim proposals become durable claim records."
+        }));
+        assert!(saved_page.exists());
 
         let health = handle_get_brain_health(GetBrainHealthRequest {
             scope: scope.clone(),
@@ -9386,21 +9657,13 @@ mod tests {
             .iter()
             .any(|event| event.event_type == BrainEventKind::ReviewResolved));
         assert_eq!(
-            fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes after"),
-            nodes_before
-        );
-        assert_eq!(
-            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges after"),
-            edges_before
-        );
-        assert_eq!(
-            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki after"),
-            wiki_before
-        );
-        assert_eq!(
             fs::read_to_string(workspace_root.join("memory/records.json"))
                 .unwrap_or_else(|_| "[]".into()),
             memory_before
+        );
+        assert_eq!(
+            fs::read_to_string(&manifest.manifest_path).expect("read source manifest after"),
+            source_manifest_before
         );
     }
 
