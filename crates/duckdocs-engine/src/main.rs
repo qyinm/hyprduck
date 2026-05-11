@@ -10,18 +10,22 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
-    ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType, BrainEvent,
-    BrainEventKind, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, CompileProjectRequest, CompileProjectResponseData,
-    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload,
-    EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest,
-    EngineRuntimeResponse, EngineSuccess, EvidenceRef, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject, LoadConfigRequest,
-    LoadProjectRequest, LoadProjectResponseData, OutputAsset, PageArtifact, ParseEvent, ParseInput,
-    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
-    ProjectOverview, ProjectStatus, ProviderModelCatalogResponseData, ProviderOption,
-    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
+    ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
+    BrainContextPack, BrainEvent, BrainEventKind, BrainNodeKind, BrainNodeRecord, BrainReadScope,
+    BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult,
+    BrainSearchResultKind, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
+    CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure,
+    EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest,
+    EngineRuntimeResponse, EngineSuccess, EvidenceRef, GetContextPackRequest,
+    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
+    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, OutputAsset, PageArtifact, ParseEvent, ParseInput, ParseMetadata,
+    ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview,
+    ProjectStatus, ProviderModelCatalogResponseData, ProviderOption, ReadNodeRequest,
+    ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReadinessCheck,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, RuntimeReadinessResponseData,
+    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
     SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceSummary, SuggestedAction,
     SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
     WikiPage, WorkspaceCorrection, WorkspaceId,
@@ -220,6 +224,30 @@ fn encode_success_response(
             EngineCommand::AnswerProject,
             handle_answer_project(request)?,
         )),
+        EngineRequest::SearchBrain(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::SearchBrain,
+            handle_search_brain(request)?,
+        )),
+        EngineRequest::ReadSource(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadSource,
+            handle_read_source(request)?,
+        )),
+        EngineRequest::ReadWikiPage(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadWikiPage,
+            handle_read_wiki_page(request)?,
+        )),
+        EngineRequest::ReadNode(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadNode,
+            handle_read_node(request)?,
+        )),
+        EngineRequest::ReadRecentEvents(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadRecentEvents,
+            handle_read_recent_events(request)?,
+        )),
+        EngineRequest::GetContextPack(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::GetContextPack,
+            handle_get_context_pack(request)?,
+        )),
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
             let config = config_store.load()?;
             serde_json::to_string(&EngineSuccess::new(
@@ -285,6 +313,12 @@ fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::LoadProject(_) => EngineCommand::LoadProject,
         EngineRequest::ApplyCorrection(_) => EngineCommand::ApplyCorrection,
         EngineRequest::AnswerProject(_) => EngineCommand::AnswerProject,
+        EngineRequest::SearchBrain(_) => EngineCommand::SearchBrain,
+        EngineRequest::ReadSource(_) => EngineCommand::ReadSource,
+        EngineRequest::ReadWikiPage(_) => EngineCommand::ReadWikiPage,
+        EngineRequest::ReadNode(_) => EngineCommand::ReadNode,
+        EngineRequest::ReadRecentEvents(_) => EngineCommand::ReadRecentEvents,
+        EngineRequest::GetContextPack(_) => EngineCommand::GetContextPack,
         EngineRequest::LoadConfig(_) => EngineCommand::LoadConfig,
         EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
@@ -604,6 +638,471 @@ fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectR
     let project = load_answerable_project(&store, &request.project_id)?;
     let answer = answer_project(&project, &request)?;
     Ok(AnswerProjectResponseData { answer })
+}
+
+fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    Ok(SearchBrainResponseData {
+        results: reader.search(&request.query, request.limit.unwrap_or(10)),
+    })
+}
+
+fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    let source = reader
+        .snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == request.source_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("source {} was not found", request.source_id))?;
+    let wiki_page = reader
+        .snapshot
+        .wiki_pages
+        .iter()
+        .find(|page| {
+            page.source_refs
+                .iter()
+                .any(|source_ref| source_ref == &source.source_id)
+        })
+        .cloned()
+        .map(|page| reader.read_wiki_page_body(page))
+        .transpose()?;
+    let evidence = reader
+        .snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source.source_id.as_str()))
+        .cloned()
+        .collect();
+    Ok(ReadSourceResponseData {
+        source,
+        wiki_page,
+        evidence,
+    })
+}
+
+fn handle_read_wiki_page(request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    let page = reader.read_wiki_page(&request.path)?;
+    Ok(ReadWikiPageResponseData { page })
+}
+
+fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    let node = reader
+        .snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    let evidence_ids = node.evidence_ids.iter().collect::<BTreeSet<_>>();
+    let evidence = reader
+        .snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence_ids.contains(&evidence.id))
+        .cloned()
+        .collect();
+    let relations = reader
+        .snapshot
+        .relations
+        .iter()
+        .filter(|relation| {
+            relation.source_node_id == node.node_id || relation.target_node_id == node.node_id
+        })
+        .cloned()
+        .collect();
+    Ok(ReadNodeResponseData {
+        node,
+        evidence,
+        relations,
+    })
+}
+
+fn handle_read_recent_events(
+    request: ReadRecentEventsRequest,
+) -> Result<ReadRecentEventsResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    Ok(ReadRecentEventsResponseData {
+        events: reader.recent_events(request.limit.unwrap_or(20)),
+    })
+}
+
+fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    Ok(GetContextPackResponseData {
+        context_pack: reader.context_pack(&request.query, request.budget.unwrap_or(8000))?,
+    })
+}
+
+struct BrainReader {
+    root: PathBuf,
+    snapshot: BrainRepoSnapshot,
+    events: Vec<BrainEvent>,
+}
+
+impl BrainReader {
+    fn open(scope: &BrainReadScope) -> Result<Self> {
+        let root = resolve_brain_workspace_root(scope)?;
+        let manifest_path = root.join("brain-manifest.json");
+        let manifest_json = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed reading {}", manifest_path.display()))?;
+        let mut snapshot: BrainRepoSnapshot = serde_json::from_str(&manifest_json)
+            .with_context(|| format!("failed decoding {}", manifest_path.display()))?;
+        if snapshot.workspace_id != scope.workspace_id {
+            bail!(
+                "brain manifest workspace_id {} does not match requested workspace {}",
+                snapshot.workspace_id,
+                scope.workspace_id
+            );
+        }
+        snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
+        snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
+        snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
+        let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+        snapshot.events = events.clone();
+        Ok(Self {
+            root,
+            snapshot,
+            events,
+        })
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<BrainSearchResult> {
+        let terms = search_terms(query);
+        if terms.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut results = Vec::new();
+        for source in &self.snapshot.sources {
+            let haystack = format!(
+                "{} {} {} {}",
+                source.source_id, source.original_path, source.source_path, source.markdown_path
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Source,
+                    id: source.source_id.clone(),
+                    title: source.source_id.clone(),
+                    path: Some(source.source_path.clone()),
+                    score,
+                    snippet: source.original_path.clone(),
+                });
+            }
+        }
+        for node in &self.snapshot.nodes {
+            let haystack = format!("{} {} {}", node.node_id, node.label, node.aliases.join(" "));
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Node,
+                    id: node.node_id.clone(),
+                    title: node.label.clone(),
+                    path: None,
+                    score,
+                    snippet: format!("{} evidence refs", node.evidence_ids.len()),
+                });
+            }
+        }
+        for page in &self.snapshot.wiki_pages {
+            let page = self
+                .read_wiki_page_body(page.clone())
+                .unwrap_or_else(|_| page.clone());
+            let haystack = format!("{} {} {}", page.path, page.title, page.body);
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::WikiPage,
+                    id: page.page_id,
+                    title: page.title,
+                    path: Some(page.path),
+                    score,
+                    snippet: best_snippet(&page.body, &terms),
+                });
+            }
+        }
+        for evidence in &self.snapshot.evidence {
+            let haystack = format!(
+                "{} {} {}",
+                evidence.id, evidence.page_label, evidence.snippet
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Evidence,
+                    id: evidence.id.clone(),
+                    title: evidence.page_label.clone(),
+                    path: evidence.markdown_path.clone(),
+                    score,
+                    snippet: best_snippet(&evidence.snippet, &terms),
+                });
+            }
+        }
+        for event in &self.events {
+            let haystack = format!(
+                "{} {:?} {} {}",
+                event.event_id, event.event_type, event.policy_result, event.payload_json
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Event,
+                    id: event.event_id.clone(),
+                    title: format!("{:?}", event.event_type),
+                    path: Some("events/brain_events.jsonl".into()),
+                    score,
+                    snippet: event.payload_json.clone(),
+                });
+            }
+        }
+        results.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| left.title.cmp(&right.title))
+        });
+        results.truncate(limit);
+        results
+    }
+
+    fn read_wiki_page(&self, path: &str) -> Result<WikiPage> {
+        let normalized_path = normalize_wiki_path(path)?;
+        let page = self
+            .snapshot
+            .wiki_pages
+            .iter()
+            .find(|page| page.path == normalized_path)
+            .cloned()
+            .ok_or_else(|| anyhow!("wiki page {normalized_path} was not found"))?;
+        self.read_wiki_page_body(page)
+    }
+
+    fn read_wiki_page_body(&self, mut page: WikiPage) -> Result<WikiPage> {
+        let path = self.root.join(&page.path);
+        page.body = fs::read_to_string(&path)
+            .with_context(|| format!("failed reading {}", path.display()))?;
+        Ok(page)
+    }
+
+    fn recent_events(&self, limit: usize) -> Vec<BrainEvent> {
+        let mut events = self.events.clone();
+        events.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.event_id.cmp(&left.event_id))
+        });
+        events.truncate(limit);
+        events
+    }
+
+    fn context_pack(&self, query: &str, budget: usize) -> Result<BrainContextPack> {
+        let results = self.search(query, 12);
+        let mut page_paths = BTreeSet::new();
+        let mut node_ids = BTreeSet::new();
+        let mut source_ids = BTreeSet::new();
+        let mut evidence_ids = BTreeSet::new();
+        for result in &results {
+            match result.kind {
+                BrainSearchResultKind::WikiPage => {
+                    if let Some(path) = &result.path {
+                        page_paths.insert(path.clone());
+                    }
+                }
+                BrainSearchResultKind::Node => {
+                    node_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Source => {
+                    source_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Evidence => {
+                    evidence_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Event => {}
+            }
+        }
+
+        let mut nodes = self
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| node_ids.contains(&node.node_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for node in &nodes {
+            source_ids.extend(node.source_ids.iter().cloned());
+            evidence_ids.extend(node.evidence_ids.iter().cloned());
+        }
+        let sources = self
+            .snapshot
+            .sources
+            .iter()
+            .filter(|source| source_ids.contains(&source.source_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let evidence = self
+            .snapshot
+            .evidence
+            .iter()
+            .filter(|evidence| evidence_ids.contains(&evidence.id))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut wiki_pages = Vec::new();
+        for path in page_paths {
+            if let Ok(page) = self.read_wiki_page(&path) {
+                wiki_pages.push(page);
+            }
+        }
+        if wiki_pages.is_empty() {
+            for path in ["wiki/index.md", "wiki/overview.md"] {
+                if let Ok(page) = self.read_wiki_page(path) {
+                    wiki_pages.push(page);
+                }
+            }
+        }
+
+        let warnings = context_pack_warnings(&nodes, &evidence, budget);
+        trim_context_pack_to_budget(budget, &mut wiki_pages, &mut nodes);
+        let recent_events = self.recent_events(5);
+        Ok(BrainContextPack {
+            workspace_id: self.snapshot.workspace_id.clone(),
+            query: query.to_string(),
+            token_budget: budget,
+            summary: format!(
+                "Context pack for \"{}\" with {} wiki pages, {} nodes, {} sources, {} evidence refs, and {} recent events.",
+                query,
+                wiki_pages.len(),
+                nodes.len(),
+                sources.len(),
+                evidence.len(),
+                recent_events.len()
+            ),
+            wiki_pages,
+            nodes,
+            sources,
+            evidence,
+            recent_events,
+            warnings,
+        })
+    }
+}
+
+fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
+    if let Some(root_dir) = &scope.root_dir {
+        return Ok(PathBuf::from(root_dir).join(&scope.workspace_id));
+    }
+    if let Some(output_root) = std::env::var_os("DUCKDOCS_OUTPUT_DIR") {
+        return Ok(PathBuf::from(output_root).join(&scope.workspace_id));
+    }
+    if let Some(application_support_root) = dirs::data_local_dir() {
+        return Ok(application_support_root
+            .join("HyprDuck")
+            .join(&scope.workspace_id));
+    }
+    Ok(std::env::temp_dir()
+        .join("HyprDuck")
+        .join(&scope.workspace_id))
+}
+
+fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let json =
+        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
+    serde_json::from_str(&json).with_context(|| format!("failed decoding {}", path.display()))
+}
+
+fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("failed decoding brain event JSONL row"))
+        .collect()
+}
+
+fn normalize_wiki_path(path: &str) -> Result<String> {
+    let mut normalized = path.trim().trim_start_matches('/').to_string();
+    if !normalized.starts_with("wiki/") {
+        normalized = format!("wiki/{normalized}");
+    }
+    if normalized.split('/').any(|part| part == "..") {
+        bail!("wiki page path cannot contain ..");
+    }
+    Ok(normalized)
+}
+
+fn search_terms(query: &str) -> Vec<String> {
+    query
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .map(|term| term.to_ascii_lowercase())
+        .filter(|term| term.len() > 1)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn match_score(terms: &[String], haystack: &str) -> Option<usize> {
+    let haystack = haystack.to_ascii_lowercase();
+    let score = terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count();
+    (score > 0).then_some(score)
+}
+
+fn best_snippet(text: &str, terms: &[String]) -> String {
+    let lower = text.to_ascii_lowercase();
+    let start = terms
+        .iter()
+        .filter_map(|term| lower.find(term))
+        .min()
+        .unwrap_or(0)
+        .saturating_sub(48);
+    text.chars().skip(start).take(180).collect()
+}
+
+fn context_pack_warnings(
+    nodes: &[BrainNodeRecord],
+    evidence: &[EvidenceRef],
+    budget: usize,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if nodes.is_empty() {
+        warnings.push(
+            "No graph nodes matched the query; pack falls back to workspace wiki pages.".into(),
+        );
+    }
+    if evidence.is_empty() {
+        warnings.push("No direct evidence refs matched the query.".into());
+    }
+    if nodes
+        .iter()
+        .any(|node| node.confidence.unwrap_or(1.0) < 0.6)
+    {
+        warnings.push("Some selected nodes have low confidence.".into());
+    }
+    if budget < 2000 {
+        warnings.push("Small budget may omit relevant wiki pages or graph context.".into());
+    }
+    warnings
+}
+
+fn trim_context_pack_to_budget(
+    budget: usize,
+    wiki_pages: &mut [WikiPage],
+    nodes: &mut Vec<BrainNodeRecord>,
+) {
+    let mut remaining_chars = budget.saturating_mul(4);
+    for page in wiki_pages.iter_mut() {
+        if page.body.len() > remaining_chars {
+            page.body = page.body.chars().take(remaining_chars).collect();
+            remaining_chars = 0;
+        } else {
+            remaining_chars = remaining_chars.saturating_sub(page.body.len());
+        }
+    }
+    if remaining_chars == 0 {
+        nodes.truncate(nodes.len().min(3));
+    }
 }
 
 fn load_answerable_project(
@@ -5925,6 +6424,88 @@ mod tests {
         let index = fs::read_to_string(workspace_root.join("wiki/index.md")).expect("wiki index");
         assert!(index.contains("## Sources"));
         assert!(index.contains("## Topics"));
+    }
+
+    #[test]
+    fn read_only_brain_api_reads_materialized_repo() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let search = handle_search_brain(SearchBrainRequest {
+            scope: scope.clone(),
+            query: "agent brain".into(),
+            limit: Some(5),
+        })
+        .expect("search brain");
+        assert!(!search.results.is_empty());
+
+        let source = handle_read_source(ReadSourceRequest {
+            scope: scope.clone(),
+            source_id: manifest.source_id.clone(),
+        })
+        .expect("read source");
+        assert_eq!(source.source.source_id, manifest.source_id);
+        assert!(!source.evidence.is_empty());
+
+        let wiki = handle_read_wiki_page(ReadWikiPageRequest {
+            scope: scope.clone(),
+            path: "index.md".into(),
+        })
+        .expect("read wiki page");
+        assert_eq!(wiki.page.path, "wiki/index.md");
+        assert!(wiki.page.body.contains("Brain Index"));
+
+        let node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let node = handle_read_node(ReadNodeRequest {
+            scope: scope.clone(),
+            node_id,
+        })
+        .expect("read node");
+        assert_eq!(node.node.kind, BrainNodeKind::Concept);
+        assert!(!node.evidence.is_empty());
+
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope: scope.clone(),
+            limit: Some(2),
+        })
+        .expect("read recent events");
+        assert!(!events.events.is_empty());
+
+        let context_pack = handle_get_context_pack(GetContextPackRequest {
+            scope,
+            query: "agent brain".into(),
+            budget: Some(4000),
+        })
+        .expect("context pack")
+        .context_pack;
+        assert_eq!(context_pack.workspace_id, DEFAULT_WORKSPACE_ID);
+        assert!(!context_pack.wiki_pages.is_empty());
+        assert!(!context_pack.recent_events.is_empty());
     }
 
     #[test]

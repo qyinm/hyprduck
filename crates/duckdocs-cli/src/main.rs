@@ -7,7 +7,8 @@ use anyhow::Result;
 use cli::{Cli, Commands};
 use duckdocs_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    DocumentFormat, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
+    BrainReadScope, DocumentFormat, GetContextPackRequest, ParseInput, ParseOptions,
+    ParseOutputTarget, ParseProgress, ParseRequest, SearchBrainRequest,
 };
 
 fn main() -> Result<()> {
@@ -17,6 +18,7 @@ fn main() -> Result<()> {
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Serve) => run_serve(),
         Some(Commands::Engines { command }) => run_engines(command),
+        Some(Commands::Brain { command }) => run_brain(command),
         Some(Commands::Parse { input }) => run_parse(input),
         None => tui::run_tui(),
     }
@@ -45,6 +47,62 @@ fn run_engines(command: cli::EnginesCommand) -> Result<()> {
     match command {
         cli::EnginesCommand::List => {
             println!("duckdocs-engine");
+        }
+    }
+    Ok(())
+}
+
+fn run_brain(command: cli::BrainCommand) -> Result<()> {
+    let client = SubprocessEngineClient::default();
+    match command {
+        cli::BrainCommand::Search {
+            workspace,
+            root_dir,
+            query,
+        } => {
+            let response = client.search_brain(SearchBrainRequest {
+                scope: BrainReadScope {
+                    workspace_id: workspace,
+                    root_dir,
+                },
+                query,
+                limit: Some(10),
+            })?;
+            for result in response.results {
+                let path = result.path.unwrap_or_else(|| "-".into());
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    result.score,
+                    format!("{:?}", result.kind).to_ascii_lowercase(),
+                    result.title,
+                    path
+                );
+                println!("  {}", result.snippet.replace('\n', " "));
+            }
+        }
+        cli::BrainCommand::ContextPack {
+            workspace,
+            root_dir,
+            query,
+            budget,
+        } => {
+            let pack = client.get_context_pack(GetContextPackRequest {
+                scope: BrainReadScope {
+                    workspace_id: workspace,
+                    root_dir,
+                },
+                query,
+                budget,
+            })?;
+            println!("{}", pack.summary);
+            for warning in &pack.warnings {
+                println!("warning: {warning}");
+            }
+            println!("wiki-pages: {}", pack.wiki_pages.len());
+            println!("nodes: {}", pack.nodes.len());
+            println!("sources: {}", pack.sources.len());
+            println!("evidence: {}", pack.evidence.len());
+            println!("recent-events: {}", pack.recent_events.len());
         }
     }
     Ok(())
