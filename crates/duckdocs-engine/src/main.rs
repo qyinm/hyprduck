@@ -422,7 +422,7 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
         let project = store.load_project(Some(project_id))?;
         let workspace_id = match request.workspace_id.clone() {
             Some(workspace_id) => Some(workspace_id),
-            None => store.load_latest_workspace_id()?,
+            None => store.load_workspace_id_for_project(project_id)?,
         };
         let sources = workspace_id
             .as_deref()
@@ -3618,6 +3618,17 @@ impl KnowledgeProjectStore {
         Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
     }
 
+    fn load_workspace_id_for_project(&self, project_id: &str) -> Result<Option<WorkspaceId>> {
+        self.ensure_schema()?;
+        let sql = format!(
+            "SELECT workspace_id FROM sources WHERE project_id = '{}' ORDER BY updated_at DESC LIMIT 1;",
+            escape_sqlite(project_id)
+        );
+        let output = self.run_sql(&sql)?;
+        let workspace_id = output.trim();
+        Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
+    }
+
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
@@ -4821,6 +4832,70 @@ mod tests {
         assert!(error
             .to_string()
             .contains("workspace-level correction writes are not supported yet"));
+    }
+
+    #[test]
+    fn exact_project_load_uses_project_workspace_sources() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nWorkspace A evidence stays separate.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (project_b, mut manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nWorkspace B evidence is newer.\n",
+            "source-b",
+            "beta",
+            99,
+        );
+        manifest_b.workspace_id = "workspace-b".into();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: manifest_a.markdown_path.clone(),
+            source_document_path: Some(manifest_a.source_path.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: manifest_b.markdown_path.clone(),
+            source_document_path: Some(manifest_b.source_path.clone()),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save workspace a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save workspace b project");
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response = handle_load_project(LoadProjectRequest {
+            project_id: Some(project_a.summary.project_id.clone()),
+            workspace_id: None,
+        })
+        .expect("load exact project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        assert_eq!(response.workspace_id.as_deref(), Some(DEFAULT_WORKSPACE_ID));
+        assert_eq!(response.sources.len(), 1);
+        assert_eq!(response.sources[0].source_id, "source-a");
+        assert_eq!(
+            response.project.expect("exact project").summary.project_id,
+            project_a.summary.project_id
+        );
     }
 
     #[test]
