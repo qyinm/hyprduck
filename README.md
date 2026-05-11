@@ -5,7 +5,7 @@
 <h1 align="center">HyprDuck</h1>
 
 <p align="center">
-  <strong>Local document parsing for agent-ready knowledge.</strong>
+  <strong>Local-first brain repo and trust console for AI agents.</strong>
 </p>
 
 <p align="center">
@@ -19,103 +19,128 @@
 
 ## Overview
 
-HyprDuck is a macOS app for turning existing files into markdown using AI.
+HyprDuck turns local documents into a maintained, evidence-backed brain that AI
+agents can read, extend, and audit.
 
-The active desktop shell lives in `apps/desktop` as an Electron app.
+The current wedge is local document ingestion: import PDF, DOCX, or DOC files,
+preserve the original source, derive markdown and page artifacts, then compile
+the result into a source-backed knowledge base with wiki pages, graph nodes,
+claims, memory records, evidence refs, review items, and maintenance logs.
 
-The current product surface is file parsing:
+The longer-term product direction is an agent-maintained personal or company
+brain:
 
-1. **Import a file**
-   Choose a PDF, DOCX, or DOC file from disk.
-2. **Convert pages**
-   HyprDuck renders each page as an image so multimodal models can analyze layout and content.
-3. **Generate markdown**
-   The selected provider extracts text and structure, then saves markdown plus linked page images.
+```text
+local sources
+  -> immutable source records
+  -> extracted entities, claims, topics, and typed links
+  -> maintained wiki, graph, memory, and review queue
+  -> context packs agents can use without losing provenance
+```
 
-HyprDuck currently uses provider-based AI processing with OpenRouter, OpenAI, Anthropic, or Ollama.
+HyprDuck is not a generic document chatbot. The product is built around durable
+local artifacts, visible provenance, and human-operable trust surfaces for agent
+memory.
 
 ---
 
-## Features
+## What HyprDuck Builds
 
-### File Parsing
-- Import PDF, DOCX, and DOC
-- Convert each page to an image for analysis
-- Retry failed pages and save partial results
-- Save markdown together with linked page images
+### Source-Backed Brain Repo
+- Keeps imported files as immutable source records
+- Stores generated page artifacts and markdown output
+- Materializes brain artifacts under a local workspace
+- Writes append-only brain events for import, proposal, review, and maintenance
 
-### AI Processing
-- OpenRouter, OpenAI, Anthropic, and Ollama support
-- Preset model lists plus custom model entry
-- Prompt templates for general docs, tutorials, UI flows, code, and tables
-- Local Ollama support for privacy-sensitive workflows
+### Knowledge Graph
+- Represents sources, concepts, entities, claims, memory, and wiki pages as graph records
+- Tracks evidence refs so nodes and claims stay tied to source material
+- Supports reviewable proposals for claims, links, observations, and source notes
+- Detects stale, orphaned, missing-evidence, and conflicting brain artifacts
+
+### Agent Context Surface
+- Provides brain search and context-pack contracts through the Rust engine
+- Keeps proposal writes reviewable instead of letting agents mutate source truth directly
+- Separates safe memory updates from risky claims and links
+- Preserves provenance so agents can cite the source of durable context
+
+### Local-First Parsing
+- Imports PDF, DOCX, and DOC files
+- Converts document pages into artifacts suitable for multimodal parsing
+- Uses provider-based analysis through OpenRouter or local Ollama
+- Avoids Screen Recording or Accessibility permissions for the primary import flow
+
+---
+
+## Current Status
+
+HyprDuck is in active development. The parser wedge, local workspace layout,
+brain materialization, review queue, and maintenance lint loop are implemented
+as early product infrastructure.
+
+The next major work is improving structured extraction and retrieval quality:
+entities, claims, typed relations, evidence coverage, golden-corpus evaluation,
+and stronger context packs before opening a broader external agent interface.
 
 ---
 
 ## How It Works
 
-### Parse a File
-1. Choose an AI provider and model.
-2. Import a PDF or Word document.
-3. HyprDuck converts pages into images.
-4. Each page is analyzed and assembled into markdown.
-5. Results are saved to `~/Documents/HyprDuck/`.
+1. Import a local document.
+2. HyprDuck saves source metadata and derived artifacts.
+3. The engine parses the document into markdown and page-level evidence.
+4. The brain compiler materializes source, node, claim, memory, wiki, graph, and event records.
+5. The Knowledge workspace lets you inspect the graph, evidence, health, and review queue.
+6. Agents can eventually consume context packs while HyprDuck keeps writes auditable.
+
+---
+
+## Workspace Artifacts
+
+A HyprDuck brain workspace is designed around durable local files:
+
+```text
+brain-manifest.json
+events/
+  brain_events.jsonl
+graph/
+  nodes.json
+  edges.json
+  evidence.json
+memory/
+  records.json
+reviews/
+  proposed_updates/
+wiki/
+  index.md
+  log.md
+```
+
+Original sources remain separate from generated and reviewable artifacts.
 
 ---
 
 ## AI Providers
 
-### OpenRouter
-- Good default for flexible model choice
-- Supports a wide range of multimodal models through one API key
+HyprDuck currently focuses on:
 
-### OpenAI
-- Direct access to GPT multimodal models
+- **OpenRouter** for flexible hosted model access
+- **Ollama** for local-first and privacy-sensitive workflows
 
-### Anthropic
-- Direct access to Claude multimodal models
-
-### Ollama
-- Local or cloud-backed usage
-- Useful for privacy-first or offline-adjacent workflows
+Provider settings are shared across parsing and knowledge workflows. Ollama does
+not require an API key.
 
 ---
 
 ## Requirements
 
-### System
 - macOS 12.3+
 - Apple Silicon or Intel Mac
-
-### Permissions
-- **No special permissions are required for file parsing**
-
----
-
-## Quick Start
-
-### Parse a Document
-1. Launch HyprDuck.
-2. Configure the AI provider and model.
-3. Import a PDF, DOCX, or DOC file.
-4. Wait for conversion and analysis to complete.
-5. Open the generated markdown from `~/Documents/HyprDuck/`.
+- No special macOS permissions are required for document import
 
 ---
 
 ## Build
-
-Preferred desktop build:
-
-```bash
-bun --cwd apps/desktop run build
-```
-
-Rust workspace verification:
-
-```bash
-cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
-```
 
 Build the Electron desktop shell:
 
@@ -123,11 +148,19 @@ Build the Electron desktop shell:
 bun --cwd apps/desktop run build
 ```
 
+Run the Rust workspace verification:
+
+```bash
+cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
+```
+
 Stage the static site artifact locally:
 
 ```bash
 just site-stage
 ```
+
+---
 
 ## Repository Layout
 
@@ -137,6 +170,12 @@ just site-stage
 │   ├── cli
 │   ├── desktop
 │   └── site
+├── crates
+│   ├── duckdocs-cli
+│   ├── duckdocs-engine
+│   ├── duckdocs-engine-client
+│   ├── duckdocs-engine-types
+│   └── duckdocs-knowledge
 ├── packages
 ├── scripts
 └── release
