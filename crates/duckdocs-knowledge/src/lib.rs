@@ -316,6 +316,7 @@ pub enum BrainEventKind {
     MemoryAccepted,
     ReviewCreated,
     ReviewResolved,
+    BrainMaintenanceRun,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
