@@ -11,7 +11,9 @@ pub use duckdocs_knowledge::{
     CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
     GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, ProjectOverview,
     ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
-    SourceRecord, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
+    SourceRecord, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionPageRef, StructuredExtractionRelation,
+    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

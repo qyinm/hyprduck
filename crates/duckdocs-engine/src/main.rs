@@ -33,7 +33,9 @@ use duckdocs_engine_types::{
     ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
     SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceSummary, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionPageRef, StructuredExtractionRelation,
+    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
     ValidateProviderResponseData, ValidationIssue, WikiPage, WorkspaceCorrection, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
@@ -1044,6 +1046,11 @@ fn read_materialized_brain_snapshot(root: &Path, workspace_id: &str) -> Result<B
     }
     if root.join("graph/claims.json").exists() {
         snapshot.claims = read_json_artifact(&root.join("graph/claims.json"))?;
+    }
+    if let Ok(extractions) = read_structured_extraction_artifacts(root, &snapshot.sources) {
+        if !extractions.is_empty() {
+            snapshot.extractions = extractions;
+        }
     }
     snapshot.memories = read_memory_records(root)?;
     snapshot.events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
@@ -3462,7 +3469,7 @@ fn build_brain_repo_snapshot(
     let relations = aggregate
         .edges
         .iter()
-        .map(|edge| {
+        .filter_map(|edge| {
             let evidence_ids = aggregate
                 .edge_details_by_id
                 .get(&edge.id)
@@ -3476,7 +3483,10 @@ fn build_brain_repo_snapshot(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            BrainRelationRecord {
+            if evidence_ids.is_empty() {
+                return None;
+            }
+            Some(BrainRelationRecord {
                 relation_id: edge.id.clone(),
                 kind: brain_relation_kind_for_relation_kind(edge.kind),
                 source_node_id: edge.source_node_id.clone(),
@@ -3485,10 +3495,11 @@ fn build_brain_repo_snapshot(
                 evidence_ids,
                 confidence: edge.confidence,
                 updated_at: generated_at,
-            }
+            })
         })
         .collect::<Vec<_>>();
 
+    let extractions = build_structured_extraction_artifacts(workspace_id, rows, generated_at);
     let wiki_pages = build_materialized_wiki_pages(workspace_id, &sources, &nodes, generated_at);
     let mut events = vec![
         BrainEvent {
@@ -3588,8 +3599,258 @@ fn build_brain_repo_snapshot(
         wiki_pages,
         entities,
         claims,
+        extractions,
         events,
     }
+}
+
+fn build_structured_extraction_artifacts(
+    workspace_id: &str,
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+    generated_at: u64,
+) -> Vec<StructuredExtractionArtifact> {
+    rows.iter()
+        .map(|(row, project)| {
+            build_structured_extraction_artifact_for_source(
+                workspace_id,
+                row,
+                project.as_ref(),
+                generated_at,
+            )
+        })
+        .collect()
+}
+
+fn build_structured_extraction_artifact_for_source(
+    workspace_id: &str,
+    row: &StoredSourceRow,
+    project: Option<&KnowledgeProject>,
+    generated_at: u64,
+) -> StructuredExtractionArtifact {
+    let source_id = row.summary.source_id.clone();
+    let source_refs = vec![source_id.clone()];
+    let Some(project) = project else {
+        return StructuredExtractionArtifact {
+            artifact_id: format!("extraction-{source_id}"),
+            workspace_id: workspace_id.into(),
+            source_id,
+            extractor: "heuristic".into(),
+            extractor_model: None,
+            source_refs,
+            page_refs: Vec::new(),
+            entities: Vec::new(),
+            topics: Vec::new(),
+            claims: Vec::new(),
+            relations: Vec::new(),
+            evidence_refs: Vec::new(),
+            confidence: Some(0.0),
+            provenance: "No compiled project snapshot was available for this source.".into(),
+            created_at: generated_at,
+        };
+    };
+
+    let mut evidence_by_id = BTreeMap::<String, EvidenceRef>::new();
+    for detail in project.details_by_node_id.values() {
+        for evidence in &detail.evidence {
+            if evidence.source_id.as_deref() == Some(source_id.as_str()) {
+                evidence_by_id.insert(evidence.id.clone(), evidence.clone());
+            }
+        }
+    }
+    for detail in project.edge_details_by_id.values() {
+        for evidence in &detail.evidence {
+            if evidence.source_id.as_deref() == Some(source_id.as_str()) {
+                evidence_by_id.insert(evidence.id.clone(), evidence.clone());
+            }
+        }
+    }
+
+    let page_refs = page_refs_from_evidence(evidence_by_id.values());
+    let entities = project
+        .details_by_node_id
+        .values()
+        .filter(|detail| detail.node.kind == GraphNodeKind::Concept)
+        .filter_map(|detail| {
+            let evidence = evidence_for_source(&detail.evidence, &source_id);
+            let evidence_refs = evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<Vec<_>>();
+            if evidence_refs.is_empty() {
+                return None;
+            }
+            Some(StructuredExtractionEntity {
+                entity_id: format!("ent-{}", detail.node.id),
+                kind: BrainNodeKind::Concept,
+                name: detail.canonical_name.clone(),
+                aliases: detail.aliases.clone(),
+                source_refs: source_refs_from_evidence(&evidence, &source_id),
+                evidence_refs,
+                page_refs: page_refs_from_evidence(evidence.iter().copied()),
+                confidence: detail.node.confidence,
+                provenance: format!(
+                    "Heuristic extractor promoted concept node '{}' from source-backed evidence.",
+                    detail.canonical_name
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let topics = project
+        .details_by_node_id
+        .values()
+        .filter(|detail| detail.node.kind == GraphNodeKind::Concept)
+        .filter_map(|detail| {
+            let evidence = evidence_for_source(&detail.evidence, &source_id);
+            let evidence_refs = evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<Vec<_>>();
+            if evidence_refs.is_empty() {
+                return None;
+            }
+            Some(StructuredExtractionTopic {
+                topic_id: detail.node.id.clone(),
+                title: detail.canonical_name.clone(),
+                source_refs: source_refs_from_evidence(&evidence, &source_id),
+                evidence_refs,
+                page_refs: page_refs_from_evidence(evidence.iter().copied()),
+                confidence: detail.node.confidence,
+                provenance: format!(
+                    "Heuristic extractor treated '{}' as a source-backed topic.",
+                    detail.canonical_name
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let claims = project
+        .details_by_node_id
+        .values()
+        .filter(|detail| matches!(detail.node.kind, GraphNodeKind::Concept | GraphNodeKind::Page))
+        .filter_map(|detail| {
+            let evidence = evidence_for_source(&detail.evidence, &source_id);
+            let evidence_refs = evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<Vec<_>>();
+            if evidence_refs.is_empty() {
+                return None;
+            }
+            let first_evidence = evidence
+                .first()
+                .map(|evidence| evidence.snippet.trim())
+                .filter(|snippet| !snippet.is_empty())
+                .unwrap_or(&detail.description);
+            Some(StructuredExtractionClaim {
+                claim_id: format!("claim-{}", detail.node.id),
+                statement: format!(
+                    "{} is evidence-backed by: {}",
+                    detail.canonical_name, first_evidence
+                ),
+                subject_refs: vec![detail.node.id.clone()],
+                source_refs: source_refs_from_evidence(&evidence, &source_id),
+                evidence_refs,
+                page_refs: page_refs_from_evidence(evidence.iter().copied()),
+                confidence: detail.node.confidence,
+                status: "supported".into(),
+                provenance: format!(
+                    "Heuristic extractor created this claim only because '{}' has direct source evidence.",
+                    detail.canonical_name
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let relations = project
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let evidence = project
+                .edge_details_by_id
+                .get(&edge.id)
+                .map(|detail| evidence_for_source(&detail.evidence, &source_id))
+                .unwrap_or_default();
+            let evidence_refs = evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<Vec<_>>();
+            if evidence_refs.is_empty() {
+                return None;
+            }
+            Some(StructuredExtractionRelation {
+                relation_id: edge.id.clone(),
+                kind: brain_relation_kind_for_relation_kind(edge.kind),
+                source_node_id: edge.source_node_id.clone(),
+                target_node_id: edge.target_node_id.clone(),
+                label: edge.label.clone(),
+                source_refs: source_refs_from_evidence(&evidence, &source_id),
+                evidence_refs,
+                page_refs: page_refs_from_evidence(evidence.iter().copied()),
+                confidence: edge.confidence,
+                provenance: format!(
+                    "Heuristic extractor kept this relation only because it has source evidence in {}.",
+                    source_id
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    StructuredExtractionArtifact {
+        artifact_id: format!("extraction-{source_id}"),
+        workspace_id: workspace_id.into(),
+        source_id,
+        extractor: "heuristic".into(),
+        extractor_model: None,
+        source_refs,
+        page_refs,
+        entities,
+        topics,
+        claims,
+        relations,
+        evidence_refs: evidence_by_id.into_values().collect(),
+        confidence: Some(if project.summary.status == ProjectStatus::Ready {
+            0.7
+        } else {
+            0.4
+        }),
+        provenance: "Structured extraction artifact generated from the current heuristic graph compiler fallback.".into(),
+        created_at: generated_at,
+    }
+}
+
+fn evidence_for_source<'a>(evidence: &'a [EvidenceRef], source_id: &str) -> Vec<&'a EvidenceRef> {
+    evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+        .collect()
+}
+
+fn source_refs_from_evidence(evidence: &[&EvidenceRef], fallback_source_id: &str) -> Vec<String> {
+    let mut refs = evidence
+        .iter()
+        .filter_map(|evidence| evidence.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    if refs.is_empty() {
+        refs.insert(fallback_source_id.into());
+    }
+    refs.into_iter().collect()
+}
+
+fn page_refs_from_evidence<'a>(
+    evidence: impl IntoIterator<Item = &'a EvidenceRef>,
+) -> Vec<StructuredExtractionPageRef> {
+    let mut refs = BTreeMap::<(String, Option<usize>), StructuredExtractionPageRef>::new();
+    for evidence in evidence {
+        refs.entry((evidence.page_label.clone(), evidence.page_index))
+            .or_insert_with(|| StructuredExtractionPageRef {
+                page_label: evidence.page_label.clone(),
+                page_index: evidence.page_index,
+                markdown_path: evidence.markdown_path.clone(),
+                image_path: evidence.image_path.clone(),
+            });
+    }
+    refs.into_values().collect()
 }
 
 fn brain_node_kind_for_graph_kind(kind: GraphNodeKind) -> BrainNodeKind {
@@ -3712,6 +3973,7 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
     let wiki_root = root.join("wiki");
     for dir in [
         root.join("graph"),
+        root.join("artifacts"),
         root.join("events"),
         root.join("memory"),
         root.join("reviews/proposed-updates"),
@@ -3751,6 +4013,15 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         &root.join("memory/records.json"),
         &effective_snapshot.memories,
     )?;
+    for extraction in &effective_snapshot.extractions {
+        write_json_pretty(
+            &root
+                .join("artifacts")
+                .join(sanitize_name(&extraction.source_id))
+                .join("extraction.json"),
+            extraction,
+        )?;
+    }
     write_brain_events_jsonl(
         &root.join("events/brain_events.jsonl"),
         &effective_snapshot.events,
@@ -3774,6 +4045,26 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         .context("failed writing lint reports placeholder")?;
     fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
     Ok(())
+}
+
+fn read_structured_extraction_artifacts(
+    root: &Path,
+    sources: &[SourceRecord],
+) -> Result<Vec<StructuredExtractionArtifact>> {
+    let mut artifacts = Vec::new();
+    for source in sources {
+        let path = root
+            .join("artifacts")
+            .join(sanitize_name(&source.source_id))
+            .join("extraction.json");
+        if path.exists() {
+            artifacts.push(
+                read_json_artifact(&path)
+                    .with_context(|| format!("failed reading {}", path.display()))?,
+            );
+        }
+    }
+    Ok(artifacts)
 }
 
 fn merge_preserved_brain_events(
@@ -7899,6 +8190,9 @@ mod tests {
         assert!(workspace_root.join("graph/evidence.json").exists());
         assert!(workspace_root.join("graph/entities.json").exists());
         assert!(workspace_root.join("graph/claims.json").exists());
+        assert!(workspace_root
+            .join("artifacts/source-test/extraction.json")
+            .exists());
         assert!(workspace_root.join("events/brain_events.jsonl").exists());
         assert!(workspace_root.join("wiki/index.md").exists());
         assert!(workspace_root.join("wiki/log.md").exists());
@@ -7916,6 +8210,30 @@ mod tests {
             serde_json::from_str(&manifest_json).expect("decode brain manifest");
         assert_eq!(snapshot.workspace_id, DEFAULT_WORKSPACE_ID);
         assert_eq!(snapshot.sources.len(), 1);
+        assert_eq!(snapshot.extractions.len(), 1);
+        assert_eq!(snapshot.extractions[0].extractor, "heuristic");
+        assert_eq!(snapshot.extractions[0].source_refs, vec!["source-test"]);
+        assert!(!snapshot.extractions[0].page_refs.is_empty());
+        assert!(snapshot.extractions[0].entities.iter().all(|entity| !entity
+            .evidence_refs
+            .is_empty()
+            && !entity.source_refs.is_empty()
+            && !entity.page_refs.is_empty()
+            && !entity.provenance.is_empty()));
+        assert!(snapshot.extractions[0]
+            .claims
+            .iter()
+            .all(|claim| !claim.evidence_refs.is_empty()
+                && !claim.source_refs.is_empty()
+                && !claim.page_refs.is_empty()
+                && !claim.provenance.is_empty()));
+        assert!(snapshot.extractions[0]
+            .relations
+            .iter()
+            .all(|relation| !relation.evidence_refs.is_empty()
+                && !relation.source_refs.is_empty()
+                && !relation.page_refs.is_empty()
+                && !relation.provenance.is_empty()));
         assert!(snapshot
             .nodes
             .iter()
@@ -7934,12 +8252,62 @@ mod tests {
                 && !claim.source_refs.is_empty()
         }));
         assert!(snapshot
+            .relations
+            .iter()
+            .all(|relation| !relation.evidence_ids.is_empty()));
+        assert!(snapshot
             .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::GraphMaterialized));
+        let extraction_json =
+            fs::read_to_string(workspace_root.join("artifacts/source-test/extraction.json"))
+                .expect("read extraction artifact");
+        let extraction: duckdocs_engine_types::StructuredExtractionArtifact =
+            serde_json::from_str(&extraction_json).expect("decode extraction artifact");
+        assert_eq!(extraction.extractor, "heuristic");
+        assert_eq!(extraction.source_id, "source-test");
+        assert!(extraction.created_at > 0);
+        assert!(!extraction.entities.is_empty());
+        assert!(!extraction.claims.is_empty());
+        assert!(extraction
+            .claims
+            .iter()
+            .all(|claim| !claim.evidence_refs.is_empty()));
         let index = fs::read_to_string(workspace_root.join("wiki/index.md")).expect("wiki index");
         assert!(index.contains("## Sources"));
         assert!(index.contains("## Topics"));
+    }
+
+    #[test]
+    fn structured_extraction_does_not_trust_claims_or_relations_without_evidence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (mut project, manifest) = compile_manifest_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\nShared graph context keeps evidence visible.\n",
+        );
+
+        for detail in project.details_by_node_id.values_mut() {
+            if detail.node.kind == GraphNodeKind::Concept {
+                detail.evidence.clear();
+            }
+        }
+        for detail in project.edge_details_by_id.values_mut() {
+            detail.evidence.clear();
+        }
+
+        let row = StoredSourceRow {
+            summary: source_summary_from_manifest(&manifest),
+            project_id: project.summary.project_id.clone(),
+            manifest_path: manifest.manifest_path.clone(),
+        };
+        let rows = vec![(row, Some(project.clone()))];
+        let snapshot = build_brain_repo_snapshot(DEFAULT_WORKSPACE_ID, &rows, &project, &[]);
+
+        assert!(snapshot.claims.is_empty());
+        assert!(snapshot.relations.is_empty());
+        assert_eq!(snapshot.extractions.len(), 1);
+        assert!(snapshot.extractions[0].claims.is_empty());
+        assert!(snapshot.extractions[0].relations.is_empty());
     }
 
     #[test]
