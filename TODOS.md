@@ -9,11 +9,10 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Reviewable save-back and correction persistence
-2. Model-task matrix and latency budget
-3. Read-only MCP v0
-4. Proposed-write MCP and policy engine
-5. Team/company brain governance
+1. Model-task matrix and latency budget
+2. Read-only MCP v0
+3. Proposed-write MCP and policy engine
+4. Team/company brain governance
 ```
 
 ---
@@ -84,7 +83,7 @@ Current roadmap order:
 
 ---
 
-## P1 - Reviewable save-back and correction persistence
+## P1 - Reviewable save-back and correction persistence - Done
 
 **What:** Implement durable save-back flows for answers, corrections, and graph edits.
 
@@ -100,11 +99,11 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] Rename/merge/keep-separate actions survive re-aggregation.
-- [ ] Approved answers can be saved as wiki page, claim, memory, or source note.
-- [ ] Every save-back creates an event log entry.
-- [ ] Original source files and source-derived raw artifacts are never overwritten.
-- [ ] Re-materialization replays correction and save-back history.
+- [x] Rename/merge/keep-separate actions survive re-aggregation.
+- [x] Approved answers can be saved as wiki page, claim, memory, or source note.
+- [x] Every save-back creates an event log entry.
+- [x] Original source files and source-derived raw artifacts are never overwritten.
+- [x] Re-materialization replays correction and save-back history.
 
 **Effort:** M
 **Priority:** P1
@@ -262,3 +261,9 @@ Current roadmap order:
   - Added evidence IDs to search snippets for agent-readable citations.
   - Added CLI context-pack counts for memories, entities, claims, and relations.
   - Covered plural-token retrieval and graph/evidence expansion with a regression test.
+- [x] Reviewable save-back and correction persistence
+  - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
+  - Accepted claim proposals now write durable `graph/claims.json` records.
+  - Accepted link proposals now write durable `graph/edges.json` records.
+  - Accepted wiki-page proposals now write durable `wiki/save-back/*.md` pages.
+  - Accepted save-back proposals are replayed during brain repo materialization.
