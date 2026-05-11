@@ -934,14 +934,7 @@ fn aggregate_workspace_project(
             if accumulator.canonical_name != detail.canonical_name {
                 accumulator.aliases.insert(detail.canonical_name.clone());
             }
-            accumulator.evidence = dedupe_evidence(
-                accumulator
-                    .evidence
-                    .clone()
-                    .into_iter()
-                    .chain(detail.evidence.clone())
-                    .collect(),
-            );
+            accumulator.evidence.extend(detail.evidence.iter().cloned());
             accumulator.confidence = match (accumulator.confidence, detail.node.confidence) {
                 (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
                 (Some(left), None) => Some(left),
@@ -965,14 +958,9 @@ fn aggregate_workspace_project(
                         confidence: Some(0.76),
                         evidence: Vec::new(),
                     });
-            edge_accumulator.evidence = dedupe_evidence(
-                edge_accumulator
-                    .evidence
-                    .clone()
-                    .into_iter()
-                    .chain(detail.evidence.clone())
-                    .collect(),
-            );
+            edge_accumulator
+                .evidence
+                .extend(detail.evidence.iter().cloned());
         }
 
         for edge in &project.edges {
@@ -1019,14 +1007,7 @@ fn aggregate_workspace_project(
                 (None, Some(right)) => Some(right),
                 (None, None) => None,
             };
-            accumulator.evidence = dedupe_evidence(
-                accumulator
-                    .evidence
-                    .clone()
-                    .into_iter()
-                    .chain(evidence)
-                    .collect(),
-            );
+            accumulator.evidence.extend(evidence.into_iter());
         }
     }
 
@@ -1034,6 +1015,9 @@ fn aggregate_workspace_project(
         remap_workspace_edge_accumulators(source_concept_edges, &aggregate_key_by_concept_key);
     relation_edges =
         remap_workspace_edge_accumulators(relation_edges, &aggregate_key_by_concept_key);
+    for accumulator in concept_accumulators.values_mut() {
+        accumulator.evidence = dedupe_evidence(std::mem::take(&mut accumulator.evidence));
+    }
 
     let concept_positions = layout_concept_positions(concept_accumulators.len().max(1));
     let mut concept_nodes = Vec::new();
