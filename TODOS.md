@@ -2,6 +2,18 @@
 
 ## Knowledge Graph
 
+### Workspace correction persistence
+
+**What:** Implement the correction ledger and source snapshot write flow described in `docs/workspace-corrections.md`.
+
+**Why:** Workspace aggregate corrections must not disappear on re-aggregation. Rename, merge, and keep-separate actions need to write back through the source-backed knowledge snapshots while leaving original imported artifacts immutable.
+
+**Context:** The current graph workspace can expose correction actions, but aggregate writes are intentionally constrained until source provenance and correction replay are explicit. The contract now defines the ledger shape, source-node resolution flow, and replay behavior.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Structured extraction artifact, source evidence provenance, source-backed project snapshots
+
 ### Agent-facing local context API / MCP bridge
 
 **What:** Expose the local knowledge project as an agent-readable context API or MCP surface after the in-app graph and memory loop are stable.

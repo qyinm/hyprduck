@@ -310,25 +310,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                   <div className="space-y-2">
                     {selectedEdge.evidence.map((evidence) => (
-                      <article
+                      <EvidenceCard
+                        evidence={evidence}
                         key={evidence.id}
-                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
-                      >
-                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{evidence.pageLabel}</span>
-                          <span>
-                            {evidence.sourcePath?.split("/").pop() ?? "Imported source"}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm leading-6 text-foreground">
-                          {formatEvidenceSnippet(evidence.snippet)}
-                        </p>
-                        {extractMarkdownImageLabel(evidence.snippet) ? (
-                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
-                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
-                          </div>
-                        ) : null}
-                      </article>
+                        onOpenArtifact={onOpenArtifact}
+                      />
                     ))}
                   </div>
                 </section>
@@ -456,25 +442,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                   <div className="space-y-2">
                     {selectedNode.evidence.map((evidence) => (
-                      <article
+                      <EvidenceCard
+                        evidence={evidence}
                         key={evidence.id}
-                        className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3"
-                      >
-                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{evidence.pageLabel}</span>
-                          <span>
-                            {evidence.sourcePath?.split("/").pop() ?? "Imported source"}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm leading-6 text-foreground">
-                          {formatEvidenceSnippet(evidence.snippet)}
-                        </p>
-                        {extractMarkdownImageLabel(evidence.snippet) ? (
-                          <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
-                            Page image: {extractMarkdownImageLabel(evidence.snippet)}
-                          </div>
-                        ) : null}
-                      </article>
+                        onOpenArtifact={onOpenArtifact}
+                      />
                     ))}
                   </div>
                 </section>
@@ -766,21 +738,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     Cited evidence
                   </p>
                   {answer.citations.map((citation) => (
-                    <article
+                    <EvidenceCard
+                      evidence={citation}
                       key={citation.id}
-                      className="rounded-xl border border-border/70 bg-background px-3 py-3"
-                    >
-                      <div className="text-xs font-medium text-muted-foreground">
-                        {citation.pageLabel}
-                        {citation.sourcePath ? ` · ${citation.sourcePath.split("/").pop()}` : ""}
-                      </div>
-                      {extractMarkdownImageLabel(citation.snippet) ? (
-                        <div className="mt-2 rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                          Page image: {extractMarkdownImageLabel(citation.snippet)}
-                        </div>
-                      ) : null}
-                      <p className="mt-2 text-sm leading-6">{formatEvidenceSnippet(citation.snippet)}</p>
-                    </article>
+                      onOpenArtifact={onOpenArtifact}
+                    />
                   ))}
                 </div>
               ) : null}
@@ -879,6 +841,75 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         </p>
       ) : null}
     </form>
+  );
+}
+
+interface EvidenceCardProps {
+  evidence: WorkspaceEvidenceRef;
+  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
+}
+
+function EvidenceCard(props: EvidenceCardProps) {
+  const { evidence, onOpenArtifact } = props;
+  const imageLabel = evidence.imagePath
+    ? fileNameFromPath(evidence.imagePath)
+    : extractMarkdownImageLabel(evidence.snippet);
+  const artifactRows = [
+    evidence.markdownPath
+      ? { label: "Markdown", path: evidence.markdownPath }
+      : null,
+    evidence.imagePath ? { label: "Page image", path: evidence.imagePath } : null,
+    evidence.sourcePath ? { label: "Source", path: evidence.sourcePath } : null,
+  ].filter((row): row is { label: string; path: string } => Boolean(row));
+
+  return (
+    <article className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {evidence.pageLabel}
+          {typeof evidence.pageIndex === "number"
+            ? ` · page index ${evidence.pageIndex + 1}`
+            : ""}
+        </span>
+        <span className="truncate">
+          {fileNameFromPath(evidence.sourcePath ?? evidence.sourceId ?? "Imported source")}
+        </span>
+      </div>
+      {evidence.provenance ? (
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          {evidence.provenance}
+        </p>
+      ) : null}
+      <p className="mt-2 text-sm leading-6 text-foreground">
+        {formatEvidenceSnippet(evidence.snippet)}
+      </p>
+      {imageLabel ? (
+        <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+          Page image: {imageLabel}
+        </div>
+      ) : null}
+      {artifactRows.length ? (
+        <div className="mt-3 grid gap-2">
+          {artifactRows.map((row) => (
+            <div
+              className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs"
+              key={`${row.label}:${row.path}`}
+            >
+              <span className="text-muted-foreground">{row.label}</span>
+              <Button
+                className="h-7 min-w-0 max-w-[11rem] justify-start truncate px-2 text-xs"
+                onClick={() => void onOpenArtifact(row.path, false)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                {fileNameFromPath(row.path)}
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </article>
   );
 }
 

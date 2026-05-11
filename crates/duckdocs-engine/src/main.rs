@@ -507,8 +507,11 @@ fn load_answerable_project(
 
 #[derive(Debug, Clone)]
 struct PageSection {
+    page_index: usize,
     page_label: String,
     content: String,
+    markdown_path: Option<String>,
+    image_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -521,10 +524,59 @@ struct ConceptAccumulator {
 }
 
 #[derive(Debug, Clone)]
+struct ExtractionEvidenceRef {
+    id: String,
+    page_index: usize,
+    page_label: String,
+    snippet: String,
+    source_path: String,
+    source_id: Option<String>,
+    markdown_path: Option<String>,
+    image_path: Option<String>,
+    provenance: String,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedConcept {
+    id: String,
+    label: String,
+    aliases: BTreeSet<String>,
+    evidence_ids: Vec<String>,
+    page_labels: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedClaim {
+    id: String,
+    text: String,
+    subject_concept_id: String,
+    evidence_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedRelation {
+    source_concept_id: String,
+    target_concept_id: String,
+    evidence_ids: Vec<String>,
+    page_labels: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractionArtifact {
+    concepts: Vec<ExtractedConcept>,
+    claims: Vec<ExtractedClaim>,
+    relations: Vec<ExtractedRelation>,
+    evidence_refs: BTreeMap<String, ExtractionEvidenceRef>,
+}
+
+#[derive(Debug, Clone)]
 struct PageConceptSet {
+    page_index: usize,
     page_label: String,
     concept_ids: Vec<String>,
     snippet: String,
+    markdown_path: Option<String>,
+    image_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -563,7 +615,8 @@ fn compile_knowledge_project(
     source_manifest: Option<&SourceArtifactManifest>,
 ) -> KnowledgeProject {
     let title = infer_markdown_title(&request.source_markdown_path, markdown);
-    let page_sections = extract_page_sections(markdown);
+    let mut page_sections = extract_page_sections(markdown);
+    attach_page_artifacts_to_sections(&mut page_sections, source_manifest);
     let source_path = request
         .source_document_path
         .clone()
@@ -582,11 +635,12 @@ fn compile_knowledge_project(
         .map(|manifest| build_source_backed_project_id(&manifest.workspace_id, &manifest.source_id))
         .unwrap_or_else(|| build_project_id(request));
 
-    let collected = collect_concepts(
+    let extraction = build_extraction_artifact(
         &page_sections,
         &source_path_for_evidence,
         source_id_for_evidence.as_deref(),
     );
+    let collected = collected_concepts_from_artifact(&extraction);
     let concept_accumulators = collected.concepts;
     let concept_count = concept_accumulators.len();
     let mut document_node = GraphNodeSummary {
@@ -633,9 +687,16 @@ fn compile_knowledge_project(
         .map(|(index, section)| EvidenceRef {
             id: format!("ev-document-{}", index + 1),
             page_label: section.page_label.clone(),
+            page_index: Some(section.page_index),
             snippet: excerpt(&section.content, 180),
             source_path: Some(source_path_for_evidence.clone()),
             source_id: source_id_for_evidence.clone(),
+            markdown_path: section.markdown_path.clone(),
+            image_path: section.image_path.clone(),
+            provenance: Some(format!(
+                "Document-level evidence extracted from {}.",
+                section.page_label
+            )),
         })
         .collect::<Vec<_>>();
 
@@ -1431,19 +1492,22 @@ fn source_backing_from_manifest(manifest: &SourceArtifactManifest) -> SourceBack
     }
 }
 
-fn collect_concepts(
+fn build_extraction_artifact(
     page_sections: &[PageSection],
     source_path: &str,
     source_id: Option<&str>,
-) -> CollectedConcepts {
-    let mut concepts = BTreeMap::<String, ConceptAccumulator>::new();
-    let mut page_concepts = Vec::new();
+) -> ExtractionArtifact {
+    let mut concepts = BTreeMap::<String, ExtractedConcept>::new();
+    let mut claims = Vec::new();
+    let mut evidence_refs = BTreeMap::new();
+    let mut concept_ids_by_page = Vec::<(String, Vec<String>, Vec<String>)>::new();
 
     for section in page_sections {
         let mut seen_on_page = BTreeSet::new();
         let mut page_concept_ids = Vec::new();
+        let mut page_evidence_ids = Vec::new();
         let candidates = concept_candidates(&section.content);
-        for (candidate_index, candidate) in candidates.into_iter().enumerate() {
+        for candidate in candidates {
             let key = normalize_key(&candidate);
             if key.is_empty() || !seen_on_page.insert(key.clone()) {
                 continue;
@@ -1451,36 +1515,51 @@ fn collect_concepts(
             let concept_id = format!("concept-{key}");
             let concept = concepts
                 .entry(key.clone())
-                .or_insert_with(|| ConceptAccumulator {
+                .or_insert_with(|| ExtractedConcept {
                     id: concept_id.clone(),
                     label: candidate.clone(),
                     aliases: BTreeSet::new(),
-                    evidence: Vec::new(),
+                    evidence_ids: Vec::new(),
                     page_labels: BTreeSet::new(),
                 });
             if concept.label != candidate {
                 concept.aliases.insert(candidate.clone());
             }
             concept.page_labels.insert(section.page_label.clone());
-            concept.evidence.push(EvidenceRef {
-                id: format!(
-                    "ev-{}-{}",
-                    key,
-                    candidate_index + concept.evidence.len() + 1
-                ),
-                page_label: section.page_label.clone(),
-                snippet: excerpt(&section.content, 180),
-                source_path: Some(source_path.to_string()),
-                source_id: source_id.map(ToString::to_string),
+            let evidence_id = format!("ev-{}-{}", key, concept.evidence_ids.len() + 1);
+            evidence_refs.insert(
+                evidence_id.clone(),
+                ExtractionEvidenceRef {
+                    id: evidence_id.clone(),
+                    page_index: section.page_index,
+                    page_label: section.page_label.clone(),
+                    snippet: excerpt(&section.content, 180),
+                    source_path: source_path.to_string(),
+                    source_id: source_id.map(ToString::to_string),
+                    markdown_path: section.markdown_path.clone(),
+                    image_path: section.image_path.clone(),
+                    provenance: format!(
+                        "Concept '{}' was extracted from {} because the page text produced a stable candidate label.",
+                        candidate, section.page_label
+                    ),
+                },
+            );
+            concept.evidence_ids.push(evidence_id.clone());
+            page_evidence_ids.push(evidence_id.clone());
+            claims.push(ExtractedClaim {
+                id: format!("claim-{}-{}", key, claims.len() + 1),
+                text: candidate.clone(),
+                subject_concept_id: concept_id.clone(),
+                evidence_id,
             });
             page_concept_ids.push(concept_id);
         }
         if !page_concept_ids.is_empty() {
-            page_concepts.push(PageConceptSet {
-                page_label: section.page_label.clone(),
-                concept_ids: page_concept_ids,
-                snippet: excerpt(&section.content, 180),
-            });
+            concept_ids_by_page.push((
+                section.page_label.clone(),
+                page_concept_ids,
+                page_evidence_ids,
+            ));
         }
     }
 
@@ -1491,25 +1570,43 @@ fn collect_concepts(
             let concept_id = format!("concept-{key}");
             concepts.insert(
                 key.clone(),
-                ConceptAccumulator {
+                ExtractedConcept {
                     id: concept_id.clone(),
                     label,
                     aliases: BTreeSet::new(),
-                    evidence: vec![EvidenceRef {
-                        id: format!("ev-fallback-{}", index + 1),
-                        page_label: section.page_label.clone(),
-                        snippet: excerpt(&section.content, 180),
-                        source_path: Some(source_path.to_string()),
-                        source_id: source_id.map(ToString::to_string),
-                    }],
+                    evidence_ids: vec![format!("ev-fallback-{}", index + 1)],
                     page_labels: [section.page_label.clone()].into_iter().collect(),
                 },
             );
-            page_concepts.push(PageConceptSet {
-                page_label: section.page_label.clone(),
-                concept_ids: vec![concept_id],
-                snippet: excerpt(&section.content, 180),
+            let evidence_id = format!("ev-fallback-{}", index + 1);
+            evidence_refs.insert(
+                evidence_id.clone(),
+                ExtractionEvidenceRef {
+                    id: evidence_id.clone(),
+                    page_index: section.page_index,
+                    page_label: section.page_label.clone(),
+                    snippet: excerpt(&section.content, 180),
+                    source_path: source_path.to_string(),
+                    source_id: source_id.map(ToString::to_string),
+                    markdown_path: section.markdown_path.clone(),
+                    image_path: section.image_path.clone(),
+                    provenance: format!(
+                        "Fallback concept extracted from {} because no stronger concept candidates were found.",
+                        section.page_label
+                    ),
+                },
+            );
+            claims.push(ExtractedClaim {
+                id: format!("claim-fallback-{}", index + 1),
+                text: fallback_concept_label(&section.content, &section.page_label),
+                subject_concept_id: concept_id.clone(),
+                evidence_id: evidence_id.clone(),
             });
+            concept_ids_by_page.push((
+                section.page_label.clone(),
+                vec![concept_id],
+                vec![evidence_id],
+            ));
         }
     }
 
@@ -1518,23 +1615,149 @@ fn collect_concepts(
         .iter()
         .map(|concept| concept.id.clone())
         .collect::<BTreeSet<_>>();
-    let page_concepts = page_concepts
-        .into_iter()
+    let mut relations = Vec::new();
+    for (page_label, mut concept_ids, evidence_ids) in concept_ids_by_page {
+        concept_ids.retain(|id| allowed_ids.contains(id));
+        concept_ids.sort();
+        concept_ids.dedup();
+        for left_index in 0..concept_ids.len() {
+            for right_index in (left_index + 1)..concept_ids.len() {
+                let (source_concept_id, target_concept_id) =
+                    if concept_ids[left_index] <= concept_ids[right_index] {
+                        (
+                            concept_ids[left_index].clone(),
+                            concept_ids[right_index].clone(),
+                        )
+                    } else {
+                        (
+                            concept_ids[right_index].clone(),
+                            concept_ids[left_index].clone(),
+                        )
+                    };
+                relations.push(ExtractedRelation {
+                    source_concept_id,
+                    target_concept_id,
+                    evidence_ids: evidence_ids.clone(),
+                    page_labels: [page_label.clone()].into_iter().collect(),
+                });
+            }
+        }
+    }
+
+    ExtractionArtifact {
+        concepts,
+        claims,
+        relations,
+        evidence_refs,
+    }
+}
+
+fn collected_concepts_from_artifact(artifact: &ExtractionArtifact) -> CollectedConcepts {
+    let allowed_ids = artifact
+        .concepts
+        .iter()
+        .map(|concept| concept.id.clone())
+        .collect::<BTreeSet<_>>();
+    let concepts = artifact
+        .concepts
+        .iter()
+        .map(|concept| ConceptAccumulator {
+            id: concept.id.clone(),
+            label: concept.label.clone(),
+            aliases: concept.aliases.clone(),
+            evidence: concept
+                .evidence_ids
+                .iter()
+                .filter_map(|id| artifact.evidence_refs.get(id))
+                .map(evidence_ref_from_extraction)
+                .collect(),
+            page_labels: concept.page_labels.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut page_concepts_by_label = BTreeMap::<String, PageConceptSet>::new();
+    let mut claims = artifact.claims.iter().collect::<Vec<_>>();
+    claims.sort_by(|left, right| left.id.cmp(&right.id));
+    for claim in claims {
+        if !allowed_ids.contains(&claim.subject_concept_id) {
+            continue;
+        }
+        let Some(evidence) = artifact.evidence_refs.get(&claim.evidence_id) else {
+            continue;
+        };
+        let page = page_concepts_by_label
+            .entry(evidence.page_label.clone())
+            .or_insert_with(|| PageConceptSet {
+                page_index: evidence.page_index,
+                page_label: evidence.page_label.clone(),
+                concept_ids: Vec::new(),
+                snippet: evidence.snippet.clone(),
+                markdown_path: evidence.markdown_path.clone(),
+                image_path: evidence.image_path.clone(),
+            });
+        page.concept_ids.push(claim.subject_concept_id.clone());
+        if claim.text.len() > page.snippet.len() {
+            page.snippet = claim.text.clone();
+        }
+    }
+    for relation in &artifact.relations {
+        if !allowed_ids.contains(&relation.source_concept_id)
+            || !allowed_ids.contains(&relation.target_concept_id)
+        {
+            continue;
+        }
+        for page_label in &relation.page_labels {
+            let evidence_refs = relation
+                .evidence_ids
+                .iter()
+                .filter_map(|id| artifact.evidence_refs.get(id))
+                .collect::<Vec<_>>();
+            let relation_evidence = evidence_refs
+                .iter()
+                .find(|evidence| &evidence.page_label == page_label)
+                .copied()
+                .or_else(|| evidence_refs.first().copied());
+            let Some(evidence) = relation_evidence else {
+                continue;
+            };
+            let page = page_concepts_by_label
+                .entry(page_label.clone())
+                .or_insert_with(|| PageConceptSet {
+                    page_index: evidence.page_index,
+                    page_label: page_label.clone(),
+                    concept_ids: Vec::new(),
+                    snippet: evidence.snippet.clone(),
+                    markdown_path: evidence.markdown_path.clone(),
+                    image_path: evidence.image_path.clone(),
+                });
+            page.concept_ids.push(relation.source_concept_id.clone());
+            page.concept_ids.push(relation.target_concept_id.clone());
+        }
+    }
+    let page_concepts = page_concepts_by_label
+        .into_values()
         .filter_map(|mut page| {
-            page.concept_ids.retain(|id| allowed_ids.contains(id));
             page.concept_ids.sort();
             page.concept_ids.dedup();
-            if page.concept_ids.is_empty() {
-                None
-            } else {
-                Some(page)
-            }
+            (!page.concept_ids.is_empty()).then_some(page)
         })
         .collect();
-
     CollectedConcepts {
         concepts,
         page_concepts,
+    }
+}
+
+fn evidence_ref_from_extraction(evidence: &ExtractionEvidenceRef) -> EvidenceRef {
+    EvidenceRef {
+        id: evidence.id.clone(),
+        page_label: evidence.page_label.clone(),
+        page_index: Some(evidence.page_index),
+        snippet: evidence.snippet.clone(),
+        source_path: Some(evidence.source_path.clone()),
+        source_id: evidence.source_id.clone(),
+        markdown_path: evidence.markdown_path.clone(),
+        image_path: evidence.image_path.clone(),
+        provenance: Some(evidence.provenance.clone()),
     }
 }
 
@@ -1621,9 +1844,16 @@ fn build_relation_edges(
                         accumulator.evidence.len() + 1
                     ),
                     page_label: page.page_label.clone(),
+                    page_index: Some(page.page_index),
                     snippet: page.snippet.clone(),
                     source_path: Some(source_path.to_string()),
                     source_id: source_id.map(ToString::to_string),
+                    markdown_path: page.markdown_path.clone(),
+                    image_path: page.image_path.clone(),
+                    provenance: Some(format!(
+                        "Relation evidence extracted because both concepts appeared in {}.",
+                        page.page_label
+                    )),
                 });
             }
         }
@@ -1832,8 +2062,11 @@ fn extract_page_sections(markdown: &str) -> Vec<PageSection> {
     let headers = regex_like_page_headers(&normalized);
     if headers.is_empty() {
         return vec![PageSection {
+            page_index: 0,
             page_label: "Imported text".into(),
             content: normalized,
+            markdown_path: None,
+            image_path: None,
         }];
     }
 
@@ -1845,11 +2078,35 @@ fn extract_page_sections(markdown: &str) -> Vec<PageSection> {
             .map(|(_, next_start, _)| *next_start)
             .unwrap_or(normalized.len());
         sections.push(PageSection {
+            page_index: index,
             page_label: page_label.clone(),
             content: normalized[*content_start..next_start].trim().to_string(),
+            markdown_path: None,
+            image_path: None,
         });
     }
     sections
+}
+
+fn attach_page_artifacts_to_sections(
+    sections: &mut [PageSection],
+    source_manifest: Option<&SourceArtifactManifest>,
+) {
+    let Some(manifest) = source_manifest else {
+        return;
+    };
+    for section in sections {
+        let artifact = manifest
+            .pages
+            .iter()
+            .find(|page| page.label == section.page_label)
+            .or_else(|| manifest.pages.get(section.page_index));
+        if let Some(artifact) = artifact {
+            section.page_index = artifact.index;
+            section.markdown_path = artifact.markdown_path.clone();
+            section.image_path = artifact.image_path.clone();
+        }
+    }
 }
 
 fn regex_like_page_headers(markdown: &str) -> Vec<(String, usize, usize)> {
@@ -4744,6 +5001,35 @@ mod tests {
         }
     }
 
+    fn multi_source_fixture_pages(temp: &tempfile::TempDir, source_id: &str) -> Vec<PageArtifact> {
+        (0..2)
+            .map(|index| PageArtifact {
+                index,
+                label: format!("Page {}", index + 1),
+                image_path: Some(
+                    temp.path()
+                        .join(format!(
+                            "default/artifacts/{source_id}/images/page_{}.png",
+                            index + 1
+                        ))
+                        .display()
+                        .to_string(),
+                ),
+                markdown_path: Some(
+                    temp.path()
+                        .join(format!(
+                            "default/artifacts/{source_id}/pages/page_{}.md",
+                            index + 1
+                        ))
+                        .display()
+                        .to_string(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            })
+            .collect()
+    }
+
     fn rename_first_concept_for_test(
         project: &mut KnowledgeProject,
         canonical_name: &str,
@@ -4893,6 +5179,118 @@ mod tests {
     }
 
     #[test]
+    fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";
+        let mut sections = extract_page_sections(markdown);
+        let mut manifest = sample_manifest(&temp);
+        manifest.pages = vec![
+            PageArtifact {
+                index: 0,
+                label: "Page 1".into(),
+                image_path: Some(
+                    temp.path()
+                        .join("default/artifacts/source-test/images/page-1.png")
+                        .display()
+                        .to_string(),
+                ),
+                markdown_path: Some(
+                    temp.path()
+                        .join("default/artifacts/source-test/pages/page-1.md")
+                        .display()
+                        .to_string(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            },
+            PageArtifact {
+                index: 1,
+                label: "Page 2".into(),
+                image_path: Some(
+                    temp.path()
+                        .join("default/artifacts/source-test/images/page-2.png")
+                        .display()
+                        .to_string(),
+                ),
+                markdown_path: Some(
+                    temp.path()
+                        .join("default/artifacts/source-test/pages/page-2.md")
+                        .display()
+                        .to_string(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            },
+        ];
+        attach_page_artifacts_to_sections(&mut sections, Some(&manifest));
+
+        let artifact =
+            build_extraction_artifact(&sections, &manifest.source_path, Some(&manifest.source_id));
+
+        assert!(artifact.concepts.len() >= 2);
+        assert!(artifact.claims.len() >= 2);
+        assert!(!artifact.relations.is_empty());
+        assert!(artifact
+            .relations
+            .iter()
+            .all(|relation| !relation.evidence_ids.is_empty()));
+        let evidence = artifact
+            .evidence_refs
+            .values()
+            .find(|evidence| evidence.page_label == "Page 1")
+            .expect("page 1 evidence");
+        assert_eq!(evidence.page_index, 0);
+        assert!(evidence
+            .markdown_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("page-1.md")));
+        assert!(evidence
+            .image_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("page-1.png")));
+        assert!(evidence.provenance.contains("Page 1"));
+
+        let collected = collected_concepts_from_artifact(&artifact);
+        assert!(collected
+            .page_concepts
+            .iter()
+            .any(|page| page.page_label == "Page 1" && page.concept_ids.len() >= 2));
+    }
+
+    #[test]
+    fn structured_extraction_uses_unique_evidence_ids_across_pages() {
+        let markdown = "# Source import\n\n## Page 1\n\nAlpha Planning Notes stay local.\nShared Context Layer keeps agents grounded.\n\n## Page 2\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n";
+        let sections = extract_page_sections(markdown);
+        let artifact = build_extraction_artifact(&sections, "/tmp/source.pdf", Some("source-test"));
+        let shared = artifact
+            .concepts
+            .iter()
+            .find(|concept| {
+                normalize_key(&concept.label) == "shared-context-layer-keeps-agents-grounded"
+            })
+            .expect("shared context concept");
+
+        assert_eq!(shared.evidence_ids.len(), 2);
+        assert_eq!(
+            shared.evidence_ids.iter().collect::<BTreeSet<_>>().len(),
+            shared.evidence_ids.len()
+        );
+        for evidence_id in &shared.evidence_ids {
+            assert!(artifact.evidence_refs.contains_key(evidence_id));
+        }
+        assert_eq!(
+            artifact
+                .evidence_refs
+                .values()
+                .filter(|evidence| evidence
+                    .provenance
+                    .contains("Shared Context Layer keeps agents"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn load_project_defaults_to_workspace_graph_aggregate() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
@@ -4984,6 +5382,89 @@ mod tests {
             loaded_source_project.summary.project_id,
             project_a.summary.project_id
         );
+    }
+
+    #[test]
+    fn workspace_aggregate_smoke_uses_real_multi_source_markdown_fixtures() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("multisource");
+        let fixture_a_path = fixture_root.join("agent-context.md");
+        let fixture_b_path = fixture_root.join("review-notes.md");
+        let markdown_a = fs::read_to_string(&fixture_a_path).expect("read agent context fixture");
+        let markdown_b = fs::read_to_string(&fixture_b_path).expect("read review notes fixture");
+        let mut manifest_a =
+            sample_manifest_with_source(&temp, "source-agent-context", "agent-context", 10);
+        let mut manifest_b =
+            sample_manifest_with_source(&temp, "source-review-notes", "review-notes", 20);
+        manifest_a.markdown_path = fixture_a_path.display().to_string();
+        manifest_b.markdown_path = fixture_b_path.display().to_string();
+        manifest_a.pages = multi_source_fixture_pages(&temp, "source-agent-context");
+        manifest_b.pages = multi_source_fixture_pages(&temp, "source-review-notes");
+
+        for (markdown, fixture_path, manifest) in [
+            (&markdown_a, &fixture_a_path, &manifest_a),
+            (&markdown_b, &fixture_b_path, &manifest_b),
+        ] {
+            let request = CompileProjectRequest {
+                source_markdown_path: fixture_path.display().to_string(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(manifest.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+            };
+            let project = compile_knowledge_project(&request, markdown, Some(manifest));
+            store
+                .save_project(&project, &request, Some(manifest))
+                .expect("save source-backed fixture project");
+        }
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+
+        assert_eq!(aggregate.summary.document_count, 2);
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-agent-context"));
+        assert!(aggregate
+            .nodes
+            .iter()
+            .any(|node| node.id == "source:source-review-notes"));
+
+        let shared = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| {
+                normalize_key(&detail.canonical_name) == "shared-team-context-layer-keeps-agents"
+            })
+            .expect("shared team context layer concept");
+        for source_id in ["source-agent-context", "source-review-notes"] {
+            assert!(shared
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some(source_id)));
+        }
+        assert!(shared.evidence.iter().any(|evidence| {
+            evidence
+                .markdown_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("page_1.md"))
+                && evidence
+                    .image_path
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("page_1.png"))
+        }));
+        assert!(aggregate.edges.iter().any(|edge| {
+            edge.kind == RelationKind::RelatedTo
+                && (edge.source_node_id == shared.node.id || edge.target_node_id == shared.node.id)
+                && edge.evidence_count > 0
+        }));
     }
 
     #[test]
