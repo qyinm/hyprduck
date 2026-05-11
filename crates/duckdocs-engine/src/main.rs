@@ -31,6 +31,7 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
+const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -3828,19 +3829,18 @@ impl KnowledgeProjectStore {
         if unique_project_ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let quoted_ids = unique_project_ids
-            .iter()
-            .map(|project_id| format!("'{}'", escape_sqlite(project_id)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT hex(project_id), snapshot_base64 FROM projects WHERE project_id IN ({quoted_ids});"
-        );
-        let output = self.run_sql(&sql)?;
-        output
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
+        let mut projects = BTreeMap::new();
+        for chunk in unique_project_ids.chunks(PROJECT_SNAPSHOT_BATCH_SIZE) {
+            let quoted_ids = chunk
+                .iter()
+                .map(|project_id| format!("'{}'", escape_sqlite(project_id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT hex(project_id), snapshot_base64 FROM projects WHERE project_id IN ({quoted_ids});"
+            );
+            let output = self.run_sql(&sql)?;
+            for line in output.lines().filter(|line| !line.trim().is_empty()) {
                 let columns = line.split('|').collect::<Vec<_>>();
                 if columns.len() != 2 {
                     bail!(
@@ -3848,12 +3848,13 @@ impl KnowledgeProjectStore {
                         columns.len()
                     );
                 }
-                Ok((
+                projects.insert(
                     decode_sqlite_hex_text(columns[0])?,
                     decode_project_snapshot(columns[1])?,
-                ))
-            })
-            .collect()
+                );
+            }
+        }
+        Ok(projects)
     }
 
     fn load_latest_workspace_id(&self) -> Result<Option<WorkspaceId>> {
