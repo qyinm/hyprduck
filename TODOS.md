@@ -9,8 +9,7 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Proposed-write MCP and policy engine
-2. Team/company brain governance
+1. Team/company brain governance
 ```
 
 ---
@@ -165,7 +164,7 @@ Current roadmap order:
 
 ---
 
-## P2 - Proposed-write MCP and policy engine
+## P2 - Proposed-write MCP and policy engine - Done
 
 **What:** Let agents propose memories, claims, links, observations, and source notes through a policy-controlled write path.
 
@@ -190,11 +189,11 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] Every write proposal creates a brain event.
-- [ ] Auto-applied writes are limited to safe categories.
-- [ ] Risky writes appear in the Health/Review queue.
-- [ ] Review decisions are persisted and auditable.
-- [ ] Agents cannot overwrite source truth directly.
+- [x] Every write proposal creates a brain event.
+- [x] Auto-applied writes are limited to safe categories.
+- [x] Risky writes appear in the Health/Review queue.
+- [x] Review decisions are persisted and auditable.
+- [x] Agents cannot overwrite source truth directly.
 
 **Effort:** L
 **Priority:** P2
