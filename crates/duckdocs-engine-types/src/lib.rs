@@ -5,10 +5,13 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub use duckdocs_knowledge::{
-    AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, ProjectOverview,
-    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
-    SuggestedAction, SuggestedActionKind, WorkspaceCorrection,
+    AnswerResponse, AnswerStatus, BrainActor, BrainActorType, BrainEvent, BrainEventKind,
+    BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
+    BrainScope, ClaimRecord, CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef,
+    GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject,
+    MemoryRecord, ProjectOverview, ProjectStatus, RelationEdgeDetail, RelationEdgeSummary,
+    RelationKind, SourceBacking, SourceRecord, SuggestedAction, SuggestedActionKind, WikiPage,
+    WorkspaceCorrection,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -228,6 +228,248 @@ pub struct WorkspaceCorrection {
     pub created_at: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainScope {
+    Personal,
+    Project,
+    Team,
+    Company,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainNodeKind {
+    Source,
+    Memory,
+    WikiPage,
+    Person,
+    Company,
+    Project,
+    Product,
+    Team,
+    Event,
+    Decision,
+    Task,
+    Claim,
+    Topic,
+    Concept,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainRelationKind {
+    Mentions,
+    Supports,
+    Contradicts,
+    Supersedes,
+    SameAs,
+    WorksAt,
+    Founded,
+    InvestedIn,
+    Advises,
+    Attended,
+    Owns,
+    ResponsibleFor,
+    Decided,
+    Blocks,
+    DependsOn,
+    SourceOf,
+    DerivedFrom,
+    RelatedTo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainActorType {
+    System,
+    User,
+    Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainActor {
+    pub actor_type: BrainActorType,
+    pub actor_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainEventKind {
+    SourceImported,
+    SourceCompiled,
+    GraphMaterialized,
+    WikiMaterialized,
+    CorrectionApplied,
+    MemoryProposed,
+    MemoryAccepted,
+    ReviewCreated,
+    ReviewResolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainEvent {
+    pub event_id: String,
+    pub workspace_id: String,
+    pub scope: BrainScope,
+    pub event_type: BrainEventKind,
+    pub actor: BrainActor,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub relation_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub payload_json: String,
+    #[serde(default)]
+    pub confidence: Option<String>,
+    pub policy_result: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRecord {
+    pub source_id: String,
+    pub workspace_id: String,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: String,
+    pub status: String,
+    pub page_count: usize,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainNodeRecord {
+    pub node_id: String,
+    pub kind: BrainNodeKind,
+    pub label: String,
+    pub scope: BrainScope,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub source_ids: Vec<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainRelationRecord {
+    pub relation_id: String,
+    pub kind: BrainRelationKind,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRecord {
+    pub memory_id: String,
+    pub workspace_id: String,
+    pub scope: BrainScope,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiPage {
+    pub page_id: String,
+    pub workspace_id: String,
+    pub path: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityRecord {
+    pub entity_id: String,
+    pub workspace_id: String,
+    pub kind: BrainNodeKind,
+    pub name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimRecord {
+    pub claim_id: String,
+    pub workspace_id: String,
+    pub statement: String,
+    #[serde(default)]
+    pub topic_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub status: String,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainRepoSnapshot {
+    pub workspace_id: String,
+    pub generated_at: u64,
+    #[serde(default)]
+    pub sources: Vec<SourceRecord>,
+    #[serde(default)]
+    pub nodes: Vec<BrainNodeRecord>,
+    #[serde(default)]
+    pub relations: Vec<BrainRelationRecord>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub memories: Vec<MemoryRecord>,
+    #[serde(default)]
+    pub wiki_pages: Vec<WikiPage>,
+    #[serde(default)]
+    pub entities: Vec<EntityRecord>,
+    #[serde(default)]
+    pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub events: Vec<BrainEvent>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
