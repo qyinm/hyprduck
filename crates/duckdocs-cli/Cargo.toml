@@ -10,6 +10,5 @@ crossterm.workspace = true
 ratatui.workspace = true
 duckdocs-engine-client = { path = "../duckdocs-engine-client" }
 duckdocs-engine-types = { path = "../duckdocs-engine-types" }
-
-[dev-dependencies]
+serde.workspace = true
 serde_json.workspace = true

@@ -30,6 +30,14 @@ impl Cli {
                     _ => return Err(anyhow!("unknown engines subcommand: {subcommand}")),
                 }
             }
+            Some("eval") => {
+                let subcommand = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: duckdocs eval golden-corpus [--fixtures <path>] [--mode heuristic|hosted|local|all]"))?;
+                Some(Commands::Eval {
+                    command: parse_eval_command(subcommand, args.collect())?,
+                })
+            }
             Some("brain") => {
                 let subcommand = args
                     .next()
@@ -42,6 +50,39 @@ impl Cli {
         };
 
         Ok(Self { command })
+    }
+}
+
+fn parse_eval_command(subcommand: String, args: Vec<String>) -> Result<EvalCommand> {
+    match subcommand.as_str() {
+        "golden-corpus" => {
+            let mut fixtures = None;
+            let mut mode = "heuristic".to_string();
+            let mut index = 0usize;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--fixtures" => {
+                        index += 1;
+                        fixtures = Some(
+                            args.get(index)
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--fixtures needs a value"))?,
+                        );
+                    }
+                    "--mode" => {
+                        index += 1;
+                        mode = args
+                            .get(index)
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--mode needs a value"))?;
+                    }
+                    value => return Err(anyhow!("unknown golden-corpus option: {value}")),
+                }
+                index += 1;
+            }
+            Ok(EvalCommand::GoldenCorpus { fixtures, mode })
+        }
+        _ => Err(anyhow!("unknown eval subcommand: {subcommand}")),
     }
 }
 
@@ -303,11 +344,20 @@ pub enum Commands {
     Parse { input: String },
     Engines { command: EnginesCommand },
     Brain { command: BrainCommand },
+    Eval { command: EvalCommand },
 }
 
 #[derive(Debug)]
 pub enum EnginesCommand {
     List,
+}
+
+#[derive(Debug)]
+pub enum EvalCommand {
+    GoldenCorpus {
+        fixtures: Option<String>,
+        mode: String,
+    },
 }
 
 #[derive(Debug)]
