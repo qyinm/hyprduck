@@ -8,7 +8,7 @@ pub use duckdocs_knowledge::{
     AnswerResponse, AnswerStatus, CorrectionAction, CorrectionKind, EvidenceRef, GraphNodeDetail,
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, KnowledgeProject, ProjectOverview,
     ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
-    SuggestedAction, SuggestedActionKind,
+    SuggestedAction, SuggestedActionKind, WorkspaceCorrection,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

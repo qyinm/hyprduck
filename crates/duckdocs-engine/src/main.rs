@@ -22,7 +22,7 @@ use duckdocs_engine_types::{
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
     SourceArtifactManifest, SourceBacking, SourceId, SourceSummary, SuggestedAction,
     SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData, ValidationIssue,
-    WorkspaceId,
+    WorkspaceCorrection, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
@@ -470,16 +470,126 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
 }
 
 fn handle_apply_correction(request: ApplyCorrectionRequest) -> Result<ApplyCorrectionResponseData> {
-    if request.project_id.starts_with("workspace:") {
-        bail!("workspace-level correction writes are not supported yet");
+    let store = KnowledgeProjectStore::default()?;
+    if let Some(workspace_id) = workspace_id_from_project_id(&request.project_id) {
+        return handle_apply_workspace_correction(&store, workspace_id, &request);
     }
 
-    let store = KnowledgeProjectStore::default()?;
     let mut project = store
         .load_project(Some(&request.project_id))?
         .ok_or_else(|| anyhow!("project {} was not found", request.project_id))?;
     apply_correction(&mut project, &request)?;
     store.update_project(&project)?;
+    Ok(ApplyCorrectionResponseData { project })
+}
+
+fn handle_apply_workspace_correction(
+    store: &KnowledgeProjectStore,
+    workspace_id: &str,
+    request: &ApplyCorrectionRequest,
+) -> Result<ApplyCorrectionResponseData> {
+    let rows = store.load_projects_for_workspace(workspace_id)?;
+    if rows.is_empty() {
+        bail!("workspace {workspace_id} was not found");
+    }
+
+    let aggregate = aggregate_workspace_project(workspace_id, rows.clone());
+    let selected_detail = aggregate
+        .details_by_node_id
+        .get(&request.node_id)
+        .ok_or_else(|| anyhow!("workspace node {} was not found", request.node_id))?;
+    if selected_detail.node.kind != GraphNodeKind::Concept {
+        bail!("workspace corrections only support concept nodes");
+    }
+    let target_detail = match request.kind {
+        CorrectionKind::Merge => {
+            let target_node_id = request
+                .target_node_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("merge needs a target concept"))?;
+            let detail = aggregate
+                .details_by_node_id
+                .get(target_node_id)
+                .ok_or_else(|| anyhow!("workspace target node {target_node_id} was not found"))?;
+            if detail.node.kind != GraphNodeKind::Concept {
+                bail!("merge only supports concept nodes");
+            }
+            Some(detail)
+        }
+        CorrectionKind::KeepSeparate | CorrectionKind::Rename => None,
+    };
+
+    let mut replayed_source_node_ids = BTreeSet::new();
+    let mut changed_projects = Vec::new();
+    for (row, project) in rows {
+        let Some(mut project) = project else {
+            continue;
+        };
+        let selected_source_node_ids = matching_source_concept_node_ids(&project, selected_detail);
+        if selected_source_node_ids.is_empty() {
+            continue;
+        }
+
+        let target_source_node_id = target_detail.and_then(|detail| {
+            matching_source_concept_node_ids(&project, detail)
+                .into_iter()
+                .find(|node_id| !selected_source_node_ids.contains(node_id))
+        });
+        if request.kind == CorrectionKind::Merge && target_source_node_id.is_none() {
+            continue;
+        }
+
+        let mut changed = false;
+        for source_node_id in selected_source_node_ids {
+            let source_request = ApplyCorrectionRequest {
+                project_id: row.project_id.clone(),
+                node_id: source_node_id.clone(),
+                kind: request.kind.clone(),
+                target_node_id: target_source_node_id.clone(),
+                value: request.value.clone(),
+            };
+            apply_correction(&mut project, &source_request)?;
+            replayed_source_node_ids.insert(format!("{}:{source_node_id}", row.project_id));
+            changed = true;
+            if request.kind == CorrectionKind::Merge {
+                break;
+            }
+        }
+
+        if changed {
+            store.update_project(&project)?;
+            changed_projects.push(row.project_id);
+        }
+    }
+
+    if changed_projects.is_empty() {
+        bail!(
+            "workspace correction could not resolve node {} to any source snapshots",
+            request.node_id
+        );
+    }
+
+    store.append_workspace_correction(&WorkspaceCorrection {
+        id: Uuid::now_v7().to_string(),
+        workspace_id: workspace_id.to_string(),
+        aggregate_node_id: request.node_id.clone(),
+        kind: request.kind.clone(),
+        target_node_id: request.target_node_id.clone(),
+        value: request.value.clone(),
+        evidence_ids: selected_detail
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        source_node_ids: replayed_source_node_ids.into_iter().collect(),
+        created_at: unix_timestamp_seconds(),
+    })?;
+
+    let project = store
+        .load_workspace_project(workspace_id)?
+        .ok_or_else(|| anyhow!("workspace {workspace_id} was not found after correction"))?;
     Ok(ApplyCorrectionResponseData { project })
 }
 
@@ -1401,6 +1511,45 @@ fn finalize_workspace_project(
 
 fn workspace_project_id(workspace_id: &str) -> String {
     format!("workspace:{workspace_id}")
+}
+
+fn workspace_id_from_project_id(project_id: &str) -> Option<&str> {
+    project_id
+        .strip_prefix("workspace:")
+        .filter(|workspace_id| !workspace_id.trim().is_empty())
+}
+
+fn matching_source_concept_node_ids(
+    project: &KnowledgeProject,
+    aggregate_detail: &GraphNodeDetail,
+) -> Vec<String> {
+    let aggregate_keys = concept_identity_keys(aggregate_detail)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let aggregate_source_ids = aggregate_detail
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.source_id.as_deref())
+        .collect::<BTreeSet<_>>();
+
+    project
+        .details_by_node_id
+        .values()
+        .filter(|detail| detail.node.kind == GraphNodeKind::Concept)
+        .filter(|detail| {
+            concept_identity_keys(detail)
+                .iter()
+                .any(|key| aggregate_keys.contains(key))
+                && (aggregate_source_ids.is_empty()
+                    || detail.evidence.iter().any(|evidence| {
+                        evidence
+                            .source_id
+                            .as_deref()
+                            .is_some_and(|source_id| aggregate_source_ids.contains(source_id))
+                    }))
+        })
+        .map(|detail| detail.node.id.clone())
+        .collect()
 }
 
 fn source_label_from_summary(summary: &SourceSummary) -> String {
@@ -3869,6 +4018,54 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     })
 }
 
+#[cfg(test)]
+fn workspace_correction_from_sqlite_row(line: &str) -> Result<WorkspaceCorrection> {
+    let columns: Vec<&str> = line.split('|').collect();
+    if columns.len() != 9 {
+        bail!(
+            "expected 9 workspace correction columns from sqlite, got {}",
+            columns.len()
+        );
+    }
+    let target_node_id = decode_sqlite_hex_text(columns[4])?;
+    let value = decode_sqlite_hex_text(columns[5])?;
+    let evidence_ids_json = decode_sqlite_hex_text(columns[6])?;
+    let source_node_ids_json = decode_sqlite_hex_text(columns[7])?;
+    Ok(WorkspaceCorrection {
+        id: decode_sqlite_hex_text(columns[0])?,
+        workspace_id: decode_sqlite_hex_text(columns[1])?,
+        aggregate_node_id: decode_sqlite_hex_text(columns[2])?,
+        kind: correction_kind_from_slug(columns[3])?,
+        target_node_id: (!target_node_id.is_empty()).then_some(target_node_id),
+        value: (!value.is_empty()).then_some(value),
+        evidence_ids: serde_json::from_str(&evidence_ids_json)
+            .context("failed to decode workspace correction evidence ids")?,
+        source_node_ids: serde_json::from_str(&source_node_ids_json)
+            .context("failed to decode workspace correction source node ids")?,
+        created_at: columns[8]
+            .parse()
+            .context("failed to parse workspace correction created_at")?,
+    })
+}
+
+fn correction_kind_slug(kind: &CorrectionKind) -> &'static str {
+    match kind {
+        CorrectionKind::Merge => "merge",
+        CorrectionKind::KeepSeparate => "keep_separate",
+        CorrectionKind::Rename => "rename",
+    }
+}
+
+#[cfg(test)]
+fn correction_kind_from_slug(value: &str) -> Result<CorrectionKind> {
+    match value {
+        "merge" => Ok(CorrectionKind::Merge),
+        "keep_separate" => Ok(CorrectionKind::KeepSeparate),
+        "rename" => Ok(CorrectionKind::Rename),
+        _ => bail!("unknown correction kind {value}"),
+    }
+}
+
 fn decode_project_snapshot(encoded: &str) -> Result<KnowledgeProject> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
@@ -4241,6 +4438,54 @@ impl KnowledgeProjectStore {
         self.run_sql(&sql).map(|_| ())
     }
 
+    fn append_workspace_correction(&self, correction: &WorkspaceCorrection) -> Result<()> {
+        self.ensure_schema()?;
+        let evidence_ids_json = serde_json::to_string(&correction.evidence_ids)
+            .context("failed to encode workspace correction evidence ids")?;
+        let source_node_ids_json = serde_json::to_string(&correction.source_node_ids)
+            .context("failed to encode workspace correction source node ids")?;
+        let target_node_id = correction
+            .target_node_id
+            .as_ref()
+            .map(|value| format!("'{}'", escape_sqlite(value)))
+            .unwrap_or_else(|| "NULL".into());
+        let value = correction
+            .value
+            .as_ref()
+            .map(|value| format!("'{}'", escape_sqlite(value)))
+            .unwrap_or_else(|| "NULL".into());
+        let sql = format!(
+            "INSERT INTO workspace_corrections (id, workspace_id, aggregate_node_id, kind, target_node_id, value, evidence_ids_json, source_node_ids_json, created_at) \
+             VALUES ('{id}', '{workspace_id}', '{aggregate_node_id}', '{kind}', {target_node_id}, {value}, '{evidence_ids_json}', '{source_node_ids_json}', {created_at});",
+            id = escape_sqlite(&correction.id),
+            workspace_id = escape_sqlite(&correction.workspace_id),
+            aggregate_node_id = escape_sqlite(&correction.aggregate_node_id),
+            kind = correction_kind_slug(&correction.kind),
+            target_node_id = target_node_id,
+            value = value,
+            evidence_ids_json = escape_sqlite(&evidence_ids_json),
+            source_node_ids_json = escape_sqlite(&source_node_ids_json),
+            created_at = correction.created_at,
+        );
+        self.run_sql(&sql).map(|_| ())
+    }
+
+    #[cfg(test)]
+    fn load_workspace_corrections(&self, workspace_id: &str) -> Result<Vec<WorkspaceCorrection>> {
+        self.ensure_schema()?;
+        let sql = format!(
+            "SELECT hex(id), hex(workspace_id), hex(aggregate_node_id), kind, hex(COALESCE(target_node_id, '')), hex(COALESCE(value, '')), hex(evidence_ids_json), hex(source_node_ids_json), created_at \
+             FROM workspace_corrections WHERE workspace_id = '{}' ORDER BY created_at ASC, id ASC;",
+            escape_sqlite(workspace_id)
+        );
+        let output = self.run_sql(&sql)?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(workspace_correction_from_sqlite_row)
+            .collect()
+    }
+
     fn ensure_schema(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
@@ -4273,7 +4518,19 @@ impl KnowledgeProjectStore {
                 manifest_path TEXT NOT NULL,
                 manifest_base64 TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_sources_workspace_updated_at ON sources(workspace_id, updated_at DESC);",
+            CREATE INDEX IF NOT EXISTS idx_sources_workspace_updated_at ON sources(workspace_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS workspace_corrections (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                aggregate_node_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target_node_id TEXT,
+                value TEXT,
+                evidence_ids_json TEXT NOT NULL,
+                source_node_ids_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspace_corrections_workspace_created_at ON workspace_corrections(workspace_id, created_at ASC);",
         )
         .map(|_| ())
     }
@@ -5042,6 +5299,15 @@ mod tests {
             .expect("concept node")
             .id
             .clone();
+        rename_concept_for_test(project, &concept_id, canonical_name, aliases);
+    }
+
+    fn rename_concept_for_test(
+        project: &mut KnowledgeProject,
+        concept_id: &str,
+        canonical_name: &str,
+        aliases: &[&str],
+    ) {
         let node = project
             .nodes
             .iter_mut()
@@ -5050,7 +5316,7 @@ mod tests {
         node.label = canonical_name.into();
         let detail = project
             .details_by_node_id
-            .get_mut(&concept_id)
+            .get_mut(concept_id)
             .expect("concept detail");
         detail.canonical_name = canonical_name.into();
         detail.aliases = aliases.iter().map(|alias| (*alias).to_string()).collect();
@@ -5847,19 +6113,265 @@ mod tests {
     }
 
     #[test]
-    fn apply_correction_rejects_workspace_project_id() {
-        let error = handle_apply_correction(ApplyCorrectionRequest {
+    fn workspace_rename_correction_replays_to_source_snapshots_and_ledger() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nShared context layer keeps agents grounded.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nShared context layer keeps document evidence grounded.\n",
+            "source-b",
+            "beta",
+            20,
+        );
+        rename_first_concept_for_test(&mut project_a, "Shared Context Layer", &["Agent Context"]);
+        rename_first_concept_for_test(&mut project_b, "Shared Context Layer", &[]);
+
+        for (project, manifest) in [(&project_a, &manifest_a), (&project_b, &manifest_b)] {
+            let request = CompileProjectRequest {
+                source_markdown_path: manifest.markdown_path.clone(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(manifest.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+            };
+            store
+                .save_project(project, &request, Some(manifest))
+                .expect("save source project");
+        }
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let aggregate_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Shared Context Layer")
+            .expect("workspace concept")
+            .clone();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response = handle_apply_correction(ApplyCorrectionRequest {
             project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
-            node_id: "concept:shared-context-layer".into(),
+            node_id: aggregate_detail.node.id.clone(),
             kind: CorrectionKind::Rename,
             target_node_id: None,
-            value: Some("Shared Context Layer".into()),
+            value: Some("Agent Brain Context".into()),
         })
-        .expect_err("workspace aggregate corrections should stay disabled");
+        .expect("apply workspace rename correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
 
-        assert!(error
-            .to_string()
-            .contains("workspace-level correction writes are not supported yet"));
+        assert!(response
+            .project
+            .details_by_node_id
+            .values()
+            .any(|detail| detail.canonical_name == "Agent Brain Context"));
+        for project_id in [&project_a.summary.project_id, &project_b.summary.project_id] {
+            let source_project = store
+                .load_project(Some(project_id))
+                .expect("load source project")
+                .expect("source project");
+            let renamed = source_project
+                .details_by_node_id
+                .values()
+                .find(|detail| detail.canonical_name == "Agent Brain Context")
+                .expect("renamed source concept");
+            assert!(renamed.aliases.contains(&"Shared Context Layer".into()));
+        }
+
+        let corrections = store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace corrections");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].aggregate_node_id, aggregate_detail.node.id);
+        assert_eq!(corrections[0].kind, CorrectionKind::Rename);
+        assert_eq!(corrections[0].source_node_ids.len(), 2);
+        assert!(!corrections[0].evidence_ids.is_empty());
+    }
+
+    #[test]
+    fn workspace_merge_correction_replays_to_source_snapshot_and_ledger() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha planning context keeps agents grounded.\n\n## Page 2\n\nBeta review context keeps evidence visible.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let concept_ids = project
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        assert!(concept_ids.len() >= 2);
+        rename_concept_for_test(&mut project, &concept_ids[0], "Alpha Context", &[]);
+        rename_concept_for_test(&mut project, &concept_ids[1], "Beta Context", &[]);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source project");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let source_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Alpha Context")
+            .expect("workspace source concept")
+            .clone();
+        let target_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Beta Context")
+            .expect("workspace target concept")
+            .clone();
+        let node_count_before = project.nodes.len();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: source_detail.node.id.clone(),
+            kind: CorrectionKind::Merge,
+            target_node_id: Some(target_detail.node.id.clone()),
+            value: None,
+        })
+        .expect("apply workspace merge correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let source_project = store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load source project")
+            .expect("source project");
+        assert_eq!(source_project.nodes.len(), node_count_before - 1);
+        assert!(!source_project
+            .details_by_node_id
+            .values()
+            .any(|detail| detail.canonical_name == "Alpha Context"));
+        assert!(source_project
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Beta Context")
+            .expect("merged target concept")
+            .aliases
+            .contains(&"Alpha Context".into()));
+
+        let corrections = store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace corrections");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].kind, CorrectionKind::Merge);
+        assert_eq!(corrections[0].target_node_id, Some(target_detail.node.id));
+        assert_eq!(corrections[0].source_node_ids.len(), 1);
+    }
+
+    #[test]
+    fn workspace_keep_separate_correction_replays_to_source_snapshot_and_ledger() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha context keeps agents grounded.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        rename_first_concept_for_test(&mut project, "Alpha Context", &["Beta Context"]);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source project");
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let aggregate_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Alpha Context")
+            .expect("workspace concept")
+            .clone();
+        assert!(aggregate_detail.aliases.contains(&"Beta Context".into()));
+        let node_count_before = project.nodes.len();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: aggregate_detail.node.id.clone(),
+            kind: CorrectionKind::KeepSeparate,
+            target_node_id: None,
+            value: None,
+        })
+        .expect("apply workspace keep separate correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let source_project = store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load source project")
+            .expect("source project");
+        assert_eq!(source_project.nodes.len(), node_count_before + 1);
+        assert!(source_project
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Alpha Context")
+            .expect("kept concept")
+            .aliases
+            .is_empty());
+        assert!(source_project
+            .details_by_node_id
+            .values()
+            .any(|detail| detail.canonical_name == "Beta Context"));
+
+        let corrections = store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace corrections");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].kind, CorrectionKind::KeepSeparate);
+        assert_eq!(corrections[0].source_node_ids.len(), 1);
     }
 
     #[test]

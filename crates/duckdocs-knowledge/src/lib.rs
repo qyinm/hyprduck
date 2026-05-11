@@ -210,6 +210,24 @@ pub struct KnowledgeProject {
     pub answer_by_node_id: BTreeMap<String, AnswerResponse>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCorrection {
+    pub id: String,
+    pub workspace_id: String,
+    pub aggregate_node_id: String,
+    pub kind: CorrectionKind,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub source_node_ids: Vec<String>,
+    pub created_at: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
