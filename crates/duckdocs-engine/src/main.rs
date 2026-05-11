@@ -449,11 +449,14 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
         Some(workspace_id) => Some(workspace_id),
         None => store.load_latest_workspace_id()?,
     };
-    let project = workspace_id
+    let mut project = workspace_id
         .as_deref()
         .map(|workspace_id| store.load_workspace_project(workspace_id))
         .transpose()?
         .flatten();
+    if project.is_none() && request.workspace_id.is_none() {
+        project = store.load_project(None)?;
+    }
     let sources = workspace_id
         .as_deref()
         .map(|workspace_id| store.load_sources(workspace_id))
@@ -5322,6 +5325,44 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.id == "source:source-a"));
+    }
+
+    #[test]
+    fn default_load_project_falls_back_to_latest_legacy_project() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let project = compile_fixture_project(
+            &temp,
+            "# Legacy import\n\n## Page 1\n\nLegacy project snapshots remain visible.\n",
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: temp.path().join("legacy.md").display().to_string(),
+            source_document_path: None,
+            source_manifest_path: None,
+            workspace_id: None,
+            source_id: None,
+        };
+        store
+            .save_project(&project, &request, None)
+            .expect("save legacy project");
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        let response =
+            handle_load_project(LoadProjectRequest::default()).expect("load default project");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        assert_eq!(response.sources.len(), 0);
+        assert_eq!(
+            response.project.expect("legacy project").summary.project_id,
+            project.summary.project_id
+        );
     }
 
     #[test]
