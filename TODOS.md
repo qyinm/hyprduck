@@ -9,18 +9,17 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Golden corpus and eval harness
-2. Local retrieval baseline and context-pack hardening
-3. Reviewable save-back and correction persistence
-4. Model-task matrix and latency budget
-5. Read-only MCP v0
-6. Proposed-write MCP and policy engine
-7. Team/company brain governance
+1. Local retrieval baseline and context-pack hardening
+2. Reviewable save-back and correction persistence
+3. Model-task matrix and latency budget
+4. Read-only MCP v0
+5. Proposed-write MCP and policy engine
+6. Team/company brain governance
 ```
 
 ---
 
-## P0 - Golden corpus and eval harness
+## P0 - Golden corpus and eval harness - Done
 
 **What:** Add a small benchmark corpus and CLI/eval path for extraction, retrieval, and context-pack quality.
 
@@ -46,11 +45,11 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] Fixtures live under a stable test path.
-- [ ] Expected entities, claims, relations, and evidence refs are checked in.
-- [ ] A CLI or test command can run the corpus locally.
-- [ ] The result reports quality and latency in a human-readable format.
-- [ ] The corpus can compare heuristic, hosted-model, and local-model extraction paths.
+- [x] Fixtures live under a stable test path.
+- [x] Expected entities, claims, relations, and evidence refs are checked in.
+- [x] A CLI or test command can run the corpus locally.
+- [x] The result reports quality and latency in a human-readable format.
+- [x] The corpus can compare heuristic, hosted-model, and local-model extraction paths.
 
 **Effort:** M
 **Priority:** P0
@@ -253,3 +252,8 @@ Current roadmap order:
   - Marked the current extractor as `extractor=heuristic`.
   - Prevented evidence-free claims/relations from becoming trusted brain context.
   - Covered artifact shape and source/evidence round trip in unit tests.
+- [x] Golden corpus and eval harness
+  - Added six checked-in benchmark fixtures under `crates/duckdocs-engine/tests/fixtures/brain-corpus`.
+  - Added `duckdocs eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
+  - Reports entity recall, claim citation coverage, relation evidence coverage, evidence snippet coverage, contradiction detection, context-pack relevance, and latency.
+  - Covered the CLI eval path with an integration test.
