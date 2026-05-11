@@ -1,0 +1,24 @@
+{
+  "caseId": "multi-source-contradiction",
+  "workspaceId": "default",
+  "sourceId": "source-multi-source-contradiction",
+  "description": "Contradictory policy statements should be measurable by the corpus.",
+  "expectedEntities": [
+    "Policy Alpha requires manual review",
+    "Policy Alpha does not require manual review",
+    "Conflict Detector flags contradictory claims"
+  ],
+  "expectedClaims": [
+    "Policy Alpha requires manual review",
+    "Policy Alpha does not require manual review"
+  ],
+  "expectedRelations": [
+    {
+      "sourceEntity": "Policy Alpha requires manual review",
+      "targetEntity": "Policy Alpha does not require manual review"
+    }
+  ],
+  "expectedEvidenceSnippets": [
+    "Policy Alpha does not require manual review"
+  ]
+}

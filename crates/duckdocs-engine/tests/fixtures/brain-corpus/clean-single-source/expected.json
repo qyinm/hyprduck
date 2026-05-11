@@ -1,0 +1,25 @@
+{
+  "caseId": "clean-single-source",
+  "workspaceId": "default",
+  "sourceId": "source-clean-single-source",
+  "description": "Clean source-backed extraction with three related entities.",
+  "expectedEntities": [
+    "Shared Context Layer keeps agents grounded",
+    "Evidence Map links page images to markdown",
+    "Decision Ledger records approved agent memory"
+  ],
+  "expectedClaims": [
+    "Shared Context Layer keeps agents grounded",
+    "Evidence Map links page images to markdown",
+    "Decision Ledger records approved agent memory"
+  ],
+  "expectedRelations": [
+    {
+      "sourceEntity": "Shared Context Layer keeps agents grounded",
+      "targetEntity": "Evidence Map links page images to markdown"
+    }
+  ],
+  "expectedEvidenceSnippets": [
+    "Shared Context Layer keeps agents grounded"
+  ]
+}

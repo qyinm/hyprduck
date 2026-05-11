@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod eval;
 mod tui;
 mod ui;
 
@@ -20,6 +21,7 @@ fn main() -> Result<()> {
         Some(Commands::Serve) => run_serve(),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Brain { command }) => run_brain(command),
+        Some(Commands::Eval { command }) => run_eval(command),
         Some(Commands::Parse { input }) => run_parse(input),
         None => tui::run_tui(),
     }
@@ -145,6 +147,16 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             println!("event: {}", response.event.event_id);
             println!("status: {:?}", response.proposal.status);
             println!("path: {}", response.proposal_path);
+        }
+    }
+    Ok(())
+}
+
+fn run_eval(command: cli::EvalCommand) -> Result<()> {
+    match command {
+        cli::EvalCommand::GoldenCorpus { fixtures, mode } => {
+            let mode = eval::GoldenEvalMode::parse(&mode)?;
+            println!("{}", eval::run_golden_corpus(fixtures, mode)?);
         }
     }
     Ok(())

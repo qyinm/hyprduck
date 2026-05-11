@@ -1,0 +1,24 @@
+{
+  "caseId": "low-quality-ocr",
+  "workspaceId": "default",
+  "sourceId": "source-low-quality-ocr",
+  "description": "Noisy OCR-like text should still keep evidence-backed artifacts.",
+  "expectedEntities": [
+    "OCR Recovery handles broken scan text",
+    "Noisy Page Evidence still keeps source refs",
+    "Broken Glyph Repair preserves cited context"
+  ],
+  "expectedClaims": [
+    "OCR Recovery handles broken scan text",
+    "Noisy Page Evidence still keeps source refs"
+  ],
+  "expectedRelations": [
+    {
+      "sourceEntity": "OCR Recovery handles broken scan text",
+      "targetEntity": "Noisy Page Evidence still keeps source refs"
+    }
+  ],
+  "expectedEvidenceSnippets": [
+    "Noisy Page Evidence still keeps source refs"
+  ]
+}
