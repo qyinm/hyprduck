@@ -899,27 +899,37 @@ fn aggregate_workspace_project(
             let Some(canonical_key) = concept_keys.first().cloned() else {
                 continue;
             };
-            let aggregate_key = concept_keys
+            let existing_aggregate_keys = concept_keys
                 .iter()
-                .find_map(|key| aggregate_key_by_concept_key.get(key).cloned())
-                .unwrap_or_else(|| canonical_key.clone());
+                .filter_map(|key| aggregate_key_by_concept_key.get(key).cloned())
+                .collect::<BTreeSet<_>>();
+            let aggregate_key = existing_aggregate_keys
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or(canonical_key);
+            if !existing_aggregate_keys.is_empty() {
+                merge_workspace_concept_groups(
+                    &aggregate_key,
+                    &existing_aggregate_keys,
+                    &mut concept_accumulators,
+                    &mut aggregate_key_by_concept_key,
+                );
+            }
             for key in &concept_keys {
-                aggregate_key_by_concept_key
-                    .entry(key.clone())
-                    .or_insert_with(|| aggregate_key.clone());
+                aggregate_key_by_concept_key.insert(key.clone(), aggregate_key.clone());
             }
             let aggregate_node_id = format!("concept-{aggregate_key}");
             concept_id_map.insert(detail.node.id.clone(), aggregate_node_id.clone());
-            let accumulator =
-                concept_accumulators
-                    .entry(aggregate_key)
-                    .or_insert_with(|| WorkspaceConceptAccumulator {
-                        node_id: aggregate_node_id.clone(),
-                        canonical_name: detail.canonical_name.clone(),
-                        aliases: BTreeSet::new(),
-                        evidence: Vec::new(),
-                        confidence: detail.node.confidence,
-                    });
+            let accumulator = concept_accumulators
+                .entry(aggregate_key)
+                .or_insert_with(|| WorkspaceConceptAccumulator {
+                    node_id: aggregate_node_id.clone(),
+                    canonical_name: detail.canonical_name.clone(),
+                    aliases: BTreeSet::new(),
+                    evidence: Vec::new(),
+                    confidence: detail.node.confidence,
+                });
             accumulator.aliases.extend(detail.aliases.iter().cloned());
             if accumulator.canonical_name != detail.canonical_name {
                 accumulator.aliases.insert(detail.canonical_name.clone());
@@ -1019,6 +1029,11 @@ fn aggregate_workspace_project(
             );
         }
     }
+
+    source_concept_edges =
+        remap_workspace_edge_accumulators(source_concept_edges, &aggregate_key_by_concept_key);
+    relation_edges =
+        remap_workspace_edge_accumulators(relation_edges, &aggregate_key_by_concept_key);
 
     let concept_positions = layout_concept_positions(concept_accumulators.len().max(1));
     let mut concept_nodes = Vec::new();
@@ -1134,6 +1149,120 @@ fn aggregate_workspace_project(
         answer_by_node_id,
         source_count,
     )
+}
+
+fn merge_workspace_concept_groups(
+    aggregate_key: &str,
+    existing_aggregate_keys: &BTreeSet<String>,
+    concept_accumulators: &mut BTreeMap<String, WorkspaceConceptAccumulator>,
+    aggregate_key_by_concept_key: &mut BTreeMap<String, String>,
+) {
+    if existing_aggregate_keys.len() <= 1 {
+        return;
+    }
+
+    let mut merged_accumulator = concept_accumulators
+        .remove(aggregate_key)
+        .unwrap_or_else(|| WorkspaceConceptAccumulator {
+            node_id: format!("concept-{aggregate_key}"),
+            canonical_name: aggregate_key.to_string(),
+            aliases: BTreeSet::new(),
+            evidence: Vec::new(),
+            confidence: None,
+        });
+
+    for stale_key in existing_aggregate_keys {
+        if stale_key == aggregate_key {
+            continue;
+        }
+        if let Some(stale_accumulator) = concept_accumulators.remove(stale_key) {
+            merged_accumulator
+                .aliases
+                .insert(stale_accumulator.canonical_name.clone());
+            merged_accumulator
+                .aliases
+                .extend(stale_accumulator.aliases.into_iter());
+            merged_accumulator
+                .evidence
+                .extend(stale_accumulator.evidence.into_iter());
+            merged_accumulator.confidence =
+                match (merged_accumulator.confidence, stale_accumulator.confidence) {
+                    (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+                    (Some(left), None) => Some(left),
+                    (None, Some(right)) => Some(right),
+                    (None, None) => None,
+                };
+        }
+    }
+
+    merged_accumulator.evidence = dedupe_evidence(merged_accumulator.evidence);
+    for mapped_aggregate_key in aggregate_key_by_concept_key.values_mut() {
+        if existing_aggregate_keys.contains(mapped_aggregate_key) {
+            *mapped_aggregate_key = aggregate_key.to_string();
+        }
+    }
+    concept_accumulators.insert(aggregate_key.to_string(), merged_accumulator);
+}
+
+fn remap_workspace_edge_accumulators(
+    accumulators: BTreeMap<String, StoredEdgeAccumulator>,
+    aggregate_key_by_concept_key: &BTreeMap<String, String>,
+) -> BTreeMap<String, StoredEdgeAccumulator> {
+    let mut remapped = BTreeMap::<String, StoredEdgeAccumulator>::new();
+    for mut accumulator in accumulators.into_values() {
+        accumulator.source_node_id = remap_workspace_concept_node_id(
+            &accumulator.source_node_id,
+            aggregate_key_by_concept_key,
+        );
+        accumulator.target_node_id = remap_workspace_concept_node_id(
+            &accumulator.target_node_id,
+            aggregate_key_by_concept_key,
+        );
+        if accumulator.source_node_id == accumulator.target_node_id {
+            continue;
+        }
+        let edge_id = relation_edge_id(
+            accumulator.kind,
+            &accumulator.source_node_id,
+            &accumulator.target_node_id,
+        );
+        let existing = remapped
+            .entry(edge_id)
+            .or_insert_with(|| StoredEdgeAccumulator {
+                kind: accumulator.kind,
+                source_node_id: accumulator.source_node_id.clone(),
+                target_node_id: accumulator.target_node_id.clone(),
+                label: accumulator.label.clone(),
+                confidence: accumulator.confidence,
+                evidence: Vec::new(),
+            });
+        existing.label =
+            preferred_edge_label(&existing.label, &accumulator.label, accumulator.kind);
+        existing.confidence = match (existing.confidence, accumulator.confidence) {
+            (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+        existing.evidence.extend(accumulator.evidence.into_iter());
+    }
+    for accumulator in remapped.values_mut() {
+        accumulator.evidence = dedupe_evidence(std::mem::take(&mut accumulator.evidence));
+    }
+    remapped
+}
+
+fn remap_workspace_concept_node_id(
+    node_id: &str,
+    aggregate_key_by_concept_key: &BTreeMap<String, String>,
+) -> String {
+    let Some(key) = node_id.strip_prefix("concept-") else {
+        return node_id.to_string();
+    };
+    aggregate_key_by_concept_key
+        .get(key)
+        .map(|aggregate_key| format!("concept-{aggregate_key}"))
+        .unwrap_or_else(|| node_id.to_string())
 }
 
 fn finalize_workspace_project(
@@ -1919,7 +2048,10 @@ fn select_focal_node_id(
         if project.details_by_node_id.contains_key(node_id) {
             return Ok(node_id.to_string());
         }
-        bail!("node {node_id} was not found in project {}", request.project_id);
+        bail!(
+            "node {node_id} was not found in project {}",
+            request.project_id
+        );
     }
 
     if project.summary.project_id.starts_with("workspace:") {
@@ -4621,6 +4753,33 @@ mod tests {
         }
     }
 
+    fn rename_first_concept_for_test(
+        project: &mut KnowledgeProject,
+        canonical_name: &str,
+        aliases: &[&str],
+    ) {
+        let concept_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let node = project
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == concept_id)
+            .expect("mutable concept node");
+        node.label = canonical_name.into();
+        let detail = project
+            .details_by_node_id
+            .get_mut(&concept_id)
+            .expect("concept detail");
+        detail.canonical_name = canonical_name.into();
+        detail.aliases = aliases.iter().map(|alias| (*alias).to_string()).collect();
+        detail.node.label = canonical_name.into();
+    }
+
     #[test]
     fn compile_and_store_project_round_trip() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -4840,7 +4999,11 @@ mod tests {
     fn source_backed_project_id_uses_manifest_identity() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
-        let shared_original = temp.path().join("shared-original.pdf").display().to_string();
+        let shared_original = temp
+            .path()
+            .join("shared-original.pdf")
+            .display()
+            .to_string();
         let markdown_a =
             "# Source A\n\n## Page 1\n\nAlpha planning context stays evidence backed.\n";
         let markdown_b =
@@ -4891,20 +5054,14 @@ mod tests {
             .load_workspace_project(DEFAULT_WORKSPACE_ID)
             .expect("load aggregate")
             .expect("workspace aggregate");
-        assert!(aggregate
-            .details_by_node_id
-            .values()
-            .any(|detail| detail
-                .evidence
-                .iter()
-                .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))));
-        assert!(aggregate
-            .details_by_node_id
-            .values()
-            .any(|detail| detail
-                .evidence
-                .iter()
-                .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
+        assert!(aggregate.details_by_node_id.values().any(|detail| detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))));
+        assert!(aggregate.details_by_node_id.values().any(|detail| detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
     }
 
     #[test]
@@ -5063,6 +5220,74 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn workspace_aggregate_merges_transitive_alias_groups() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha concept keeps project knowledge grounded.\n",
+            "source-a",
+            "alpha",
+            30,
+        );
+        let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source B\n\n## Page 1\n\nGamma concept keeps project knowledge grounded.\n",
+            "source-b",
+            "beta",
+            20,
+        );
+        let (mut project_c, manifest_c) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source C\n\n## Page 1\n\nBeta concept bridges gamma evidence.\n",
+            "source-c",
+            "gamma",
+            10,
+        );
+
+        rename_first_concept_for_test(&mut project_a, "Alpha", &["Beta"]);
+        rename_first_concept_for_test(&mut project_b, "Gamma", &["Delta"]);
+        rename_first_concept_for_test(&mut project_c, "Beta", &["Gamma"]);
+
+        for (project, manifest) in [
+            (&project_a, &manifest_a),
+            (&project_b, &manifest_b),
+            (&project_c, &manifest_c),
+        ] {
+            let request = CompileProjectRequest {
+                source_markdown_path: manifest.markdown_path.clone(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(manifest.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+            };
+            store
+                .save_project(project, &request, Some(manifest))
+                .expect("save source project");
+        }
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let concept_details = aggregate
+            .details_by_node_id
+            .values()
+            .filter(|detail| detail.node.kind == GraphNodeKind::Concept)
+            .collect::<Vec<_>>();
+        assert_eq!(concept_details.len(), 1);
+        let merged = concept_details[0];
+        assert!(merged.aliases.contains(&"Beta".into()));
+        assert!(merged.aliases.contains(&"Gamma".into()));
+        for source_id in ["source-a", "source-b", "source-c"] {
+            assert!(merged
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some(source_id)));
+        }
     }
 
     #[test]
