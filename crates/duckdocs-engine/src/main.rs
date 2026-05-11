@@ -15,12 +15,13 @@ use duckdocs_engine_types::{
     BrainContextPack, BrainEvent, BrainEventKind, BrainHealthStatus, BrainNodeKind,
     BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainReadScope, BrainRelationKind,
     BrainRelationRecord, BrainRepoSnapshot, BrainReviewDecision, BrainReviewItem, BrainScope,
-    BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal, CompileProjectRequest,
-    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
-    EngineConfigPayload, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
-    EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, EvidenceRef, GetBrainHealthRequest,
-    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
+    BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal, ClaimRecord,
+    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
+    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
+    EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
+    EngineSuccess, EntityRecord, EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData,
+    GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
     ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
     LoadProjectRequest, LoadProjectResponseData, MemoryRecord, OutputAsset, PageArtifact,
     ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
@@ -1313,6 +1314,12 @@ impl BrainReader {
         snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
         snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
         snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
+        if let Ok(entities) = read_json_artifact(&root.join("graph/entities.json")) {
+            snapshot.entities = entities;
+        }
+        if let Ok(claims) = read_json_artifact(&root.join("graph/claims.json")) {
+            snapshot.claims = claims;
+        }
         snapshot.memories = read_memory_records(&root)?;
         let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
         snapshot.events = events.clone();
@@ -1355,6 +1362,70 @@ impl BrainReader {
                     path: None,
                     score,
                     snippet: format!("{} evidence refs", node.evidence_ids.len()),
+                });
+            }
+        }
+        for entity in &self.snapshot.entities {
+            let haystack = format!(
+                "{} {:?} {} {} {}",
+                entity.entity_id,
+                entity.kind,
+                entity.name,
+                entity.aliases.join(" "),
+                entity.source_refs.join(" ")
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Entity,
+                    id: entity.entity_id.clone(),
+                    title: entity.name.clone(),
+                    path: None,
+                    score,
+                    snippet: format!("{} evidence refs", entity.evidence_refs.len()),
+                });
+            }
+        }
+        for claim in &self.snapshot.claims {
+            let haystack = format!(
+                "{} {} {} {} {}",
+                claim.claim_id,
+                claim.statement,
+                claim.topic_refs.join(" "),
+                claim.source_refs.join(" "),
+                claim.evidence_refs.join(" ")
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Claim,
+                    id: claim.claim_id.clone(),
+                    title: claim.statement.clone(),
+                    path: Some("graph/claims.json".into()),
+                    score,
+                    snippet: best_snippet(&claim.statement, &terms),
+                });
+            }
+        }
+        for relation in &self.snapshot.relations {
+            let haystack = format!(
+                "{} {:?} {} {} {} {}",
+                relation.relation_id,
+                relation.kind,
+                relation.source_node_id,
+                relation.target_node_id,
+                relation.label,
+                relation.evidence_ids.join(" ")
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Relation,
+                    id: relation.relation_id.clone(),
+                    title: relation.label.clone(),
+                    path: Some("graph/edges.json".into()),
+                    score,
+                    snippet: format!(
+                        "{:?}: {} -> {}",
+                        relation.kind, relation.source_node_id, relation.target_node_id
+                    ),
                 });
             }
         }
@@ -1471,6 +1542,9 @@ impl BrainReader {
         let results = self.search(query, 12);
         let mut page_paths = BTreeSet::new();
         let mut node_ids = BTreeSet::new();
+        let mut entity_ids = BTreeSet::new();
+        let mut claim_ids = BTreeSet::new();
+        let mut relation_ids = BTreeSet::new();
         let mut source_ids = BTreeSet::new();
         let mut evidence_ids = BTreeSet::new();
         for result in &results {
@@ -1482,6 +1556,15 @@ impl BrainReader {
                 }
                 BrainSearchResultKind::Node => {
                     node_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Entity => {
+                    entity_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Claim => {
+                    claim_ids.insert(result.id.clone());
+                }
+                BrainSearchResultKind::Relation => {
+                    relation_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Source => {
                     source_ids.insert(result.id.clone());
@@ -1504,6 +1587,58 @@ impl BrainReader {
         for node in &nodes {
             source_ids.extend(node.source_ids.iter().cloned());
             evidence_ids.extend(node.evidence_ids.iter().cloned());
+        }
+        let entities = self
+            .snapshot
+            .entities
+            .iter()
+            .filter(|entity| entity_ids.contains(&entity.entity_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for entity in &entities {
+            source_ids.extend(entity.source_refs.iter().cloned());
+            evidence_ids.extend(entity.evidence_refs.iter().cloned());
+        }
+        let claims = self
+            .snapshot
+            .claims
+            .iter()
+            .filter(|claim| claim_ids.contains(&claim.claim_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for claim in &claims {
+            node_ids.extend(claim.topic_refs.iter().cloned());
+            source_ids.extend(claim.source_refs.iter().cloned());
+            evidence_ids.extend(claim.evidence_refs.iter().cloned());
+        }
+        nodes = self
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| node_ids.contains(&node.node_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for node in &nodes {
+            source_ids.extend(node.source_ids.iter().cloned());
+            evidence_ids.extend(node.evidence_ids.iter().cloned());
+        }
+        let selected_node_ids = nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect::<BTreeSet<_>>();
+        let relations = self
+            .snapshot
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation_ids.contains(&relation.relation_id)
+                    || selected_node_ids.contains(&relation.source_node_id)
+                    || selected_node_ids.contains(&relation.target_node_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for relation in &relations {
+            evidence_ids.extend(relation.evidence_ids.iter().cloned());
         }
         let sources = self
             .snapshot
@@ -1553,10 +1688,13 @@ impl BrainReader {
             query: query.to_string(),
             token_budget: budget,
             summary: format!(
-                "Context pack for \"{}\" with {} wiki pages, {} nodes, {} sources, {} memories, {} evidence refs, and {} recent events.",
+                "Context pack for \"{}\" with {} wiki pages, {} nodes, {} entities, {} claims, {} relations, {} sources, {} memories, {} evidence refs, and {} recent events.",
                 query,
                 wiki_pages.len(),
                 nodes.len(),
+                entities.len(),
+                claims.len(),
+                relations.len(),
                 sources.len(),
                 memories.len(),
                 evidence.len(),
@@ -1566,6 +1704,9 @@ impl BrainReader {
             nodes,
             sources,
             memories,
+            entities,
+            claims,
+            relations,
             evidence,
             recent_events,
             warnings,
@@ -2755,6 +2896,68 @@ fn build_brain_repo_snapshot(
         })
         .collect::<Vec<_>>();
 
+    let entities = nodes
+        .iter()
+        .filter(|node| matches!(node.kind, BrainNodeKind::Concept | BrainNodeKind::Topic))
+        .map(|node| EntityRecord {
+            entity_id: format!("ent-{}", node.node_id),
+            workspace_id: workspace_id.to_string(),
+            kind: node.kind,
+            name: node.label.clone(),
+            aliases: node.aliases.clone(),
+            source_refs: node.source_ids.clone(),
+            evidence_refs: node.evidence_ids.clone(),
+            updated_at: generated_at,
+        })
+        .collect::<Vec<_>>();
+
+    let claims = aggregate
+        .details_by_node_id
+        .values()
+        .filter(|detail| {
+            matches!(
+                detail.node.kind,
+                GraphNodeKind::Concept | GraphNodeKind::Page
+            )
+        })
+        .filter(|detail| !detail.evidence.is_empty())
+        .map(|detail| {
+            let evidence_refs = detail
+                .evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let source_refs = detail
+                .evidence
+                .iter()
+                .filter_map(|evidence| evidence.source_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let first_evidence = detail
+                .evidence
+                .first()
+                .map(|evidence| evidence.snippet.trim())
+                .filter(|snippet| !snippet.is_empty())
+                .unwrap_or(&detail.description);
+            ClaimRecord {
+                claim_id: format!("claim-{}", detail.node.id),
+                workspace_id: workspace_id.to_string(),
+                statement: format!(
+                    "{} is evidence-backed by: {}",
+                    detail.canonical_name, first_evidence
+                ),
+                topic_refs: vec![detail.node.id.clone()],
+                source_refs,
+                evidence_refs,
+                status: "supported".into(),
+                updated_at: generated_at,
+            }
+        })
+        .collect::<Vec<_>>();
+
     let relations = aggregate
         .edges
         .iter()
@@ -2882,8 +3085,8 @@ fn build_brain_repo_snapshot(
         evidence: evidence_by_id.into_values().collect(),
         memories: Vec::new(),
         wiki_pages,
-        entities: Vec::new(),
-        claims: Vec::new(),
+        entities,
+        claims,
         events,
     }
 }
@@ -3038,6 +3241,11 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         &root.join("graph/evidence.json"),
         &effective_snapshot.evidence,
     )?;
+    write_json_pretty(
+        &root.join("graph/entities.json"),
+        &effective_snapshot.entities,
+    )?;
+    write_json_pretty(&root.join("graph/claims.json"), &effective_snapshot.claims)?;
     write_json_pretty(
         &root.join("memory/records.json"),
         &effective_snapshot.memories,
@@ -7187,6 +7395,8 @@ mod tests {
         assert!(workspace_root.join("graph/nodes.json").exists());
         assert!(workspace_root.join("graph/edges.json").exists());
         assert!(workspace_root.join("graph/evidence.json").exists());
+        assert!(workspace_root.join("graph/entities.json").exists());
+        assert!(workspace_root.join("graph/claims.json").exists());
         assert!(workspace_root.join("events/brain_events.jsonl").exists());
         assert!(workspace_root.join("wiki/index.md").exists());
         assert!(workspace_root.join("wiki/log.md").exists());
@@ -7208,6 +7418,19 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.kind == BrainNodeKind::Concept));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.kind == BrainNodeKind::Concept
+                && !entity.evidence_refs.is_empty()
+                && !entity.source_refs.is_empty()));
+        assert!(snapshot.claims.iter().any(|claim| {
+            claim.status == "supported"
+                && claim.statement.contains("Agent brain")
+                && !claim.topic_refs.is_empty()
+                && !claim.evidence_refs.is_empty()
+                && !claim.source_refs.is_empty()
+        }));
         assert!(snapshot
             .events
             .iter()
@@ -7245,10 +7468,18 @@ mod tests {
         let search = handle_search_brain(SearchBrainRequest {
             scope: scope.clone(),
             query: "agent brain".into(),
-            limit: Some(5),
+            limit: Some(20),
         })
         .expect("search brain");
         assert!(!search.results.is_empty());
+        assert!(search
+            .results
+            .iter()
+            .any(|result| result.kind == BrainSearchResultKind::Entity));
+        assert!(search
+            .results
+            .iter()
+            .any(|result| result.kind == BrainSearchResultKind::Claim));
 
         let source = handle_read_source(ReadSourceRequest {
             scope: scope.clone(),
@@ -7297,6 +7528,9 @@ mod tests {
         .context_pack;
         assert_eq!(context_pack.workspace_id, DEFAULT_WORKSPACE_ID);
         assert!(!context_pack.wiki_pages.is_empty());
+        assert!(!context_pack.entities.is_empty());
+        assert!(!context_pack.claims.is_empty());
+        assert!(!context_pack.relations.is_empty());
         assert!(!context_pack.recent_events.is_empty());
     }
 
