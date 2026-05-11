@@ -3399,13 +3399,13 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
         );
     }
     Ok(SourceSummary {
-        workspace_id: columns[0].to_string(),
-        source_id: columns[1].to_string(),
-        original_path: columns[2].to_string(),
-        source_path: columns[3].to_string(),
-        markdown_path: columns[4].to_string(),
-        format: document_format_from_slug(columns[5])?,
-        status: ingest_status_from_slug(columns[6])?,
+        workspace_id: decode_sqlite_hex_text(columns[0])?,
+        source_id: decode_sqlite_hex_text(columns[1])?,
+        original_path: decode_sqlite_hex_text(columns[2])?,
+        source_path: decode_sqlite_hex_text(columns[3])?,
+        markdown_path: decode_sqlite_hex_text(columns[4])?,
+        format: document_format_from_slug(&decode_sqlite_hex_text(columns[5])?)?,
+        status: ingest_status_from_slug(&decode_sqlite_hex_text(columns[6])?)?,
         page_count: columns[7]
             .parse()
             .context("failed to parse source page_count")?,
@@ -3431,13 +3431,13 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     }
     Ok(StoredSourceRow {
         summary: SourceSummary {
-            workspace_id: columns[0].to_string(),
-            source_id: columns[1].to_string(),
-            original_path: columns[2].to_string(),
-            source_path: columns[3].to_string(),
-            markdown_path: columns[4].to_string(),
-            format: document_format_from_slug(columns[5])?,
-            status: ingest_status_from_slug(columns[6])?,
+            workspace_id: decode_sqlite_hex_text(columns[0])?,
+            source_id: decode_sqlite_hex_text(columns[1])?,
+            original_path: decode_sqlite_hex_text(columns[2])?,
+            source_path: decode_sqlite_hex_text(columns[3])?,
+            markdown_path: decode_sqlite_hex_text(columns[4])?,
+            format: document_format_from_slug(&decode_sqlite_hex_text(columns[5])?)?,
+            status: ingest_status_from_slug(&decode_sqlite_hex_text(columns[6])?)?,
             page_count: columns[7]
                 .parse()
                 .context("failed to parse source page_count")?,
@@ -3451,9 +3451,23 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
                 .parse()
                 .context("failed to parse source updated_at")?,
         },
-        project_id: columns[11].to_string(),
-        manifest_path: columns[12].to_string(),
+        project_id: decode_sqlite_hex_text(columns[11])?,
+        manifest_path: decode_sqlite_hex_text(columns[12])?,
     })
+}
+
+fn decode_sqlite_hex_text(value: &str) -> Result<String> {
+    if value.len() % 2 != 0 {
+        bail!("sqlite hex text had an odd byte count");
+    }
+    let bytes = (0..value.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&value[index..index + 2], 16)
+                .context("failed to decode sqlite hex text byte")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    String::from_utf8(bytes).context("sqlite hex text was not valid UTF-8")
 }
 
 fn ingest_status_slug(status: &IngestStatus) -> &'static str {
@@ -3670,7 +3684,7 @@ impl KnowledgeProjectStore {
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT workspace_id, source_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at \
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at \
              FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
@@ -3685,7 +3699,7 @@ impl KnowledgeProjectStore {
     fn load_source_rows(&self, workspace_id: &str) -> Result<Vec<StoredSourceRow>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT workspace_id, source_id, original_path, source_path, markdown_path, format, status, page_count, success_count, failed_count, updated_at, project_id, manifest_path \
+            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path) \
              FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
             escape_sqlite(workspace_id)
         );
@@ -4808,6 +4822,58 @@ mod tests {
                 .evidence
                 .iter()
                 .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
+    }
+
+    #[test]
+    fn source_rows_round_trip_paths_with_pipe_characters() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let markdown = "# Source A\n\n## Page 1\n\nPipe path evidence stays readable.\n";
+        let markdown_path = temp.path().join("pipe-source.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let mut manifest = sample_manifest_with_source(&temp, "source-pipe", "alpha", 10);
+        manifest.original_path = temp.path().join("a|b.pdf").display().to_string();
+        manifest.source_path = temp
+            .path()
+            .join("default/sources/source-pipe/a|b.pdf")
+            .display()
+            .to_string();
+        manifest.markdown_path = temp
+            .path()
+            .join("default/artifacts/source-pipe/a|b.md")
+            .display()
+            .to_string();
+        manifest.manifest_path = temp
+            .path()
+            .join("default/artifacts/source-pipe/source|manifest.json")
+            .display()
+            .to_string();
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save pipe path source");
+
+        let sources = store
+            .load_sources(DEFAULT_WORKSPACE_ID)
+            .expect("load sources");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].original_path, manifest.original_path);
+        assert_eq!(sources[0].source_path, manifest.source_path);
+        assert_eq!(sources[0].markdown_path, manifest.markdown_path);
+
+        let rows = store
+            .load_source_rows(DEFAULT_WORKSPACE_ID)
+            .expect("load source rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].manifest_path, manifest.manifest_path);
+        assert_eq!(rows[0].project_id, project.summary.project_id);
     }
 
     #[test]
