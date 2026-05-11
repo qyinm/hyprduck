@@ -9,12 +9,11 @@ The parser remains the wedge, but the next product milestone is not "more chat" 
 Current roadmap order:
 
 ```text
-1. Local retrieval baseline and context-pack hardening
-2. Reviewable save-back and correction persistence
-3. Model-task matrix and latency budget
-4. Read-only MCP v0
-5. Proposed-write MCP and policy engine
-6. Team/company brain governance
+1. Reviewable save-back and correction persistence
+2. Model-task matrix and latency budget
+3. Read-only MCP v0
+4. Proposed-write MCP and policy engine
+5. Team/company brain governance
 ```
 
 ---
@@ -57,7 +56,7 @@ Current roadmap order:
 
 ---
 
-## P0 - Local retrieval baseline and context-pack hardening
+## P0 - Local retrieval baseline and context-pack hardening - Done
 
 **What:** Replace simple substring-style brain search with a local retrieval baseline, then harden `GetContextPack` around that retrieval.
 
@@ -73,11 +72,11 @@ Current roadmap order:
 
 **Acceptance:**
 
-- [ ] Search no longer depends only on naive substring matching.
-- [ ] Context packs include entities, claims, relations, memories, evidence, and recent events when relevant.
-- [ ] Results expose citation/evidence IDs an agent can quote back.
-- [ ] Golden corpus tests catch retrieval regressions.
-- [ ] CLI output reflects the same context-pack fields the engine returns.
+- [x] Search no longer depends only on naive substring matching.
+- [x] Context packs include entities, claims, relations, memories, evidence, and recent events when relevant.
+- [x] Results expose citation/evidence IDs an agent can quote back.
+- [x] Golden corpus tests catch retrieval regressions.
+- [x] CLI output reflects the same context-pack fields the engine returns.
 
 **Effort:** M
 **Priority:** P0
@@ -257,3 +256,9 @@ Current roadmap order:
   - Added `duckdocs eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
   - Reports entity recall, claim citation coverage, relation evidence coverage, evidence snippet coverage, contradiction detection, context-pack relevance, and latency.
   - Covered the CLI eval path with an integration test.
+- [x] Local retrieval baseline and context-pack hardening
+  - Replaced substring-only score counting with tokenized local scoring and suffix/plural normalization.
+  - Expanded context packs through matched sources, evidence, entities, claims, relations, memories, and events.
+  - Added evidence IDs to search snippets for agent-readable citations.
+  - Added CLI context-pack counts for memories, entities, claims, and relations.
+  - Covered plural-token retrieval and graph/evidence expansion with a regression test.
