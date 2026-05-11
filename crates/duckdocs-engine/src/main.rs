@@ -749,14 +749,7 @@ fn handle_propose_brain_update(
 ) -> Result<ProposeBrainUpdateResponseData> {
     validate_brain_update_proposal(&request)?;
     let root = resolve_brain_workspace_root(&request.scope)?;
-    let proposal_dir = root.join("reviews/proposed-updates");
-    let events_path = root.join("events/brain_events.jsonl");
-    fs::create_dir_all(&proposal_dir)
-        .with_context(|| format!("failed creating {}", proposal_dir.display()))?;
-    if let Some(parent) = events_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed creating {}", parent.display()))?;
-    }
+    let writer = BrainWorkspaceWriter::open(root)?;
 
     let created_at = unix_timestamp_seconds();
     let proposal_id = format!("proposal-{}", Uuid::now_v7());
@@ -799,14 +792,13 @@ fn handle_propose_brain_update(
     if auto_apply {
         event.policy_result = "auto_applied".into();
     }
-    let proposal_path = proposal_dir.join(format!("{}.json", proposal.proposal_id));
-    write_json_pretty(&proposal_path, &proposal)?;
-    append_brain_event_jsonl(&events_path, &event)?;
+    let proposal_path = writer.write_proposal(&proposal)?;
+    writer.append_event(&event)?;
     if auto_apply {
         let memory = memory_record_for_proposal(&proposal);
-        upsert_memory_record(&root, memory)?;
+        writer.upsert_memory_record(memory)?;
         let accepted_event = brain_memory_accepted_event(&proposal)?;
-        append_brain_event_jsonl(&events_path, &accepted_event)?;
+        writer.append_event(&accepted_event)?;
     }
 
     Ok(ProposeBrainUpdateResponseData {
@@ -892,10 +884,7 @@ fn brain_event_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainEvent
 
 fn memory_record_for_proposal(proposal: &BrainUpdateProposal) -> MemoryRecord {
     MemoryRecord {
-        memory_id: format!(
-            "memory-{}",
-            proposal.proposal_id.trim_start_matches("proposal-")
-        ),
+        memory_id: format!("memory-{}", brain_proposal_fingerprint(proposal)),
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
         title: proposal.title.clone(),
@@ -924,6 +913,123 @@ fn brain_memory_accepted_event(proposal: &BrainUpdateProposal) -> Result<BrainEv
         policy_result: "auto_applied".into(),
         created_at: proposal.created_at,
     })
+}
+
+fn brain_proposal_fingerprint(proposal: &BrainUpdateProposal) -> String {
+    let mut parts = vec![
+        proposal.workspace_id.clone(),
+        format!("{:?}", proposal.kind).to_ascii_lowercase(),
+        proposal.actor.actor_id.clone(),
+        proposal.title.trim().to_ascii_lowercase(),
+        proposal.body.trim().to_ascii_lowercase(),
+    ];
+    parts.extend(proposal.source_refs.iter().cloned());
+    parts.extend(proposal.node_refs.iter().cloned());
+    parts.extend(proposal.evidence_refs.iter().cloned());
+    if let Some(target_node_id) = &proposal.target_node_id {
+        parts.push(target_node_id.clone());
+    }
+    if let Some(target_source_id) = &proposal.target_source_id {
+        parts.push(target_source_id.clone());
+    }
+    if let Some(relation_kind) = proposal.relation_kind {
+        parts.push(format!("{relation_kind:?}").to_ascii_lowercase());
+    }
+    sanitize_name(&parts.join("-"))
+}
+
+struct BrainWorkspaceWriter {
+    root: PathBuf,
+    _lock: WorkspaceLock,
+}
+
+impl BrainWorkspaceWriter {
+    fn open(root: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&root).with_context(|| format!("failed creating {}", root.display()))?;
+        let lock = WorkspaceLock::acquire(root.join("brain.lock"))?;
+        for dir in [
+            root.join("events"),
+            root.join("memory"),
+            root.join("reviews/proposed-updates"),
+        ] {
+            fs::create_dir_all(&dir)
+                .with_context(|| format!("failed creating {}", dir.display()))?;
+        }
+        Ok(Self { root, _lock: lock })
+    }
+
+    fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
+        let path = self
+            .root
+            .join("reviews/proposed-updates")
+            .join(format!("{}.json", proposal.proposal_id));
+        write_json_pretty(&path, proposal)?;
+        Ok(path)
+    }
+
+    fn append_event(&self, event: &BrainEvent) -> Result<()> {
+        append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
+    }
+
+    fn upsert_memory_record(&self, memory: MemoryRecord) -> Result<()> {
+        let path = self.root.join("memory/records.json");
+        let mut memories = read_memory_records(&self.root)?;
+        if let Some(existing) = memories
+            .iter_mut()
+            .find(|record| record.memory_id == memory.memory_id)
+        {
+            *existing = memory;
+        } else {
+            memories.push(memory);
+        }
+        memories.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.memory_id.cmp(&right.memory_id))
+        });
+        write_json_pretty(&path, &memories)
+    }
+}
+
+struct WorkspaceLock {
+    path: PathBuf,
+}
+
+impl WorkspaceLock {
+    fn acquire(path: PathBuf) -> Result<Self> {
+        let started = Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    writeln!(file, "pid={}", std::process::id())
+                        .with_context(|| format!("failed writing {}", path.display()))?;
+                    file.sync_all()
+                        .with_context(|| format!("failed syncing {}", path.display()))?;
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if started.elapsed() > Duration::from_secs(5) {
+                        bail!(
+                            "timed out waiting for workspace brain lock {}",
+                            path.display()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed acquiring {}", path.display()));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for WorkspaceLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 struct BrainReader {
@@ -1244,30 +1350,10 @@ fn read_memory_records(root: &Path) -> Result<Vec<MemoryRecord>> {
     read_optional_json_artifact(&root.join("memory/records.json"))
 }
 
-fn upsert_memory_record(root: &Path, memory: MemoryRecord) -> Result<()> {
-    let memory_dir = root.join("memory");
-    fs::create_dir_all(&memory_dir)
-        .with_context(|| format!("failed creating {}", memory_dir.display()))?;
-    let path = memory_dir.join("records.json");
-    let mut memories = read_memory_records(root)?;
-    if let Some(existing) = memories
-        .iter_mut()
-        .find(|record| record.memory_id == memory.memory_id)
-    {
-        *existing = memory;
-    } else {
-        memories.push(memory);
-    }
-    memories.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| left.memory_id.cmp(&right.memory_id))
-    });
-    write_json_pretty(&path, &memories)
-}
-
 fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
     contents
@@ -2654,6 +2740,8 @@ fn build_materialized_wiki_pages(
 }
 
 fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
+    let writer = BrainWorkspaceWriter::open(root.to_path_buf())?;
+    let root = writer.root.as_path();
     let wiki_root = root.join("wiki");
     for dir in [
         root.join("graph"),
@@ -2801,7 +2889,7 @@ fn materialized_wiki_page_body(page: &WikiPage, snapshot: &BrainRepoSnapshot) ->
 
 fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(value).context("failed to encode JSON artifact")?;
-    fs::write(path, json).with_context(|| format!("failed writing {}", path.display()))
+    write_file_atomic(path, json.as_bytes())
 }
 
 fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
@@ -2812,11 +2900,45 @@ fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
         );
         lines.push('\n');
     }
-    fs::write(path, lines).with_context(|| format!("failed writing {}", path.display()))
+    write_file_atomic(path, lines.as_bytes())
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating {}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "artifact".into());
+    let temp_path = path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::now_v7().as_simple()));
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .with_context(|| format!("failed opening {}", temp_path.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed writing {}", temp_path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed syncing {}", temp_path.display()))?;
+    }
+    fs::rename(&temp_path, path).with_context(|| {
+        format!(
+            "failed renaming {} to {}",
+            temp_path.display(),
+            path.display()
+        )
+    })
 }
 
 fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
     let line = serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating {}", parent.display()))?;
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -2825,7 +2947,9 @@ fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
     file.write_all(line.as_bytes())
         .with_context(|| format!("failed writing {}", path.display()))?;
     file.write_all(b"\n")
-        .with_context(|| format!("failed writing {}", path.display()))
+        .with_context(|| format!("failed writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed syncing {}", path.display()))
 }
 
 fn workspace_root_for_rows(
@@ -7066,12 +7190,155 @@ mod tests {
         let rematerialized_events =
             read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
                 .expect("read rematerialized events");
-        assert!(rematerialized_events
+        let accepted_event_ids = events
+            .events
+            .iter()
+            .filter(|event| event.event_type == BrainEventKind::MemoryAccepted)
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        let claim_event_ids = events
+            .events
+            .iter()
+            .filter(|event| event.event_type == BrainEventKind::ClaimProposed)
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        let rematerialized_event_ids = rematerialized_events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(accepted_event_ids
+            .iter()
+            .all(|event_id| rematerialized_event_ids.contains(event_id)));
+        assert!(claim_event_ids
+            .iter()
+            .all(|event_id| rematerialized_event_ids.contains(event_id)));
+    }
+
+    #[test]
+    fn brain_writer_bootstraps_missing_memory_and_events_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::remove_file(workspace_root.join("memory/records.json")).expect("remove memory file");
+        fs::remove_file(workspace_root.join("events/brain_events.jsonl")).expect("remove events");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Memory,
+            title: "Remember bootstrap behavior".into(),
+            body: "Missing memory and event files should be recreated safely.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "claude-code".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: Vec::new(),
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        })
+        .expect("propose memory with missing files");
+        assert_eq!(response.proposal.status, BrainProposalStatus::Accepted);
+
+        let memories = read_memory_records(&workspace_root).expect("read bootstrapped memories");
+        assert_eq!(memories.len(), 1);
+        assert!(workspace_root.join("events/brain_events.jsonl").exists());
+        let events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(10),
+        })
+        .expect("read bootstrapped events");
+        assert!(events
+            .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
-        assert!(rematerialized_events
+        assert!(!workspace_root.join("brain.lock").exists());
+    }
+
+    #[test]
+    fn brain_writer_deduplicates_concurrent_safe_proposals_by_fingerprint() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let proposal_request = ProposeBrainUpdateRequest {
+            scope,
+            kind: BrainProposalKind::Memory,
+            title: "Remember duplicate write".into(),
+            body: "The same agent memory should collapse to one memory record.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "claude-code".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+        };
+
+        let handles = (0..8)
+            .map(|_| {
+                let request = proposal_request.clone();
+                std::thread::spawn(move || {
+                    handle_propose_brain_update(request).expect("concurrent safe proposal")
+                })
+            })
+            .collect::<Vec<_>>();
+        let responses = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join concurrent proposal"))
+            .collect::<Vec<_>>();
+        assert!(responses
             .iter()
-            .any(|event| event.event_type == BrainEventKind::ClaimProposed));
+            .all(|response| response.proposal.status == BrainProposalStatus::Accepted));
+
+        let memories = read_memory_records(&workspace_root).expect("read memory records");
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].title, "Remember duplicate write");
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events remain valid JSONL");
+        assert!(events.len() >= 16);
+        assert!(!workspace_root.join("brain.lock").exists());
     }
 
     #[test]
