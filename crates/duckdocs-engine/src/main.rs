@@ -3481,6 +3481,13 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     })
 }
 
+fn decode_project_snapshot(encoded: &str) -> Result<KnowledgeProject> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("failed to decode stored project snapshot")?;
+    serde_json::from_slice(&bytes).context("failed to decode stored project")
+}
+
 fn decode_sqlite_hex_text(value: &str) -> Result<String> {
     if value.len() % 2 != 0 {
         bail!("sqlite hex text had an odd byte count");
@@ -3680,11 +3687,49 @@ impl KnowledgeProjectStore {
         if encoded.is_empty() {
             return Ok(None);
         }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .context("failed to decode stored project snapshot")?;
-        let project = serde_json::from_slice(&bytes).context("failed to decode stored project")?;
-        Ok(Some(project))
+        decode_project_snapshot(encoded).map(Some)
+    }
+
+    fn load_projects_by_ids(
+        &self,
+        project_ids: &[String],
+    ) -> Result<BTreeMap<String, KnowledgeProject>> {
+        self.ensure_schema()?;
+        let unique_project_ids = project_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if unique_project_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let quoted_ids = unique_project_ids
+            .iter()
+            .map(|project_id| format!("'{}'", escape_sqlite(project_id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT hex(project_id), snapshot_base64 FROM projects WHERE project_id IN ({quoted_ids});"
+        );
+        let output = self.run_sql(&sql)?;
+        output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let columns = line.split('|').collect::<Vec<_>>();
+                if columns.len() != 2 {
+                    bail!(
+                        "expected 2 project snapshot columns from sqlite, got {}",
+                        columns.len()
+                    );
+                }
+                Ok((
+                    decode_sqlite_hex_text(columns[0])?,
+                    decode_project_snapshot(columns[1])?,
+                ))
+            })
+            .collect()
     }
 
     fn load_latest_workspace_id(&self) -> Result<Option<WorkspaceId>> {
@@ -3741,9 +3786,14 @@ impl KnowledgeProjectStore {
         workspace_id: &str,
     ) -> Result<Vec<(StoredSourceRow, Option<KnowledgeProject>)>> {
         let rows = self.load_source_rows(workspace_id)?;
+        let project_ids = rows
+            .iter()
+            .map(|row| row.project_id.clone())
+            .collect::<Vec<_>>();
+        let projects_by_id = self.load_projects_by_ids(&project_ids)?;
         rows.into_iter()
             .map(|row| {
-                let project = self.load_project(Some(&row.project_id))?;
+                let project = projects_by_id.get(&row.project_id).cloned();
                 Ok((row, project))
             })
             .collect()
