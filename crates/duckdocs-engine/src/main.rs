@@ -566,7 +566,9 @@ fn compile_knowledge_project(
         .map(|manifest| manifest.source_path.clone())
         .unwrap_or_else(|| source_path.clone());
     let source_id_for_evidence = source_manifest.map(|manifest| manifest.source_id.clone());
-    let project_id = build_project_id(request);
+    let project_id = source_manifest
+        .map(|manifest| build_source_backed_project_id(&manifest.workspace_id, &manifest.source_id))
+        .unwrap_or_else(|| build_project_id(request));
 
     let collected = collect_concepts(
         &page_sections,
@@ -2801,6 +2803,13 @@ fn build_project_id(request: &CompileProjectRequest) -> String {
     format!("project-{:016x}", fnv1a_hash(stable_source.as_bytes()))
 }
 
+fn build_source_backed_project_id(workspace_id: &str, source_id: &str) -> String {
+    format!(
+        "project-{:016x}",
+        fnv1a_hash(format!("{workspace_id}/{source_id}").as_bytes())
+    )
+}
+
 fn fnv1a_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
@@ -4679,6 +4688,77 @@ mod tests {
             loaded_source_project.summary.project_id,
             project_a.summary.project_id
         );
+    }
+
+    #[test]
+    fn source_backed_project_id_uses_manifest_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let shared_original = temp.path().join("shared-original.pdf").display().to_string();
+        let markdown_a =
+            "# Source A\n\n## Page 1\n\nAlpha planning context stays evidence backed.\n";
+        let markdown_b =
+            "# Source B\n\n## Page 1\n\nBeta architecture context stays evidence backed.\n";
+        let markdown_path_a = temp.path().join("source-a.md");
+        let markdown_path_b = temp.path().join("source-b.md");
+        fs::write(&markdown_path_a, markdown_a).expect("write source a markdown");
+        fs::write(&markdown_path_b, markdown_b).expect("write source b markdown");
+
+        let mut manifest_a = sample_manifest_with_source(&temp, "source-a", "alpha", 10);
+        let mut manifest_b = sample_manifest_with_source(&temp, "source-b", "beta", 11);
+        manifest_a.original_path = shared_original.clone();
+        manifest_b.original_path = shared_original.clone();
+        let request_a = CompileProjectRequest {
+            source_markdown_path: markdown_path_a.display().to_string(),
+            source_document_path: Some(shared_original.clone()),
+            source_manifest_path: Some(manifest_a.manifest_path.clone()),
+            workspace_id: Some(manifest_a.workspace_id.clone()),
+            source_id: Some(manifest_a.source_id.clone()),
+        };
+        let request_b = CompileProjectRequest {
+            source_markdown_path: markdown_path_b.display().to_string(),
+            source_document_path: Some(shared_original),
+            source_manifest_path: Some(manifest_b.manifest_path.clone()),
+            workspace_id: Some(manifest_b.workspace_id.clone()),
+            source_id: Some(manifest_b.source_id.clone()),
+        };
+
+        let project_a = compile_knowledge_project(&request_a, markdown_a, Some(&manifest_a));
+        let project_b = compile_knowledge_project(&request_b, markdown_b, Some(&manifest_b));
+        assert_ne!(project_a.summary.project_id, project_b.summary.project_id);
+        assert_eq!(
+            project_a.summary.project_id,
+            build_source_backed_project_id(DEFAULT_WORKSPACE_ID, "source-a")
+        );
+        assert_eq!(
+            project_b.summary.project_id,
+            build_source_backed_project_id(DEFAULT_WORKSPACE_ID, "source-b")
+        );
+
+        store
+            .save_project(&project_a, &request_a, Some(&manifest_a))
+            .expect("save source a project");
+        store
+            .save_project(&project_b, &request_b, Some(&manifest_b))
+            .expect("save source b project");
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        assert!(aggregate
+            .details_by_node_id
+            .values()
+            .any(|detail| detail
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))));
+        assert!(aggregate
+            .details_by_node_id
+            .values()
+            .any(|detail| detail
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
     }
 
     #[test]
