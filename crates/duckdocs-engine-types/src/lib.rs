@@ -309,6 +309,7 @@ pub struct SearchBrainRequest {
 #[serde(rename_all = "snake_case")]
 pub enum BrainSearchResultKind {
     Source,
+    Memory,
     WikiPage,
     Node,
     Evidence,
@@ -416,6 +417,8 @@ pub struct BrainContextPack {
     pub nodes: Vec<BrainNodeRecord>,
     #[serde(default)]
     pub sources: Vec<SourceRecord>,
+    #[serde(default)]
+    pub memories: Vec<MemoryRecord>,
     #[serde(default)]
     pub evidence: Vec<EvidenceRef>,
     #[serde(default)]

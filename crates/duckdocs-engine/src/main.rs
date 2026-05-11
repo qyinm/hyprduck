@@ -20,16 +20,16 @@ use duckdocs_engine_types::{
     EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
     EngineSuccess, EvidenceRef, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
     GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, OutputAsset, PageArtifact,
-    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest,
-    ProposeBrainUpdateResponseData, ProviderModelCatalogResponseData, ProviderOption,
-    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceSummary, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, MemoryRecord, OutputAsset,
+    PageArtifact, ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest,
+    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ProviderModelCatalogResponseData,
+    ProviderOption, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary,
+    RelationKind, RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData,
+    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
+    SourceRecord, SourceSummary, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
     ValidateProviderResponseData, ValidationIssue, WikiPage, WorkspaceCorrection, WorkspaceId,
 };
 use reqwest::{blocking::Client, Url};
@@ -773,11 +773,16 @@ fn handle_propose_brain_update(
         }
     }
 
+    let auto_apply = is_auto_apply_brain_proposal(request.kind);
     let proposal = BrainUpdateProposal {
         proposal_id: proposal_id.clone(),
         workspace_id: request.scope.workspace_id.clone(),
         kind: request.kind,
-        status: BrainProposalStatus::PendingReview,
+        status: if auto_apply {
+            BrainProposalStatus::Accepted
+        } else {
+            BrainProposalStatus::PendingReview
+        },
         actor: request.actor.clone(),
         scope: BrainScope::Project,
         title: request.title.trim().to_string(),
@@ -790,16 +795,32 @@ fn handle_propose_brain_update(
         evidence_refs: request.evidence_refs,
         created_at,
     };
-    let event = brain_event_for_proposal(&proposal)?;
+    let mut event = brain_event_for_proposal(&proposal)?;
+    if auto_apply {
+        event.policy_result = "auto_applied".into();
+    }
     let proposal_path = proposal_dir.join(format!("{}.json", proposal.proposal_id));
     write_json_pretty(&proposal_path, &proposal)?;
     append_brain_event_jsonl(&events_path, &event)?;
+    if auto_apply {
+        let memory = memory_record_for_proposal(&proposal);
+        upsert_memory_record(&root, memory)?;
+        let accepted_event = brain_memory_accepted_event(&proposal)?;
+        append_brain_event_jsonl(&events_path, &accepted_event)?;
+    }
 
     Ok(ProposeBrainUpdateResponseData {
         proposal,
         event,
         proposal_path: proposal_path.display().to_string(),
     })
+}
+
+fn is_auto_apply_brain_proposal(kind: BrainProposalKind) -> bool {
+    matches!(
+        kind,
+        BrainProposalKind::Memory | BrainProposalKind::Observation | BrainProposalKind::SourceNote
+    )
 }
 
 fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result<()> {
@@ -869,6 +890,42 @@ fn brain_event_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainEvent
     })
 }
 
+fn memory_record_for_proposal(proposal: &BrainUpdateProposal) -> MemoryRecord {
+    MemoryRecord {
+        memory_id: format!(
+            "memory-{}",
+            proposal.proposal_id.trim_start_matches("proposal-")
+        ),
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        source_refs: proposal.source_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        created_at: proposal.created_at,
+        updated_at: proposal.created_at,
+    }
+}
+
+fn brain_memory_accepted_event(proposal: &BrainUpdateProposal) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        event_type: BrainEventKind::MemoryAccepted,
+        actor: proposal.actor.clone(),
+        source_refs: proposal.source_refs.clone(),
+        node_refs: proposal.node_refs.clone(),
+        relation_refs: Vec::new(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(proposal)
+            .context("failed to encode accepted memory event payload")?,
+        confidence: None,
+        policy_result: "auto_applied".into(),
+        created_at: proposal.created_at,
+    })
+}
+
 struct BrainReader {
     root: PathBuf,
     snapshot: BrainRepoSnapshot,
@@ -893,6 +950,7 @@ impl BrainReader {
         snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
         snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
         snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
+        snapshot.memories = read_memory_records(&root)?;
         let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
         snapshot.events = events.clone();
         Ok(Self {
@@ -934,6 +992,26 @@ impl BrainReader {
                     path: None,
                     score,
                     snippet: format!("{} evidence refs", node.evidence_ids.len()),
+                });
+            }
+        }
+        for memory in &self.snapshot.memories {
+            let haystack = format!(
+                "{} {} {} {} {}",
+                memory.memory_id,
+                memory.title,
+                memory.body,
+                memory.source_refs.join(" "),
+                memory.evidence_refs.join(" ")
+            );
+            if let Some(score) = match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Memory,
+                    id: memory.memory_id.clone(),
+                    title: memory.title.clone(),
+                    path: Some("memory/records.json".into()),
+                    score,
+                    snippet: best_snippet(&memory.body, &terms),
                 });
             }
         }
@@ -1045,6 +1123,7 @@ impl BrainReader {
                 BrainSearchResultKind::Source => {
                     source_ids.insert(result.id.clone());
                 }
+                BrainSearchResultKind::Memory => {}
                 BrainSearchResultKind::Evidence => {
                     evidence_ids.insert(result.id.clone());
                 }
@@ -1068,6 +1147,17 @@ impl BrainReader {
             .sources
             .iter()
             .filter(|source| source_ids.contains(&source.source_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let memory_terms = search_terms(query);
+        let memories = self
+            .snapshot
+            .memories
+            .iter()
+            .filter(|memory| {
+                let haystack = format!("{} {}", memory.title, memory.body);
+                !memory_terms.is_empty() && match_score(&memory_terms, &haystack).is_some()
+            })
             .cloned()
             .collect::<Vec<_>>();
         let evidence = self
@@ -1100,17 +1190,19 @@ impl BrainReader {
             query: query.to_string(),
             token_budget: budget,
             summary: format!(
-                "Context pack for \"{}\" with {} wiki pages, {} nodes, {} sources, {} evidence refs, and {} recent events.",
+                "Context pack for \"{}\" with {} wiki pages, {} nodes, {} sources, {} memories, {} evidence refs, and {} recent events.",
                 query,
                 wiki_pages.len(),
                 nodes.len(),
                 sources.len(),
+                memories.len(),
                 evidence.len(),
                 recent_events.len()
             ),
             wiki_pages,
             nodes,
             sources,
+            memories,
             evidence,
             recent_events,
             warnings,
@@ -1139,6 +1231,40 @@ fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> 
     let json =
         fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
     serde_json::from_str(&json).with_context(|| format!("failed decoding {}", path.display()))
+}
+
+fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    if !path.exists() {
+        return Ok(T::default());
+    }
+    read_json_artifact(path)
+}
+
+fn read_memory_records(root: &Path) -> Result<Vec<MemoryRecord>> {
+    read_optional_json_artifact(&root.join("memory/records.json"))
+}
+
+fn upsert_memory_record(root: &Path, memory: MemoryRecord) -> Result<()> {
+    let memory_dir = root.join("memory");
+    fs::create_dir_all(&memory_dir)
+        .with_context(|| format!("failed creating {}", memory_dir.display()))?;
+    let path = memory_dir.join("records.json");
+    let mut memories = read_memory_records(root)?;
+    if let Some(existing) = memories
+        .iter_mut()
+        .find(|record| record.memory_id == memory.memory_id)
+    {
+        *existing = memory;
+    } else {
+        memories.push(memory);
+    }
+    memories.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.memory_id.cmp(&right.memory_id))
+    });
+    write_json_pretty(&path, &memories)
 }
 
 fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
@@ -2544,20 +2670,43 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         fs::create_dir_all(&dir).with_context(|| format!("failed creating {}", dir.display()))?;
     }
 
-    write_json_pretty(&root.join("brain-manifest.json"), snapshot)?;
-    write_json_pretty(&root.join("graph/nodes.json"), &snapshot.nodes)?;
-    write_json_pretty(&root.join("graph/edges.json"), &snapshot.relations)?;
-    write_json_pretty(&root.join("graph/evidence.json"), &snapshot.evidence)?;
-    write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
+    let mut effective_snapshot = snapshot.clone();
+    effective_snapshot.memories = read_memory_records(root)?;
+    effective_snapshot.events = merge_preserved_brain_events(
+        snapshot.events.clone(),
+        &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
+    );
 
-    for page in &snapshot.wiki_pages {
+    write_json_pretty(&root.join("brain-manifest.json"), &effective_snapshot)?;
+    write_json_pretty(&root.join("graph/nodes.json"), &effective_snapshot.nodes)?;
+    write_json_pretty(
+        &root.join("graph/edges.json"),
+        &effective_snapshot.relations,
+    )?;
+    write_json_pretty(
+        &root.join("graph/evidence.json"),
+        &effective_snapshot.evidence,
+    )?;
+    write_json_pretty(
+        &root.join("memory/records.json"),
+        &effective_snapshot.memories,
+    )?;
+    write_brain_events_jsonl(
+        &root.join("events/brain_events.jsonl"),
+        &effective_snapshot.events,
+    )?;
+
+    for page in &effective_snapshot.wiki_pages {
         let path = root.join(&page.path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed creating {}", parent.display()))?;
         }
-        fs::write(&path, materialized_wiki_page_body(page, snapshot))
-            .with_context(|| format!("failed writing wiki page {}", path.display()))?;
+        fs::write(
+            &path,
+            materialized_wiki_page_body(page, &effective_snapshot),
+        )
+        .with_context(|| format!("failed writing wiki page {}", path.display()))?;
     }
     fs::write(root.join("reviews/proposed-updates/.gitkeep"), "")
         .context("failed writing proposed updates placeholder")?;
@@ -2565,6 +2714,41 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         .context("failed writing lint reports placeholder")?;
     fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
     Ok(())
+}
+
+fn merge_preserved_brain_events(
+    mut materialized_events: Vec<BrainEvent>,
+    existing_events: &[BrainEvent],
+) -> Vec<BrainEvent> {
+    let mut seen = materialized_events
+        .iter()
+        .map(|event| event.event_id.clone())
+        .collect::<BTreeSet<_>>();
+    for event in existing_events {
+        if is_preserved_brain_event(event.event_type) && seen.insert(event.event_id.clone()) {
+            materialized_events.push(event.clone());
+        }
+    }
+    materialized_events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    materialized_events
+}
+
+fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
+    matches!(
+        event_type,
+        BrainEventKind::MemoryProposed
+            | BrainEventKind::ClaimProposed
+            | BrainEventKind::LinkProposed
+            | BrainEventKind::ObservationAppended
+            | BrainEventKind::SourceNoteProposed
+            | BrainEventKind::MemoryAccepted
+            | BrainEventKind::ReviewCreated
+            | BrainEventKind::ReviewResolved
+    )
 }
 
 fn materialized_wiki_page_body(page: &WikiPage, snapshot: &BrainRepoSnapshot) -> String {
@@ -6654,7 +6838,7 @@ mod tests {
     }
 
     #[test]
-    fn proposed_brain_updates_queue_review_items_without_mutating_materialized_repo() {
+    fn safe_brain_update_proposals_auto_apply_memory_records_without_mutating_graph_or_wiki() {
         let temp = tempfile::tempdir().expect("temp dir");
         let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
         let markdown_path = temp.path().join("sample.md");
@@ -6761,21 +6945,53 @@ mod tests {
                 evidence_refs: Vec::new(),
             })
             .expect("propose brain update");
-            assert_eq!(response.proposal.status, BrainProposalStatus::PendingReview);
-            assert_eq!(response.event.policy_result, "needs_review");
+            if matches!(
+                response.proposal.kind,
+                BrainProposalKind::Memory
+                    | BrainProposalKind::Observation
+                    | BrainProposalKind::SourceNote
+            ) {
+                assert_eq!(response.proposal.status, BrainProposalStatus::Accepted);
+                assert_eq!(response.event.policy_result, "auto_applied");
+            } else {
+                assert_eq!(response.proposal.status, BrainProposalStatus::PendingReview);
+                assert_eq!(response.event.policy_result, "needs_review");
+            }
             proposal_paths.push(PathBuf::from(response.proposal_path));
         }
 
+        let mut accepted_count = 0usize;
+        let mut pending_count = 0usize;
         for path in &proposal_paths {
             assert!(path.exists(), "missing proposal {}", path.display());
             let proposal_json = fs::read_to_string(path).expect("read proposal");
             let proposal: BrainUpdateProposal =
                 serde_json::from_str(&proposal_json).expect("decode proposal");
-            assert_eq!(proposal.status, BrainProposalStatus::PendingReview);
+            match proposal.status {
+                BrainProposalStatus::Accepted => accepted_count += 1,
+                BrainProposalStatus::PendingReview => pending_count += 1,
+                BrainProposalStatus::Rejected => panic!("proposal should not be rejected"),
+            }
         }
+        assert_eq!(accepted_count, 3);
+        assert_eq!(pending_count, 2);
+
+        let memory_records: Vec<MemoryRecord> =
+            read_json_artifact(&workspace_root.join("memory/records.json"))
+                .expect("read memory records");
+        assert_eq!(memory_records.len(), 3);
+        assert!(memory_records
+            .iter()
+            .any(|memory| memory.title == "Remember parser wedge"));
+        assert!(memory_records
+            .iter()
+            .any(|memory| memory.title == "Append session observation"));
+        assert!(memory_records
+            .iter()
+            .any(|memory| memory.title == "Annotate source"));
 
         let events = handle_read_recent_events(ReadRecentEventsRequest {
-            scope,
+            scope: scope.clone(),
             limit: Some(10),
         })
         .expect("read proposal events");
@@ -6799,6 +7015,33 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::SourceNoteProposed));
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
+
+        let search = handle_search_brain(SearchBrainRequest {
+            scope: scope.clone(),
+            query: "review queue".into(),
+            limit: Some(10),
+        })
+        .expect("search brain memories");
+        assert!(search.results.iter().any(|result| {
+            result.kind == BrainSearchResultKind::Memory
+                && result.title == "Append session observation"
+        }));
+
+        let context_pack = handle_get_context_pack(GetContextPackRequest {
+            scope: scope.clone(),
+            query: "source backed document parsing".into(),
+            budget: Some(4000),
+        })
+        .expect("context pack")
+        .context_pack;
+        assert!(context_pack
+            .memories
+            .iter()
+            .any(|memory| memory.title == "Remember parser wedge"));
 
         assert_eq!(
             fs::read_to_string(workspace_root.join("graph/nodes.json")).expect("read nodes after"),
@@ -6812,6 +7055,23 @@ mod tests {
             fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki after"),
             wiki_before
         );
+
+        store
+            .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+            .expect("rematerialize workspace brain repo");
+        let rematerialized_memory_records: Vec<MemoryRecord> =
+            read_json_artifact(&workspace_root.join("memory/records.json"))
+                .expect("read rematerialized memory records");
+        assert_eq!(rematerialized_memory_records.len(), 3);
+        let rematerialized_events =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("read rematerialized events");
+        assert!(rematerialized_events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
+        assert!(rematerialized_events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::ClaimProposed));
     }
 
     #[test]
