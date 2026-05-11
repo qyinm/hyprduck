@@ -13,8 +13,9 @@ use duckdocs_engine_types::{
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
     LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
-    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadNodeRequest,
+    ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
     SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
 };
@@ -43,6 +44,10 @@ pub trait EngineClient {
         &self,
         request: duckdocs_engine_types::GetContextPackRequest,
     ) -> Result<BrainContextPack>;
+    fn propose_brain_update(
+        &self,
+        request: ProposeBrainUpdateRequest,
+    ) -> Result<ProposeBrainUpdateResponseData>;
     fn load_config(&self) -> Result<EngineConfigPayload>;
     fn save_config(&self, config: EngineConfigPayload) -> Result<SaveConfigResponseData>;
     fn validate_provider(
@@ -308,6 +313,17 @@ impl EngineClient for SubprocessEngineClient {
             None,
         )?;
         Ok(response.context_pack)
+    }
+
+    fn propose_brain_update(
+        &self,
+        request: ProposeBrainUpdateRequest,
+    ) -> Result<ProposeBrainUpdateResponseData> {
+        self.run_command::<ProposeBrainUpdateResponseData, ProposeBrainUpdateResponseData>(
+            EngineRequest::ProposeBrainUpdate(request),
+            EngineCommand::ProposeBrainUpdate,
+            None,
+        )
     }
 
     fn load_config(&self) -> Result<EngineConfigPayload> {
