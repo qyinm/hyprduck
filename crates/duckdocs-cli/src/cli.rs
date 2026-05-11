@@ -13,6 +13,17 @@ impl Cli {
             None | Some("tui") => None,
             Some("doctor") => Some(Commands::Doctor),
             Some("serve") => Some(Commands::Serve),
+            Some("mcp") => {
+                let subcommand = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: duckdocs mcp serve"))?;
+                match subcommand.as_str() {
+                    "serve" => Some(Commands::Mcp {
+                        command: McpCommand::Serve,
+                    }),
+                    _ => return Err(anyhow!("unknown mcp subcommand: {subcommand}")),
+                }
+            }
             Some("parse") => {
                 let input = args
                     .next()
@@ -354,10 +365,16 @@ fn parse_brain_relation_kind(raw: &str) -> Result<BrainRelationKind> {
 pub enum Commands {
     Doctor,
     Serve,
+    Mcp { command: McpCommand },
     Parse { input: String },
     Engines { command: EnginesCommand },
     Brain { command: BrainCommand },
     Eval { command: EvalCommand },
+}
+
+#[derive(Debug)]
+pub enum McpCommand {
+    Serve,
 }
 
 #[derive(Debug)]

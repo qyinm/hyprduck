@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod eval;
+mod mcp;
 mod tui;
 mod ui;
 
@@ -19,6 +20,7 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Serve) => run_serve(),
+        Some(Commands::Mcp { command }) => run_mcp(command),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Brain { command }) => run_brain(command),
         Some(Commands::Eval { command }) => run_eval(command),
@@ -34,6 +36,12 @@ fn run_serve() -> Result<()> {
         anyhow::bail!("engine runtime exited with status {status}");
     }
     Ok(())
+}
+
+fn run_mcp(command: cli::McpCommand) -> Result<()> {
+    match command {
+        cli::McpCommand::Serve => mcp::run_mcp_server(),
+    }
 }
 
 fn run_doctor() -> Result<()> {
