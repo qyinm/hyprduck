@@ -1616,7 +1616,7 @@ fn build_extraction_artifact(
         .map(|concept| concept.id.clone())
         .collect::<BTreeSet<_>>();
     let mut relations = Vec::new();
-    for (page_label, mut concept_ids, evidence_ids) in concept_ids_by_page.clone() {
+    for (page_label, mut concept_ids, evidence_ids) in concept_ids_by_page {
         concept_ids.retain(|id| allowed_ids.contains(id));
         concept_ids.sort();
         concept_ids.dedup();
