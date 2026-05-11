@@ -109,7 +109,10 @@ function registerIpcHandlers() {
       case "load_workspace_project":
         return runEngineCommand("load_project", {
           command: "load_project",
-          payload: { project_id: args.project_id ?? null },
+          payload: {
+            project_id: args.project_id ?? null,
+            workspace_id: args.workspace_id ?? null,
+          },
         }).then((response) => response.data);
       case "apply_workspace_correction":
         return applyWorkspaceCorrection(args.correction);
