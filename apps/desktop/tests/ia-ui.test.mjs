@@ -23,7 +23,7 @@ test("app shell exposes only Knowledge and Settings as primary destinations", ()
   expect(appSource).toMatch(/label: "Knowledge"/);
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
-  expect(appSource).toMatch(/Knowledge maintenance/);
+  expect(appSource).toMatch(/Trust Console/);
 });
 
 test("app shell exposes fixed window chrome independent of sidebar", () => {
@@ -37,6 +37,17 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
   expect(appSource).toMatch(/setSidebarCollapsed\(false\)/);
   expect(stylesSource).toMatch(/\[data-electron-no-drag\]/);
   expect(appSource).not.toMatch(/className=\"size-7\"/);
+});
+
+test("Trust Console exposes reviewable brain proposals and decisions", () => {
+  expect(appSource).toMatch(/Trust Console/);
+  expect(appSource).toMatch(/Review Queue/);
+  expect(appSource).toMatch(/Provenance/);
+  expect(appSource).toMatch(/Review decision/);
+  expect(appSource).toMatch(/Accept applies the durable save-back/);
+  expect(appSource).toMatch(/Recent brain events/);
+  expect(appSource).toMatch(/resolve_brain_review/);
+  expect(appSource).toMatch(/formatProposalKind/);
 });
 
 test("desktop visual tokens follow DESIGN.md restraint", () => {
