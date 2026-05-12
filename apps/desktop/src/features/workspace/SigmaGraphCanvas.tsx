@@ -391,13 +391,14 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
                 vectorEffect="non-scaling-stroke"
               />
               <text
-                dominantBaseline="middle"
+                dominantBaseline="hanging"
                 fill="#111111"
                 fontFamily="Geist Variable, Geist, ui-sans-serif, system-ui"
                 fontSize="1.55"
                 fontWeight="500"
-                x="2.6"
-                y="0"
+                textAnchor="middle"
+                x="0"
+                y="2.9"
               >
                 {data.label}
               </text>
