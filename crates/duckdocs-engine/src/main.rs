@@ -57,6 +57,7 @@ const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
 const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
+const PROVIDER_GRAPH_AGENT_ID: &str = "duckdocs-provider-graph-agent";
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -492,6 +493,19 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     let project = compile_knowledge_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
+    if let Some(manifest) = &source_manifest {
+        let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
+            workspace_id: workspace_id.clone(),
+            root_dir: None,
+        })?;
+        maybe_generate_provider_graph_proposals(
+            &workspace_root,
+            &workspace_id,
+            manifest,
+            &markdown,
+            &PathBuf::from(&manifest.artifact_root),
+        )?;
+    }
     Ok(CompileProjectResponseData {
         project_id: project.summary.project_id,
         workspace_id,
@@ -6690,7 +6704,647 @@ fn compile_queued_markdown_source(
         &artifact_root,
         &markdown_signals.related_pages,
     )?;
+    maybe_generate_provider_graph_proposals(
+        &paths.workspace_root,
+        &record.workspace_id,
+        &manifest,
+        &markdown,
+        &artifact_root,
+    )?;
     Ok(manifest)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderGraphProposalGenerationReport {
+    status: String,
+    provider: String,
+    model: String,
+    source_id: String,
+    proposal_count: usize,
+    applied_count: usize,
+    failed_count: usize,
+    #[serde(default)]
+    proposal_ids: Vec<String>,
+    #[serde(default)]
+    applied_proposal_ids: Vec<String>,
+    #[serde(default)]
+    failed_proposals: Vec<AgentProposalFailureReport>,
+    #[serde(default)]
+    skipped_reason: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    updated_at: u64,
+}
+
+fn maybe_generate_provider_graph_proposals(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    artifact_root: &Path,
+) -> Result<ProviderGraphProposalGenerationReport> {
+    let report_path = artifact_root.join("provider-graph-proposals.json");
+    if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
+    {
+        if !existing.proposal_ids.is_empty() && existing.source_id == manifest.source_id {
+            return Ok(existing);
+        }
+    }
+
+    let config = match EngineConfigStore::default().and_then(|store| store.load()) {
+        Ok(config) => config,
+        Err(error) => {
+            let report = ProviderGraphProposalGenerationReport {
+                status: "failed".into(),
+                provider: "unknown".into(),
+                model: "unknown".into(),
+                source_id: manifest.source_id.clone(),
+                proposal_count: 0,
+                applied_count: 0,
+                failed_count: 0,
+                proposal_ids: Vec::new(),
+                applied_proposal_ids: Vec::new(),
+                failed_proposals: Vec::new(),
+                skipped_reason: None,
+                error_message: Some(format!("{error:#}")),
+                updated_at: unix_timestamp_seconds(),
+            };
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+    let mut report = ProviderGraphProposalGenerationReport {
+        status: "skipped".into(),
+        provider: config.provider.id_slug().into(),
+        model: config.model_id.clone(),
+        source_id: manifest.source_id.clone(),
+        proposal_count: 0,
+        applied_count: 0,
+        failed_count: 0,
+        proposal_ids: Vec::new(),
+        applied_proposal_ids: Vec::new(),
+        failed_proposals: Vec::new(),
+        skipped_reason: None,
+        error_message: None,
+        updated_at: unix_timestamp_seconds(),
+    };
+
+    if provider_graph_generation_disabled_for_process() {
+        report.skipped_reason = Some("provider_graph_generation_disabled".into());
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    if provider_unavailable(&config) {
+        report.skipped_reason = Some("provider_unavailable".into());
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
+    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot);
+    let provider_response = match parse_openai_compatible(&config, &prompt, None) {
+        Ok(response) => response,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+
+    let mut payloads = match parse_provider_graph_proposal_payloads(&provider_response) {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+
+    if payloads.is_empty() {
+        report.status = "empty".into();
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    for payload in &mut payloads {
+        normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
+    }
+
+    let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
+    for payload in payloads {
+        let mut proposal = provider_graph_payload_to_proposal(
+            workspace_id,
+            &format!("{PROVIDER_GRAPH_AGENT_ID}:{}", config.provider.id_slug()),
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let request = ProposeBrainUpdateRequest {
+            scope: BrainReadScope {
+                workspace_id: workspace_id.to_string(),
+                root_dir: Some(
+                    workspace_root
+                        .parent()
+                        .unwrap_or(workspace_root)
+                        .display()
+                        .to_string(),
+                ),
+            },
+            kind: proposal.kind,
+            title: proposal.title.clone(),
+            body: proposal.body.clone(),
+            actor: proposal.actor.clone(),
+            target_node_id: proposal.target_node_id.clone(),
+            target_source_id: proposal.target_source_id.clone(),
+            relation_kind: proposal.relation_kind,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: proposal.source_refs.clone(),
+            node_refs: proposal.node_refs.clone(),
+            evidence_refs: proposal.evidence_refs.clone(),
+            proposal_payload: proposal.proposal_payload.clone(),
+        };
+        if let Err(error) = validate_brain_update_proposal(&request) {
+            report.failed_count += 1;
+            report.failed_proposals.push(AgentProposalFailureReport {
+                proposal_id: proposal.proposal_id.clone(),
+                run_id: "provider-graph-generation".into(),
+                snapshot_id: "not_applied".into(),
+                error_code: "provider_payload_validation_failed".into(),
+                error_message: format!("{error:#}"),
+                validation_issues: error
+                    .downcast_ref::<AgentGraphProposalValidationError>()
+                    .map(|error| error.issues.clone())
+                    .unwrap_or_default(),
+                audit_path: report_path.display().to_string(),
+            });
+            continue;
+        }
+        writer.write_proposal(&proposal)?;
+        writer.append_event(&brain_event_for_proposal(&proposal)?)?;
+        report.proposal_ids.push(proposal.proposal_id.clone());
+    }
+    drop(writer);
+
+    report.proposal_count = report.proposal_ids.len();
+    if report.proposal_count == 0 {
+        report.status = if report.failed_count > 0 {
+            "failed".into()
+        } else {
+            "empty".into()
+        };
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let apply_result = run_queued_agent_proposal_apply_worker(workspace_root, workspace_id)?;
+    report.applied_count = apply_result.applied.len();
+    report.failed_count += apply_result.failed.len();
+    report.applied_proposal_ids = apply_result.applied;
+    report.failed_proposals.extend(apply_result.failed);
+    report.status = if report.failed_count == 0 {
+        "applied".into()
+    } else if report.applied_count > 0 {
+        "partially_applied".into()
+    } else {
+        "failed".into()
+    };
+    report.updated_at = unix_timestamp_seconds();
+    write_json_pretty(&report_path, &report)?;
+    Ok(report)
+}
+
+fn provider_graph_generation_disabled_for_process() -> bool {
+    std::env::var_os("DUCKDOCS_DISABLE_PROVIDER_GRAPH").is_some()
+        || (cfg!(test) && std::env::var_os("DUCKDOCS_TEST_ENABLE_PROVIDER_GRAPH").is_none())
+}
+
+fn build_provider_graph_proposal_prompt(
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    snapshot: &BrainRepoSnapshot,
+) -> String {
+    let existing_nodes = snapshot
+        .nodes
+        .iter()
+        .take(80)
+        .map(|node| {
+            format!(
+                "- nodeId: {}, kind: {:?}, label: {}, sources: {}",
+                node.node_id,
+                node.kind,
+                node.label,
+                join_or_none(&node.source_ids)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let existing_edges = snapshot
+        .relations
+        .iter()
+        .take(80)
+        .map(|edge| {
+            format!(
+                "- edgeId: {}, kind: {:?}, source: {}, target: {}, label: {}",
+                edge.relation_id, edge.kind, edge.source_node_id, edge.target_node_id, edge.label
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let existing_claims = snapshot
+        .claims
+        .iter()
+        .take(40)
+        .map(|claim| {
+            format!(
+                "- claimId: {}, statement: {}",
+                claim.claim_id, claim.statement
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let evidence_refs = source_evidence_refs_for_provider_proposals(snapshot, &manifest.source_id);
+
+    format!(
+        r#"You are HyprDuck's local brain graph maintenance agent.
+
+Goal:
+- Read the new source markdown and the existing brain graph.
+- Propose only durable, evidence-backed graph updates.
+- Add new nodes, new edges, new claims, and important memories when useful.
+- Reuse existing nodeId values when the new source refers to an existing thing.
+- If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
+
+Hard output rule:
+- Return JSON only. No markdown fence, no prose.
+- Shape: {{"proposals":[AgentGraphProposalPayload...]}}
+- Use camelCase object fields and snake_case enum values.
+
+Allowed payloads:
+1. {{"changeType":"new_node","node":{{"label":"...","kind":"concept|topic|person|company|project|product|team|event|decision|task|claim","sourcePath":"...","nodeId":"optional-stable-id","aliases":[],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+2. {{"changeType":"new_edge","edge":{{"sourceNodeId":"...","targetNodeId":"...","kind":"mentions|supports|contradicts|supersedes|same_as|works_at|founded|invested_in|advises|attended|owns|responsible_for|decided|blocks|depends_on|source_of|derived_from|related_to","label":"...","sourcePath":"...","edgeId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+3. {{"changeType":"new_claim","claim":{{"statement":"...","sourcePath":"...","claimId":"optional-stable-id","topicRefs":["node-id"],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+4. {{"changeType":"new_memory","memory":{{"title":"...","body":"...","sourcePath":"...","memoryId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+
+Source:
+- sourceId: {source_id}
+- sourcePath: {source_path}
+- markdownPath: {markdown_path}
+- evidenceRefs you may cite: {evidence_refs}
+
+Existing nodes:
+{existing_nodes}
+
+Existing edges:
+{existing_edges}
+
+Existing claims:
+{existing_claims}
+
+New source markdown:
+{markdown}
+"#,
+        source_id = manifest.source_id,
+        source_path = manifest.source_path,
+        markdown_path = manifest.markdown_path,
+        evidence_refs = join_or_none(&evidence_refs),
+        existing_nodes = if existing_nodes.is_empty() {
+            "(none)"
+        } else {
+            &existing_nodes
+        },
+        existing_edges = if existing_edges.is_empty() {
+            "(none)"
+        } else {
+            &existing_edges
+        },
+        existing_claims = if existing_claims.is_empty() {
+            "(none)"
+        } else {
+            &existing_claims
+        },
+        markdown = truncate_for_prompt(markdown, 24000)
+    )
+}
+
+fn parse_provider_graph_proposal_payloads(raw: &str) -> Result<Vec<AgentGraphProposalPayload>> {
+    let value = extract_provider_json_value(raw)?;
+    if value.is_array() {
+        return serde_json::from_value(value)
+            .context("failed to decode provider graph proposal array");
+    }
+    let proposals = value
+        .get("proposals")
+        .cloned()
+        .ok_or_else(|| anyhow!("provider graph response missing proposals array"))?;
+    serde_json::from_value(proposals).context("failed to decode provider graph proposals")
+}
+
+fn extract_provider_json_value(raw: &str) -> Result<Value> {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+
+    let unfenced = trimmed
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let Ok(value) = serde_json::from_str::<Value>(unfenced) {
+        return Ok(value);
+    }
+
+    let starts = raw
+        .char_indices()
+        .filter_map(|(index, ch)| matches!(ch, '{' | '[').then_some(index))
+        .collect::<Vec<_>>();
+    let ends = raw
+        .char_indices()
+        .filter_map(|(index, ch)| matches!(ch, '}' | ']').then_some(index + ch.len_utf8()))
+        .rev()
+        .collect::<Vec<_>>();
+    for start in starts {
+        for end in &ends {
+            if *end <= start {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(&raw[start..*end]) {
+                return Ok(value);
+            }
+        }
+    }
+    bail!("provider graph response did not contain valid JSON")
+}
+
+fn normalize_provider_graph_proposal_payload(
+    payload: &mut AgentGraphProposalPayload,
+    manifest: &SourceArtifactManifest,
+    default_evidence_refs: &[String],
+) {
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => {
+            normalize_provider_payload_refs(
+                &mut node.source_path,
+                &mut node.source_refs,
+                &mut node.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if node.node_id.is_none() {
+                node.node_id = Some(format!(
+                    "node-provider-{}",
+                    sanitize_id_fragment(&node.label)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewEdge { edge } => {
+            normalize_provider_payload_refs(
+                &mut edge.source_path,
+                &mut edge.source_refs,
+                &mut edge.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if edge.edge_id.is_none() {
+                edge.edge_id = Some(format!(
+                    "edge-provider-{}-{}-{}",
+                    sanitize_id_fragment(&edge.source_node_id),
+                    relation_kind_slug(edge.kind),
+                    sanitize_id_fragment(&edge.target_node_id)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewClaim { claim } => {
+            normalize_provider_payload_refs(
+                &mut claim.source_path,
+                &mut claim.source_refs,
+                &mut claim.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if claim.claim_id.is_none() {
+                claim.claim_id = Some(format!(
+                    "claim-provider-{}",
+                    sanitize_id_fragment(&claim.statement)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewMemory { memory } => {
+            normalize_provider_payload_refs(
+                &mut memory.source_path,
+                &mut memory.source_refs,
+                &mut memory.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if memory.memory_id.is_none() {
+                memory.memory_id = Some(format!(
+                    "memory-provider-{}",
+                    sanitize_id_fragment(&memory.title)
+                ));
+            }
+        }
+    }
+}
+
+fn normalize_provider_payload_refs(
+    source_path: &mut String,
+    source_refs: &mut Vec<String>,
+    evidence_refs: &mut Vec<String>,
+    manifest: &SourceArtifactManifest,
+    default_evidence_refs: &[String],
+) {
+    if source_path.trim().is_empty() {
+        *source_path = manifest.markdown_path.clone();
+    }
+    merge_unique_string(source_refs, &manifest.source_id);
+    if evidence_refs.is_empty() {
+        for evidence_ref in default_evidence_refs.iter().take(3) {
+            merge_unique_string(evidence_refs, evidence_ref);
+        }
+    }
+}
+
+fn provider_graph_payload_to_proposal(
+    workspace_id: &str,
+    actor_id: &str,
+    payload: AgentGraphProposalPayload,
+) -> BrainUpdateProposal {
+    let kind = provider_graph_payload_kind(&payload);
+    let (title, body, target_node_id, relation_kind, source_refs, node_refs, evidence_refs) =
+        provider_graph_payload_proposal_fields(&payload);
+    BrainUpdateProposal {
+        proposal_id: format!("proposal-{}", Uuid::now_v7()),
+        workspace_id: workspace_id.to_string(),
+        kind,
+        status: BrainProposalStatus::PendingReview,
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: actor_id.to_string(),
+        },
+        scope: BrainScope::Project,
+        title,
+        body,
+        target_node_id,
+        target_source_id: source_refs.first().cloned(),
+        relation_kind,
+        source_refs,
+        node_refs,
+        evidence_refs,
+        proposal_payload: Some(payload),
+        created_at: unix_timestamp_seconds(),
+    }
+}
+
+fn provider_graph_payload_kind(payload: &AgentGraphProposalPayload) -> BrainProposalKind {
+    match payload {
+        AgentGraphProposalPayload::NewNode { .. } => BrainProposalKind::Node,
+        AgentGraphProposalPayload::NewEdge { .. } => BrainProposalKind::Link,
+        AgentGraphProposalPayload::NewClaim { .. } => BrainProposalKind::Claim,
+        AgentGraphProposalPayload::NewMemory { .. } => BrainProposalKind::Memory,
+    }
+}
+
+fn provider_graph_payload_proposal_fields(
+    payload: &AgentGraphProposalPayload,
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<BrainRelationKind>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+) {
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => (
+            format!("Add graph node: {}", node.label),
+            node.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Provider identified `{}` as a durable graph node.",
+                    node.label
+                )
+            }),
+            node.node_id.clone(),
+            None,
+            node.source_refs.clone(),
+            node.node_id.iter().cloned().collect(),
+            node.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewEdge { edge } => (
+            format!("Connect graph nodes: {}", edge.label),
+            edge.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Provider identified a {:?} relation from {} to {}.",
+                    edge.kind, edge.source_node_id, edge.target_node_id
+                )
+            }),
+            Some(edge.target_node_id.clone()),
+            Some(edge.kind),
+            edge.source_refs.clone(),
+            vec![edge.source_node_id.clone(), edge.target_node_id.clone()],
+            edge.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewClaim { claim } => (
+            format!(
+                "Add graph claim: {}",
+                truncate_for_prompt(&claim.statement, 80)
+            ),
+            claim.reason.clone().unwrap_or_else(|| {
+                "Provider identified a source-backed claim for the graph.".into()
+            }),
+            claim.topic_refs.first().cloned(),
+            None,
+            claim.source_refs.clone(),
+            claim.topic_refs.clone(),
+            claim.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewMemory { memory } => (
+            format!("Add brain memory: {}", memory.title),
+            memory.reason.clone().unwrap_or_else(|| memory.body.clone()),
+            None,
+            None,
+            memory.source_refs.clone(),
+            Vec::new(),
+            memory.evidence_refs.clone(),
+        ),
+    }
+}
+
+fn source_evidence_refs_for_provider_proposals(
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+) -> Vec<String> {
+    snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+        .map(|evidence| evidence.id.clone())
+        .take(8)
+        .collect()
+}
+
+fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+    let mut output = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        output.push_str("\n...[truncated]");
+    }
+    output
+}
+
+fn sanitize_id_fragment(value: &str) -> String {
+    let mut fragment = value
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                Some(ch.to_ascii_lowercase())
+            } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '/' | ':' | '.') {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    while fragment.contains("--") {
+        fragment = fragment.replace("--", "-");
+    }
+    let fragment = fragment.trim_matches('-');
+    if fragment.is_empty() {
+        Uuid::now_v7().to_string()
+    } else {
+        fragment.chars().take(64).collect()
+    }
+}
+
+fn relation_kind_slug(kind: BrainRelationKind) -> &'static str {
+    match kind {
+        BrainRelationKind::Mentions => "mentions",
+        BrainRelationKind::Supports => "supports",
+        BrainRelationKind::Contradicts => "contradicts",
+        BrainRelationKind::Supersedes => "supersedes",
+        BrainRelationKind::SameAs => "same-as",
+        BrainRelationKind::WorksAt => "works-at",
+        BrainRelationKind::Founded => "founded",
+        BrainRelationKind::InvestedIn => "invested-in",
+        BrainRelationKind::Advises => "advises",
+        BrainRelationKind::Attended => "attended",
+        BrainRelationKind::Owns => "owns",
+        BrainRelationKind::ResponsibleFor => "responsible-for",
+        BrainRelationKind::Decided => "decided",
+        BrainRelationKind::Blocks => "blocks",
+        BrainRelationKind::DependsOn => "depends-on",
+        BrainRelationKind::SourceOf => "source-of",
+        BrainRelationKind::DerivedFrom => "derived-from",
+        BrainRelationKind::RelatedTo => "related-to",
+    }
 }
 
 fn read_idempotent_markdown_ingest_manifest(
@@ -15673,6 +16327,132 @@ mod tests {
             compile_knowledge_project(&request, markdown, Some(&manifest)),
             manifest,
         )
+    }
+
+    #[test]
+    fn provider_graph_parser_accepts_fenced_payloads() {
+        let raw = r#"```json
+{
+  "proposals": [
+    {
+      "changeType": "new_node",
+      "node": {
+        "label": "HyprDuck",
+        "kind": "project",
+        "sourcePath": "/tmp/source.md",
+        "nodeId": "node-provider-hyprduck",
+        "sourceRefs": ["source-a"],
+        "evidenceRefs": ["ev-a"],
+        "reason": "Project identity is explicit."
+      }
+    },
+    {
+      "changeType": "new_edge",
+      "edge": {
+        "sourceNodeId": "node-provider-hyprduck",
+        "targetNodeId": "node-provider-agent-brain",
+        "kind": "related_to",
+        "label": "relates to",
+        "sourcePath": "/tmp/source.md",
+        "sourceRefs": ["source-a"],
+        "evidenceRefs": ["ev-a"]
+      }
+    }
+  ]
+}
+```"#;
+
+        let payloads = parse_provider_graph_proposal_payloads(raw).expect("parse provider JSON");
+
+        assert_eq!(payloads.len(), 2);
+        assert!(matches!(
+            &payloads[0],
+            AgentGraphProposalPayload::NewNode { node }
+                if node.label == "HyprDuck" && node.kind == BrainNodeKind::Project
+        ));
+        assert!(matches!(
+            &payloads[1],
+            AgentGraphProposalPayload::NewEdge { edge }
+                if edge.kind == BrainRelationKind::RelatedTo
+                    && edge.source_node_id == "node-provider-hyprduck"
+        ));
+    }
+
+    #[test]
+    fn provider_graph_payload_normalization_adds_source_and_evidence_refs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = sample_manifest_with_source(&temp, "source-agent", "source", 1);
+        let mut payload = AgentGraphProposalPayload::NewClaim {
+            claim: AgentNewClaimPayload {
+                statement: "HyprDuck keeps graph updates source-backed.".into(),
+                source_path: String::new(),
+                claim_id: None,
+                topic_refs: vec!["node-provider-hyprduck".into()],
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                reason: None,
+            },
+        };
+
+        normalize_provider_graph_proposal_payload(&mut payload, &manifest, &["ev-agent".into()]);
+
+        let AgentGraphProposalPayload::NewClaim { claim } = payload else {
+            panic!("expected claim payload");
+        };
+        assert_eq!(claim.source_path, manifest.markdown_path);
+        assert_eq!(claim.source_refs, vec!["source-agent"]);
+        assert_eq!(claim.evidence_refs, vec!["ev-agent"]);
+        assert!(claim
+            .claim_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("claim-provider-")));
+    }
+
+    #[test]
+    fn provider_graph_payload_proposal_is_auto_applied_by_queue_worker() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        write_json_pretty(
+            &workspace_root.join("brain-manifest.json"),
+            &empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID),
+        )
+        .expect("write baseline manifest");
+        let payload = AgentGraphProposalPayload::NewNode {
+            node: AgentNewNodePayload {
+                label: "Agent maintained graph".into(),
+                kind: BrainNodeKind::Concept,
+                source_path: "/tmp/source.md".into(),
+                node_id: Some("node-provider-agent-maintained-graph".into()),
+                aliases: Vec::new(),
+                source_refs: vec!["source-agent".into()],
+                evidence_refs: vec!["ev-agent".into()],
+                reason: Some("The source defines the durable graph behavior.".into()),
+            },
+        };
+        let mut proposal = provider_graph_payload_to_proposal(
+            DEFAULT_WORKSPACE_ID,
+            PROVIDER_GRAPH_AGENT_ID,
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("open writer");
+        writer.write_proposal(&proposal).expect("write proposal");
+        writer
+            .append_event(&brain_event_for_proposal(&proposal).expect("proposal event"))
+            .expect("append event");
+        drop(writer);
+
+        let result = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("apply provider proposal");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+
+        assert_eq!(result.applied, vec![proposal.proposal_id]);
+        assert!(snapshot.nodes.iter().any(|node| {
+            node.node_id == "node-provider-agent-maintained-graph"
+                && node.label == "Agent maintained graph"
+        }));
     }
 
     fn sample_parse_result() -> ParseResult {
