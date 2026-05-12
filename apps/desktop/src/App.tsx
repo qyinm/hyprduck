@@ -20,6 +20,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  RefreshCw,
   Save,
   Settings,
   ShieldCheck,
@@ -40,12 +41,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
+import { materializedGraphSnapshotToWorkspaceEnvelope } from "@/features/workspace/materializedGraphSnapshot";
 import { fileNameFromPath } from "@/features/workspace/pathUtils";
 import {
   createInitialWorkspaceUiState,
   workspaceUiStateReducer,
 } from "@/features/workspace/state";
 import type {
+  MaterializedGraphSnapshot,
   WorkspaceApplyCorrectionRequest,
   WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
@@ -137,10 +140,22 @@ interface RuntimeReadinessResponseData {
   checks: RuntimeReadinessCheck[];
 }
 
-type BrainProposalKind = "memory" | "claim" | "link" | "observation" | "source_note" | "wiki_page";
+type BrainProposalKind = "node" | "memory" | "claim" | "link" | "observation" | "source_note" | "wiki_page";
 type BrainProposalStatus = "pending_review" | "accepted" | "rejected";
 type BrainHealthStatus = "clean" | "attention_needed";
 type BrainReviewDecision = "accept" | "reject";
+type WorkspaceLoadStatus = "idle" | "loading" | "ready" | "fallback" | "error";
+
+interface WorkspaceLoadState {
+  status: WorkspaceLoadStatus;
+  message: string | null;
+}
+
+interface WorkspaceLoadResult {
+  envelope: WorkspaceProjectEnvelope;
+  source: "materialized" | "legacy";
+  fallbackReason?: string | null;
+}
 
 interface BrainReviewItem {
   reviewId: string;
@@ -461,6 +476,74 @@ function getWebWorkspaceFromSnapshot(
   };
 }
 
+function createWebMaterializedGraphSnapshot(): MaterializedGraphSnapshot {
+  return {
+    snapshotId: "snapshot-web-preview",
+    sourceIngestId: "web-preview",
+    workspaceId: "web-preview",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: WEB_MOCK_NOW_SECONDS,
+    materializedAt: WEB_MOCK_NOW_SECONDS,
+    materializedPaths: [
+      "graph/nodes.json",
+      "graph/edges.json",
+      "wiki/index.md",
+      "events/brain_events.jsonl",
+    ],
+    sourcePaths: [webMockSnapshot.lastResult?.savedOutputPath ?? "web-preview.md"],
+    nodes: [
+      {
+        nodeId: "source:preview",
+        kind: "source",
+        label: "Web preview source",
+        aliases: ["Latest import"],
+        evidenceIds: ["ev-page-1"],
+        sourceIds: ["preview"],
+        confidence: 0.72,
+        updatedAt: WEB_MOCK_NOW_SECONDS,
+      },
+      {
+        nodeId: "concept-agent-ready-knowledge",
+        kind: "concept",
+        label: "Agent-ready knowledge",
+        aliases: ["Materialized graph"],
+        evidenceIds: ["ev-page-1"],
+        sourceIds: ["preview"],
+        confidence: 0.76,
+        updatedAt: WEB_MOCK_NOW_SECONDS,
+      },
+    ],
+    edges: [
+      {
+        relationId: "edge-preview-agent-ready-knowledge",
+        kind: "derived_from",
+        sourceNodeId: "source:preview",
+        targetNodeId: "concept-agent-ready-knowledge",
+        label: "Derived from source",
+        evidenceIds: ["ev-page-1"],
+        confidence: 0.74,
+        updatedAt: WEB_MOCK_NOW_SECONDS,
+      },
+    ],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [
+      {
+        pageId: "wiki-index",
+        workspaceId: "web-preview",
+        path: "wiki/index.md",
+        title: "Workspace index",
+        body: WEB_MOCK_MARKDOWN,
+        nodeRefs: ["source:preview", "concept-agent-ready-knowledge"],
+        sourceRefs: ["preview"],
+        evidenceRefs: ["ev-page-1"],
+        updatedAt: WEB_MOCK_NOW_SECONDS,
+      },
+    ],
+  };
+}
+
 function hydrateWorkspaceProjectWithSources(
   project: WorkspaceProject,
   sources: WorkspaceSourceSummary[],
@@ -677,7 +760,7 @@ function createWebMockApi(): HyprDuckDesktopApi {
           const kind = String(args.kind ?? "memory") as BrainProposalKind;
           const proposalId = `proposal-web-${Date.now()}`;
           const reviewable =
-            kind === "claim" || kind === "link" || kind === "wiki_page";
+            kind === "node" || kind === "claim" || kind === "link" || kind === "wiki_page";
           if (reviewable) {
             webMockReviewItems = [
               {
@@ -701,19 +784,25 @@ function createWebMockApi(): HyprDuckDesktopApi {
             eventId: `evt-web-proposed-${Date.now()}`,
             workspaceId: "web-preview",
             eventType:
-              kind === "claim"
-                ? "claim_proposed"
-                : kind === "link"
-                  ? "link_proposed"
-                  : kind === "wiki_page"
-                    ? "wiki_page_proposed"
-                    : "memory_proposed",
+              kind === "node"
+                ? "node_proposed"
+                : kind === "claim"
+                  ? "claim_proposed"
+                  : kind === "link"
+                    ? "link_proposed"
+                    : kind === "wiki_page"
+                      ? "wiki_page_proposed"
+                      : "memory_proposed",
             actor: { actorType: "user", actorId: "local-user" },
             sourceRefs: (args.source_refs as string[] | undefined) ?? [],
             nodeRefs: (args.node_refs as string[] | undefined) ?? [],
             relationRefs: [],
             evidenceRefs: (args.evidence_refs as string[] | undefined) ?? [],
-            payloadJson: JSON.stringify({ title: args.title, body: args.body }),
+            payloadJson: JSON.stringify({
+              title: args.title,
+              body: args.body,
+              proposalPayload: args.proposal_payload ?? null,
+            }),
             confidence: null,
             policyResult: reviewable ? "needs_review" : "auto_applied",
             createdAt: Math.floor(Date.now() / 1000),
@@ -743,6 +832,9 @@ function createWebMockApi(): HyprDuckDesktopApi {
             return { project: null, workspace_id: envelope.workspace_id, sources: envelope.sources } as T;
           }
           return { ...envelope } as T;
+        }
+        case "load_materialized_graph_snapshot": {
+          return createWebMaterializedGraphSnapshot() as T;
         }
         case "pick_import_file": {
           return { ...WEB_MOCK_SAMPLE_FILE } as T;
@@ -984,6 +1076,66 @@ async function invoke<T>(
   return getDesktopApi().invoke<T>(command, args);
 }
 
+async function loadGraphWorkspaceEnvelope(
+  workspaceId?: string | null,
+  projectId?: string | null,
+): Promise<WorkspaceProjectEnvelope> {
+  return (await loadGraphWorkspaceEnvelopeResult(workspaceId, projectId)).envelope;
+}
+
+async function loadGraphWorkspaceEnvelopeResult(
+  workspaceId?: string | null,
+  projectId?: string | null,
+): Promise<WorkspaceLoadResult> {
+  try {
+    const materializedSnapshot = await invoke<MaterializedGraphSnapshot>(
+      "load_materialized_graph_snapshot",
+      {
+        workspace_id: workspaceId ?? undefined,
+      },
+    );
+    return {
+      envelope: materializedGraphSnapshotToWorkspaceEnvelope(materializedSnapshot),
+      source: "materialized",
+    };
+  } catch (materializedError) {
+    try {
+      return {
+        envelope: await invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
+          project_id: projectId ?? null,
+          workspace_id: workspaceId ?? null,
+        }),
+        source: "legacy",
+        fallbackReason: String(materializedError),
+      };
+    } catch (legacyError) {
+      throw new Error(
+        `Failed to refresh latest workspace snapshot. Materialized read failed: ${String(
+          materializedError,
+        )}. Legacy project read failed: ${String(legacyError)}.`,
+      );
+    }
+  }
+}
+
+function workspaceLoadStateFromResult(result: WorkspaceLoadResult): WorkspaceLoadState {
+  if (result.source === "materialized") {
+    const snapshotPath =
+      result.envelope.project?.summary.summary.match(/from (.+)\.$/)?.[1] ??
+      "state/latest-readable-snapshot.json";
+    return {
+      status: "ready",
+      message: `Loaded latest materialized snapshot from ${snapshotPath}.`,
+    };
+  }
+
+  return {
+    status: "fallback",
+    message:
+      "Materialized snapshot was unavailable, so HyprDuck loaded the legacy workspace project read path.",
+  };
+}
+
 function parseSummary(snapshot: UiSnapshot): string {
   const result = snapshot.lastResult;
   if (!result) {
@@ -1007,6 +1159,52 @@ function sidebarButtonClass(active: boolean): string {
 
 function windowChromeButtonClass(): string {
   return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
+}
+
+function WorkspaceSnapshotStatusBanner({
+  state,
+}: {
+  state: WorkspaceLoadState;
+}) {
+  if (state.status === "idle" || state.status === "ready") {
+    return null;
+  }
+
+  const isError = state.status === "error";
+  const isFallback = state.status === "fallback";
+  return (
+    <section
+      className={cn(
+        "mx-6 mt-14 rounded-xl border px-4 py-3 text-sm",
+        isError
+          ? "border-red-200 bg-red-50/85 text-red-900"
+          : isFallback
+            ? "border-amber-200 bg-amber-50/85 text-amber-900"
+            : "border-border bg-secondary/70 text-foreground",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {isError ? (
+          <XCircle size={18} className="mt-0.5 shrink-0" />
+        ) : (
+          <RefreshCw
+            size={18}
+            className={cn("mt-0.5 shrink-0", state.status === "loading" && "animate-spin")}
+          />
+        )}
+        <div className="space-y-1">
+          <p className="font-medium">
+            {isError
+              ? "Could not refresh the workspace snapshot."
+              : isFallback
+                ? "Using fallback workspace read path."
+                : "Refreshing latest workspace snapshot."}
+          </p>
+          {state.message && <p className="leading-6">{state.message}</p>}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function modelTaskGuidance(providerId: string, modelId: string) {
@@ -1877,6 +2075,8 @@ function ReferenceRow(props: { label: string; refs: string[] }) {
 
 function formatProposalKind(kind: BrainProposalKind): string {
   switch (kind) {
+    case "node":
+      return "Node";
     case "claim":
       return "Claim";
     case "link":
@@ -1925,6 +2125,11 @@ export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
   const [loadedWorkspaceEnvelope, setLoadedWorkspaceEnvelope] =
     useState<WorkspaceProjectEnvelope | null>(null);
+  const [workspaceLoadState, setWorkspaceLoadState] =
+    useState<WorkspaceLoadState>({
+      status: "idle",
+      message: null,
+    });
   const [currentConfig, setCurrentConfig] =
     useState<EngineConfigPayload | null>(null);
   const [validation, setValidation] =
@@ -2035,14 +2240,21 @@ export function App() {
           invoke<RuntimeReadinessResponseData>("engine_readiness"),
           invoke<BrainHealthResponseData>("brain_health"),
         ]);
-      const initialWorkspaceEnvelope =
-        await invoke<WorkspaceProjectEnvelope>("load_workspace_project");
+      setWorkspaceLoadState({
+        status: "loading",
+        message: "Loading latest materialized graph/wiki snapshot.",
+      });
+      const initialWorkspaceLoad = await loadGraphWorkspaceEnvelopeResult(
+        initialSnapshot.lastWorkspaceId ?? null,
+        initialSnapshot.lastProjectId ?? null,
+      );
       setSnapshot(initialSnapshot);
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
       setReadiness(initialReadiness);
       setBrainHealth(initialBrainHealth);
-      setLoadedWorkspaceEnvelope(initialWorkspaceEnvelope);
+      setLoadedWorkspaceEnvelope(initialWorkspaceLoad.envelope);
+      setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad));
 
       unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
         setSnapshot(message.payload);
@@ -2069,18 +2281,24 @@ export function App() {
     const projectIdToLoad = workspaceProjectId ?? snapshot.lastProjectId ?? null;
 
     if (projectIdToLoad) {
-      invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
-        project_id: projectIdToLoad,
-        workspace_id: snapshot.lastWorkspaceId ?? undefined,
-      })
-        .then((envelope) => {
+      setWorkspaceLoadState({
+        status: "loading",
+        message: "Refreshing from the latest materialized graph/wiki snapshot.",
+      });
+      loadGraphWorkspaceEnvelopeResult(snapshot.lastWorkspaceId ?? null, projectIdToLoad)
+        .then((result) => {
           if (!cancelled) {
-            setLoadedWorkspaceEnvelope(envelope);
+            setLoadedWorkspaceEnvelope(result.envelope);
+            setWorkspaceLoadState(workspaceLoadStateFromResult(result));
           }
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (!cancelled) {
             setLoadedWorkspaceEnvelope(null);
+            setWorkspaceLoadState({
+              status: "error",
+              message: String(error),
+            });
           }
         });
       return () => {
@@ -2090,6 +2308,10 @@ export function App() {
 
     if (snapshot.lastResult) {
       setLoadedWorkspaceEnvelope(null);
+      setWorkspaceLoadState({
+        status: "idle",
+        message: null,
+      });
     }
 
     return () => {
@@ -2106,11 +2328,7 @@ export function App() {
       type: "sync_project",
       project: workspaceProject,
     });
-  }, [
-    workspaceProject?.summary.projectId,
-    workspaceProject?.summary.stale,
-    workspaceProject?.summary.nodeCount,
-  ]);
+  }, [workspaceProject]);
 
   useEffect(() => {
     const items = brainHealth?.reviewItems ?? [];
@@ -2176,7 +2394,7 @@ export function App() {
   const applyWorkspaceCorrection = async (
     request: WorkspaceApplyCorrectionRequest,
   ) => {
-    const project = await invoke<WorkspaceProject>("apply_workspace_correction", {
+    const appliedProject = await invoke<WorkspaceProject>("apply_workspace_correction", {
       correction: {
         projectId: request.projectId,
         nodeId: request.nodeId,
@@ -2185,11 +2403,16 @@ export function App() {
         value: request.value ?? null,
       },
     });
-    setLoadedWorkspaceEnvelope((current) => ({
-      project,
-      workspace_id: current?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
-      sources: current?.sources ?? [],
-    }));
+    setWorkspaceLoadState({
+      status: "loading",
+      message: "Refreshing graph/wiki after correction.",
+    });
+    const nextLoad = await loadGraphWorkspaceEnvelopeResult(
+      loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
+      appliedProject.summary.projectId,
+    );
+    setLoadedWorkspaceEnvelope(nextLoad.envelope);
+    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
   };
 
   const answerWorkspaceProject = async (
@@ -2229,16 +2452,18 @@ export function App() {
       source_refs: request.sourceRefs ?? [],
       node_refs: request.nodeRefs ?? [],
       evidence_refs: request.evidenceRefs ?? [],
+      proposal_payload: request.proposalPayload ?? null,
     });
-    const nextEnvelope = await invoke<WorkspaceProjectEnvelope>(
-      "load_workspace_project",
-      {
-        project_id: loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
-        workspace_id:
-          loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? undefined,
-      },
+    setWorkspaceLoadState({
+      status: "loading",
+      message: "Refreshing graph/wiki after brain update.",
+    });
+    const nextLoad = await loadGraphWorkspaceEnvelopeResult(
+      loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
+      loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
     );
-    setLoadedWorkspaceEnvelope(nextEnvelope);
+    setLoadedWorkspaceEnvelope(nextLoad.envelope);
+    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
     const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
       workspace_id: workspaceId,
     });
@@ -2303,17 +2528,22 @@ export function App() {
         reason: reviewReason.trim() || null,
       });
       setReviewReason("");
-      const [nextHealth, nextEnvelope] = await Promise.all([
+      setWorkspaceLoadState({
+        status: "loading",
+        message: "Refreshing graph/wiki after review decision.",
+      });
+      const [nextHealth, nextLoad] = await Promise.all([
         invoke<BrainHealthResponseData>("brain_health", {
           workspace_id: workspaceId,
         }),
-        invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
-          project_id: loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
-          workspace_id: workspaceId,
-        }),
+        loadGraphWorkspaceEnvelopeResult(
+          workspaceId,
+          loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
+        ),
       ]);
       setBrainHealth(nextHealth);
-      setLoadedWorkspaceEnvelope(nextEnvelope);
+      setLoadedWorkspaceEnvelope(nextLoad.envelope);
+      setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
       setSelectedReviewId(nextHealth.reviewItems[0]?.reviewId ?? null);
     } catch (error) {
       setReviewDecisionError(String(error));
@@ -2573,6 +2803,7 @@ export function App() {
             />
           ) : activePanel === "knowledge" ? (
             <WorkspaceErrorBoundary>
+              <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}

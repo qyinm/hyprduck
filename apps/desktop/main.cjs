@@ -151,6 +151,7 @@ function registerIpcHandlers() {
             sourceRefs: args.source_refs ?? [],
             nodeRefs: args.node_refs ?? [],
             evidenceRefs: args.evidence_refs ?? [],
+            proposalPayload: args.proposal_payload ?? null,
           },
         }).then((response) => response.data);
       }
@@ -164,6 +165,15 @@ function registerIpcHandlers() {
             workspace_id: args.workspace_id ?? null,
           },
         }).then((response) => response.data);
+      case "load_materialized_graph_snapshot": {
+        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("read_graph_snapshot", {
+          command: "read_graph_snapshot",
+          payload: {
+            scope: brainReadScope(workspaceId),
+          },
+        }).then((response) => response.data);
+      }
       case "apply_workspace_correction":
         return applyWorkspaceCorrection(args.correction);
       case "answer_workspace_project":
