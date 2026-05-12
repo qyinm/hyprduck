@@ -8,12 +8,18 @@ import {
 } from "react";
 
 import { cn } from "@/lib/utils";
+import { Focus, Network } from "lucide-react";
 
 import {
   buildSigmaGraph,
+  type BuildSigmaGraphScope,
   type SigmaWorkspaceGraph,
 } from "./graphologyAdapter";
-import { pointerDeltaToViewBox, zoomGraphViewportAtPoint } from "./graphViewport";
+import {
+  graphPositionFromPointerDelta,
+  pointerDeltaToViewBox,
+  zoomGraphViewportAtPoint,
+} from "./graphViewport";
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import type { WorkspaceProject } from "./types";
 
@@ -26,17 +32,61 @@ interface SigmaGraphCanvasProps {
 
 export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
   const { project, uiState, dispatch, className } = props;
+  const [graphMode, setGraphMode] =
+    useState<BuildSigmaGraphScope["mode"]>("global");
+  const graphScope = useMemo<BuildSigmaGraphScope>(
+    () => ({
+      mode: graphMode,
+      centerNodeId: uiState.selectedNodeId,
+      depth: 1,
+    }),
+    [graphMode, uiState.selectedNodeId],
+  );
   const graph = useMemo(
     () =>
-      buildSigmaGraph(project, {
-        selectedNodeId: uiState.selectedNodeId,
-        selectedEdgeId: uiState.selectedEdgeId,
-      }),
-    [project, uiState.selectedEdgeId, uiState.selectedNodeId],
+      buildSigmaGraph(
+        project,
+        {
+          selectedNodeId: uiState.selectedNodeId,
+          selectedEdgeId: uiState.selectedEdgeId,
+        },
+        graphScope,
+      ),
+    [graphScope, project, uiState.selectedEdgeId, uiState.selectedNodeId],
   );
+  const localModeDisabled = !uiState.selectedNodeId;
 
   return (
     <div className={cn("relative size-full overflow-hidden bg-white", className)}>
+      <div className="absolute right-4 top-4 z-20 flex items-center gap-1 rounded-full border border-border/80 bg-background/90 p-1 shadow-sm backdrop-blur">
+        <button
+          aria-label="Show global graph"
+          className={cn(
+            "inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary hover:text-foreground",
+            graphMode === "global" &&
+              "bg-foreground text-background hover:bg-foreground hover:text-background",
+          )}
+          onClick={() => setGraphMode("global")}
+          title="Global graph"
+          type="button"
+        >
+          <Network size={15} />
+        </button>
+        <button
+          aria-label="Show local graph"
+          className={cn(
+            "inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            graphMode === "local" &&
+              "bg-foreground text-background hover:bg-foreground hover:text-background",
+          )}
+          disabled={localModeDisabled}
+          onClick={() => setGraphMode("local")}
+          title="Local graph"
+          type="button"
+        >
+          <Focus size={15} />
+        </button>
+      </div>
       <SvgGraphLayer
         dispatch={dispatch}
         graph={graph}
@@ -65,12 +115,33 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
     lastY: number;
     totalDelta: number;
   } | null>(null);
+  const nodeDragRef = useRef<{
+    pointerId: number;
+    nodeId: string;
+    lastX: number;
+    lastY: number;
+    totalDelta: number;
+  } | null>(null);
   const suppressClickRef = useRef(false);
   const [viewport, setViewport] = useState({
     panX: 0,
     panY: 0,
     zoom: 1,
   });
+  const [nodePositions, setNodePositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+
+  useEffect(() => {
+    setNodePositions((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([nodeId]) => graph.hasNode(nodeId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
+    });
+  }, [graph]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -119,6 +190,51 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
   };
 
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
+    const nodeDrag = nodeDragRef.current;
+    if (nodeDrag?.pointerId === event.pointerId) {
+      const svg = svgRef.current;
+      if (!svg) {
+        return;
+      }
+
+      const rect = svg.getBoundingClientRect();
+      const deltaX = event.clientX - nodeDrag.lastX;
+      const deltaY = event.clientY - nodeDrag.lastY;
+      const graphDelta = graphPositionFromPointerDelta(
+        deltaX,
+        deltaY,
+        rect.width,
+        rect.height,
+        viewport.zoom,
+      );
+      const nextDelta =
+        nodeDrag.totalDelta + Math.abs(deltaX) + Math.abs(deltaY);
+
+      nodeDragRef.current = {
+        ...nodeDrag,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        totalDelta: nextDelta,
+      };
+
+      if (nextDelta > 2) {
+        suppressClickRef.current = true;
+      }
+
+      setNodePositions((current) => {
+        const base =
+          current[nodeDrag.nodeId] ?? nodeGraphPosition(graph, nodeDrag.nodeId);
+        return {
+          ...current,
+          [nodeDrag.nodeId]: {
+            x: clampGraphPosition(base.x + graphDelta.x),
+            y: clampGraphPosition(base.y + graphDelta.y),
+          },
+        };
+      });
+      return;
+    }
+
     const drag = dragRef.current;
     const svg = svgRef.current;
     if (!drag || drag.pointerId !== event.pointerId || !svg) {
@@ -142,14 +258,24 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
 
     setViewport((current) => ({
       ...current,
-      panX: current.panX + pointerDeltaToViewBox(deltaX, rect.width, current.zoom),
-      panY: current.panY + pointerDeltaToViewBox(deltaY, rect.height, current.zoom),
+      panX:
+        current.panX + pointerDeltaToViewBox(deltaX, rect.width, current.zoom),
+      panY:
+        current.panY + pointerDeltaToViewBox(deltaY, rect.height, current.zoom),
     }));
   };
 
   const handlePointerUp = (event: PointerEvent<SVGSVGElement>) => {
+    if (nodeDragRef.current?.pointerId === event.pointerId) {
+      nodeDragRef.current = null;
+    }
+
     if (dragRef.current?.pointerId === event.pointerId) {
       dragRef.current = null;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
     if (suppressClickRef.current) {
@@ -177,6 +303,27 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
     dispatch({ type: "select_edge", edgeId: edge });
   };
 
+  const handleNodePointerDown = (
+    event: PointerEvent<SVGGElement>,
+    nodeId: string,
+  ) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    svgRef.current?.setPointerCapture(event.pointerId);
+    nodeDragRef.current = {
+      pointerId: event.pointerId,
+      nodeId,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      totalDelta: 0,
+    };
+    dispatch({ type: "select_node", nodeId });
+  };
+
   return (
     <svg
       ref={svgRef}
@@ -189,7 +336,9 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
       role="img"
       viewBox="0 0 100 100"
     >
-      <g transform={`translate(${viewport.panX} ${viewport.panY}) scale(${viewport.zoom})`}>
+      <g
+        transform={`translate(${viewport.panX} ${viewport.panY}) scale(${viewport.zoom})`}
+      >
         {edges.map((edge) => {
           const source = graph.source(edge);
           const target = graph.target(edge);
@@ -212,10 +361,10 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               strokeLinecap="round"
               strokeWidth={selected ? 0.55 : 0.34}
               vectorEffect="non-scaling-stroke"
-              x1={toPercentX(sourceNode.x)}
-              x2={toPercentX(targetNode.x)}
-              y1={toPercentY(sourceNode.y)}
-              y2={toPercentY(targetNode.y)}
+              x1={toPercentX(nodePositions[source]?.x ?? sourceNode.x)}
+              x2={toPercentX(nodePositions[target]?.x ?? targetNode.x)}
+              y1={toPercentY(nodePositions[source]?.y ?? sourceNode.y)}
+              y2={toPercentY(nodePositions[target]?.y ?? targetNode.y)}
             />
           );
         })}
@@ -223,14 +372,16 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
         {nodes.map((node) => {
           const data = graph.getNodeAttributes(node);
           const selected = selectedNodeId === node;
+          const position = nodePositions[node] ?? data;
 
           return (
             <g
               key={node}
               data-graph-selectable="true"
-              className="cursor-pointer"
+              className="cursor-grab active:cursor-grabbing"
               onClick={() => selectNode(node)}
-              transform={`translate(${toPercentX(data.x)} ${toPercentY(data.y)})`}
+              onPointerDown={(event) => handleNodePointerDown(event, node)}
+              transform={`translate(${toPercentX(position.x)} ${toPercentY(position.y)})`}
             >
               <circle
                 fill={selected ? "#111111" : "#ffffff"}
@@ -264,4 +415,16 @@ function toPercentX(value: number): number {
 
 function toPercentY(value: number): number {
   return 50 - value * 50;
+}
+
+function nodeGraphPosition(
+  graph: SigmaWorkspaceGraph,
+  nodeId: string,
+): { x: number; y: number } {
+  const node = graph.getNodeAttributes(nodeId);
+  return { x: node.x, y: node.y };
+}
+
+function clampGraphPosition(value: number): number {
+  return Math.max(-1.8, Math.min(1.8, value));
 }

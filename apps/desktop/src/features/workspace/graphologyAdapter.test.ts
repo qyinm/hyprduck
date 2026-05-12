@@ -60,8 +60,9 @@ describe("buildSigmaGraph", () => {
 
     expect(graph.order).toBe(2);
     expect(graph.size).toBe(1);
-    expect(graph.getNodeAttribute("source:source-1", "x")).toBeCloseTo(-0.04);
-    expect(graph.getNodeAttribute("source:source-1", "y")).toBeCloseTo(0.68);
+    expect(Number.isFinite(graph.getNodeAttribute("source:source-1", "x"))).toBe(true);
+    expect(Number.isFinite(graph.getNodeAttribute("source:source-1", "y"))).toBe(true);
+    expect(distanceBetween(graph, "source:source-1", "concept")).toBeLessThan(0.35);
     expect(graph.getNodeAttribute("source:source-1", "nodeKind")).toBe("source");
     expect(graph.getNodeAttribute("source:source-1", "size")).toBeGreaterThan(
       graph.getNodeAttribute("concept", "size"),
@@ -156,4 +157,148 @@ describe("buildSigmaGraph", () => {
     expect(Number.isFinite(graph.getNodeAttribute("concept", "x"))).toBe(true);
     expect(Number.isFinite(graph.getNodeAttribute("concept", "y"))).toBe(true);
   });
+
+  test("clusters connected components while keeping unrelated nodes separated", () => {
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        nodes: [
+          ...project.nodes,
+          {
+            id: "isolated-a",
+            label: "Isolated A",
+            kind: "concept",
+            confidence: null,
+            relatedCount: 0,
+            evidenceCount: 0,
+            position: { x: 50, y: 50 },
+          },
+          {
+            id: "isolated-b",
+            label: "Isolated B",
+            kind: "concept",
+            confidence: null,
+            relatedCount: 0,
+            evidenceCount: 0,
+            position: { x: 51, y: 51 },
+          },
+        ],
+      },
+      {
+        selectedNodeId: null,
+        selectedEdgeId: null,
+      },
+    );
+
+    const connectedDistance = distanceBetween(graph, "source:source-1", "concept");
+    const unrelatedDistance = distanceBetween(graph, "source:source-1", "isolated-a");
+
+    expect(connectedDistance).toBeLessThan(unrelatedDistance);
+    expect(distanceBetween(graph, "isolated-a", "isolated-b")).toBeGreaterThan(0.3);
+  });
+
+  test("separates dense nodes so they do not stack on top of each other", () => {
+    const denseNodes = Array.from({ length: 14 }, (_, index) => ({
+      id: `dense-${index}`,
+      label: `Dense ${index}`,
+      kind: "concept" as const,
+      confidence: null,
+      relatedCount: 2,
+      evidenceCount: 1,
+      position: { x: 50, y: 50 },
+    }));
+    const denseEdges = denseNodes.slice(1).map((node, index) => ({
+      id: `dense-edge-${index}`,
+      sourceNodeId: "dense-0",
+      targetNodeId: node.id,
+      kind: "related_to",
+      label: "Related",
+      confidence: null,
+      evidenceCount: 1,
+    }));
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        nodes: denseNodes,
+        edges: denseEdges,
+      },
+      {
+        selectedNodeId: null,
+        selectedEdgeId: null,
+      },
+    );
+
+    for (let sourceIndex = 0; sourceIndex < denseNodes.length; sourceIndex += 1) {
+      for (let targetIndex = sourceIndex + 1; targetIndex < denseNodes.length; targetIndex += 1) {
+        expect(
+          distanceBetween(graph, denseNodes[sourceIndex].id, denseNodes[targetIndex].id),
+        ).toBeGreaterThan(0.12);
+      }
+    }
+  });
+
+  test("local graph scope keeps only the selected node neighborhood", () => {
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        nodes: [
+          ...project.nodes,
+          {
+            id: "neighbor",
+            label: "Neighbor",
+            kind: "concept",
+            confidence: null,
+            relatedCount: 1,
+            evidenceCount: 1,
+            position: { x: 50, y: 50 },
+          },
+          {
+            id: "remote",
+            label: "Remote",
+            kind: "concept",
+            confidence: null,
+            relatedCount: 0,
+            evidenceCount: 0,
+            position: { x: 50, y: 50 },
+          },
+        ],
+        edges: [
+          ...project.edges,
+          {
+            id: "edge-concept-neighbor",
+            sourceNodeId: "concept",
+            targetNodeId: "neighbor",
+            kind: "related_to",
+            label: "Related",
+            confidence: null,
+            evidenceCount: 1,
+          },
+        ],
+      },
+      {
+        selectedNodeId: "concept",
+        selectedEdgeId: null,
+      },
+      {
+        mode: "local",
+        centerNodeId: "concept",
+      },
+    );
+
+    expect(graph.hasNode("concept")).toBe(true);
+    expect(graph.hasNode("source:source-1")).toBe(true);
+    expect(graph.hasNode("neighbor")).toBe(true);
+    expect(graph.hasNode("remote")).toBe(false);
+    expect(graph.size).toBe(2);
+  });
 });
+
+function distanceBetween(
+  graph: ReturnType<typeof buildSigmaGraph>,
+  source: string,
+  target: string,
+): number {
+  const sourceAttrs = graph.getNodeAttributes(source);
+  const targetAttrs = graph.getNodeAttributes(target);
+  return Math.hypot(sourceAttrs.x - targetAttrs.x, sourceAttrs.y - targetAttrs.y);
+}

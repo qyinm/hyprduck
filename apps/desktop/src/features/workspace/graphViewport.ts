@@ -46,6 +46,19 @@ export function pointerDeltaToViewBox(
   return (pointerDelta / viewportSize) * (100 / zoom);
 }
 
+export function graphPositionFromPointerDelta(
+  deltaX: number,
+  deltaY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  zoom: number,
+): { x: number; y: number } {
+  return {
+    x: pointerDeltaToViewBox(deltaX, viewportWidth, zoom) / 50,
+    y: -pointerDeltaToViewBox(deltaY, viewportHeight, zoom) / 50,
+  };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }

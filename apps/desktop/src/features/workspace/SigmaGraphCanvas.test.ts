@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  graphPositionFromPointerDelta,
   nextGraphZoom,
   pointerDeltaToViewBox,
   zoomGraphViewportAtPoint,
@@ -30,5 +31,16 @@ describe("graph viewport controls", () => {
     expect(pointerDeltaToViewBox(50, 500, 1)).toBeCloseTo(10);
     expect(pointerDeltaToViewBox(50, 500, 2)).toBeCloseTo(5);
     expect(pointerDeltaToViewBox(50, 0, 1)).toBe(0);
+  });
+
+  test("converts pointer movement into graph node movement", () => {
+    expect(graphPositionFromPointerDelta(50, -50, 500, 500, 1)).toEqual({
+      x: 0.2,
+      y: 0.2,
+    });
+    expect(graphPositionFromPointerDelta(50, 50, 500, 500, 2)).toEqual({
+      x: 0.1,
+      y: -0.1,
+    });
   });
 });
