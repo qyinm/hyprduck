@@ -17,12 +17,20 @@ import type {
 export function materializedGraphSnapshotToWorkspaceEnvelope(
   snapshot: MaterializedGraphSnapshot,
 ): WorkspaceProjectEnvelope {
-  const nodePositions = layoutNodePositions(snapshot.nodes.length);
-  const nodes = snapshot.nodes.map((node, index) =>
+  const visibleMaterializedNodes = snapshot.nodes.filter(
+    (node) => !isDerivedMarkdownSourceNode(snapshot, node),
+  );
+  const visibleNodeIds = new Set(visibleMaterializedNodes.map((node) => node.nodeId));
+  const visibleEdges = snapshot.edges.filter(
+    (edge) => visibleNodeIds.has(edge.sourceNodeId) && visibleNodeIds.has(edge.targetNodeId),
+  );
+  const visibleSourcePaths = visibleGraphSourcePaths(snapshot.sourcePaths);
+  const nodePositions = layoutNodePositions(visibleMaterializedNodes.length);
+  const nodes = visibleMaterializedNodes.map((node, index) =>
     materializedNodeToWorkspaceNode(node, nodePositions[index] ?? { x: 50, y: 50 }),
   );
   const evidenceById = buildEvidenceById(snapshot);
-  const relatedCounts = buildRelatedCounts(snapshot.edges);
+  const relatedCounts = buildRelatedCounts(visibleEdges);
   const detailsByNodeId: Record<string, WorkspaceNodeDetail> = {};
   const answerByNodeId: Record<string, WorkspaceAnswerResponse> = {};
 
@@ -35,6 +43,10 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
     const sourcePath =
       materialized.sourceIds
         .map((sourceId) => sourcePathForSourceId(snapshot, sourceId))
+        .find(Boolean) ?? null;
+    const markdownPath =
+      materialized.sourceIds
+        .map((sourceId) => markdownPathForSourceId(snapshot, sourceId))
         .find(Boolean) ?? null;
     const hydratedNode = {
       ...node,
@@ -50,7 +62,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       actions: [],
       source:
         hydratedNode.kind === "source"
-          ? sourceBackingForNode(snapshot, materialized, sourcePath)
+          ? sourceBackingForNode(snapshot, materialized, sourcePath, markdownPath)
           : null,
     };
     answerByNodeId[node.id] = {
@@ -62,7 +74,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       explanation:
         "This graph view is loaded from the latest materialized graph/wiki snapshot, with events JSONL remaining the source of truth.",
       citations: evidence.slice(0, 3),
-      relatedNodeIds: relatedNodeIdsForNode(snapshot.edges, node.id),
+      relatedNodeIds: relatedNodeIdsForNode(visibleEdges, node.id),
       suggestedActions: [
         {
           kind: "inspect_evidence",
@@ -74,7 +86,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
   }
 
   const edgeDetailsById: Record<string, WorkspaceEdgeDetail> = {};
-  const edges = snapshot.edges.map((edge) => {
+  const edges = visibleEdges.map((edge) => {
     const summary = materializedEdgeToWorkspaceEdge(edge);
     const evidence = edge.evidenceIds.map((id) => evidenceById[id]).filter(Boolean);
     edgeDetailsById[summary.id] = {
@@ -94,7 +106,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
         status: projectNodes.length > 0 ? "ready" : "degraded",
         stale: false,
         summary: `Loaded ${projectNodes.length} nodes and ${edges.length} relationships from ${snapshot.latestReadableSnapshotPath}.`,
-        documentCount: snapshot.sourcePaths.length,
+        documentCount: visibleSourcePaths.length,
         nodeCount: projectNodes.length,
         relationshipCount: edges.length,
         evidenceCount: Object.keys(evidenceById).length,
@@ -106,7 +118,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       answerByNodeId,
     },
     workspace_id: snapshot.workspaceId,
-    sources: snapshot.sourcePaths.map((sourcePath, index) =>
+    sources: visibleSourcePaths.map((sourcePath, index) =>
       sourceSummaryFromPath(snapshot, sourcePath, index),
     ),
   };
@@ -212,21 +224,36 @@ function buildEvidenceById(snapshot: MaterializedGraphSnapshot) {
 }
 
 function sourcePathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: string) {
-  return snapshot.sourcePaths.find((sourcePath) => sourcePath.includes(sourceId)) ?? null;
+  return (
+    snapshot.sourcePaths.find(
+      (sourcePath) => sourcePath.includes(sourceId) && !isMarkdownPath(sourcePath),
+    ) ??
+    snapshot.sourcePaths.find((sourcePath) => sourcePath.includes(sourceId)) ??
+    null
+  );
+}
+
+function markdownPathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: string) {
+  return (
+    snapshot.sourcePaths.find(
+      (sourcePath) => sourcePath.includes(sourceId) && isMarkdownPath(sourcePath),
+    ) ?? null
+  );
 }
 
 function sourceBackingForNode(
   snapshot: MaterializedGraphSnapshot,
   node: MaterializedGraphNodeRecord,
   sourcePath: string | null,
+  markdownPath: string | null,
 ) {
   return {
     workspaceId: snapshot.workspaceId,
     sourceId: node.sourceIds[0] ?? node.nodeId,
     originalPath: sourcePath ?? node.label,
     sourcePath: sourcePath ?? node.label,
-    markdownPath: sourcePath ?? node.label,
-    format: "markdown",
+    markdownPath: markdownPath ?? sourcePath ?? node.label,
+    format: documentFormatFromPath(sourcePath ?? node.label),
     status: "ingested" as const,
     pageCount: 0,
     successCount: 0,
@@ -249,8 +276,8 @@ function sourceSummaryFromPath(
     source_id: `source-${index + 1}`,
     original_path: sourcePath,
     source_path: sourcePath,
-    markdown_path: sourcePath,
-    format: "markdown",
+    markdown_path: markdownPathForSourcePath(snapshot, sourcePath) ?? sourcePath,
+    format: documentFormatFromPath(sourcePath),
     status: "ingested",
     page_count: 0,
     success_count: 0,
@@ -260,6 +287,86 @@ function sourceSummaryFromPath(
     ingest_instruction: "",
     updated_at: snapshot.materializedAt,
   };
+}
+
+function visibleGraphSourcePaths(sourcePaths: string[]) {
+  return sourcePaths.filter((sourcePath) => !isDerivedMarkdownPath(sourcePath, sourcePaths));
+}
+
+function isDerivedMarkdownSourceNode(
+  snapshot: MaterializedGraphSnapshot,
+  node: MaterializedGraphNodeRecord,
+) {
+  if (node.kind !== "source" || !isMarkdownPath(node.label)) {
+    return false;
+  }
+  return node.sourceIds.some((sourceId) =>
+    snapshot.sourcePaths.some(
+      (sourcePath) => sourcePath.includes(sourceId) && !isMarkdownPath(sourcePath),
+    ),
+  );
+}
+
+function markdownPathForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: string) {
+  const sourceKey = sourceArtifactKey(sourcePath);
+  if (!sourceKey) {
+    return null;
+  }
+  return (
+    snapshot.sourcePaths.find(
+      (candidate) =>
+        candidate !== sourcePath &&
+        isMarkdownPath(candidate) &&
+        sourceArtifactKey(candidate) === sourceKey,
+    ) ?? null
+  );
+}
+
+function isDerivedMarkdownPath(path: string, allPaths: string[]) {
+  if (!isMarkdownPath(path)) {
+    return false;
+  }
+  const sourceKey = sourceArtifactKey(path);
+  return (
+    path.includes("/artifacts/") ||
+    (sourceKey
+      ? allPaths.some(
+          (candidate) =>
+            candidate !== path &&
+            !isMarkdownPath(candidate) &&
+            sourceArtifactKey(candidate) === sourceKey,
+        )
+      : false)
+  );
+}
+
+function sourceArtifactKey(path: string) {
+  return path.match(/(?:^|\/)(source-[^/]+)/)?.[1] ?? null;
+}
+
+function fileNameFromPath(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function isMarkdownPath(path: string) {
+  return fileNameFromPath(path).toLowerCase().endsWith(".md");
+}
+
+function documentFormatFromPath(path: string) {
+  const name = fileNameFromPath(path).toLowerCase();
+  if (name.endsWith(".pdf")) {
+    return "pdf";
+  }
+  if (name.endsWith(".docx")) {
+    return "docx";
+  }
+  if (name.endsWith(".doc")) {
+    return "doc";
+  }
+  if (name.endsWith(".md")) {
+    return "markdown";
+  }
+  return "source";
 }
 
 function nodeDescription(
