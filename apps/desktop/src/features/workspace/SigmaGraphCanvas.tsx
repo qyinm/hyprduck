@@ -101,6 +101,13 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
     if (event.button !== 0) {
       return;
     }
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("[data-graph-selectable='true']")
+    ) {
+      return;
+    }
 
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
@@ -193,6 +200,7 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
           return (
             <line
               key={edge}
+              data-graph-selectable="true"
               className="cursor-pointer"
               onClick={() => selectEdge(edge)}
               stroke={selected ? "#111111" : "#cbd5e1"}
@@ -219,6 +227,7 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
           return (
             <g
               key={node}
+              data-graph-selectable="true"
               className="cursor-pointer"
               onClick={() => selectNode(node)}
               transform={`translate(${toPercentX(data.x)} ${toPercentY(data.y)})`}

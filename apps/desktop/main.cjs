@@ -704,13 +704,13 @@ function detectFormat(filePath) {
 function formatForEngine(format) {
   switch (String(format).toLowerCase()) {
     case "pdf":
-      return "Pdf";
+      return "pdf";
     case "docx":
-      return "Docx";
+      return "docx";
     case "doc":
-      return "Doc";
+      return "doc";
     case "image":
-      return "Image";
+      return "image";
     default:
       throw new Error(`unsupported format: ${format}`);
   }

@@ -1976,6 +1976,31 @@ export function App() {
       loadedWorkspaceEnvelope.sources,
     );
   }, [loadedWorkspaceEnvelope, previewWorkspaceProject, snapshot.activeJob]);
+  const graphImportStatus = useMemo(() => {
+    if (snapshot.activeJob) {
+      return {
+        filePath: snapshot.activeJob.filePath,
+        format: snapshot.activeJob.format,
+        status: snapshot.activeJob.status,
+        progressPercent: snapshot.activeJob.progressPercent,
+        message: snapshot.activeJob.lastMessage,
+      };
+    }
+
+    const latestProgress = snapshot.progressLog[0] ?? null;
+    if (latestProgress?.phase === "failed") {
+      return {
+        filePath: selectedFile?.path ?? "Selected file",
+        format: selectedFile?.format ?? "document",
+        status: "failed",
+        progressPercent: 100,
+        message: "Import failed",
+        failureMessage: latestProgress.message,
+      };
+    }
+
+    return null;
+  }, [selectedFile, snapshot.activeJob, snapshot.progressLog]);
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,
@@ -2550,6 +2575,7 @@ export function App() {
             <WorkspaceErrorBoundary>
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
+                importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}

@@ -26,6 +26,7 @@ import type {
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
   uiState: WorkspaceUiState;
+  importStatus: GraphImportStatus | null;
   dispatch: Dispatch<WorkspaceUiAction>;
   onOpenImport: () => void;
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
@@ -34,10 +35,20 @@ interface GraphWorkspaceProps {
   onProposeBrainUpdate: (request: WorkspaceProposeBrainUpdateRequest) => Promise<void>;
 }
 
+interface GraphImportStatus {
+  filePath: string;
+  format: string;
+  status: string;
+  progressPercent: number;
+  message: string | null;
+  failureMessage?: string | null;
+}
+
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
     project,
     uiState,
+    importStatus,
     dispatch,
     onOpenImport,
     onOpenArtifact,
@@ -281,6 +292,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             graphPaneClass,
           )}
         >
+          {importStatus && <GraphImportStatusBanner status={importStatus} />}
           <SigmaGraphCanvas
             className="flex-1"
             dispatch={dispatch}
@@ -841,6 +853,51 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
+  const { status } = props;
+  const failed = status.status === "failed" || Boolean(status.failureMessage);
+  const progress = Math.max(0, Math.min(100, Math.round(status.progressPercent)));
+
+  return (
+    <div
+      className={cn(
+        "pointer-events-auto absolute left-6 right-6 top-14 z-30 rounded-xl border px-4 py-3 shadow-sm backdrop-blur",
+        failed
+          ? "border-destructive/25 bg-destructive/10 text-destructive"
+          : "border-border bg-background/95 text-foreground",
+      )}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">
+            {failed ? "Import failed" : "Importing source file"}
+          </p>
+          <p className="mt-1 truncate text-sm text-muted-foreground">
+            {fileNameFromPath(status.filePath)} · {status.format.toUpperCase()}
+            {status.message ? ` · ${status.message}` : ""}
+          </p>
+        </div>
+        {!failed && (
+          <Badge variant="outline" className="shrink-0">
+            {progress}%
+          </Badge>
+        )}
+      </div>
+      {!failed && (
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary">
+          <div
+            className="h-full rounded-full bg-foreground transition-all"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      )}
+      {failed && status.failureMessage ? (
+        <p className="mt-2 text-sm leading-5">{status.failureMessage}</p>
+      ) : null}
     </div>
   );
 }
