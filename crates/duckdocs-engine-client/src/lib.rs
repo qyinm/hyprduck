@@ -14,9 +14,11 @@ use duckdocs_engine_types::{
     EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, KnowledgeProject,
     ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
     LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest,
-    ParseResponseData, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadNodeRequest,
-    ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ParseResponseData, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData,
+    ReadGraphHistoryRequest, ReadGraphHistoryResponseData, ReadGraphSnapshotRequest,
+    ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
     ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
     RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
     SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
@@ -42,6 +44,18 @@ pub trait EngineClient {
         &self,
         request: ReadRecentEventsRequest,
     ) -> Result<ReadRecentEventsResponseData>;
+    fn read_graph_history(
+        &self,
+        request: ReadGraphHistoryRequest,
+    ) -> Result<ReadGraphHistoryResponseData>;
+    fn read_graph_snapshot(
+        &self,
+        request: ReadGraphSnapshotRequest,
+    ) -> Result<ReadGraphSnapshotResponseData>;
+    fn reconstruct_brain(
+        &self,
+        request: ReconstructBrainRequest,
+    ) -> Result<ReconstructBrainResponseData>;
     fn get_context_pack(
         &self,
         request: duckdocs_engine_types::GetContextPackRequest,
@@ -310,6 +324,39 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<ReadRecentEventsResponseData, ReadRecentEventsResponseData>(
             EngineRequest::ReadRecentEvents(request),
             EngineCommand::ReadRecentEvents,
+            None,
+        )
+    }
+
+    fn read_graph_history(
+        &self,
+        request: ReadGraphHistoryRequest,
+    ) -> Result<ReadGraphHistoryResponseData> {
+        self.run_command::<ReadGraphHistoryResponseData, ReadGraphHistoryResponseData>(
+            EngineRequest::ReadGraphHistory(request),
+            EngineCommand::ReadGraphHistory,
+            None,
+        )
+    }
+
+    fn read_graph_snapshot(
+        &self,
+        request: ReadGraphSnapshotRequest,
+    ) -> Result<ReadGraphSnapshotResponseData> {
+        self.run_command::<ReadGraphSnapshotResponseData, ReadGraphSnapshotResponseData>(
+            EngineRequest::ReadGraphSnapshot(request),
+            EngineCommand::ReadGraphSnapshot,
+            None,
+        )
+    }
+
+    fn reconstruct_brain(
+        &self,
+        request: ReconstructBrainRequest,
+    ) -> Result<ReconstructBrainResponseData> {
+        self.run_command::<ReconstructBrainResponseData, ReconstructBrainResponseData>(
+            EngineRequest::ReconstructBrain(request),
+            EngineCommand::ReconstructBrain,
             None,
         )
     }
