@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from "react";
 import {
@@ -1171,20 +1172,40 @@ function SettingsPanel(props: {
   const [providerStates, setProviderStates] = useState<
     Map<string, ProviderState>
   >(new Map());
+  const lastSavedSettingsSignature = useRef<string | null>(null);
+
+  function settingsSignature(payload: {
+    provider: string;
+    model_id: string;
+    api_key: string;
+    base_url: string | null;
+    prompt_template: string;
+  }) {
+    return JSON.stringify({
+      provider: payload.provider,
+      model_id: payload.model_id,
+      api_key: payload.api_key,
+      base_url: payload.base_url ?? null,
+      prompt_template: payload.prompt_template,
+    });
+  }
 
   useEffect(() => {
     if (config) {
       setActiveProvider(config.provider);
       setSelectedModel(config.model_id);
       setPromptTemplate(config.prompt_template ?? "General");
+      lastSavedSettingsSignature.current = settingsSignature(config);
       setProviderStates((prev) => {
         const next = new Map(prev);
         for (const opt of config.provider_options) {
+          const existing = prev.get(opt.id);
+          const isActive = opt.id === config.provider;
           next.set(opt.id, {
-            apiKey: config.api_key,
-            baseUrl: "",
-            expanded: false,
-            showAdvanced: false,
+            apiKey: isActive ? config.api_key : existing?.apiKey ?? "",
+            baseUrl: isActive ? config.base_url ?? "" : existing?.baseUrl ?? "",
+            expanded: existing?.expanded ?? false,
+            showAdvanced: existing?.showAdvanced ?? false,
           });
         }
         return next;
@@ -1271,6 +1292,7 @@ function SettingsPanel(props: {
   }, [activeProvider]);
 
   const activeApiKey = providerStates.get(activeProvider)?.apiKey ?? "";
+  const activeBaseUrl = providerStates.get(activeProvider)?.baseUrl ?? "";
 
   // Auto-save whenever settings change
   const [saving, setSaving] = useState(false);
@@ -1289,11 +1311,28 @@ function SettingsPanel(props: {
         model_options: availableModels,
         prompt_template_options: config?.prompt_template_options ?? [],
       };
+      const nextSignature = settingsSignature(payload);
+      if (nextSignature === lastSavedSettingsSignature.current) {
+        return;
+      }
+      lastSavedSettingsSignature.current = nextSignature;
       setSaving(true);
-      onSave(payload).finally(() => setSaving(false));
+      onSave(payload)
+        .catch(() => {
+          lastSavedSettingsSignature.current = null;
+        })
+        .finally(() => setSaving(false));
     }, 600);
     return () => clearTimeout(timer);
-  }, [activeProvider, selectedModel, activeApiKey, providerStates, promptTemplate]);
+  }, [
+    activeProvider,
+    selectedModel,
+    activeApiKey,
+    activeBaseUrl,
+    promptTemplate,
+    availableModels,
+    config,
+  ]);
 
   if (!config) {
     return (
@@ -2492,8 +2531,8 @@ export function App() {
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div
           className={cn(
-            "flex min-h-0 flex-1 flex-col overflow-hidden",
-            settingsOpen ? "p-6 pt-14" : "",
+            "flex min-h-0 flex-1 flex-col",
+            settingsOpen ? "overflow-y-auto p-6 pt-14" : "overflow-hidden",
           )}
         >
           {settingsOpen ? (
