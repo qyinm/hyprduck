@@ -564,6 +564,16 @@ async function openSavedOutput(outputPath, reveal) {
 async function openLocalArtifact(outputPath, reveal) {
   const safePath = resolveKnownWorkspacePath(outputPath);
   if (reveal) {
+    if (!fs.existsSync(safePath)) {
+      throw new Error(`Cannot reveal missing local artifact: ${safePath}`);
+    }
+    if (fs.statSync(safePath).isDirectory()) {
+      const error = await shell.openPath(safePath);
+      if (error) {
+        throw new Error(error);
+      }
+      return;
+    }
     shell.showItemInFolder(safePath);
     return;
   }
@@ -578,7 +588,25 @@ function resolveKnownWorkspacePath(candidatePath) {
     throw new Error("Missing local artifact path.");
   }
   const storageRoot = path.resolve(ensureHyprduckApplicationSupportPath());
-  const resolvedPath = path.resolve(candidatePath);
+  const expandedPath = candidatePath.startsWith("~/")
+    ? path.join(app.getPath("home"), candidatePath.slice(2))
+    : candidatePath;
+  const candidates = path.isAbsolute(expandedPath)
+    ? [expandedPath]
+    : [
+        path.join(storageRoot, expandedPath),
+        path.join(storageRoot, "default", expandedPath),
+      ];
+  const resolvedPath =
+    candidates.map((candidate) => path.resolve(candidate)).find((candidate) => {
+      const relativePath = path.relative(storageRoot, candidate);
+      return (
+        relativePath.length > 0 &&
+        !relativePath.startsWith("..") &&
+        !path.isAbsolute(relativePath) &&
+        fs.existsSync(candidate)
+      );
+    }) ?? path.resolve(candidates[0]);
   const relativePath = path.relative(storageRoot, resolvedPath);
   if (
     relativePath.startsWith("..") ||

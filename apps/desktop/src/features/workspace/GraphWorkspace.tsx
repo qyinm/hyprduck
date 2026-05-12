@@ -254,7 +254,11 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     if (!path) {
       return;
     }
-    await onOpenArtifact(path, reveal);
+    try {
+      await onOpenArtifact(path, reveal);
+    } catch (error) {
+      setAnswerError(String(error));
+    }
   }
 
   return (

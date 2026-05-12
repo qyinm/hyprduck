@@ -1550,6 +1550,9 @@ fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceRepor
 
 fn read_materialized_brain_snapshot(root: &Path, workspace_id: &str) -> Result<BrainRepoSnapshot> {
     let manifest_path = root.join("brain-manifest.json");
+    if !manifest_path.exists() {
+        return Ok(empty_replayed_brain_snapshot(workspace_id));
+    }
     let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
     if snapshot.workspace_id != workspace_id {
         bail!(
@@ -4967,6 +4970,13 @@ impl BrainReader {
     fn open(scope: &BrainReadScope) -> Result<Self> {
         let root = resolve_brain_workspace_root(scope)?;
         let manifest_path = root.join("brain-manifest.json");
+        if !manifest_path.exists() {
+            return Ok(Self {
+                root,
+                snapshot: empty_replayed_brain_snapshot(&scope.workspace_id),
+                events: Vec::new(),
+            });
+        }
         let manifest_json = fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed reading {}", manifest_path.display()))?;
         let mut snapshot: BrainRepoSnapshot = serde_json::from_str(&manifest_json)
@@ -19943,6 +19953,28 @@ mod tests {
         assert!(!workspace_root
             .join("state/latest-readable-snapshot.json")
             .exists());
+    }
+
+    #[test]
+    fn graph_snapshot_reader_returns_empty_state_for_fresh_workspace() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(temp.path().join(DEFAULT_WORKSPACE_ID)).expect("create workspace root");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("fresh workspace reads as empty snapshot");
+
+        assert_eq!(read.workspace_id, DEFAULT_WORKSPACE_ID);
+        assert_eq!(read.snapshot_id, "snapshot-default-0");
+        assert_eq!(read.source_ingest_id, "materialized://default");
+        assert!(read.nodes.is_empty());
+        assert!(read.edges.is_empty());
+        assert!(read.source_paths.is_empty());
+        assert!(read.wiki_pages.is_empty());
     }
 
     #[test]
