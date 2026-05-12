@@ -10,16 +10,20 @@ import {
 import {
   ArrowLeft,
   Bell,
+  CheckCircle2,
   BookOpen,
   ChevronDown,
   ChevronRight,
+  FileText,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Save,
   Settings,
+  ShieldCheck,
   Sparkles,
+  XCircle,
 } from "lucide-react";
 import {
   Card,
@@ -28,9 +32,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
 import { fileNameFromPath } from "@/features/workspace/pathUtils";
@@ -133,6 +139,7 @@ interface RuntimeReadinessResponseData {
 type BrainProposalKind = "memory" | "claim" | "link" | "observation" | "source_note" | "wiki_page";
 type BrainProposalStatus = "pending_review" | "accepted" | "rejected";
 type BrainHealthStatus = "clean" | "attention_needed";
+type BrainReviewDecision = "accept" | "reject";
 
 interface BrainReviewItem {
   reviewId: string;
@@ -149,10 +156,31 @@ interface BrainReviewItem {
   createdAt: number;
 }
 
+interface BrainActor {
+  actorType: "system" | "user" | "agent";
+  actorId: string;
+}
+
+interface BrainEvent {
+  eventId: string;
+  workspaceId: string;
+  eventType: string;
+  actor: BrainActor;
+  sourceRefs: string[];
+  nodeRefs: string[];
+  relationRefs: string[];
+  evidenceRefs: string[];
+  payloadJson: string;
+  confidence?: string | null;
+  policyResult: string;
+  createdAt: number;
+}
+
 interface BrainHealthResponseData {
   status: BrainHealthStatus;
   attentionCount: number;
   reviewItems: BrainReviewItem[];
+  recentEvents: BrainEvent[];
 }
 
 interface DesktopMessage<T> {
@@ -260,6 +288,58 @@ const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
   ollama: ["llama3.1", "llava:latest", "qwen2.5vl"],
 };
 
+const WEB_MOCK_NOW_SECONDS = Math.floor(Date.now() / 1000);
+const WEB_MOCK_REVIEW_ITEMS: BrainReviewItem[] = [
+  {
+    reviewId: "proposal-web-claim",
+    proposalId: "proposal-web-claim",
+    workspaceId: "web-preview",
+    kind: "claim",
+    status: "pending_review",
+    title: "Claim needs source-backed approval",
+    body: "Imported PDF notes say HyprDuck should keep agent memory updates auditable before they become trusted graph state.",
+    proposalPath:
+      "~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/proposal-web-claim.json",
+    sourceRefs: ["preview"],
+    nodeRefs: ["source:preview"],
+    evidenceRefs: ["ev-page-1"],
+    createdAt: WEB_MOCK_NOW_SECONDS - 300,
+  },
+  {
+    reviewId: "proposal-web-wiki",
+    proposalId: "proposal-web-wiki",
+    workspaceId: "web-preview",
+    kind: "wiki_page",
+    status: "pending_review",
+    title: "Wiki save-back needs review",
+    body: "Agent-authored wiki pages should show a proposed durable write before HyprDuck saves them into the local brain repo.",
+    proposalPath:
+      "~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/proposal-web-wiki.json",
+    sourceRefs: ["preview"],
+    nodeRefs: [],
+    evidenceRefs: [],
+    createdAt: WEB_MOCK_NOW_SECONDS - 120,
+  },
+];
+
+let webMockReviewItems = WEB_MOCK_REVIEW_ITEMS.map((item) => ({ ...item }));
+let webMockRecentEvents: BrainEvent[] = [
+  {
+    eventId: "evt-web-review-created",
+    workspaceId: "web-preview",
+    eventType: "review_created",
+    actor: { actorType: "agent", actorId: "web-preview-agent" },
+    sourceRefs: ["preview"],
+    nodeRefs: ["source:preview"],
+    relationRefs: [],
+    evidenceRefs: ["ev-page-1"],
+    payloadJson: "{}",
+    confidence: null,
+    policyResult: "needs_review",
+    createdAt: WEB_MOCK_NOW_SECONDS - 300,
+  },
+];
+
 let webMockSnapshot = WEB_MOCK_BASE_SNAPSHOT;
 let webMockConfig: EngineConfigPayload = WEB_MOCK_CONFIG;
 let webMockValidation: ValidateProviderResponseData = { ready: false, issues: [] };
@@ -320,6 +400,19 @@ function deriveWebReadiness(): RuntimeReadinessResponseData {
     model_id: webMockConfig.model_id,
     checks,
   };
+}
+
+function createWebBrainHealth(): BrainHealthResponseData {
+  return {
+    status: webMockReviewItems.length > 0 ? "attention_needed" : "clean",
+    attentionCount: webMockReviewItems.length,
+    reviewItems: webMockReviewItems.map((item) => ({ ...item })),
+    recentEvents: webMockRecentEvents.map((event) => ({ ...event })),
+  };
+}
+
+function appendWebBrainEvent(event: BrainEvent) {
+  webMockRecentEvents = [event, ...webMockRecentEvents].slice(0, 12);
 }
 
 function emitWebSnapshot(snapshot: UiSnapshot) {
@@ -543,17 +636,91 @@ function createWebMockApi(): HyprDuckDesktopApi {
           return deriveWebReadiness() as T;
         }
         case "brain_health": {
+          return createWebBrainHealth() as T;
+        }
+        case "resolve_brain_review": {
+          const proposalId = String(args.proposal_id ?? "");
+          const decision = String(args.decision ?? "reject") as BrainReviewDecision;
+          const resolved = webMockReviewItems.find(
+            (item) => item.proposalId === proposalId,
+          );
+          webMockReviewItems = webMockReviewItems.filter(
+            (item) => item.proposalId !== proposalId,
+          );
+          appendWebBrainEvent({
+            eventId: `evt-web-resolved-${Date.now()}`,
+            workspaceId: resolved?.workspaceId ?? "web-preview",
+            eventType: "review_resolved",
+            actor: { actorType: "user", actorId: "local-user" },
+            sourceRefs: resolved?.sourceRefs ?? [],
+            nodeRefs: resolved?.nodeRefs ?? [],
+            relationRefs: [],
+            evidenceRefs: resolved?.evidenceRefs ?? [],
+            payloadJson: JSON.stringify({
+              proposalId,
+              decision,
+              reason: args.reason ?? null,
+            }),
+            confidence: null,
+            policyResult: decision,
+            createdAt: Math.floor(Date.now() / 1000),
+          });
           return {
-            status: "clean",
-            attentionCount: 0,
-            reviewItems: [],
+            proposal: {
+              proposalId,
+              status: decision === "accept" ? "accepted" : "rejected",
+            },
           } as T;
         }
         case "propose_brain_update": {
+          const kind = String(args.kind ?? "memory") as BrainProposalKind;
+          const proposalId = `proposal-web-${Date.now()}`;
+          const reviewable =
+            kind === "claim" || kind === "link" || kind === "wiki_page";
+          if (reviewable) {
+            webMockReviewItems = [
+              {
+                reviewId: proposalId,
+                proposalId,
+                workspaceId: "web-preview",
+                kind,
+                status: "pending_review",
+                title: String(args.title ?? "Untitled proposal"),
+                body: String(args.body ?? ""),
+                proposalPath: `~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/${proposalId}.json`,
+                sourceRefs: (args.source_refs as string[] | undefined) ?? [],
+                nodeRefs: (args.node_refs as string[] | undefined) ?? [],
+                evidenceRefs: (args.evidence_refs as string[] | undefined) ?? [],
+                createdAt: Math.floor(Date.now() / 1000),
+              },
+              ...webMockReviewItems,
+            ];
+          }
+          appendWebBrainEvent({
+            eventId: `evt-web-proposed-${Date.now()}`,
+            workspaceId: "web-preview",
+            eventType:
+              kind === "claim"
+                ? "claim_proposed"
+                : kind === "link"
+                  ? "link_proposed"
+                  : kind === "wiki_page"
+                    ? "wiki_page_proposed"
+                    : "memory_proposed",
+            actor: { actorType: "user", actorId: "local-user" },
+            sourceRefs: (args.source_refs as string[] | undefined) ?? [],
+            nodeRefs: (args.node_refs as string[] | undefined) ?? [],
+            relationRefs: [],
+            evidenceRefs: (args.evidence_refs as string[] | undefined) ?? [],
+            payloadJson: JSON.stringify({ title: args.title, body: args.body }),
+            confidence: null,
+            policyResult: reviewable ? "needs_review" : "auto_applied",
+            createdAt: Math.floor(Date.now() / 1000),
+          });
           return {
             proposal: {
-              proposalId: "proposal-web-preview",
-              status: "accepted",
+              proposalId,
+              status: reviewable ? "pending_review" : "accepted",
             },
           } as T;
         }
@@ -1391,6 +1558,330 @@ function SettingsPanel(props: {
   );
 }
 
+function TrustConsole(props: {
+  health: BrainHealthResponseData | null;
+  selectedItem: BrainReviewItem | null;
+  selectedReviewId: string | null;
+  reviewReason: string;
+  decisionPending: BrainReviewDecision | null;
+  decisionError: string | null;
+  onOpenProposal: (path: string) => Promise<void>;
+  onReasonChange: (value: string) => void;
+  onRefresh: () => Promise<void>;
+  onResolve: (item: BrainReviewItem, decision: BrainReviewDecision) => Promise<void>;
+  onSelectReview: (reviewId: string) => void;
+}) {
+  const {
+    health,
+    selectedItem,
+    selectedReviewId,
+    reviewReason,
+    decisionPending,
+    decisionError,
+    onOpenProposal,
+    onReasonChange,
+    onRefresh,
+    onResolve,
+    onSelectReview,
+  } = props;
+  const reviewItems = health?.reviewItems ?? [];
+  const recentEvents = health?.recentEvents ?? [];
+  const attentionCount = health?.attentionCount ?? 0;
+  const statusLabel = health?.status === "attention_needed" ? "Needs review" : "Clean";
+
+  return (
+    <section
+      aria-label="Trust Console"
+      className="fixed bottom-4 right-3 top-12 z-50 flex w-[min(58rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-border bg-background text-sm shadow-xl"
+      data-electron-no-drag
+    >
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-4">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-secondary text-foreground">
+            <ShieldCheck size={16} />
+          </span>
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Trust Console</h2>
+            <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
+              Review agent-written memory, claim, link, and wiki proposals before
+              they become trusted brain state.
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant={attentionCount > 0 ? "default" : "secondary"}>
+            {statusLabel}
+          </Badge>
+          <Button
+            onClick={() => void onRefresh()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Refresh
+          </Button>
+        </div>
+      </header>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[18rem_minmax(0,1fr)]">
+        <aside className="flex min-h-0 flex-col border-b border-border bg-secondary/25 md:border-b-0 md:border-r">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Review Queue
+            </span>
+            <span className="text-xs text-muted-foreground">{attentionCount} pending</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {reviewItems.map((item) => {
+              const active = item.reviewId === selectedReviewId;
+              return (
+                <button
+                  className={cn(
+                    "mb-2 w-full rounded-lg border px-3 py-3 text-left transition-colors",
+                    active
+                      ? "border-foreground bg-background text-foreground"
+                      : "border-border bg-background/70 text-foreground hover:bg-background",
+                  )}
+                  key={item.reviewId}
+                  onClick={() => onSelectReview(item.reviewId)}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-sm font-medium">{item.title}</span>
+                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {formatProposalKind(item.kind)}
+                    </span>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                    {item.body}
+                  </p>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    {formatTimestamp(item.createdAt)}
+                  </p>
+                </button>
+              );
+            })}
+
+            {health && reviewItems.length === 0 && (
+              <div className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+                No pending reviews. Proposed writes that passed policy are already
+                evented, and risky writes will appear here.
+              </div>
+            )}
+            {!health && (
+              <div className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+                Loading brain health.
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <div className="flex min-h-0 flex-col overflow-y-auto">
+          {selectedItem ? (
+            <div className="grid gap-5 p-4">
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{formatProposalKind(selectedItem.kind)}</Badge>
+                  <Badge variant="secondary">{formatProposalStatus(selectedItem.status)}</Badge>
+                  <Badge variant="secondary">{selectedItem.workspaceId}</Badge>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold tracking-tight text-foreground">
+                    {selectedItem.title}
+                  </h3>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                    {selectedItem.body}
+                  </p>
+                </div>
+              </section>
+
+              <section className="grid gap-3 rounded-xl border border-border bg-secondary/30 p-3">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} />
+                  <h4 className="text-sm font-semibold">Provenance</h4>
+                </div>
+                <ReferenceRow label="Sources" refs={selectedItem.sourceRefs} />
+                <ReferenceRow label="Nodes" refs={selectedItem.nodeRefs} />
+                <ReferenceRow label="Evidence" refs={selectedItem.evidenceRefs} />
+                <div className="grid gap-1 border-t border-border pt-3 text-xs">
+                  <span className="font-medium text-foreground">Proposal file</span>
+                  <button
+                    className="truncate text-left text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => void onOpenProposal(selectedItem.proposalPath)}
+                    type="button"
+                  >
+                    {selectedItem.proposalPath}
+                  </button>
+                </div>
+              </section>
+
+              <section className="grid gap-3 rounded-xl border border-border p-3">
+                <div>
+                  <h4 className="text-sm font-semibold">Review decision</h4>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Accept applies the durable save-back. Reject preserves the
+                    proposal record and logs the decision without mutating trusted state.
+                  </p>
+                </div>
+                <Textarea
+                  className="min-h-20"
+                  onChange={(event) => onReasonChange(event.target.value)}
+                  placeholder="Optional review note..."
+                  value={reviewReason}
+                />
+                {decisionError && (
+                  <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    {decisionError}
+                  </p>
+                )}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    disabled={decisionPending !== null}
+                    onClick={() => void onResolve(selectedItem, "reject")}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <XCircle size={14} />
+                    {decisionPending === "reject" ? "Rejecting..." : "Reject"}
+                  </Button>
+                  <Button
+                    disabled={decisionPending !== null}
+                    onClick={() => void onResolve(selectedItem, "accept")}
+                    size="sm"
+                    type="button"
+                  >
+                    <CheckCircle2 size={14} />
+                    {decisionPending === "accept" ? "Accepting..." : "Accept"}
+                  </Button>
+                </div>
+              </section>
+            </div>
+          ) : (
+            <div className="grid min-h-[18rem] place-items-center p-6 text-center">
+              <div>
+                <ShieldCheck className="mx-auto text-muted-foreground" size={24} />
+                <h3 className="mt-3 text-sm font-semibold text-foreground">
+                  No proposal selected
+                </h3>
+                <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+                  Agent write proposals and maintenance findings appear here when
+                  they need human approval.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <section className="border-t border-border p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Recent brain events</h3>
+              <span className="text-xs text-muted-foreground">
+                {recentEvents.length} shown
+              </span>
+            </div>
+            <div className="grid gap-2">
+              {recentEvents.map((event) => (
+                <div
+                  className="rounded-lg border border-border bg-secondary/30 px-3 py-2 text-xs leading-5"
+                  key={event.eventId}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-foreground">
+                      {formatEventType(event.eventType)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {event.actor.actorType}:{event.actor.actorId} · {event.policyResult}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                    <span>{formatTimestamp(event.createdAt)}</span>
+                    <span>{event.sourceRefs.length} sources</span>
+                    <span>{event.evidenceRefs.length} evidence</span>
+                  </div>
+                </div>
+              ))}
+              {recentEvents.length === 0 && (
+                <div className="rounded-lg border border-border bg-secondary/30 px-3 py-3 text-xs text-muted-foreground">
+                  No recent brain events yet.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReferenceRow(props: { label: string; refs: string[] }) {
+  return (
+    <div className="grid gap-2 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
+      <span className="font-medium text-muted-foreground">{props.label}</span>
+      <div className="flex min-w-0 flex-wrap gap-1.5">
+        {props.refs.length > 0 ? (
+          props.refs.map((ref) => (
+            <span
+              className="max-w-full truncate rounded-full border border-border bg-background px-2 py-0.5 text-foreground"
+              key={ref}
+              title={ref}
+            >
+              {ref}
+            </span>
+          ))
+        ) : (
+          <span className="text-muted-foreground">No refs attached</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatProposalKind(kind: BrainProposalKind): string {
+  switch (kind) {
+    case "claim":
+      return "Claim";
+    case "link":
+      return "Link";
+    case "memory":
+      return "Memory";
+    case "observation":
+      return "Observation";
+    case "source_note":
+      return "Source note";
+    case "wiki_page":
+      return "Wiki page";
+  }
+}
+
+function formatProposalStatus(status: BrainProposalStatus): string {
+  switch (status) {
+    case "accepted":
+      return "Accepted";
+    case "pending_review":
+      return "Pending review";
+    case "rejected":
+      return "Rejected";
+  }
+}
+
+function formatEventType(eventType: string): string {
+  return eventType
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "Unknown time";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(seconds * 1000));
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
   const [loadedWorkspaceEnvelope, setLoadedWorkspaceEnvelope] =
@@ -1409,6 +1900,13 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [healthOpen, setHealthOpen] = useState(false);
+  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
+  const [reviewReason, setReviewReason] = useState("");
+  const [reviewDecisionPending, setReviewDecisionPending] =
+    useState<BrainReviewDecision | null>(null);
+  const [reviewDecisionError, setReviewDecisionError] = useState<string | null>(
+    null,
+  );
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = useMemo(
     () => buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob)),
@@ -1444,6 +1942,15 @@ export function App() {
     null,
     createInitialWorkspaceUiState,
   );
+  const selectedReviewItem = useMemo(() => {
+    const items = brainHealth?.reviewItems ?? [];
+    if (items.length === 0) {
+      return null;
+    }
+    return (
+      items.find((item) => item.reviewId === selectedReviewId) ?? items[0]
+    );
+  }, [brainHealth?.reviewItems, selectedReviewId]);
 
   useEffect(() => {
     let unlisten: DesktopUnlisten | null = null;
@@ -1541,6 +2048,19 @@ export function App() {
     workspaceProject?.summary.nodeCount,
   ]);
 
+  useEffect(() => {
+    const items = brainHealth?.reviewItems ?? [];
+    if (items.length === 0) {
+      if (selectedReviewId !== null) {
+        setSelectedReviewId(null);
+      }
+      return;
+    }
+    if (!selectedReviewId || !items.some((item) => item.reviewId === selectedReviewId)) {
+      setSelectedReviewId(items[0].reviewId);
+    }
+  }, [brainHealth?.reviewItems, selectedReviewId]);
+
   const chooseFile = async () => {
     const selection = await invoke<FileSelection | null>("pick_import_file");
     if (selection) {
@@ -1626,12 +2146,13 @@ export function App() {
   const proposeBrainUpdate = async (
     request: WorkspaceProposeBrainUpdateRequest,
   ) => {
+    const workspaceId =
+      request.workspaceId ??
+      loadedWorkspaceEnvelope?.workspace_id ??
+      snapshot.lastWorkspaceId ??
+      "default";
     await invoke<unknown>("propose_brain_update", {
-      workspace_id:
-        request.workspaceId ??
-        loadedWorkspaceEnvelope?.workspace_id ??
-        snapshot.lastWorkspaceId ??
-        "default",
+      workspace_id: workspaceId,
       kind: request.kind,
       title: request.title,
       body: request.body,
@@ -1654,6 +2175,10 @@ export function App() {
       },
     );
     setLoadedWorkspaceEnvelope(nextEnvelope);
+    const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
+      workspace_id: workspaceId,
+    });
+    setBrainHealth(nextHealth);
   };
 
   const saveConfig = async (payload: EngineConfigPayload) => {
@@ -1693,6 +2218,44 @@ export function App() {
         loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
     });
     setBrainHealth(nextHealth);
+  };
+
+  const resolveBrainReview = async (
+    item: BrainReviewItem,
+    decision: BrainReviewDecision,
+  ) => {
+    const workspaceId =
+      item.workspaceId ??
+      loadedWorkspaceEnvelope?.workspace_id ??
+      snapshot.lastWorkspaceId ??
+      "default";
+    setReviewDecisionPending(decision);
+    setReviewDecisionError(null);
+    try {
+      await invoke<unknown>("resolve_brain_review", {
+        workspace_id: workspaceId,
+        proposal_id: item.proposalId,
+        decision,
+        reason: reviewReason.trim() || null,
+      });
+      setReviewReason("");
+      const [nextHealth, nextEnvelope] = await Promise.all([
+        invoke<BrainHealthResponseData>("brain_health", {
+          workspace_id: workspaceId,
+        }),
+        invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
+          project_id: loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
+          workspace_id: workspaceId,
+        }),
+      ]);
+      setBrainHealth(nextHealth);
+      setLoadedWorkspaceEnvelope(nextEnvelope);
+      setSelectedReviewId(nextHealth.reviewItems[0]?.reviewId ?? null);
+    } catch (error) {
+      setReviewDecisionError(String(error));
+    } finally {
+      setReviewDecisionPending(null);
+    }
   };
 
   if (startupError) {
@@ -1837,65 +2400,22 @@ export function App() {
         </Button>
       )}
       {healthOpen && (
-        <section
-          data-electron-no-drag
-          className={cn(
-            "fixed top-12 z-50 w-72 rounded-xl border border-border bg-background p-4 text-sm shadow-none",
-            !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-3",
-          )}
-          style={
-            !settingsOpen && workspaceUiState.inspectorOpen
-              ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
-              : undefined
-          }
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-foreground">Brain health</h2>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Pending agent-written claims and links that need human review.
-              </p>
-            </div>
-            <span className="rounded-full border border-border bg-secondary px-2 py-1 text-[11px] font-medium text-foreground">
-              {brainHealth?.status === "clean" ? "Clean" : "Attention"}
-            </span>
-          </div>
-          <div className="mt-4 space-y-2">
-            {(brainHealth?.reviewItems ?? []).map((item) => (
-              <div
-                className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5"
-                key={item.reviewId}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-foreground">{item.title}</span>
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    {item.kind === "claim" ? "Claim" : "Link"}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-3 text-muted-foreground">{item.body}</p>
-              </div>
-            ))}
-            {brainHealth && brainHealth.reviewItems.length === 0 && (
-              <div className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
-                No pending claim or link reviews.
-              </div>
-            )}
-            {!brainHealth && (
-              <div className="rounded-lg border border-border bg-secondary/60 p-3 text-xs leading-5 text-muted-foreground">
-                Brain health is loading.
-              </div>
-            )}
-          </div>
-          <Button
-            className="mt-3 w-full"
-            onClick={() => void refreshBrainHealth()}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            Refresh
-          </Button>
-        </section>
+        <TrustConsole
+          decisionError={reviewDecisionError}
+          decisionPending={reviewDecisionPending}
+          health={brainHealth}
+          onOpenProposal={(path) => openLocalArtifact(path, false)}
+          onReasonChange={setReviewReason}
+          onRefresh={refreshBrainHealth}
+          onResolve={resolveBrainReview}
+          onSelectReview={(reviewId) => {
+            setSelectedReviewId(reviewId);
+            setReviewDecisionError(null);
+          }}
+          reviewReason={reviewReason}
+          selectedItem={selectedReviewItem}
+          selectedReviewId={selectedReviewId}
+        />
       )}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
