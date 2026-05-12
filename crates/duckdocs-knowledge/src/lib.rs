@@ -113,6 +113,7 @@ pub enum CorrectionKind {
     Merge,
     KeepSeparate,
     Rename,
+    Split,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,14 +301,18 @@ pub struct BrainActor {
     pub actor_id: String,
 }
 
+pub const BRAIN_EVENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrainEventKind {
     SourceImported,
+    SourceIngestQueued,
     SourceCompiled,
     GraphMaterialized,
     WikiMaterialized,
     CorrectionApplied,
+    NodeProposed,
     MemoryProposed,
     ClaimProposed,
     LinkProposed,
@@ -320,24 +325,81 @@ pub enum BrainEventKind {
     BrainMaintenanceRun,
 }
 
+fn default_brain_event_schema_version() -> u32 {
+    BRAIN_EVENT_SCHEMA_VERSION
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainEventCausality {
+    #[serde(default)]
+    pub caused_by_event_ids: Vec<String>,
+    #[serde(default)]
+    pub caused_by_proposal_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_source_ids: Vec<String>,
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
+    #[serde(default)]
+    pub previous_snapshot_id: Option<String>,
+    #[serde(default = "default_brain_event_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub materialized_version: Option<u64>,
+}
+
+impl Default for BrainEventCausality {
+    fn default() -> Self {
+        Self {
+            caused_by_event_ids: Vec::new(),
+            caused_by_proposal_id: None,
+            caused_by_source_ids: Vec::new(),
+            snapshot_id: None,
+            previous_snapshot_id: None,
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            materialized_version: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainEvent {
     pub event_id: String,
+    #[serde(default = "default_brain_event_schema_version")]
+    pub schema_version: u32,
     pub workspace_id: String,
     pub scope: BrainScope,
     pub event_type: BrainEventKind,
+    #[serde(default)]
+    pub operation_type: Option<String>,
     pub actor: BrainActor,
     #[serde(default)]
     pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub source_markdown_refs: Vec<String>,
     #[serde(default)]
     pub node_refs: Vec<String>,
     #[serde(default)]
     pub relation_refs: Vec<String>,
     #[serde(default)]
+    pub claim_refs: Vec<String>,
+    #[serde(default)]
+    pub memory_refs: Vec<String>,
+    #[serde(default)]
+    pub target_node_ids: Vec<String>,
+    #[serde(default)]
+    pub target_edge_ids: Vec<String>,
+    #[serde(default)]
+    pub target_claim_ids: Vec<String>,
+    #[serde(default)]
+    pub target_memory_ids: Vec<String>,
+    #[serde(default)]
     pub evidence_refs: Vec<String>,
     #[serde(default)]
     pub payload_json: String,
+    #[serde(default)]
+    pub causality: BrainEventCausality,
     #[serde(default)]
     pub confidence: Option<String>,
     pub policy_result: String,
@@ -551,6 +613,25 @@ pub struct StructuredExtractionRelation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StructuredExtractionMemoryCandidate {
+    pub memory_id: String,
+    pub title: String,
+    pub body: String,
+    pub kind: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub page_refs: Vec<StructuredExtractionPageRef>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    pub status: String,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StructuredExtractionArtifact {
     pub artifact_id: String,
     pub workspace_id: String,
@@ -570,6 +651,8 @@ pub struct StructuredExtractionArtifact {
     pub claims: Vec<StructuredExtractionClaim>,
     #[serde(default)]
     pub relations: Vec<StructuredExtractionRelation>,
+    #[serde(default)]
+    pub memories: Vec<StructuredExtractionMemoryCandidate>,
     #[serde(default)]
     pub evidence_refs: Vec<EvidenceRef>,
     #[serde(default)]
@@ -608,6 +691,7 @@ pub struct BrainRepoSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrainProposalKind {
+    Node,
     Memory,
     Claim,
     Link,
@@ -647,8 +731,151 @@ pub struct BrainUpdateProposal {
     pub node_refs: Vec<String>,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub proposal_payload: Option<AgentGraphProposalPayload>,
     pub created_at: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "changeType", rename_all = "snake_case")]
+pub enum AgentGraphProposalPayload {
+    NewNode { node: AgentNewNodePayload },
+    NewEdge { edge: AgentNewEdgePayload },
+    NewClaim { claim: AgentNewClaimPayload },
+    NewMemory { memory: AgentNewMemoryPayload },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNewNodePayload {
+    pub label: String,
+    pub kind: BrainNodeKind,
+    pub source_path: String,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNewEdgePayload {
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub kind: BrainRelationKind,
+    pub label: String,
+    pub source_path: String,
+    #[serde(default)]
+    pub edge_id: Option<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNewClaimPayload {
+    pub statement: String,
+    pub source_path: String,
+    #[serde(default)]
+    pub claim_id: Option<String>,
+    #[serde(default)]
+    pub topic_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNewMemoryPayload {
+    pub title: String,
+    pub body: String,
+    pub source_path: String,
+    #[serde(default)]
+    pub memory_id: Option<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentGraphProposalValidationCode {
+    MissingRequiredField,
+    MissingSourceRefs,
+    MissingEvidenceRefs,
+    MissingNodeRefs,
+    MissingTopicRefs,
+    MissingTargetNode,
+    MissingRelationKind,
+    KindPayloadMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentGraphProposalValidationIssue {
+    pub code: AgentGraphProposalValidationCode,
+    pub field: String,
+    pub message: String,
+}
+
+impl AgentGraphProposalValidationIssue {
+    pub fn new(
+        code: AgentGraphProposalValidationCode,
+        field: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            field: field.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentGraphProposalValidationError {
+    pub error: String,
+    pub issues: Vec<AgentGraphProposalValidationIssue>,
+}
+
+impl AgentGraphProposalValidationError {
+    pub fn new(issues: Vec<AgentGraphProposalValidationIssue>) -> Self {
+        Self {
+            error: "invalid_agent_graph_proposal".into(),
+            issues,
+        }
+    }
+}
+
+impl std::fmt::Display for AgentGraphProposalValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}:", self.error)?;
+        for issue in &self.issues {
+            write!(formatter, " [{}] {}", issue.field, issue.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AgentGraphProposalValidationError {}
 
 #[cfg(test)]
 mod tests {
