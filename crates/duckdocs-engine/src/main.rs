@@ -54,6 +54,7 @@ mod brain_repo;
 mod knowledge;
 mod parse;
 mod provider;
+mod source_index;
 
 use brain_repo::*;
 use knowledge::*;
@@ -62,6 +63,7 @@ use provider::{
     check_readiness, parse_openai_compatible_with_timeout, provider_model_catalog,
     provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
 };
+use source_index::{chunk_source_markdown, upsert_source_chunks};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
@@ -505,6 +507,8 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
             workspace_id: workspace_id.clone(),
             root_dir: None,
         })?;
+        let chunks = chunk_source_markdown(manifest, &markdown);
+        upsert_source_chunks(&workspace_root, manifest, &chunks)?;
         let report = maybe_generate_provider_graph_proposals(
             &workspace_root,
             &workspace_id,
@@ -6634,6 +6638,8 @@ fn compile_queued_markdown_source(
         updated_at: now,
     };
     write_source_manifest(&manifest)?;
+    let chunks = chunk_source_markdown(&manifest, &markdown);
+    upsert_source_chunks(&paths.workspace_root, &manifest, &chunks)?;
 
     let request = CompileProjectRequest {
         source_markdown_path: markdown_path.display().to_string(),
