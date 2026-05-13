@@ -9,9 +9,9 @@ export function nextGraphZoom(currentZoom: number, wheelDeltaY: number): number 
     return currentZoom;
   }
 
-  const direction = wheelDeltaY < 0 ? 1 : -1;
-  const factor = direction > 0 ? 1.12 : 1 / 1.12;
-  return clamp(currentZoom * factor, 0.45, 3.5);
+  const clampedDelta = Math.max(-120, Math.min(120, wheelDeltaY));
+  const factor = Math.exp(-clampedDelta * 0.0025);
+  return clamp(currentZoom * factor, 0.05, 6);
 }
 
 export function zoomGraphViewportAtPoint(
@@ -56,6 +56,27 @@ export function graphPositionFromPointerDelta(
   return {
     x: pointerDeltaToViewBox(deltaX, viewportWidth, zoom) / 50,
     y: -pointerDeltaToViewBox(deltaY, viewportHeight, zoom) / 50,
+  };
+}
+
+export function fitGraphViewportToBounds(
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  padding = 8,
+): GraphViewport {
+  const minViewX = bounds.minX * 50 + 50;
+  const maxViewX = bounds.maxX * 50 + 50;
+  const minViewY = 50 - bounds.maxY * 50;
+  const maxViewY = 50 - bounds.minY * 50;
+  const width = Math.max(1, maxViewX - minViewX + padding * 2);
+  const height = Math.max(1, maxViewY - minViewY + padding * 2);
+  const zoom = clamp(Math.min(100 / width, 100 / height), 0.05, 6);
+  const centerX = (minViewX + maxViewX) / 2;
+  const centerY = (minViewY + maxViewY) / 2;
+
+  return {
+    panX: 50 - centerX * zoom,
+    panY: 50 - centerY * zoom,
+    zoom,
   };
 }
 

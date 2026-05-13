@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  fitGraphViewportToBounds,
   graphPositionFromPointerDelta,
   nextGraphZoom,
   pointerDeltaToViewBox,
@@ -9,11 +10,12 @@ import {
 
 describe("graph viewport controls", () => {
   test("zooms in and out from wheel deltas while staying within bounds", () => {
-    expect(nextGraphZoom(1, -100)).toBeCloseTo(1.12);
-    expect(nextGraphZoom(1.12, 100)).toBeCloseTo(1);
+    const zoomedIn = nextGraphZoom(1, -100);
+    expect(zoomedIn).toBeCloseTo(Math.exp(0.25));
+    expect(nextGraphZoom(zoomedIn, 100)).toBeCloseTo(1);
     expect(nextGraphZoom(1, 0)).toBe(1);
-    expect(nextGraphZoom(4, -100)).toBe(3.5);
-    expect(nextGraphZoom(0.1, 100)).toBe(0.45);
+    expect(nextGraphZoom(6, -100)).toBe(6);
+    expect(nextGraphZoom(0.05, 100)).toBe(0.05);
   });
 
   test("zooms around the pointer position", () => {
@@ -21,7 +23,7 @@ describe("graph viewport controls", () => {
     const point = { x: 30, y: 70 };
     const nextViewport = zoomGraphViewportAtPoint(viewport, -100, point);
 
-    expect(nextViewport.zoom).toBeCloseTo(1.12);
+    expect(nextViewport.zoom).toBeCloseTo(Math.exp(0.25));
     expect(nextViewport.panX + point.x * nextViewport.zoom).toBeCloseTo(point.x);
     expect(nextViewport.panY + point.y * nextViewport.zoom).toBeCloseTo(point.y);
     expect(zoomGraphViewportAtPoint(viewport, 0, point)).toBe(viewport);
@@ -42,5 +44,19 @@ describe("graph viewport controls", () => {
       x: 0.1,
       y: -0.1,
     });
+  });
+
+  test("fits graph bounds into the viewBox with padding", () => {
+    const viewport = fitGraphViewportToBounds({
+      minX: -2,
+      minY: -1,
+      maxX: 2,
+      maxY: 1,
+    });
+
+    expect(viewport.zoom).toBeGreaterThan(0);
+    expect(viewport.zoom).toBeLessThanOrEqual(6);
+    expect(Number.isFinite(viewport.panX)).toBe(true);
+    expect(Number.isFinite(viewport.panY)).toBe(true);
   });
 });

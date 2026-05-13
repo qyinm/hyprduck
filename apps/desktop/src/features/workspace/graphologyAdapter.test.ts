@@ -64,6 +64,10 @@ describe("buildSigmaGraph", () => {
     expect(Number.isFinite(graph.getNodeAttribute("source:source-1", "y"))).toBe(true);
     expect(distanceBetween(graph, "source:source-1", "concept")).toBeLessThan(0.35);
     expect(graph.getNodeAttribute("source:source-1", "nodeKind")).toBe("source");
+    expect(graph.getNodeAttribute("source:source-1", "shortLabel")).toBe("Source PDF");
+    expect(graph.getNodeAttribute("source:source-1", "clusterId")).toBe(
+      graph.getNodeAttribute("concept", "clusterId"),
+    );
     expect(graph.getNodeAttribute("source:source-1", "size")).toBeGreaterThan(
       graph.getNodeAttribute("concept", "size"),
     );
@@ -235,6 +239,97 @@ describe("buildSigmaGraph", () => {
         ).toBeGreaterThan(0.12);
       }
     }
+  });
+
+  test("keeps source-centered clusters separated even when concepts have cross-links", () => {
+    const clusterProject: WorkspaceProject = {
+      ...project,
+      nodes: [
+        {
+          ...project.nodes[0],
+          id: "source:a",
+          label: "Source A",
+        },
+        {
+          ...project.nodes[1],
+          id: "concept:a",
+          label: "Concept A",
+        },
+        {
+          ...project.nodes[0],
+          id: "source:b",
+          label: "Source B",
+        },
+        {
+          ...project.nodes[1],
+          id: "concept:b",
+          label: "Concept B",
+        },
+      ],
+      edges: [
+        {
+          id: "source-a-concept-a",
+          sourceNodeId: "source:a",
+          targetNodeId: "concept:a",
+          kind: "source_document",
+          label: "Ingested from source",
+          confidence: 0.8,
+          evidenceCount: 1,
+        },
+        {
+          id: "source-b-concept-b",
+          sourceNodeId: "source:b",
+          targetNodeId: "concept:b",
+          kind: "source_document",
+          label: "Ingested from source",
+          confidence: 0.8,
+          evidenceCount: 1,
+        },
+        {
+          id: "cross-concept-link",
+          sourceNodeId: "concept:a",
+          targetNodeId: "concept:b",
+          kind: "related_to",
+          label: "Related",
+          confidence: 0.4,
+          evidenceCount: 1,
+        },
+      ],
+    };
+    const graph = buildSigmaGraph(clusterProject, {
+      selectedNodeId: null,
+      selectedEdgeId: null,
+    });
+
+    expect(distanceBetween(graph, "source:a", "concept:a")).toBeLessThan(0.45);
+    expect(distanceBetween(graph, "source:b", "concept:b")).toBeLessThan(0.45);
+    expect(distanceBetween(graph, "source:a", "source:b")).toBeGreaterThan(0.65);
+    expect(graph.getNodeAttribute("source:a", "clusterId")).not.toBe(
+      graph.getNodeAttribute("source:b", "clusterId"),
+    );
+  });
+
+  test("shortens long document labels while preserving the file extension", () => {
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        nodes: [
+          {
+            ...project.nodes[0],
+            label: "2026년_상반기_고객_인터뷰_통합_분석_보고서.pdf",
+          },
+        ],
+        edges: [],
+      },
+      {
+        selectedNodeId: null,
+        selectedEdgeId: null,
+      },
+    );
+
+    const label = graph.getNodeAttribute("source:source-1", "shortLabel");
+    expect(label).toContain("…");
+    expect(label.endsWith(".pdf")).toBe(true);
   });
 
   test("local graph scope keeps only the selected node neighborhood", () => {
