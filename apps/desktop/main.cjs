@@ -313,12 +313,16 @@ async function startParse(request) {
         snapshot.lastProjectId = project.projectId;
         snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
         snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
-        if (isGraphGenerationFailed(project.graphGenerationStatus)) {
+        if (isGraphGenerationBlockingFailure(project.graphGenerationStatus)) {
           markFailed(graphGenerationFailureMessage(project));
           return;
         }
         snapshot.workspaceRevision += 1;
         pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
+        const graphGenerationMessage = graphGenerationNonBlockingMessage(project);
+        if (graphGenerationMessage) {
+          pushProgressEntry("compile", graphGenerationMessage);
+        }
       } catch (error) {
         snapshot.lastProjectId = null;
         markFailed(`Knowledge graph generation failed: ${error.message}`);
@@ -652,13 +656,8 @@ async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, s
   };
 }
 
-function isGraphGenerationFailed(status) {
-  return (
-    status === "failed" ||
-    status === "partially_applied" ||
-    status === "empty" ||
-    status === "skipped"
-  );
+function isGraphGenerationBlockingFailure(status) {
+  return status === "failed";
 }
 
 function graphGenerationFailureMessage(project) {
@@ -669,6 +668,26 @@ function graphGenerationFailureMessage(project) {
     return `Knowledge graph generation skipped: ${project.graphGenerationSkippedReason}`;
   }
   return `Knowledge graph generation failed with status: ${project.graphGenerationStatus}`;
+}
+
+function graphGenerationNonBlockingMessage(project) {
+  if (!project.graphGenerationStatus) {
+    return null;
+  }
+  if (project.graphGenerationStatus === "skipped") {
+    return project.graphGenerationSkippedReason
+      ? `Knowledge graph generation skipped: ${project.graphGenerationSkippedReason}`
+      : "Knowledge graph generation skipped";
+  }
+  if (project.graphGenerationStatus === "empty") {
+    return "Knowledge graph generation completed with no provider proposals";
+  }
+  if (project.graphGenerationStatus === "partially_applied") {
+    return project.graphGenerationErrorMessage
+      ? `Knowledge graph generation partially applied: ${project.graphGenerationErrorMessage}`
+      : "Knowledge graph generation partially applied";
+  }
+  return null;
 }
 
 function runEngineCommand(expectedCommand, request, options = {}) {
