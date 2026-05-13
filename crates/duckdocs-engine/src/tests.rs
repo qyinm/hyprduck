@@ -5886,7 +5886,7 @@ fn agent_proposal_payloads_parse_and_validate_new_node_and_new_claim() {
         kind: BrainProposalKind::Claim,
         title: "Create source-backed claim".into(),
         body: "Events JSONL is the source of truth for replay.".into(),
-        actor,
+        actor: actor.clone(),
         target_node_id: Some("concept-agent-maintained-knowledge-graph".into()),
         target_source_id: None,
         relation_kind: None,
@@ -5965,6 +5965,31 @@ fn agent_proposal_payloads_parse_and_validate_new_node_and_new_claim() {
             && memory.source_refs == vec!["source-agent-loop".to_string()]
             && memory.evidence_refs == vec!["ev-agent-loop-3".to_string()]
     }));
+
+    let provider_context_validation = validate_provider_graph_proposal_with_context(
+        &ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Provider node".into(),
+            body: "Provider graph proposal must cite context evidence.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["source-agent-loop".into()],
+            proposal_payload: None,
+        },
+        &["ev-agent-loop-1".into()],
+    );
+    assert!(provider_context_validation
+        .expect_err("source ids are not valid provider evidence refs")
+        .to_string()
+        .contains("outside import context"));
 
     let invalid = validate_brain_update_proposal(&ProposeBrainUpdateRequest {
         scope,

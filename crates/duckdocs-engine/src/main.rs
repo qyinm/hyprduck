@@ -7508,7 +7508,6 @@ fn validate_provider_graph_proposal_with_context(
     }
     let allowed = allowed_context_evidence_refs
         .iter()
-        .chain(request.source_refs.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
     let unknown = request
