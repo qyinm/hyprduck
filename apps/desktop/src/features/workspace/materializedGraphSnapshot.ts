@@ -226,9 +226,9 @@ function buildEvidenceById(snapshot: MaterializedGraphSnapshot) {
 function sourcePathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: string) {
   return (
     snapshot.sourcePaths.find(
-      (sourcePath) => sourcePath.includes(sourceId) && !isMarkdownPath(sourcePath),
+      (sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
     ) ??
-    snapshot.sourcePaths.find((sourcePath) => sourcePath.includes(sourceId)) ??
+    snapshot.sourcePaths.find((sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId)) ??
     null
   );
 }
@@ -236,7 +236,7 @@ function sourcePathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: st
 function markdownPathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: string) {
   return (
     snapshot.sourcePaths.find(
-      (sourcePath) => sourcePath.includes(sourceId) && isMarkdownPath(sourcePath),
+      (sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId) && isMarkdownPath(sourcePath),
     ) ?? null
   );
 }
@@ -302,7 +302,7 @@ function isDerivedMarkdownSourceNode(
   }
   return node.sourceIds.some((sourceId) =>
     snapshot.sourcePaths.some(
-      (sourcePath) => sourcePath.includes(sourceId) && !isMarkdownPath(sourcePath),
+      (sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
     ),
   );
 }
@@ -342,6 +342,10 @@ function isDerivedMarkdownPath(path: string, allPaths: string[]) {
 
 function sourceArtifactKey(path: string) {
   return path.match(/(?:^|\/)(source-[^/]+)/)?.[1] ?? null;
+}
+
+function sourcePathMatchesSourceId(path: string, sourceId: string) {
+  return sourceArtifactKey(path) === sourceId;
 }
 
 function fileNameFromPath(path: string) {

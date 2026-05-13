@@ -96,3 +96,71 @@ test("keeps derived markdown as a source artifact instead of a graph node", () =
     "/brain/default/artifacts/source-1/report.md",
   );
 });
+
+test("matches source artifact paths by segment instead of substring", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json", "wiki/index.md"],
+    sourcePaths: [
+      "/brain/default/sources/source-10/other.pdf",
+      "/brain/default/artifacts/source-10/other.md",
+      "/brain/default/sources/source-1/report.pdf",
+      "/brain/default/artifacts/source-1/report.md",
+    ],
+    nodes: [
+      {
+        nodeId: "source-pdf",
+        kind: "source",
+        label: "report.pdf",
+        aliases: [],
+        evidenceIds: ["ev-1"],
+        sourceIds: ["source-1"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "source-md",
+        kind: "source",
+        label: "report.md",
+        aliases: [],
+        evidenceIds: [],
+        sourceIds: ["source-1"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "other-pdf",
+        kind: "source",
+        label: "other.pdf",
+        aliases: [],
+        evidenceIds: [],
+        sourceIds: ["source-10"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+    ],
+    edges: [],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+
+  expect(envelope.project.nodes.map((node) => node.id)).not.toContain("source-md");
+  expect(envelope.project.detailsByNodeId["source-pdf"]?.source?.sourcePath).toBe(
+    "/brain/default/sources/source-1/report.pdf",
+  );
+  expect(envelope.project.detailsByNodeId["source-pdf"]?.source?.markdownPath).toBe(
+    "/brain/default/artifacts/source-1/report.md",
+  );
+  expect(envelope.project.detailsByNodeId["source-pdf"]?.evidence[0]?.sourcePath).toBe(
+    "/brain/default/sources/source-1/report.pdf",
+  );
+});
