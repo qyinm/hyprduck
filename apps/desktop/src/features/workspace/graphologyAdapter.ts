@@ -419,9 +419,10 @@ function buildUnassignedClusters(
   nodeIds: string[],
   neighbors: Map<string, Set<string>>,
 ): Array<{ anchorId: string; members: string[] }> {
+  const nodeIdSet = new Set(nodeIds);
   const visited = new Set<string>();
   const clusters: Array<{ anchorId: string; members: string[] }> = [];
-  for (const nodeId of nodeIds.sort(compareNodeIds)) {
+  for (const nodeId of [...nodeIds].sort(compareNodeIds)) {
     if (visited.has(nodeId)) {
       continue;
     }
@@ -436,7 +437,7 @@ function buildUnassignedClusters(
       }
       members.push(current);
       for (const next of neighbors.get(current) ?? []) {
-        if (nodeIds.includes(next) && !visited.has(next)) {
+        if (nodeIdSet.has(next) && !visited.has(next)) {
           visited.add(next);
           stack.push(next);
         }
