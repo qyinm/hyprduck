@@ -2295,7 +2295,7 @@ fn markdown_ingest_worker_records_source_errors_in_queue_and_event_payload() {
 }
 
 #[test]
-fn markdown_ingest_keeps_derived_graph_agent_owned() {
+fn markdown_ingest_materializes_deterministic_concepts_before_agent_proposals() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     let source_dir = workspace_root.join("sources");
@@ -2366,19 +2366,24 @@ fn markdown_ingest_keeps_derived_graph_agent_owned() {
 
     let snapshot =
         read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID).expect("snapshot");
-    assert_eq!(
-        snapshot
-            .nodes
-            .iter()
-            .filter(|node| node.kind == BrainNodeKind::Concept)
-            .count(),
-        0
-    );
     let second_source = snapshot
         .sources
         .iter()
         .find(|source| source.original_path.ends_with("second.md"))
         .expect("second source record");
+    assert!(snapshot.nodes.iter().any(|node| {
+        node.kind == BrainNodeKind::Concept
+            && normalize_key(&node.label) == "agent-maintained-graph"
+            && node.source_ids.contains(&second_source.source_id)
+            && !node.evidence_ids.is_empty()
+    }));
+    assert!(snapshot.claims.iter().any(|claim| {
+        claim
+            .statement
+            .contains("autonomous agent keeps the graph fresh")
+            && claim.source_refs == vec![second_source.source_id.clone()]
+            && !claim.evidence_refs.is_empty()
+    }));
     let candidates_path = workspace_root
         .join("artifacts")
         .join(&second_source.source_id)
@@ -2386,8 +2391,10 @@ fn markdown_ingest_keeps_derived_graph_agent_owned() {
     let candidates: Vec<MarkdownNodeCandidate> =
         read_json_artifact(&candidates_path).expect("second node candidates");
     assert!(
-        candidates.is_empty(),
-        "markdown ingest should not create heuristic node candidates before agent proposals"
+        candidates
+            .iter()
+            .any(|candidate| candidate.label == "Agent maintained graph"),
+        "markdown ingest should record evidence-backed node candidates before agent proposals"
     );
     assert!(snapshot
         .nodes
