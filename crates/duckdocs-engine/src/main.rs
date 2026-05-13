@@ -51,17 +51,33 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 mod brain_repo;
+mod consolidation;
+mod import_context;
 mod knowledge;
 mod parse;
 mod provider;
+mod provider_graph_prompt;
+mod retrieval;
+mod run_artifacts;
+mod source_index;
 
 use brain_repo::*;
+use consolidation::{
+    build_post_import_consolidation_prompt, failed_post_import_consolidation_report_value,
+    post_import_consolidation_report_value, should_run_post_import_consolidation,
+};
+use import_context::{
+    build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
+};
 use knowledge::*;
 use parse::parse_document;
 use provider::{
     check_readiness, parse_openai_compatible_with_timeout, provider_model_catalog,
     provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
 };
+use provider_graph_prompt::build_provider_graph_proposal_prompt;
+use run_artifacts::queued_proposal_provider_response_value;
+use source_index::{chunk_source_markdown, upsert_source_chunks};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
@@ -494,7 +510,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     })?;
     let source_manifest = load_source_manifest(&request)?;
     let (workspace_id, source_id) = resolved_source_ids(&request, source_manifest.as_ref())?;
-    let project = compile_agent_orchestrated_project(&request, &markdown, source_manifest.as_ref());
+    let project = compile_knowledge_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
     let mut graph_generation_status = None;
@@ -505,12 +521,24 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
             workspace_id: workspace_id.clone(),
             root_dir: None,
         })?;
+        let chunks = chunk_source_markdown(manifest, &markdown);
+        upsert_source_chunks(&workspace_root, manifest, &chunks)?;
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, &workspace_id)
+            .unwrap_or_else(|_| empty_replayed_brain_snapshot(&workspace_id));
+        let context = build_import_evidence_context(
+            &workspace_root,
+            manifest,
+            &markdown,
+            &snapshot,
+            &chunks,
+        )?;
         let report = maybe_generate_provider_graph_proposals(
             &workspace_root,
             &workspace_id,
             manifest,
             &markdown,
             &PathBuf::from(&manifest.artifact_root),
+            &context,
         )?;
         graph_generation_status = Some(report.status);
         graph_generation_skipped_reason = report.skipped_reason;
@@ -5730,6 +5758,33 @@ struct MaterializedFileSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AgentRunDiff {
+    run_id: String,
+    workspace_id: String,
+    proposal_id: String,
+    status: String,
+    changed_files: Vec<String>,
+    created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRunValidationReport {
+    run_id: String,
+    workspace_id: String,
+    proposal_id: String,
+    status: String,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    validation_issues: Vec<AgentGraphProposalValidationIssue>,
+    created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LatestReadableGraphSnapshotMarker {
     schema_version: u32,
     workspace_id: String,
@@ -6115,6 +6170,22 @@ fn apply_queued_agent_proposal_transaction(
     let started_at = unix_timestamp_seconds();
     let before = capture_materialized_file_snapshot(writer.root())?;
     persist_materialized_snapshot(writer.root(), &snapshot_id, &before)?;
+    persist_agent_run_snapshot(writer.root(), &run_id, "before", &before)?;
+    write_json_pretty(
+        &writer
+            .root()
+            .join("runs")
+            .join(&run_id)
+            .join("provider-response.json"),
+        &queued_proposal_provider_response_value(
+            &run_id,
+            &proposal.workspace_id,
+            &proposal.proposal_id,
+            &proposal.actor,
+            proposal.proposal_payload.as_ref(),
+            started_at,
+        ),
+    )?;
 
     let apply_result = (|| -> Result<()> {
         enrich_agent_graph_proposal_refs(&mut proposal);
@@ -6149,26 +6220,48 @@ fn apply_queued_agent_proposal_transaction(
         Ok(()) => {
             let after = capture_materialized_file_snapshot(writer.root())?;
             let changed_files = changed_materialized_files(&before, &after);
+            persist_agent_run_snapshot(writer.root(), &run_id, "after", &after)?;
             let completed_at = unix_timestamp_seconds();
             let audit_path = writer
                 .root()
                 .join("reviews/applied-runs")
                 .join(format!("{run_id}.json"));
             let audit = AgentProposalApplyAudit {
-                run_id,
+                run_id: run_id.clone(),
                 snapshot_id,
                 workspace_id: proposal.workspace_id.clone(),
                 proposal_id: proposal.proposal_id.clone(),
                 status: "applied".into(),
                 started_at,
                 completed_at,
-                changed_files,
+                changed_files: changed_files.clone(),
                 error_message: None,
                 error_code: None,
                 validation_issues: Vec::new(),
                 rollback_hint: "Restore files from snapshots/<snapshotId>/files or replay accepted events/proposals by rematerializing the workspace brain repo.".into(),
             };
             write_json_pretty(&audit_path, &audit)?;
+            write_agent_run_diff(
+                writer.root(),
+                &run_id,
+                &proposal.workspace_id,
+                &proposal.proposal_id,
+                "applied",
+                &changed_files,
+            )?;
+            write_agent_run_validation_report(
+                writer.root(),
+                AgentRunValidationReport {
+                    run_id: run_id.clone(),
+                    workspace_id: proposal.workspace_id.clone(),
+                    proposal_id: proposal.proposal_id.clone(),
+                    status: "applied".into(),
+                    error_code: None,
+                    error_message: None,
+                    validation_issues: Vec::new(),
+                    created_at: completed_at,
+                },
+            )?;
             Ok(audit)
         }
         Err(error) => {
@@ -6186,7 +6279,7 @@ fn apply_queued_agent_proposal_transaction(
                 .join("reviews/applied-runs")
                 .join(format!("{run_id}.json"));
             let audit = AgentProposalApplyAudit {
-                run_id,
+                run_id: run_id.clone(),
                 snapshot_id,
                 workspace_id: proposal.workspace_id.clone(),
                 proposal_id: proposal.proposal_id.clone(),
@@ -6201,6 +6294,27 @@ fn apply_queued_agent_proposal_transaction(
                     .into(),
             };
             write_json_pretty(&audit_path, &audit)?;
+            write_agent_run_diff(
+                writer.root(),
+                &run_id,
+                &proposal.workspace_id,
+                &proposal.proposal_id,
+                "failed",
+                &[],
+            )?;
+            write_agent_run_validation_report(
+                writer.root(),
+                AgentRunValidationReport {
+                    run_id: run_id.clone(),
+                    workspace_id: proposal.workspace_id.clone(),
+                    proposal_id: proposal.proposal_id.clone(),
+                    status: "failed".into(),
+                    error_code: Some(error_code.clone()),
+                    error_message: Some(error.to_string()),
+                    validation_issues: validation_issues.clone(),
+                    created_at: completed_at,
+                },
+            )?;
             proposal.status = BrainProposalStatus::Rejected;
             writer.write_proposal(&proposal)?;
             writer.append_event(&queued_agent_proposal_failed_event(
@@ -6459,6 +6573,7 @@ fn is_materialized_snapshot_path(path: &Path) -> bool {
         || normalized.starts_with("graph/")
         || normalized.starts_with("memory/")
         || normalized == LATEST_READABLE_SNAPSHOT_PATH
+        || normalized.starts_with("source-index/")
         || normalized.starts_with("wiki/")
         || normalized.starts_with("events/")
         || normalized.starts_with("reviews/proposed-updates/")
@@ -6469,6 +6584,7 @@ fn should_skip_materialized_snapshot_path(path: &Path) -> bool {
     normalized == "brain.lock"
         || normalized == BRAIN_LOCK_DIRECTORY_NAME
         || normalized.starts_with("snapshots/")
+        || normalized.starts_with("runs/")
         || normalized.starts_with("reviews/applied-runs/")
         || normalized.contains("/.")
         || normalized.starts_with('.')
@@ -6493,6 +6609,58 @@ fn persist_materialized_snapshot(
             "fileCount": snapshot.files.len(),
             "createdAt": unix_timestamp_seconds(),
         }),
+    )
+}
+
+fn persist_agent_run_snapshot(
+    root: &Path,
+    run_id: &str,
+    label: &str,
+    snapshot: &MaterializedFileSnapshot,
+) -> Result<()> {
+    let snapshot_root = root.join("runs").join(run_id).join(label);
+    for (relative_path, bytes) in &snapshot.files {
+        write_file_atomic(&snapshot_root.join(relative_path), bytes)?;
+    }
+    write_json_pretty(
+        &root.join("runs").join(run_id).join(format!("{label}.json")),
+        &json!({
+            "runId": run_id,
+            "label": label,
+            "fileCount": snapshot.files.len(),
+            "createdAt": unix_timestamp_seconds(),
+        }),
+    )
+}
+
+fn write_agent_run_diff(
+    root: &Path,
+    run_id: &str,
+    workspace_id: &str,
+    proposal_id: &str,
+    status: &str,
+    changed_files: &[String],
+) -> Result<()> {
+    write_json_pretty(
+        &root.join("runs").join(run_id).join("graph-diff.json"),
+        &AgentRunDiff {
+            run_id: run_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            proposal_id: proposal_id.to_string(),
+            status: status.to_string(),
+            changed_files: changed_files.to_vec(),
+            created_at: unix_timestamp_seconds(),
+        },
+    )
+}
+
+fn write_agent_run_validation_report(root: &Path, report: AgentRunValidationReport) -> Result<()> {
+    write_json_pretty(
+        &root
+            .join("runs")
+            .join(&report.run_id)
+            .join("validation-report.json"),
+        &report,
     )
 }
 
@@ -6569,7 +6737,14 @@ fn compile_queued_markdown_source(
         .with_context(|| format!("failed creating {}", pages_dir.display()))?;
     let markdown_path = artifact_root.join(format!("{safe_name}.md"));
     let page_markdown_path = pages_dir.join("page_1.md");
-    let node_candidates = Vec::new();
+    let node_candidates = extract_markdown_node_candidates_for_workspace(
+        &markdown,
+        &source_path.display().to_string(),
+        &paths.workspace_root,
+    )
+    .unwrap_or_else(|_| {
+        extract_markdown_node_candidates(&markdown, &source_path.display().to_string())
+    });
     let mut markdown_signals = extract_markdown_signals(
         &markdown,
         &source_path.display().to_string(),
@@ -6581,8 +6756,18 @@ fn compile_queued_markdown_source(
         &record.workspace_id,
         &markdown_signals,
     )?;
-    let edge_candidates: Vec<MarkdownRelationshipEvidence> = Vec::new();
-    let claim_candidates: Vec<MarkdownClaimCandidate> = Vec::new();
+    let edge_candidates = extract_markdown_relationship_evidence(
+        &markdown,
+        &source_path.display().to_string(),
+        Some(source_id.as_str()),
+        &node_candidates,
+    );
+    let claim_candidates = extract_markdown_claim_candidates(
+        &markdown,
+        &source_path.display().to_string(),
+        Some(source_id.as_str()),
+        &node_candidates,
+    );
     write_file_atomic(&markdown_path, markdown.as_bytes())?;
     write_file_atomic(&page_markdown_path, markdown.as_bytes())?;
     write_json_pretty(
@@ -6634,6 +6819,8 @@ fn compile_queued_markdown_source(
         updated_at: now,
     };
     write_source_manifest(&manifest)?;
+    let chunks = chunk_source_markdown(&manifest, &markdown);
+    upsert_source_chunks(&paths.workspace_root, &manifest, &chunks)?;
 
     let request = CompileProjectRequest {
         source_markdown_path: markdown_path.display().to_string(),
@@ -6642,8 +6829,17 @@ fn compile_queued_markdown_source(
         workspace_id: Some(record.workspace_id.clone()),
         source_id: Some(source_id.clone()),
     };
-    let project = compile_agent_orchestrated_project(&request, &markdown, Some(&manifest));
+    let project = compile_knowledge_project(&request, &markdown, Some(&manifest));
     store.save_project(&project, &request, Some(&manifest))?;
+    let snapshot = read_materialized_brain_snapshot(&paths.workspace_root, &record.workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(&record.workspace_id));
+    let context = build_import_evidence_context(
+        &paths.workspace_root,
+        &manifest,
+        &markdown,
+        &snapshot,
+        &chunks,
+    )?;
     persist_completed_ingest_related_wiki_pages(
         &paths.workspace_root,
         &record.workspace_id,
@@ -6663,6 +6859,7 @@ fn compile_queued_markdown_source(
         &manifest,
         &markdown,
         &artifact_root,
+        &context,
     )?;
     Ok(manifest)
 }
@@ -6687,6 +6884,8 @@ struct ProviderGraphProposalGenerationReport {
     skipped_reason: Option<String>,
     #[serde(default)]
     error_message: Option<String>,
+    #[serde(default)]
+    provider_run_id: Option<String>,
     updated_at: u64,
 }
 
@@ -6696,6 +6895,7 @@ fn maybe_generate_provider_graph_proposals(
     manifest: &SourceArtifactManifest,
     markdown: &str,
     artifact_root: &Path,
+    context: &ImportEvidenceContext,
 ) -> Result<ProviderGraphProposalGenerationReport> {
     let report_path = artifact_root.join("provider-graph-proposals.json");
     if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
@@ -6721,6 +6921,7 @@ fn maybe_generate_provider_graph_proposals(
                 failed_proposals: Vec::new(),
                 skipped_reason: None,
                 error_message: Some(format!("{error:#}")),
+                provider_run_id: None,
                 updated_at: unix_timestamp_seconds(),
             };
             write_json_pretty(&report_path, &report)?;
@@ -6740,6 +6941,7 @@ fn maybe_generate_provider_graph_proposals(
         failed_proposals: Vec::new(),
         skipped_reason: None,
         error_message: None,
+        provider_run_id: None,
         updated_at: unix_timestamp_seconds(),
     };
 
@@ -6757,7 +6959,18 @@ fn maybe_generate_provider_graph_proposals(
 
     let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
-    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot);
+    write_json_pretty(&artifact_root.join("provider-graph-context.json"), context)?;
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let prompt = build_provider_graph_proposal_prompt(
+        manifest,
+        markdown,
+        &snapshot,
+        context,
+        &default_evidence_refs,
+    );
+    let provider_run_id = format!("provider-graph-{}", Uuid::now_v7());
+    report.provider_run_id = Some(provider_run_id.clone());
     let provider_response = match parse_openai_compatible_with_timeout(
         &config,
         &prompt,
@@ -6770,20 +6983,58 @@ fn maybe_generate_provider_graph_proposals(
         Err(error) => {
             report.status = "failed".into();
             report.error_message = Some(format!("{error:#}"));
+            write_provider_graph_run_artifacts(
+                workspace_root,
+                &provider_run_id,
+                workspace_id,
+                manifest,
+                "failed",
+                Some(&prompt),
+                None,
+                Some(format!("{error:#}")),
+            )?;
             write_json_pretty(&report_path, &report)?;
             return Ok(report);
         }
     };
+    write_provider_graph_run_artifacts(
+        workspace_root,
+        &provider_run_id,
+        workspace_id,
+        manifest,
+        "received",
+        Some(&prompt),
+        Some(&provider_response),
+        None,
+    )?;
 
     let mut payloads = match parse_provider_graph_proposal_payloads(&provider_response) {
         Ok(payloads) => payloads,
         Err(error) => {
             report.status = "failed".into();
             report.error_message = Some(format!("{error:#}"));
+            write_provider_graph_run_validation_report(
+                workspace_root,
+                &provider_run_id,
+                workspace_id,
+                &manifest.source_id,
+                "failed",
+                0,
+                Some(format!("{error:#}")),
+            )?;
             write_json_pretty(&report_path, &report)?;
             return Ok(report);
         }
     };
+    write_provider_graph_run_validation_report(
+        workspace_root,
+        &provider_run_id,
+        workspace_id,
+        &manifest.source_id,
+        "parsed",
+        payloads.len(),
+        None,
+    )?;
 
     if payloads.is_empty() {
         report.status = "empty".into();
@@ -6791,8 +7042,10 @@ fn maybe_generate_provider_graph_proposals(
         return Ok(report);
     }
 
-    let default_evidence_refs =
-        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let mut allowed_context_evidence_refs = import_evidence_context_allowed_refs(context);
+    for evidence_ref in &default_evidence_refs {
+        merge_unique_string(&mut allowed_context_evidence_refs, evidence_ref);
+    }
     for payload in &mut payloads {
         normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
     }
@@ -6831,7 +7084,10 @@ fn maybe_generate_provider_graph_proposals(
             evidence_refs: proposal.evidence_refs.clone(),
             proposal_payload: proposal.proposal_payload.clone(),
         };
-        if let Err(error) = validate_brain_update_proposal(&request) {
+        if let Err(error) =
+            validate_provider_graph_proposal_with_context(&request, &allowed_context_evidence_refs)
+                .and_then(|_| validate_brain_update_proposal(&request))
+        {
             report.failed_count += 1;
             report.failed_proposals.push(AgentProposalFailureReport {
                 proposal_id: proposal.proposal_id.clone(),
@@ -6869,6 +7125,17 @@ fn maybe_generate_provider_graph_proposals(
     report.failed_count += apply_result.failed.len();
     report.applied_proposal_ids = apply_result.applied;
     report.failed_proposals.extend(apply_result.failed);
+    if should_run_post_import_consolidation(report.applied_count, context) {
+        maybe_run_post_import_consolidation_worker(
+            workspace_root,
+            workspace_id,
+            manifest,
+            context,
+            &config,
+            artifact_root,
+            report.provider_run_id.as_deref(),
+        )?;
+    }
     report.status = if report.failed_count == 0 {
         "applied".into()
     } else if report.applied_count > 0 {
@@ -6886,111 +7153,227 @@ fn provider_graph_generation_disabled_for_process() -> bool {
         || (cfg!(test) && std::env::var_os("DUCKDOCS_TEST_ENABLE_PROVIDER_GRAPH").is_none())
 }
 
-fn build_provider_graph_proposal_prompt(
+fn maybe_run_post_import_consolidation_worker(
+    workspace_root: &Path,
+    workspace_id: &str,
     manifest: &SourceArtifactManifest,
-    markdown: &str,
-    snapshot: &BrainRepoSnapshot,
-) -> String {
-    let existing_nodes = snapshot
-        .nodes
-        .iter()
-        .take(80)
-        .map(|node| {
-            format!(
-                "- nodeId: {}, kind: {:?}, label: {}, sources: {}",
-                node.node_id,
-                node.kind,
-                node.label,
-                join_or_none(&node.source_ids)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let existing_edges = snapshot
-        .relations
-        .iter()
-        .take(80)
-        .map(|edge| {
-            format!(
-                "- edgeId: {}, kind: {:?}, source: {}, target: {}, label: {}",
-                edge.relation_id, edge.kind, edge.source_node_id, edge.target_node_id, edge.label
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let existing_claims = snapshot
-        .claims
-        .iter()
-        .take(40)
-        .map(|claim| {
-            format!(
-                "- claimId: {}, statement: {}",
-                claim.claim_id, claim.statement
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let evidence_refs = source_evidence_refs_for_provider_proposals(snapshot, &manifest.source_id);
+    context: &ImportEvidenceContext,
+    config: &EngineConfig,
+    artifact_root: &Path,
+    parent_run_id: Option<&str>,
+) -> Result<()> {
+    let report_path = artifact_root.join("provider-graph-consolidation.json");
+    let run_id = format!("provider-consolidation-{}", Uuid::now_v7());
+    let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
+    let prompt =
+        build_post_import_consolidation_prompt(manifest, &snapshot, context, parent_run_id);
+    let provider_response = match parse_openai_compatible_with_timeout(
+        config,
+        &prompt,
+        None,
+        Some(Duration::from_secs(
+            PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
+        )),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            write_json_pretty(
+                &report_path,
+                &failed_post_import_consolidation_report_value(
+                    &run_id,
+                    parent_run_id,
+                    &manifest.source_id,
+                    format!("{error:#}"),
+                    unix_timestamp_seconds(),
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+    write_provider_graph_run_artifacts(
+        workspace_root,
+        &run_id,
+        workspace_id,
+        manifest,
+        "received",
+        Some(&prompt),
+        Some(&provider_response),
+        None,
+    )?;
 
-    format!(
-        r#"You are HyprDuck's local brain graph maintenance agent.
+    let mut payloads = match parse_provider_graph_proposal_payloads(&provider_response) {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            write_provider_graph_run_validation_report(
+                workspace_root,
+                &run_id,
+                workspace_id,
+                &manifest.source_id,
+                "failed",
+                0,
+                Some(format!("{error:#}")),
+            )?;
+            write_json_pretty(
+                &report_path,
+                &failed_post_import_consolidation_report_value(
+                    &run_id,
+                    parent_run_id,
+                    &manifest.source_id,
+                    format!("{error:#}"),
+                    unix_timestamp_seconds(),
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+    write_provider_graph_run_validation_report(
+        workspace_root,
+        &run_id,
+        workspace_id,
+        &manifest.source_id,
+        "parsed",
+        payloads.len(),
+        None,
+    )?;
 
-Goal:
-- Read the new source markdown and the existing brain graph.
-- Propose only durable, evidence-backed graph updates.
-- Add new nodes, new edges, new claims, and important memories when useful.
-- Reuse existing nodeId values when the new source refers to an existing thing.
-- If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let mut allowed_context_evidence_refs = import_evidence_context_allowed_refs(context);
+    for evidence_ref in &default_evidence_refs {
+        merge_unique_string(&mut allowed_context_evidence_refs, evidence_ref);
+    }
+    for payload in &mut payloads {
+        normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
+    }
 
-Hard output rule:
-- Return JSON only. No markdown fence, no prose.
-- Shape: {{"proposals":[AgentGraphProposalPayload...]}}
-- Use camelCase object fields and snake_case enum values.
+    let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
+    let mut proposal_ids = Vec::new();
+    let mut failed = Vec::new();
+    for payload in payloads {
+        let mut proposal = provider_graph_payload_to_proposal(
+            workspace_id,
+            &format!(
+                "{PROVIDER_GRAPH_AGENT_ID}:{}:consolidation",
+                config.provider.id_slug()
+            ),
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let request = ProposeBrainUpdateRequest {
+            scope: BrainReadScope {
+                workspace_id: workspace_id.to_string(),
+                root_dir: Some(
+                    workspace_root
+                        .parent()
+                        .unwrap_or(workspace_root)
+                        .display()
+                        .to_string(),
+                ),
+            },
+            kind: proposal.kind,
+            title: proposal.title.clone(),
+            body: proposal.body.clone(),
+            actor: proposal.actor.clone(),
+            target_node_id: proposal.target_node_id.clone(),
+            target_source_id: proposal.target_source_id.clone(),
+            relation_kind: proposal.relation_kind,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: proposal.source_refs.clone(),
+            node_refs: proposal.node_refs.clone(),
+            evidence_refs: proposal.evidence_refs.clone(),
+            proposal_payload: proposal.proposal_payload.clone(),
+        };
+        if let Err(error) =
+            validate_provider_graph_proposal_with_context(&request, &allowed_context_evidence_refs)
+                .and_then(|_| validate_brain_update_proposal(&request))
+        {
+            failed.push(format!("{error:#}"));
+            continue;
+        }
+        writer.write_proposal(&proposal)?;
+        writer.append_event(&brain_event_for_proposal(&proposal)?)?;
+        proposal_ids.push(proposal.proposal_id.clone());
+    }
+    drop(writer);
 
-Allowed payloads:
-1. {{"changeType":"new_node","node":{{"label":"...","kind":"concept|topic|person|company|project|product|team|event|decision|task|claim","sourcePath":"...","nodeId":"optional-stable-id","aliases":[],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-2. {{"changeType":"new_edge","edge":{{"sourceNodeId":"...","targetNodeId":"...","kind":"mentions|supports|contradicts|supersedes|same_as|works_at|founded|invested_in|advises|attended|owns|responsible_for|decided|blocks|depends_on|source_of|derived_from|related_to","label":"...","sourcePath":"...","edgeId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-3. {{"changeType":"new_claim","claim":{{"statement":"...","sourcePath":"...","claimId":"optional-stable-id","topicRefs":["node-id"],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-4. {{"changeType":"new_memory","memory":{{"title":"...","body":"...","sourcePath":"...","memoryId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+    let apply_result = run_queued_agent_proposal_apply_worker(workspace_root, workspace_id)?;
+    let status = if failed.is_empty() && apply_result.failed.is_empty() {
+        "applied"
+    } else {
+        "partially_applied"
+    };
+    let failed_proposals =
+        serde_json::to_value(&apply_result.failed).context("failed to encode failed proposals")?;
+    write_json_pretty(
+        &report_path,
+        &post_import_consolidation_report_value(
+            status,
+            &run_id,
+            parent_run_id,
+            &manifest.source_id,
+            &proposal_ids,
+            &apply_result.applied,
+            &failed,
+            failed_proposals,
+            unix_timestamp_seconds(),
+        ),
+    )
+}
 
-Source:
-- sourceId: {source_id}
-- sourcePath: {source_path}
-- markdownPath: {markdown_path}
-- evidenceRefs you may cite: {evidence_refs}
+fn write_provider_graph_run_artifacts(
+    workspace_root: &Path,
+    run_id: &str,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    status: &str,
+    prompt: Option<&str>,
+    provider_response: Option<&str>,
+    error_message: Option<String>,
+) -> Result<()> {
+    write_json_pretty(
+        &workspace_root
+            .join("runs")
+            .join(run_id)
+            .join("provider-response.json"),
+        &json!({
+            "runId": run_id,
+            "workspaceId": workspace_id,
+            "sourceId": manifest.source_id,
+            "status": status,
+            "prompt": prompt,
+            "providerResponse": provider_response,
+            "errorMessage": error_message,
+            "createdAt": unix_timestamp_seconds(),
+        }),
+    )
+}
 
-Existing nodes:
-{existing_nodes}
-
-Existing edges:
-{existing_edges}
-
-Existing claims:
-{existing_claims}
-
-New source markdown:
-{markdown}
-"#,
-        source_id = manifest.source_id,
-        source_path = manifest.source_path,
-        markdown_path = manifest.markdown_path,
-        evidence_refs = join_or_none(&evidence_refs),
-        existing_nodes = if existing_nodes.is_empty() {
-            "(none)"
-        } else {
-            &existing_nodes
-        },
-        existing_edges = if existing_edges.is_empty() {
-            "(none)"
-        } else {
-            &existing_edges
-        },
-        existing_claims = if existing_claims.is_empty() {
-            "(none)"
-        } else {
-            &existing_claims
-        },
-        markdown = truncate_for_prompt(markdown, 24000)
+fn write_provider_graph_run_validation_report(
+    workspace_root: &Path,
+    run_id: &str,
+    workspace_id: &str,
+    source_id: &str,
+    status: &str,
+    parsed_count: usize,
+    error_message: Option<String>,
+) -> Result<()> {
+    write_json_pretty(
+        &workspace_root
+            .join("runs")
+            .join(run_id)
+            .join("validation-report.json"),
+        &json!({
+            "runId": run_id,
+            "workspaceId": workspace_id,
+            "sourceId": source_id,
+            "status": status,
+            "parsedProposalCount": parsed_count,
+            "errorMessage": error_message,
+            "createdAt": unix_timestamp_seconds(),
+        }),
     )
 }
 
@@ -7131,6 +7514,32 @@ fn normalize_provider_payload_refs(
             merge_unique_string(evidence_refs, evidence_ref);
         }
     }
+}
+
+fn validate_provider_graph_proposal_with_context(
+    request: &ProposeBrainUpdateRequest,
+    allowed_context_evidence_refs: &[String],
+) -> Result<()> {
+    if request.evidence_refs.is_empty() {
+        bail!("provider graph proposal requires at least one evidence ref");
+    }
+    let allowed = allowed_context_evidence_refs
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unknown = request
+        .evidence_refs
+        .iter()
+        .filter(|evidence_ref| !allowed.contains(*evidence_ref))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        bail!(
+            "provider graph proposal cited evidence refs outside import context: {}",
+            unknown.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn provider_graph_payload_to_proposal(

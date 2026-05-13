@@ -2295,7 +2295,7 @@ fn markdown_ingest_worker_records_source_errors_in_queue_and_event_payload() {
 }
 
 #[test]
-fn markdown_ingest_keeps_derived_graph_agent_owned() {
+fn markdown_ingest_materializes_deterministic_concepts_before_agent_proposals() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     let source_dir = workspace_root.join("sources");
@@ -2366,19 +2366,24 @@ fn markdown_ingest_keeps_derived_graph_agent_owned() {
 
     let snapshot =
         read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID).expect("snapshot");
-    assert_eq!(
-        snapshot
-            .nodes
-            .iter()
-            .filter(|node| node.kind == BrainNodeKind::Concept)
-            .count(),
-        0
-    );
     let second_source = snapshot
         .sources
         .iter()
         .find(|source| source.original_path.ends_with("second.md"))
         .expect("second source record");
+    assert!(snapshot.nodes.iter().any(|node| {
+        node.kind == BrainNodeKind::Concept
+            && normalize_key(&node.label) == "agent-maintained-graph"
+            && node.source_ids.contains(&second_source.source_id)
+            && !node.evidence_ids.is_empty()
+    }));
+    assert!(snapshot.claims.iter().any(|claim| {
+        claim
+            .statement
+            .contains("autonomous agent keeps the graph fresh")
+            && claim.source_refs == vec![second_source.source_id.clone()]
+            && !claim.evidence_refs.is_empty()
+    }));
     let candidates_path = workspace_root
         .join("artifacts")
         .join(&second_source.source_id)
@@ -2386,8 +2391,10 @@ fn markdown_ingest_keeps_derived_graph_agent_owned() {
     let candidates: Vec<MarkdownNodeCandidate> =
         read_json_artifact(&candidates_path).expect("second node candidates");
     assert!(
-        candidates.is_empty(),
-        "markdown ingest should not create heuristic node candidates before agent proposals"
+        candidates
+            .iter()
+            .any(|candidate| candidate.label == "Agent maintained graph"),
+        "markdown ingest should record evidence-backed node candidates before agent proposals"
     );
     assert!(snapshot
         .nodes
@@ -5556,6 +5563,7 @@ fn queued_agent_proposal_runner_applies_valid_changes_transactionally() {
         .map(|path| read_json_artifact::<AgentProposalApplyAudit>(path).expect("read audit"))
         .collect::<Vec<_>>();
     assert!(audits.iter().all(|audit| {
+        let run_root = workspace_root.join("runs").join(&audit.run_id);
         audit.status == "applied"
             && audit.error_code.is_none()
             && audit.error_message.is_none()
@@ -5565,6 +5573,13 @@ fn queued_agent_proposal_runner_applies_valid_changes_transactionally() {
                 .join(&audit.snapshot_id)
                 .join("manifest.json")
                 .exists()
+            && run_root.join("before.json").exists()
+            && run_root.join("before").exists()
+            && run_root.join("after.json").exists()
+            && run_root.join("after").exists()
+            && run_root.join("graph-diff.json").exists()
+            && run_root.join("provider-response.json").exists()
+            && run_root.join("validation-report.json").exists()
     }));
     assert!(audits.iter().any(|audit| {
         audit.proposal_id == "proposal-queued-node"
@@ -5878,7 +5893,7 @@ fn agent_proposal_payloads_parse_and_validate_new_node_and_new_claim() {
         kind: BrainProposalKind::Claim,
         title: "Create source-backed claim".into(),
         body: "Events JSONL is the source of truth for replay.".into(),
-        actor,
+        actor: actor.clone(),
         target_node_id: Some("concept-agent-maintained-knowledge-graph".into()),
         target_source_id: None,
         relation_kind: None,
@@ -5957,6 +5972,31 @@ fn agent_proposal_payloads_parse_and_validate_new_node_and_new_claim() {
             && memory.source_refs == vec!["source-agent-loop".to_string()]
             && memory.evidence_refs == vec!["ev-agent-loop-3".to_string()]
     }));
+
+    let provider_context_validation = validate_provider_graph_proposal_with_context(
+        &ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Provider node".into(),
+            body: "Provider graph proposal must cite context evidence.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["source-agent-loop".into()],
+            proposal_payload: None,
+        },
+        &["ev-agent-loop-1".into()],
+    );
+    assert!(provider_context_validation
+        .expect_err("source ids are not valid provider evidence refs")
+        .to_string()
+        .contains("outside import context"));
 
     let invalid = validate_brain_update_proposal(&ProposeBrainUpdateRequest {
         scope,
