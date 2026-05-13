@@ -163,4 +163,8 @@ test("matches source artifact paths by segment instead of substring", () => {
   expect(envelope.project.detailsByNodeId["source-pdf"]?.evidence[0]?.sourcePath).toBe(
     "/brain/default/sources/source-1/report.pdf",
   );
+  expect(envelope.sources.map((source) => source.source_id)).toEqual([
+    "source-10",
+    "source-1",
+  ]);
 });

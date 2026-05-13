@@ -226,7 +226,8 @@ function buildEvidenceById(snapshot: MaterializedGraphSnapshot) {
 function sourcePathForSourceId(snapshot: MaterializedGraphSnapshot, sourceId: string) {
   return (
     snapshot.sourcePaths.find(
-      (sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
+      (sourcePath) =>
+        sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
     ) ??
     snapshot.sourcePaths.find((sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId)) ??
     null
@@ -271,9 +272,10 @@ function sourceSummaryFromPath(
   sourcePath: string,
   index: number,
 ): WorkspaceSourceSummary {
+  const sourceId = sourceIdForSourcePath(snapshot, sourcePath) ?? `source-${index + 1}`;
   return {
     workspace_id: snapshot.workspaceId,
-    source_id: `source-${index + 1}`,
+    source_id: sourceId,
     original_path: sourcePath,
     source_path: sourcePath,
     markdown_path: markdownPathForSourcePath(snapshot, sourcePath) ?? sourcePath,
@@ -289,6 +291,19 @@ function sourceSummaryFromPath(
   };
 }
 
+function sourceIdForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: string) {
+  const artifactKey = sourceArtifactKey(sourcePath);
+  if (artifactKey) {
+    return artifactKey;
+  }
+  const sourceNode = snapshot.nodes.find(
+    (node) =>
+      node.kind === "source" &&
+      (node.label === sourcePath || sourcePath.endsWith(node.label)),
+  );
+  return sourceNode?.sourceIds[0] ?? null;
+}
+
 function visibleGraphSourcePaths(sourcePaths: string[]) {
   return sourcePaths.filter((sourcePath) => !isDerivedMarkdownPath(sourcePath, sourcePaths));
 }
@@ -302,7 +317,8 @@ function isDerivedMarkdownSourceNode(
   }
   return node.sourceIds.some((sourceId) =>
     snapshot.sourcePaths.some(
-      (sourcePath) => sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
+      (sourcePath) =>
+        sourcePathMatchesSourceId(sourcePath, sourceId) && !isMarkdownPath(sourcePath),
     ),
   );
 }
