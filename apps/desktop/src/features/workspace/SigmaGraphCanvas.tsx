@@ -161,6 +161,10 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
   const simulationNodesRef = useRef<Map<string, ForceNode>>(new Map());
   const frameRef = useRef<number | null>(null);
   const layoutKey = useMemo(() => graphLayoutKey(graph), [graph]);
+  const activeHoveredNodeId =
+    hoveredNodeId !== null && graph.hasNode(hoveredNodeId)
+      ? hoveredNodeId
+      : null;
   const visibleLabelNodeIds = useMemo(
     () =>
       computeVisibleLabels({
@@ -169,9 +173,9 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
         positions: nodePositions,
         viewport,
         selectedNodeId,
-        hoveredNodeId,
+        hoveredNodeId: activeHoveredNodeId,
       }),
-    [graph, hoveredNodeId, nodePositions, nodes, selectedNodeId, viewport],
+    [activeHoveredNodeId, graph, nodePositions, nodes, selectedNodeId, viewport],
   );
 
   useEffect(() => {
@@ -463,9 +467,9 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
           const selected = selectedEdgeId === edge;
           const crossCluster = sourceNode.clusterId !== targetNode.clusterId;
           const hovered =
-            hoveredNodeId !== null &&
-            (source === hoveredNodeId || target === hoveredNodeId);
-          const dimmed = hoveredNodeId !== null && !hovered && !selected;
+            activeHoveredNodeId !== null &&
+            (source === activeHoveredNodeId || target === activeHoveredNodeId);
+          const dimmed = activeHoveredNodeId !== null && !hovered && !selected;
           const baseOpacity =
             crossCluster && !selected ? Math.min(0.35, viewport.zoom) : 1;
 
