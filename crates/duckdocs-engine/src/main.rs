@@ -46,6 +46,7 @@ use duckdocs_engine_types::{
 use duckdocs_engine_types::{
     AgentNewClaimPayload, AgentNewEdgePayload, AgentNewMemoryPayload, AgentNewNodePayload,
 };
+use markitdown::{model::ConversionOptions, MarkItDown};
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -58,6 +59,7 @@ const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
 const PROVIDER_GRAPH_AGENT_ID: &str = "duckdocs-provider-graph-agent";
+const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -3986,7 +3988,7 @@ struct BrainWorkspaceWriter {
 impl BrainWorkspaceWriter {
     fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root).with_context(|| format!("failed creating {}", root.display()))?;
-        let lock = WorkspaceLock::acquire(root.join("brain.lock"))?;
+        let lock = WorkspaceLock::acquire(root.join(BRAIN_LOCK_DIRECTORY_NAME))?;
         for dir in [
             root.join("events"),
             root.join("memory"),
@@ -4942,14 +4944,8 @@ impl WorkspaceLock {
     fn acquire(path: PathBuf) -> Result<Self> {
         let started = Instant::now();
         loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id())
-                        .with_context(|| format!("failed writing {}", path.display()))?;
-                    file.sync_all()
-                        .with_context(|| format!("failed syncing {}", path.display()))?;
-                    return Ok(Self { path });
-                }
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     if started.elapsed() > Duration::from_secs(5) {
                         bail!(
@@ -4970,7 +4966,7 @@ impl WorkspaceLock {
 
 impl Drop for WorkspaceLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.path);
     }
 }
 
@@ -6501,6 +6497,7 @@ fn is_materialized_snapshot_path(path: &Path) -> bool {
 fn should_skip_materialized_snapshot_path(path: &Path) -> bool {
     let normalized = path.to_string_lossy().replace('\\', "/");
     normalized == "brain.lock"
+        || normalized == BRAIN_LOCK_DIRECTORY_NAME
         || normalized.starts_with("snapshots/")
         || normalized.starts_with("reviews/applied-runs/")
         || normalized.contains("/.")
@@ -14504,13 +14501,77 @@ fn parse_document(
     config: &EngineConfig,
 ) -> Result<ParsedDocument> {
     match input.format {
-        DocumentFormat::Pdf | DocumentFormat::Image => {
-            parse_visual_document(input, template, config)
-        }
-        DocumentFormat::Docx | DocumentFormat::Doc | DocumentFormat::Markdown => {
+        DocumentFormat::Pdf => parse_markitdown_document(input)
+            .or_else(|_| parse_visual_document(input, template, config)),
+        DocumentFormat::Image => parse_visual_document(input, template, config),
+        DocumentFormat::Docx => parse_markitdown_document(input)
+            .or_else(|_| parse_text_document(input, template, config)),
+        DocumentFormat::Doc | DocumentFormat::Markdown => {
             parse_text_document(input, template, config)
         }
     }
+}
+
+fn parse_markitdown_document(input: &ParseInput) -> Result<ParsedDocument> {
+    emit_event(&ParseEvent::ConvertingPages {
+        current: 1,
+        total: 1,
+    })?;
+    emit_event(&ParseEvent::Parsing {
+        current: 1,
+        total: 1,
+    })?;
+
+    let converter = MarkItDown::new();
+    let options = ConversionOptions {
+        file_extension: Some(markitdown_extension_for_format(&input.format).into()),
+        url: None,
+        llm_client: None,
+        llm_model: None,
+    };
+    let result = converter
+        .convert(&input.path, Some(options))
+        .with_context(|| format!("markitdown-rs failed for {}", input.path))?
+        .with_context(|| format!("markitdown-rs did not support {}", input.path))?;
+
+    build_markitdown_parsed_document(result.text_content)
+}
+
+fn markitdown_extension_for_format(format: &DocumentFormat) -> &'static str {
+    match format {
+        DocumentFormat::Pdf => ".pdf",
+        DocumentFormat::Docx => ".docx",
+        DocumentFormat::Doc => ".doc",
+        DocumentFormat::Markdown => ".md",
+        DocumentFormat::Image => ".png",
+    }
+}
+
+fn build_single_page_parsed_document(
+    markdown: String,
+    parser_name: &str,
+) -> Result<ParsedDocument> {
+    if markdown.trim().is_empty() {
+        bail!("{parser_name} produced empty markdown");
+    }
+    Ok(ParsedDocument {
+        pages: vec![ParsedPage {
+            index: 0,
+            markdown: Some(markdown.clone()),
+            plain_text: Some(markdown),
+            svg: None,
+            image_asset_path: None,
+            error_message: None,
+        }],
+        assets: Vec::new(),
+        page_count: 1,
+        success_count: 1,
+        failed_count: 0,
+    })
+}
+
+fn build_markitdown_parsed_document(markdown: String) -> Result<ParsedDocument> {
+    build_single_page_parsed_document(markdown, "markitdown-rs")
 }
 
 fn parse_visual_document(
@@ -24222,7 +24283,23 @@ mod tests {
                 && event.policy_result == "auto_applied"
                 && event.target_memory_ids.contains(&memories[0].memory_id)
         }));
-        assert!(!workspace_root.join("brain.lock").exists());
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
+    }
+
+    #[test]
+    fn brain_writer_uses_directory_lock_without_pid_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        fs::write(workspace_root.join("brain.lock"), "pid=999999999\n")
+            .expect("write legacy lock file");
+
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("open writer");
+        assert!(workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).is_dir());
+        drop(writer);
+
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
+        assert!(workspace_root.join("brain.lock").exists());
     }
 
     #[test]
@@ -24292,7 +24369,7 @@ mod tests {
         let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
             .expect("events remain valid JSONL");
         assert!(events.len() >= 16);
-        assert!(!workspace_root.join("brain.lock").exists());
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
     }
 
     #[test]

@@ -28,4 +28,4 @@ TARGET_BIN="${BIN_DIR}/duckdocs-engine-${HOST_TRIPLE}"
 cp "${SOURCE_BIN}" "${TARGET_BIN}"
 chmod +x "${TARGET_BIN}"
 
-echo "synced ${SOURCE_BIN} -> ${TARGET_BIN}"
+echo "synced engine ${SOURCE_BIN} -> ${TARGET_BIN}"

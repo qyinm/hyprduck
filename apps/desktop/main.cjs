@@ -818,13 +818,13 @@ function resolveEnginePath() {
     return process.env.DUCKDOCS_ENGINE_BIN;
   }
 
-  const sidecarName = `duckdocs-engine-${hostTriple()}`;
-  const devPath = path.join(__dirname, "resources", "binaries", sidecarName);
+  const engineName = `duckdocs-engine-${hostTriple()}`;
+  const devPath = path.join(__dirname, "resources", "binaries", engineName);
   if (fs.existsSync(devPath)) {
     return devPath;
   }
 
-  const packagedPath = path.join(process.resourcesPath, "binaries", sidecarName);
+  const packagedPath = path.join(process.resourcesPath, "binaries", engineName);
   if (fs.existsSync(packagedPath)) {
     return packagedPath;
   }
