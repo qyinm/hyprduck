@@ -20,7 +20,6 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  RefreshCw,
   Save,
   Settings,
   ShieldCheck,
@@ -1159,52 +1158,6 @@ function sidebarButtonClass(active: boolean): string {
 
 function windowChromeButtonClass(): string {
   return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
-}
-
-function WorkspaceSnapshotStatusBanner({
-  state,
-}: {
-  state: WorkspaceLoadState;
-}) {
-  if (state.status === "idle" || state.status === "ready") {
-    return null;
-  }
-
-  const isError = state.status === "error";
-  const isFallback = state.status === "fallback";
-  return (
-    <section
-      className={cn(
-        "mx-6 mt-14 rounded-xl border px-4 py-3 text-sm",
-        isError
-          ? "border-red-200 bg-red-50/85 text-red-900"
-          : isFallback
-            ? "border-amber-200 bg-amber-50/85 text-amber-900"
-            : "border-border bg-secondary/70 text-foreground",
-      )}
-    >
-      <div className="flex items-start gap-3">
-        {isError ? (
-          <XCircle size={18} className="mt-0.5 shrink-0" />
-        ) : (
-          <RefreshCw
-            size={18}
-            className={cn("mt-0.5 shrink-0", state.status === "loading" && "animate-spin")}
-          />
-        )}
-        <div className="space-y-1">
-          <p className="font-medium">
-            {isError
-              ? "Could not refresh the workspace snapshot."
-              : isFallback
-                ? "Using fallback workspace read path."
-                : "Refreshing latest workspace snapshot."}
-          </p>
-          {state.message && <p className="leading-6">{state.message}</p>}
-        </div>
-      </div>
-    </section>
-  );
 }
 
 function modelTaskGuidance(providerId: string, modelId: string) {
@@ -2803,7 +2756,6 @@ export function App() {
             />
           ) : activePanel === "knowledge" ? (
             <WorkspaceErrorBoundary>
-              <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}
