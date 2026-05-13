@@ -262,6 +262,12 @@ pub struct CompileProjectResponseData {
     pub project_id: String,
     pub workspace_id: WorkspaceId,
     pub source_id: SourceId,
+    #[serde(default)]
+    pub graph_generation_status: Option<String>,
+    #[serde(default)]
+    pub graph_generation_skipped_reason: Option<String>,
+    #[serde(default)]
+    pub graph_generation_error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

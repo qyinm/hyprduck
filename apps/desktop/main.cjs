@@ -16,6 +16,7 @@ const snapshot = {
   lastWorkspaceId: null,
   lastSourceId: null,
   lastSourceManifestPath: null,
+  workspaceRevision: 0,
 };
 
 let mainWindow = null;
@@ -312,10 +313,16 @@ async function startParse(request) {
         snapshot.lastProjectId = project.projectId;
         snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
         snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
+        if (isGraphGenerationFailed(project.graphGenerationStatus)) {
+          markFailed(graphGenerationFailureMessage(project));
+          return;
+        }
+        snapshot.workspaceRevision += 1;
         pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
       } catch (error) {
         snapshot.lastProjectId = null;
-        pushProgressEntry("compile_failed", `Knowledge compile failed: ${error.message}`);
+        markFailed(`Knowledge graph generation failed: ${error.message}`);
+        return;
       }
     }
 
@@ -639,7 +646,29 @@ async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, s
     projectId: response.data.project_id,
     workspaceId: response.data.workspace_id,
     sourceId: response.data.source_id,
+    graphGenerationStatus: response.data.graph_generation_status ?? null,
+    graphGenerationSkippedReason: response.data.graph_generation_skipped_reason ?? null,
+    graphGenerationErrorMessage: response.data.graph_generation_error_message ?? null,
   };
+}
+
+function isGraphGenerationFailed(status) {
+  return (
+    status === "failed" ||
+    status === "partially_applied" ||
+    status === "empty" ||
+    status === "skipped"
+  );
+}
+
+function graphGenerationFailureMessage(project) {
+  if (project.graphGenerationErrorMessage) {
+    return `Knowledge graph generation failed: ${project.graphGenerationErrorMessage}`;
+  }
+  if (project.graphGenerationSkippedReason) {
+    return `Knowledge graph generation skipped: ${project.graphGenerationSkippedReason}`;
+  }
+  return `Knowledge graph generation failed with status: ${project.graphGenerationStatus}`;
 }
 
 function runEngineCommand(expectedCommand, request, options = {}) {
@@ -708,9 +737,14 @@ function applyProgressEvent(event) {
 }
 
 function markFailed(message) {
-  snapshot.activeJob = null;
+  if (snapshot.activeJob) {
+    snapshot.activeJob.status = "failed";
+    snapshot.activeJob.progressPercent = 100;
+    snapshot.activeJob.lastMessage = message;
+  }
   pushProgressEntry("failed", message);
   publishSnapshot();
+  snapshot.activeJob = null;
 }
 
 function publishSnapshot() {
