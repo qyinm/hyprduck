@@ -494,7 +494,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     })?;
     let source_manifest = load_source_manifest(&request)?;
     let (workspace_id, source_id) = resolved_source_ids(&request, source_manifest.as_ref())?;
-    let project = compile_knowledge_project(&request, &markdown, source_manifest.as_ref());
+    let project = compile_agent_orchestrated_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
     if let Some(manifest) = &source_manifest {
@@ -6560,11 +6560,7 @@ fn compile_queued_markdown_source(
         .with_context(|| format!("failed creating {}", pages_dir.display()))?;
     let markdown_path = artifact_root.join(format!("{safe_name}.md"));
     let page_markdown_path = pages_dir.join("page_1.md");
-    let node_candidates = extract_markdown_node_candidates_for_workspace(
-        &markdown,
-        &source_path.display().to_string(),
-        &paths.workspace_root,
-    )?;
+    let node_candidates = Vec::new();
     let mut markdown_signals = extract_markdown_signals(
         &markdown,
         &source_path.display().to_string(),
@@ -6576,18 +6572,8 @@ fn compile_queued_markdown_source(
         &record.workspace_id,
         &markdown_signals,
     )?;
-    let edge_candidates = extract_markdown_relationship_evidence(
-        &markdown,
-        &source_path.display().to_string(),
-        Some(source_id.as_str()),
-        &node_candidates,
-    );
-    let claim_candidates = extract_markdown_claim_candidates(
-        &markdown,
-        &source_path.display().to_string(),
-        Some(source_id.as_str()),
-        &node_candidates,
-    );
+    let edge_candidates: Vec<MarkdownRelationshipEvidence> = Vec::new();
+    let claim_candidates: Vec<MarkdownClaimCandidate> = Vec::new();
     write_file_atomic(&markdown_path, markdown.as_bytes())?;
     write_file_atomic(&page_markdown_path, markdown.as_bytes())?;
     write_json_pretty(
@@ -6647,7 +6633,7 @@ fn compile_queued_markdown_source(
         workspace_id: Some(record.workspace_id.clone()),
         source_id: Some(source_id.clone()),
     };
-    let project = compile_knowledge_project(&request, &markdown, Some(&manifest));
+    let project = compile_agent_orchestrated_project(&request, &markdown, Some(&manifest));
     store.save_project(&project, &request, Some(&manifest))?;
     persist_completed_ingest_related_wiki_pages(
         &paths.workspace_root,

@@ -2295,7 +2295,7 @@ fn markdown_ingest_worker_records_source_errors_in_queue_and_event_payload() {
 }
 
 #[test]
-fn markdown_node_candidates_match_existing_materialized_graph_nodes() {
+fn markdown_ingest_keeps_derived_graph_agent_owned() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     let source_dir = workspace_root.join("sources");
@@ -2366,27 +2366,14 @@ fn markdown_node_candidates_match_existing_materialized_graph_nodes() {
 
     let snapshot =
         read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID).expect("snapshot");
-    let matched = snapshot
-        .nodes
-        .iter()
-        .find(|node| normalize_key(&node.label) == "agent-maintained-graph")
-        .expect("matched graph node");
     assert_eq!(
         snapshot
             .nodes
             .iter()
-            .filter(|node| {
-                node.kind == BrainNodeKind::Concept
-                    && node
-                        .aliases
-                        .iter()
-                        .chain(std::iter::once(&node.label))
-                        .any(|label| normalize_key(label) == "agent-maintained-graph")
-            })
+            .filter(|node| node.kind == BrainNodeKind::Concept)
             .count(),
-        1
+        0
     );
-    assert!(matched.source_ids.len() >= 2);
     let second_source = snapshot
         .sources
         .iter()
@@ -2398,29 +2385,15 @@ fn markdown_node_candidates_match_existing_materialized_graph_nodes() {
         .join("node-candidates.json");
     let candidates: Vec<MarkdownNodeCandidate> =
         read_json_artifact(&candidates_path).expect("second node candidates");
-    let candidate = candidates
-        .iter()
-        .find(|candidate| candidate.label == "Agent maintained graph")
-        .expect("matched candidate");
-    assert_eq!(
-        candidate.matched_node_id.as_deref(),
-        Some(matched.node_id.as_str())
+    assert!(
+        candidates.is_empty(),
+        "markdown ingest should not create heuristic node candidates before agent proposals"
     );
-    assert_eq!(
-        candidate.matched_node_label.as_deref(),
-        Some("Agent-maintained graph")
-    );
-    assert!(candidate.match_score.unwrap_or_default() >= 0.72);
-    let new_node = snapshot
+    assert!(snapshot
         .nodes
         .iter()
-        .find(|node| normalize_key(&node.label) == "autonomous-memory-loop")
-        .expect("new graph node from unmatched candidate");
-    assert_eq!(new_node.source_ids, vec![second_source.source_id.clone()]);
-    assert!(new_node
-        .evidence_ids
-        .iter()
-        .any(|evidence_id| evidence_id.contains("autonomous-memory-loop")));
+        .any(|node| node.kind == BrainNodeKind::Source
+            && node.source_ids == vec![second_source.source_id.clone()]));
 }
 
 #[test]
