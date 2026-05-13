@@ -9419,6 +9419,82 @@ fn workspace_materialization_skips_accepted_link_proposals_with_missing_nodes() 
 }
 
 #[test]
+fn workspace_delete_materialized_node_without_source_rows_returns_empty_project() {
+    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_path = temp.path().join("DuckDocs").join("knowledge.sqlite3");
+    let output_root = temp.path().join("HyprDuck");
+    let workspace_root = output_root.join(DEFAULT_WORKSPACE_ID);
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 10;
+    snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-last-materialized-node".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Last Materialized Node".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: Vec::new(),
+        source_ids: Vec::new(),
+        confidence: None,
+        updated_at: 10,
+    });
+    write_materialized_brain_repo(&workspace_root, &snapshot)
+        .expect("write materialized-only graph");
+
+    let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+    let previous_output_root = std::env::var_os("DUCKDOCS_OUTPUT_DIR");
+    std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+    std::env::set_var("DUCKDOCS_OUTPUT_DIR", &output_root);
+    let response = handle_apply_correction(ApplyCorrectionRequest {
+        project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+        node_id: "concept-last-materialized-node".into(),
+        kind: CorrectionKind::Delete,
+        target_node_id: None,
+        value: None,
+    })
+    .expect("delete last materialized node without source rows");
+    match previous_store {
+        Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+        None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+    }
+    match previous_output_root {
+        Some(value) => std::env::set_var("DUCKDOCS_OUTPUT_DIR", value),
+        None => std::env::remove_var("DUCKDOCS_OUTPUT_DIR"),
+    }
+
+    assert_eq!(response.project.summary.project_id, "workspace:default");
+    assert!(response.project.nodes.is_empty());
+    assert!(response.project.edges.is_empty());
+    let nodes_after_delete: Vec<BrainNodeRecord> =
+        read_json_artifact(&workspace_root.join("graph/nodes.json"))
+            .expect("read nodes after delete");
+    assert!(nodes_after_delete.is_empty());
+
+    let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+    let previous_output_root = std::env::var_os("DUCKDOCS_OUTPUT_DIR");
+    std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+    std::env::set_var("DUCKDOCS_OUTPUT_DIR", &output_root);
+    let retry_response = handle_apply_correction(ApplyCorrectionRequest {
+        project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+        node_id: "concept-last-materialized-node".into(),
+        kind: CorrectionKind::Delete,
+        target_node_id: None,
+        value: None,
+    })
+    .expect("retrying delete for already removed materialized node is a no-op");
+    match previous_store {
+        Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+        None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+    }
+    match previous_output_root {
+        Some(value) => std::env::set_var("DUCKDOCS_OUTPUT_DIR", value),
+        None => std::env::remove_var("DUCKDOCS_OUTPUT_DIR"),
+    }
+    assert!(retry_response.project.nodes.is_empty());
+}
+
+#[test]
 fn workspace_merge_remaps_and_deduplicates_preserved_agent_artifacts() {
     static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
@@ -10043,6 +10119,28 @@ fn answer_project_supports_workspace_project_id() {
         .citations
         .iter()
         .any(|citation| citation.source_id.as_deref() == Some("source-a")));
+}
+
+#[test]
+fn answer_empty_workspace_project_blocks_instead_of_error() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+    let aggregate = load_answerable_project(&store, &workspace_project_id(DEFAULT_WORKSPACE_ID))
+        .expect("load empty workspace answerable project");
+    let answer = answer_project(
+        &aggregate,
+        &AnswerProjectRequest {
+            project_id: aggregate.summary.project_id.clone(),
+            node_id: None,
+            question: "What remains in the graph?".into(),
+        },
+    )
+    .expect("answer empty workspace");
+
+    assert_eq!(aggregate.summary.project_id, "workspace:default");
+    assert_eq!(answer.status, AnswerStatus::Blocked);
+    assert!(answer.text.is_none());
+    assert!(answer.explanation.contains("No graph nodes"));
 }
 
 #[test]

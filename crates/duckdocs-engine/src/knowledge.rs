@@ -3007,6 +3007,9 @@ pub(super) fn workspace_root_from_path_segments(
 }
 
 pub(super) fn fallback_workspace_root(store_path: &Path, workspace_id: &str) -> PathBuf {
+    if let Some(output_root) = std::env::var_os("DUCKDOCS_OUTPUT_DIR") {
+        return PathBuf::from(output_root).join(workspace_id);
+    }
     store_path
         .parent()
         .map(|parent| parent.join(workspace_id))
@@ -5161,6 +5164,23 @@ pub(super) fn answer_project(
                 label: "Ask a concrete question".into(),
                 description:
                     "Grounded answers work best when the question names a concept, action, or relationship."
+                        .into(),
+            }],
+        });
+    }
+    if project.details_by_node_id.is_empty() {
+        return Ok(AnswerResponse {
+            status: AnswerStatus::Blocked,
+            text: None,
+            explanation: "No graph nodes remain in this workspace. Import a source or add knowledge before asking from the graph."
+                .into(),
+            citations: Vec::new(),
+            related_node_ids: Vec::new(),
+            suggested_actions: vec![SuggestedAction {
+                kind: SuggestedActionKind::AskDifferentQuestion,
+                label: "Add graph context".into(),
+                description:
+                    "Grounded answers need at least one source-backed graph node or accepted graph update."
                         .into(),
             }],
         });

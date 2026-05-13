@@ -640,6 +640,9 @@ fn handle_apply_workspace_correction(
 ) -> Result<ApplyCorrectionResponseData> {
     let rows = store.load_projects_for_workspace(workspace_id)?;
     if rows.is_empty() {
+        if request.kind == CorrectionKind::Delete {
+            return handle_delete_materialized_workspace_node(store, workspace_id, &rows, request);
+        }
         bail!("workspace {workspace_id} was not found");
     }
 
@@ -763,11 +766,17 @@ fn handle_delete_materialized_workspace_node(
     let workspace_root = workspace_root_for_rows(rows)
         .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
     let snapshot = read_materialized_brain_snapshot(&workspace_root, workspace_id)?;
-    let node = snapshot
+    let Some(node) = snapshot
         .nodes
         .iter()
         .find(|node| node.node_id == request.node_id)
-        .ok_or_else(|| anyhow!("workspace node {} was not found", request.node_id))?;
+    else {
+        store.materialize_workspace_brain_repo(workspace_id)?;
+        let project = store
+            .load_workspace_project(workspace_id)?
+            .unwrap_or_else(|| empty_workspace_project(workspace_id));
+        return Ok(ApplyCorrectionResponseData { project });
+    };
     store.append_workspace_correction(&WorkspaceCorrection {
         id: Uuid::now_v7().to_string(),
         workspace_id: workspace_id.to_string(),
@@ -8777,9 +8786,9 @@ fn load_answerable_project(
     project_id: &str,
 ) -> Result<KnowledgeProject> {
     if let Some(workspace_id) = project_id.strip_prefix("workspace:") {
-        return store
+        return Ok(store
             .load_workspace_project(workspace_id)?
-            .ok_or_else(|| anyhow!("workspace {workspace_id} was not found"));
+            .unwrap_or_else(|| empty_workspace_project(workspace_id)));
     }
 
     store
