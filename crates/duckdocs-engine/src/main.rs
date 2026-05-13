@@ -51,14 +51,20 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 mod brain_repo;
+mod consolidation;
 mod import_context;
 mod knowledge;
 mod parse;
 mod provider;
+mod provider_graph_prompt;
 mod retrieval;
 mod source_index;
 
 use brain_repo::*;
+use consolidation::{
+    build_post_import_consolidation_prompt, failed_post_import_consolidation_report_value,
+    post_import_consolidation_report_value, should_run_post_import_consolidation,
+};
 use import_context::{
     build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
 };
@@ -68,6 +74,7 @@ use provider::{
     check_readiness, parse_openai_compatible_with_timeout, provider_model_catalog,
     provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
 };
+use provider_graph_prompt::build_provider_graph_proposal_prompt;
 use source_index::{chunk_source_markdown, upsert_source_chunks};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
@@ -6919,7 +6926,15 @@ fn maybe_generate_provider_graph_proposals(
     let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
     write_json_pretty(&artifact_root.join("provider-graph-context.json"), context)?;
-    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot, context);
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let prompt = build_provider_graph_proposal_prompt(
+        manifest,
+        markdown,
+        &snapshot,
+        context,
+        &default_evidence_refs,
+    );
     let provider_run_id = format!("provider-graph-{}", Uuid::now_v7());
     report.provider_run_id = Some(provider_run_id.clone());
     let provider_response = match parse_openai_compatible_with_timeout(
@@ -6993,8 +7008,6 @@ fn maybe_generate_provider_graph_proposals(
         return Ok(report);
     }
 
-    let default_evidence_refs =
-        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
     let mut allowed_context_evidence_refs = import_evidence_context_allowed_refs(context);
     for evidence_ref in &default_evidence_refs {
         merge_unique_string(&mut allowed_context_evidence_refs, evidence_ref);
@@ -7078,6 +7091,17 @@ fn maybe_generate_provider_graph_proposals(
     report.failed_count += apply_result.failed.len();
     report.applied_proposal_ids = apply_result.applied;
     report.failed_proposals.extend(apply_result.failed);
+    if should_run_post_import_consolidation(report.applied_count, context) {
+        maybe_run_post_import_consolidation_worker(
+            workspace_root,
+            workspace_id,
+            manifest,
+            context,
+            &config,
+            artifact_root,
+            report.provider_run_id.as_deref(),
+        )?;
+    }
     report.status = if report.failed_count == 0 {
         "applied".into()
     } else if report.applied_count > 0 {
@@ -7093,6 +7117,176 @@ fn maybe_generate_provider_graph_proposals(
 fn provider_graph_generation_disabled_for_process() -> bool {
     std::env::var_os("DUCKDOCS_DISABLE_PROVIDER_GRAPH").is_some()
         || (cfg!(test) && std::env::var_os("DUCKDOCS_TEST_ENABLE_PROVIDER_GRAPH").is_none())
+}
+
+fn maybe_run_post_import_consolidation_worker(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    context: &ImportEvidenceContext,
+    config: &EngineConfig,
+    artifact_root: &Path,
+    parent_run_id: Option<&str>,
+) -> Result<()> {
+    let report_path = artifact_root.join("provider-graph-consolidation.json");
+    let run_id = format!("provider-consolidation-{}", Uuid::now_v7());
+    let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
+    let prompt =
+        build_post_import_consolidation_prompt(manifest, &snapshot, context, parent_run_id);
+    let provider_response = match parse_openai_compatible_with_timeout(
+        config,
+        &prompt,
+        None,
+        Some(Duration::from_secs(
+            PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
+        )),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            write_json_pretty(
+                &report_path,
+                &failed_post_import_consolidation_report_value(
+                    &run_id,
+                    parent_run_id,
+                    &manifest.source_id,
+                    format!("{error:#}"),
+                    unix_timestamp_seconds(),
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+    write_provider_graph_run_artifacts(
+        workspace_root,
+        &run_id,
+        workspace_id,
+        manifest,
+        "received",
+        Some(&prompt),
+        Some(&provider_response),
+        None,
+    )?;
+
+    let mut payloads = match parse_provider_graph_proposal_payloads(&provider_response) {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            write_provider_graph_run_validation_report(
+                workspace_root,
+                &run_id,
+                workspace_id,
+                &manifest.source_id,
+                "failed",
+                0,
+                Some(format!("{error:#}")),
+            )?;
+            write_json_pretty(
+                &report_path,
+                &failed_post_import_consolidation_report_value(
+                    &run_id,
+                    parent_run_id,
+                    &manifest.source_id,
+                    format!("{error:#}"),
+                    unix_timestamp_seconds(),
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+    write_provider_graph_run_validation_report(
+        workspace_root,
+        &run_id,
+        workspace_id,
+        &manifest.source_id,
+        "parsed",
+        payloads.len(),
+        None,
+    )?;
+
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let mut allowed_context_evidence_refs = import_evidence_context_allowed_refs(context);
+    for evidence_ref in &default_evidence_refs {
+        merge_unique_string(&mut allowed_context_evidence_refs, evidence_ref);
+    }
+    for payload in &mut payloads {
+        normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
+    }
+
+    let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
+    let mut proposal_ids = Vec::new();
+    let mut failed = Vec::new();
+    for payload in payloads {
+        let mut proposal = provider_graph_payload_to_proposal(
+            workspace_id,
+            &format!(
+                "{PROVIDER_GRAPH_AGENT_ID}:{}:consolidation",
+                config.provider.id_slug()
+            ),
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let request = ProposeBrainUpdateRequest {
+            scope: BrainReadScope {
+                workspace_id: workspace_id.to_string(),
+                root_dir: Some(
+                    workspace_root
+                        .parent()
+                        .unwrap_or(workspace_root)
+                        .display()
+                        .to_string(),
+                ),
+            },
+            kind: proposal.kind,
+            title: proposal.title.clone(),
+            body: proposal.body.clone(),
+            actor: proposal.actor.clone(),
+            target_node_id: proposal.target_node_id.clone(),
+            target_source_id: proposal.target_source_id.clone(),
+            relation_kind: proposal.relation_kind,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: proposal.source_refs.clone(),
+            node_refs: proposal.node_refs.clone(),
+            evidence_refs: proposal.evidence_refs.clone(),
+            proposal_payload: proposal.proposal_payload.clone(),
+        };
+        if let Err(error) =
+            validate_provider_graph_proposal_with_context(&request, &allowed_context_evidence_refs)
+                .and_then(|_| validate_brain_update_proposal(&request))
+        {
+            failed.push(format!("{error:#}"));
+            continue;
+        }
+        writer.write_proposal(&proposal)?;
+        writer.append_event(&brain_event_for_proposal(&proposal)?)?;
+        proposal_ids.push(proposal.proposal_id.clone());
+    }
+    drop(writer);
+
+    let apply_result = run_queued_agent_proposal_apply_worker(workspace_root, workspace_id)?;
+    let status = if failed.is_empty() && apply_result.failed.is_empty() {
+        "applied"
+    } else {
+        "partially_applied"
+    };
+    let failed_proposals =
+        serde_json::to_value(&apply_result.failed).context("failed to encode failed proposals")?;
+    write_json_pretty(
+        &report_path,
+        &post_import_consolidation_report_value(
+            status,
+            &run_id,
+            parent_run_id,
+            &manifest.source_id,
+            &proposal_ids,
+            &apply_result.applied,
+            &failed,
+            failed_proposals,
+            unix_timestamp_seconds(),
+        ),
+    )
 }
 
 fn write_provider_graph_run_artifacts(
@@ -7146,182 +7340,6 @@ fn write_provider_graph_run_validation_report(
             "errorMessage": error_message,
             "createdAt": unix_timestamp_seconds(),
         }),
-    )
-}
-
-fn build_provider_graph_proposal_prompt(
-    manifest: &SourceArtifactManifest,
-    markdown: &str,
-    snapshot: &BrainRepoSnapshot,
-    context: &ImportEvidenceContext,
-) -> String {
-    let existing_nodes = snapshot
-        .nodes
-        .iter()
-        .take(80)
-        .map(|node| {
-            format!(
-                "- nodeId: {}, kind: {:?}, label: {}, sources: {}",
-                node.node_id,
-                node.kind,
-                node.label,
-                join_or_none(&node.source_ids)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let existing_edges = snapshot
-        .relations
-        .iter()
-        .take(80)
-        .map(|edge| {
-            format!(
-                "- edgeId: {}, kind: {:?}, source: {}, target: {}, label: {}",
-                edge.relation_id, edge.kind, edge.source_node_id, edge.target_node_id, edge.label
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let existing_claims = snapshot
-        .claims
-        .iter()
-        .take(40)
-        .map(|claim| {
-            format!(
-                "- claimId: {}, statement: {}",
-                claim.claim_id, claim.statement
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let evidence_refs = source_evidence_refs_for_provider_proposals(snapshot, &manifest.source_id);
-    let context_evidence_refs = import_evidence_context_allowed_refs(context);
-    let retrieval_context = provider_retrieval_context_for_prompt(context);
-
-    format!(
-        r#"You are HyprDuck's local brain graph maintenance agent.
-
-Goal:
-- Read the new source markdown and the existing brain graph.
-- Read the retrieved old source/wiki/memory evidence before proposing graph changes.
-- Propose only durable, evidence-backed graph updates.
-- Add new nodes, new edges, new claims, and important memories when useful.
-- Reuse existing nodeId values when the new source refers to an existing thing.
-- Improve old graph state when retrieved old evidence proves a cross-document relationship.
-- If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
-
-Hard output rule:
-- Return JSON only. No markdown fence, no prose.
-- Shape: {{"proposals":[AgentGraphProposalPayload...]}}
-- Use camelCase object fields and snake_case enum values.
-
-Allowed payloads:
-1. {{"changeType":"new_node","node":{{"label":"...","kind":"concept|topic|person|company|project|product|team|event|decision|task|claim","sourcePath":"...","nodeId":"optional-stable-id","aliases":[],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-2. {{"changeType":"new_edge","edge":{{"sourceNodeId":"...","targetNodeId":"...","kind":"mentions|supports|contradicts|supersedes|same_as|works_at|founded|invested_in|advises|attended|owns|responsible_for|decided|blocks|depends_on|source_of|derived_from|related_to","label":"...","sourcePath":"...","edgeId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-3. {{"changeType":"new_claim","claim":{{"statement":"...","sourcePath":"...","claimId":"optional-stable-id","topicRefs":["node-id"],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-4. {{"changeType":"new_memory","memory":{{"title":"...","body":"...","sourcePath":"...","memoryId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
-
-Source:
-- sourceId: {source_id}
-- sourcePath: {source_path}
-- markdownPath: {markdown_path}
-- evidenceRefs you may cite: {evidence_refs}
-- retrieved context evidenceRefs you may cite: {context_evidence_refs}
-
-Retrieved context:
-{retrieval_context}
-
-Existing nodes:
-{existing_nodes}
-
-Existing edges:
-{existing_edges}
-
-Existing claims:
-{existing_claims}
-
-New source markdown:
-{markdown}
-"#,
-        source_id = manifest.source_id,
-        source_path = manifest.source_path,
-        markdown_path = manifest.markdown_path,
-        evidence_refs = join_or_none(&evidence_refs),
-        context_evidence_refs = join_or_none(&context_evidence_refs),
-        retrieval_context = retrieval_context,
-        existing_nodes = if existing_nodes.is_empty() {
-            "(none)"
-        } else {
-            &existing_nodes
-        },
-        existing_edges = if existing_edges.is_empty() {
-            "(none)"
-        } else {
-            &existing_edges
-        },
-        existing_claims = if existing_claims.is_empty() {
-            "(none)"
-        } else {
-            &existing_claims
-        },
-        markdown = truncate_for_prompt(markdown, 24000)
-    )
-}
-
-fn provider_retrieval_context_for_prompt(context: &ImportEvidenceContext) -> String {
-    let new_chunks = context
-        .new_source
-        .chunks
-        .iter()
-        .take(6)
-        .map(|chunk| provider_context_chunk_line("new_source", chunk))
-        .collect::<Vec<_>>();
-    let old_chunks = context
-        .retrieved_source_evidence
-        .iter()
-        .take(20)
-        .map(|chunk| provider_context_chunk_line("retrieved_old_source", chunk))
-        .collect::<Vec<_>>();
-    let queries = context
-        .retrieval_queries
-        .iter()
-        .take(12)
-        .map(|query| {
-            format!(
-                "- query: {} terms: {}",
-                query.query,
-                join_or_none(&query.terms)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Retrieval queries:\n{queries}\n\nNew source chunks:\n{new_chunks}\n\nRetrieved old evidence chunks:\n{old_chunks}",
-        queries = if queries.is_empty() { "(none)" } else { &queries },
-        new_chunks = if new_chunks.is_empty() {
-            "(none)".into()
-        } else {
-            new_chunks.join("\n")
-        },
-        old_chunks = if old_chunks.is_empty() {
-            "(none)".into()
-        } else {
-            old_chunks.join("\n")
-        }
-    )
-}
-
-fn provider_context_chunk_line(kind: &str, chunk: &retrieval::RetrievedEvidenceChunk) -> String {
-    format!(
-        "- kind: {kind}, evidenceRef: {}, sourceId: {}, sourceTitle: {}, heading: {}, lines: {}-{}, matchedTerms: {}, text: {}",
-        chunk.evidence_ref_id,
-        chunk.source_id,
-        chunk.source_title,
-        join_or_none(&chunk.heading_path),
-        chunk.line_start,
-        chunk.line_end,
-        join_or_none(&chunk.matched_terms),
-        truncate_for_prompt(&chunk.text, 1200)
     )
 }
 
