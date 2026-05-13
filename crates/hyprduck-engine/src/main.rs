@@ -10,39 +10,39 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use hyprduck_engine_types::{
     AgentGraphProposalPayload, AgentGraphProposalValidationCode, AgentGraphProposalValidationError,
-    AgentGraphProposalValidationIssue, AnswerProjectRequest, AnswerProjectResponseData,
-    AnswerResponse, AnswerStatus, ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor,
-    BrainActorType, BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind,
-    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainProposalKind, BrainProposalStatus,
-    BrainReadScope, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot, BrainReviewDecision,
-    BrainReviewItem, BrainScope, BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal,
-    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
-    CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EngineRequest,
-    EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
-    EngineSuccess, EntityRecord, EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData,
-    GetContextPackRequest, GetContextPackResponseData, GraphHistoryEntry, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, GraphRollbackTarget, IngestStatus,
-    KnowledgeProject, ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, MemoryRecord, PageArtifact,
-    ParseEvent, ParseMetadata, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
-    ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData,
-    ReadGraphHistoryRequest, ReadGraphHistoryResponseData, ReadGraphSnapshotRequest,
-    ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, ResolveBrainReviewItemRequest,
-    ResolveBrainReviewItemResponseData, SaveConfigRequest, SaveConfigResponseData,
-    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
-    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    ValidateProviderRequest, WikiPage, WorkspaceCorrection, WorkspaceId,
-    BRAIN_EVENT_SCHEMA_VERSION,
+    AgentGraphProposalValidationIssue, AgentNewEdgePayload, AnswerProjectRequest,
+    AnswerProjectResponseData, AnswerResponse, AnswerStatus, ApplyCorrectionRequest,
+    ApplyCorrectionResponseData, BrainActor, BrainActorType, BrainContextPack, BrainEvent,
+    BrainEventCausality, BrainEventKind, BrainHealthStatus, BrainNodeKind, BrainNodeRecord,
+    BrainProposalKind, BrainProposalStatus, BrainReadScope, BrainRelationKind, BrainRelationRecord,
+    BrainRepoSnapshot, BrainReviewDecision, BrainReviewItem, BrainScope, BrainSearchResult,
+    BrainSearchResultKind, BrainUpdateProposal, ClaimRecord, CompileProjectRequest,
+    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
+    EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest,
+    EngineRuntimeResponse, EngineSuccess, EntityRecord, EvidenceRef, GetBrainHealthRequest,
+    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData,
+    GraphHistoryEntry, GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary,
+    GraphRollbackTarget, IngestStatus, KnowledgeProject, ListBrainReviewItemsRequest,
+    ListBrainReviewItemsResponseData, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest,
+    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
+    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
+    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ReconstructBrainRequest, ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary,
+    RelationKind, ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
+    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
+    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceSummary,
+    StructuredExtractionArtifact, StructuredExtractionClaim, StructuredExtractionEntity,
+    StructuredExtractionMemoryCandidate, StructuredExtractionPageRef, StructuredExtractionRelation,
+    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
+    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{
-    AgentNewClaimPayload, AgentNewEdgePayload, AgentNewMemoryPayload, AgentNewNodePayload,
-    OutputAsset, ParseInput, ParseOptions,
+    AgentNewClaimPayload, AgentNewMemoryPayload, AgentNewNodePayload, OutputAsset, ParseInput,
+    ParseOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7467,6 +7467,7 @@ fn maybe_generate_provider_graph_proposals(
     for payload in &mut payloads {
         normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
     }
+    ensure_provider_graph_edge_payloads(&mut payloads, manifest);
 
     let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
     for payload in payloads {
@@ -7664,6 +7665,7 @@ fn maybe_run_post_import_consolidation_worker(
     for payload in &mut payloads {
         normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
     }
+    ensure_provider_graph_edge_payloads(&mut payloads, manifest);
 
     let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
     let mut proposal_ids = Vec::new();
@@ -7914,6 +7916,132 @@ fn normalize_provider_graph_proposal_payload(
             }
         }
     }
+}
+
+fn ensure_provider_graph_edge_payloads(
+    payloads: &mut Vec<AgentGraphProposalPayload>,
+    manifest: &SourceArtifactManifest,
+) {
+    let mut existing_edges = payloads
+        .iter()
+        .filter_map(|payload| match payload {
+            AgentGraphProposalPayload::NewEdge { edge } => Some((
+                edge.source_node_id.trim().to_string(),
+                edge.target_node_id.trim().to_string(),
+                relation_kind_slug(edge.kind).to_string(),
+            )),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut generated_edges = Vec::new();
+    let source_node_id = format!("source:{}", manifest.source_id);
+
+    for payload in payloads.iter() {
+        match payload {
+            AgentGraphProposalPayload::NewNode { node }
+                if node.kind != BrainNodeKind::Source
+                    && node
+                        .node_id
+                        .as_deref()
+                        .map(str::trim)
+                        .is_some_and(|node_id| !node_id.is_empty()) =>
+            {
+                let target_node_id = node.node_id.as_deref().unwrap().trim();
+                push_generated_provider_edge(
+                    &mut generated_edges,
+                    &mut existing_edges,
+                    ProviderGeneratedEdge {
+                        source_node_id: &source_node_id,
+                        target_node_id,
+                        kind: BrainRelationKind::SourceOf,
+                        label: "Source contains concept",
+                        reason: "Provider created a source-backed node but did not emit the source-to-node edge.",
+                        source_path: &node.source_path,
+                        source_refs: &node.source_refs,
+                        evidence_refs: &node.evidence_refs,
+                    },
+                );
+            }
+            AgentGraphProposalPayload::NewClaim { claim } => {
+                let topic_refs = claim
+                    .topic_refs
+                    .iter()
+                    .map(|topic_ref| topic_ref.trim())
+                    .filter(|topic_ref| !topic_ref.is_empty())
+                    .collect::<Vec<_>>();
+                if topic_refs.len() < 2 {
+                    continue;
+                }
+                let source_node_id = topic_refs[0];
+                for target_node_id in topic_refs.iter().skip(1) {
+                    push_generated_provider_edge(
+                        &mut generated_edges,
+                        &mut existing_edges,
+                        ProviderGeneratedEdge {
+                            source_node_id,
+                            target_node_id,
+                            kind: BrainRelationKind::RelatedTo,
+                            label: "Related by provider claim",
+                            reason: "Provider claim links multiple topicRefs, so HyprDuck materialized the relationship as an edge.",
+                            source_path: &claim.source_path,
+                            source_refs: &claim.source_refs,
+                            evidence_refs: &claim.evidence_refs,
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    payloads.extend(generated_edges);
+}
+
+struct ProviderGeneratedEdge<'a> {
+    source_node_id: &'a str,
+    target_node_id: &'a str,
+    kind: BrainRelationKind,
+    label: &'a str,
+    reason: &'a str,
+    source_path: &'a str,
+    source_refs: &'a [String],
+    evidence_refs: &'a [String],
+}
+
+fn push_generated_provider_edge(
+    generated_edges: &mut Vec<AgentGraphProposalPayload>,
+    existing_edges: &mut BTreeSet<(String, String, String)>,
+    edge: ProviderGeneratedEdge<'_>,
+) {
+    if edge.source_node_id == edge.target_node_id {
+        return;
+    }
+    let edge_key = (
+        edge.source_node_id.to_string(),
+        edge.target_node_id.to_string(),
+        relation_kind_slug(edge.kind).to_string(),
+    );
+    if !existing_edges.insert(edge_key) {
+        return;
+    }
+    generated_edges.push(AgentGraphProposalPayload::NewEdge {
+        edge: AgentNewEdgePayload {
+            source_node_id: edge.source_node_id.to_string(),
+            target_node_id: edge.target_node_id.to_string(),
+            kind: edge.kind,
+            label: edge.label.to_string(),
+            source_path: edge.source_path.to_string(),
+            edge_id: Some(format!(
+                "edge-provider-{}-{}-{}",
+                sanitize_id_fragment(edge.source_node_id),
+                relation_kind_slug(edge.kind),
+                sanitize_id_fragment(edge.target_node_id)
+            )),
+            source_refs: edge.source_refs.to_vec(),
+            evidence_refs: edge.evidence_refs.to_vec(),
+            reason: Some(edge.reason.to_string()),
+        },
+    });
 }
 
 fn normalize_provider_payload_refs(

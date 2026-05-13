@@ -63,6 +63,9 @@ Goal:
 - Reuse existing nodeId values when the new source refers to an existing thing.
 - Improve old graph state when retrieved old evidence proves a cross-document relationship.
 - If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
+- Edge contract: if a claim has two or more topicRefs, also emit at least one new_edge connecting those topic nodes.
+- Edge contract: if you create a non-source node from this source, also emit a new_edge from the source node to that node using kind "source_of" or "derived_from".
+- Do not hide relationships inside claims only. Durable relationships must appear as new_edge payloads.
 
 Hard output rule:
 - Return JSON only. No markdown fence, no prose.
