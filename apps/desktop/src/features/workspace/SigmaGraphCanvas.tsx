@@ -462,6 +462,12 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
           const targetNode = graph.getNodeAttributes(target);
           const selected = selectedEdgeId === edge;
           const crossCluster = sourceNode.clusterId !== targetNode.clusterId;
+          const hovered =
+            hoveredNodeId !== null &&
+            (source === hoveredNodeId || target === hoveredNodeId);
+          const dimmed = hoveredNodeId !== null && !hovered && !selected;
+          const baseOpacity =
+            crossCluster && !selected ? Math.min(0.35, viewport.zoom) : 1;
 
           return (
             <line
@@ -469,15 +475,15 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               data-graph-selectable="true"
               className="cursor-pointer"
               onClick={() => selectEdge(edge)}
-              opacity={crossCluster && !selected ? Math.min(0.35, viewport.zoom) : 1}
-              stroke={selected ? "#111111" : "#cbd5e1"}
+              opacity={dimmed ? Math.min(0.18, baseOpacity) : hovered ? 1 : baseOpacity}
+              stroke={selected || hovered ? "#111111" : "#cbd5e1"}
               strokeDasharray={
                 graph.getEdgeAttribute(edge, "edgeKind") === "source_document"
                   ? "1.2 1.4"
                   : undefined
               }
               strokeLinecap="round"
-              strokeWidth={selected ? 0.55 : 0.34}
+              strokeWidth={selected ? 0.62 : hovered ? 0.5 : 0.34}
               vectorEffect="non-scaling-stroke"
               x1={toPercentX(nodePositions[source]?.x ?? sourceNode.x)}
               x2={toPercentX(nodePositions[target]?.x ?? targetNode.x)}
@@ -499,15 +505,15 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               className="cursor-grab active:cursor-grabbing"
               onClick={() => selectNode(node)}
               onPointerDown={(event) => handleNodePointerDown(event, node)}
-              onPointerEnter={() => setHoveredNodeId(node)}
-              onPointerLeave={() =>
-                setHoveredNodeId((current) => (current === node ? null : current))
-              }
               transform={`translate(${toPercentX(position.x)} ${toPercentY(position.y)})`}
             >
               <title>{data.label}</title>
               <circle
                 fill={selected ? "#111111" : "#ffffff"}
+                onPointerEnter={() => setHoveredNodeId(node)}
+                onPointerLeave={() =>
+                  setHoveredNodeId((current) => (current === node ? null : current))
+                }
                 r={selected ? 1.9 : data.nodeKind === "document" ? 1.65 : 1.35}
                 stroke={selected ? "#111111" : "#111111"}
                 strokeWidth={selected ? 0.28 : 0.2}
@@ -526,6 +532,7 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
                   textAnchor="middle"
                   x="0"
                   y={3.2 / viewport.zoom}
+                  pointerEvents="none"
                 >
                   {data.shortLabel}
                 </text>
