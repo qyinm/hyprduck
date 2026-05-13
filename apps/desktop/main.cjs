@@ -298,6 +298,12 @@ async function startParse(request) {
 
     if (data.saved_output_path) {
       try {
+        if (snapshot.activeJob) {
+          snapshot.activeJob.progressPercent = 100;
+          snapshot.activeJob.lastMessage = "Building knowledge graph";
+          pushProgressEntry("compile", "Building knowledge graph");
+          publishSnapshot();
+        }
         const project = await compileWorkspaceProject(
           data.saved_output_path,
           request.path,
