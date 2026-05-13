@@ -168,3 +168,54 @@ test("matches source artifact paths by segment instead of substring", () => {
     "source-1",
   ]);
 });
+
+test("hydrates delete correction actions for materialized graph nodes", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json", "wiki/index.md"],
+    sourcePaths: ["/brain/default/sources/source-1/report.pdf"],
+    nodes: [
+      {
+        nodeId: "source:source-1",
+        kind: "source",
+        label: "report.pdf",
+        aliases: [],
+        evidenceIds: ["ev-source"],
+        sourceIds: ["source-1"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "concept-a",
+        kind: "concept",
+        label: "Project Alpha",
+        aliases: [],
+        evidenceIds: ["ev-concept"],
+        sourceIds: ["source-1"],
+        confidence: 0.8,
+        updatedAt: 2,
+      },
+    ],
+    edges: [],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+
+  expect(envelope.project.detailsByNodeId["source:source-1"]?.actions).toEqual([
+    { kind: "delete", label: "Delete", disabledReason: null },
+  ]);
+  expect(envelope.project.detailsByNodeId["concept-a"]?.actions).toContainEqual({
+    kind: "delete",
+    label: "Delete",
+    disabledReason: null,
+  });
+});

@@ -8979,6 +8979,446 @@ fn workspace_merge_correction_replays_to_source_snapshot_and_ledger() {
 }
 
 #[test]
+fn delete_correction_removes_concept_and_incident_edges() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source A\n\n## Page 1\n\nAlpha planning context keeps agents grounded.\n\n## Page 2\n\nBeta review context keeps evidence visible.\n",
+        "source-a",
+        "alpha",
+        10,
+    );
+    let concept_ids = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .map(|node| node.id.clone())
+        .collect::<Vec<_>>();
+    assert!(concept_ids.len() >= 2);
+    rename_concept_for_test(&mut project, &concept_ids[0], "Alpha Context", &[]);
+    rename_concept_for_test(&mut project, &concept_ids[1], "Beta Context", &[]);
+    let deleted_node_id = project
+        .details_by_node_id
+        .values()
+        .find(|detail| detail.canonical_name == "Alpha Context")
+        .expect("alpha concept")
+        .node
+        .id
+        .clone();
+    let request: ApplyCorrectionRequest = serde_json::from_value(json!({
+        "projectId": project.summary.project_id,
+        "nodeId": deleted_node_id,
+        "kind": "delete",
+    }))
+    .expect("decode delete request");
+
+    apply_correction(&mut project, &request).expect("apply delete correction");
+
+    assert!(!project.details_by_node_id.contains_key(&deleted_node_id));
+    assert!(!project.nodes.iter().any(|node| node.id == deleted_node_id));
+    assert!(!project.answer_by_node_id.contains_key(&deleted_node_id));
+    assert!(project.edges.iter().all(|edge| {
+        edge.source_node_id != deleted_node_id && edge.target_node_id != deleted_node_id
+    }));
+    assert!(project
+        .edge_details_by_id
+        .values()
+        .all(|detail| detail.edge.source_node_id != deleted_node_id
+            && detail.edge.target_node_id != deleted_node_id));
+    assert!(project
+        .details_by_node_id
+        .values()
+        .any(|detail| detail.canonical_name == "Beta Context"));
+    assert_eq!(manifest.source_id, "source-a");
+}
+
+#[test]
+fn workspace_delete_source_node_removes_source_backed_graph_artifacts() {
+    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_path = temp.path().join("knowledge.sqlite3");
+    let store = KnowledgeProjectStore::new(store_path.clone());
+    let (mut project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source A\n\n## Page 1\n\nAlpha deletion context keeps removable concepts grounded.\n",
+        "source-a",
+        "alpha",
+        10,
+    );
+    let (mut project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source B\n\n## Page 1\n\nBeta retained context keeps durable evidence visible.\n",
+        "source-b",
+        "beta",
+        20,
+    );
+    rename_first_concept_for_test(&mut project_a, "Alpha Deletion Context", &[]);
+    rename_first_concept_for_test(&mut project_b, "Beta Retained Context", &[]);
+
+    for (project, manifest) in [(&project_a, &manifest_a), (&project_b, &manifest_b)] {
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(project, &request, Some(manifest))
+            .expect("save source project");
+    }
+    let alpha_concept_node_id = project_a
+        .nodes
+        .iter()
+        .find(|node| node.kind == GraphNodeKind::Concept)
+        .expect("alpha concept")
+        .id
+        .clone();
+    let alpha_evidence_ids = project_a
+        .details_by_node_id
+        .get(&alpha_concept_node_id)
+        .expect("alpha detail")
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    handle_propose_brain_update(ProposeBrainUpdateRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+        kind: BrainProposalKind::Node,
+        title: "Create agent-owned alpha node".into(),
+        body: "Accepted graph proposal should disappear when its backing source is deleted.".into(),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        target_node_id: None,
+        target_source_id: None,
+        relation_kind: None,
+        source_description: None,
+        source_user_context: None,
+        source_ingest_instruction: None,
+        source_refs: vec![manifest_a.source_id.clone()],
+        node_refs: Vec::new(),
+        evidence_refs: alpha_evidence_ids.clone(),
+        proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+            node: AgentNewNodePayload {
+                label: "Agent Owned Alpha".into(),
+                kind: BrainNodeKind::Concept,
+                source_path: manifest_a.markdown_path.clone(),
+                node_id: Some("concept-agent-owned-alpha".into()),
+                aliases: Vec::new(),
+                source_refs: vec![manifest_a.source_id.clone()],
+                evidence_refs: alpha_evidence_ids,
+                reason: Some("The deleted source is the only backing source.".into()),
+            },
+        }),
+    })
+    .expect("auto-apply alpha proposal");
+
+    let deleted_source_node_id = source_node_id(&manifest_a.source_id);
+    let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+    std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+    let request: ApplyCorrectionRequest = serde_json::from_value(json!({
+        "projectId": workspace_project_id(DEFAULT_WORKSPACE_ID),
+        "nodeId": deleted_source_node_id,
+        "kind": "delete",
+    }))
+    .expect("decode delete request");
+    let response = handle_apply_correction(request).expect("delete source node");
+    match previous_store {
+        Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+        None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+    }
+
+    assert!(!response
+        .project
+        .details_by_node_id
+        .contains_key(&deleted_source_node_id));
+    assert!(response.project.edges.iter().all(|edge| {
+        edge.source_node_id != deleted_source_node_id
+            && edge.target_node_id != deleted_source_node_id
+    }));
+    assert!(!response
+        .project
+        .details_by_node_id
+        .values()
+        .any(|detail| detail.canonical_name == "Alpha Deletion Context"));
+    assert!(response
+        .project
+        .details_by_node_id
+        .values()
+        .any(|detail| detail.canonical_name == "Beta Retained Context"));
+
+    let remaining_sources = store
+        .load_sources(DEFAULT_WORKSPACE_ID)
+        .expect("load remaining sources");
+    assert_eq!(remaining_sources.len(), 1);
+    assert_eq!(remaining_sources[0].source_id, manifest_b.source_id);
+    assert!(store
+        .load_project(Some(&project_a.summary.project_id))
+        .expect("load deleted project")
+        .is_none());
+
+    let corrections = store
+        .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+        .expect("load workspace corrections");
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0].kind, CorrectionKind::Delete);
+    assert_eq!(corrections[0].aggregate_node_id, deleted_source_node_id);
+    assert_eq!(corrections[0].source_node_ids.len(), 1);
+
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let materialized_nodes: Vec<BrainNodeRecord> =
+        read_json_artifact(&workspace_root.join("graph/nodes.json"))
+            .expect("read materialized nodes");
+    assert!(materialized_nodes
+        .iter()
+        .all(|node| !node.source_ids.contains(&manifest_a.source_id)));
+    assert!(materialized_nodes
+        .iter()
+        .all(|node| node.node_id != deleted_source_node_id));
+    assert!(materialized_nodes
+        .iter()
+        .all(|node| node.node_id != "concept-agent-owned-alpha"));
+    let materialized_edges: Vec<BrainRelationRecord> =
+        read_json_artifact(&workspace_root.join("graph/edges.json"))
+            .expect("read materialized edges");
+    assert!(materialized_edges.iter().all(|edge| {
+        edge.source_node_id != deleted_source_node_id
+            && edge.target_node_id != deleted_source_node_id
+    }));
+    let claims: Vec<ClaimRecord> = read_json_artifact(&workspace_root.join("graph/claims.json"))
+        .expect("read materialized claims");
+    assert!(claims
+        .iter()
+        .all(|claim| !claim.source_refs.contains(&manifest_a.source_id)));
+    assert_materialized_brain_has_no_dangling_refs(&workspace_root);
+}
+
+#[test]
+fn workspace_delete_materialized_proposal_node_writes_tombstone() {
+    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_path = temp.path().join("knowledge.sqlite3");
+    let store = KnowledgeProjectStore::new(store_path.clone());
+    let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source A\n\n## Page 1\n\nCircular linked list appears in provider proposal evidence.\n",
+        "source-a",
+        "alpha",
+        10,
+    );
+    rename_first_concept_for_test(&mut project, "Circular Linked List", &[]);
+    let request = CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+    };
+    store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save source project");
+    let concept_node_id = project
+        .nodes
+        .iter()
+        .find(|node| node.kind == GraphNodeKind::Concept)
+        .expect("concept node")
+        .id
+        .clone();
+    let evidence_ids = project
+        .details_by_node_id
+        .get(&concept_node_id)
+        .expect("concept detail")
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    handle_propose_brain_update(ProposeBrainUpdateRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+        kind: BrainProposalKind::Node,
+        title: "Create materialized-only concept".into(),
+        body: "Accepted proposal nodes can exist only in the materialized graph.".into(),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        target_node_id: None,
+        target_source_id: None,
+        relation_kind: None,
+        source_description: None,
+        source_user_context: None,
+        source_ingest_instruction: None,
+        source_refs: vec![manifest.source_id.clone()],
+        node_refs: Vec::new(),
+        evidence_refs: evidence_ids.clone(),
+        proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+            node: AgentNewNodePayload {
+                label: "Provider Circular List".into(),
+                kind: BrainNodeKind::Concept,
+                source_path: manifest.markdown_path.clone(),
+                node_id: Some("concept-provider-circular-list".into()),
+                aliases: Vec::new(),
+                source_refs: vec![manifest.source_id.clone()],
+                evidence_refs: evidence_ids,
+                reason: Some("Provider proposed this concept from source evidence.".into()),
+            },
+        }),
+    })
+    .expect("auto-apply proposal-only node");
+    assert!(!store
+        .load_workspace_project(DEFAULT_WORKSPACE_ID)
+        .expect("load aggregate")
+        .expect("workspace aggregate")
+        .details_by_node_id
+        .contains_key("concept-provider-circular-list"));
+
+    let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+    std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+    let request: ApplyCorrectionRequest = serde_json::from_value(json!({
+        "projectId": workspace_project_id(DEFAULT_WORKSPACE_ID),
+        "nodeId": "concept-provider-circular-list",
+        "kind": "delete",
+    }))
+    .expect("decode delete request");
+    handle_apply_correction(request).expect("delete materialized-only node");
+    match previous_store {
+        Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+        None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+    }
+
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let nodes_after_delete: Vec<BrainNodeRecord> =
+        read_json_artifact(&workspace_root.join("graph/nodes.json"))
+            .expect("read nodes after delete");
+    assert!(nodes_after_delete
+        .iter()
+        .all(|node| node.node_id != "concept-provider-circular-list"));
+    store
+        .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+        .expect("rematerialize workspace");
+    let nodes_after_replay: Vec<BrainNodeRecord> =
+        read_json_artifact(&workspace_root.join("graph/nodes.json"))
+            .expect("read nodes after replay");
+    assert!(nodes_after_replay
+        .iter()
+        .all(|node| node.node_id != "concept-provider-circular-list"));
+    let corrections = store
+        .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+        .expect("load workspace corrections");
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0].kind, CorrectionKind::Delete);
+    assert_eq!(
+        corrections[0].aggregate_node_id,
+        "concept-provider-circular-list"
+    );
+    assert_materialized_brain_has_no_dangling_refs(&workspace_root);
+}
+
+#[test]
+fn workspace_materialization_skips_accepted_link_proposals_with_missing_nodes() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+    let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source A\n\n## Page 1\n\nByeon Seung Woo appears in an older graph proposal.\n",
+        "source-a",
+        "alpha",
+        10,
+    );
+    rename_first_concept_for_test(&mut project, "Current Concept", &[]);
+    let request = CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+    };
+    store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save source project");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let concept_node_id = project
+        .nodes
+        .iter()
+        .find(|node| node.kind == GraphNodeKind::Concept)
+        .expect("concept node")
+        .id
+        .clone();
+    let evidence_ids = project
+        .details_by_node_id
+        .get(&concept_node_id)
+        .expect("concept detail")
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    let missing_node_id = "node-person-byeon-seung-woo".to_string();
+    let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+    writer
+        .write_proposal(&BrainUpdateProposal {
+            proposal_id: "proposal-stale-missing-node-link".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Link,
+            status: BrainProposalStatus::Accepted,
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            scope: BrainScope::Project,
+            title: "Connect stale person node".into(),
+            body: "Accepted link proposals can outlive the node they referenced.".into(),
+            target_node_id: Some(missing_node_id.clone()),
+            target_source_id: None,
+            relation_kind: Some(BrainRelationKind::RelatedTo),
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id.clone(), missing_node_id.clone()],
+            evidence_refs: evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                edge: AgentNewEdgePayload {
+                    source_node_id: concept_node_id,
+                    target_node_id: missing_node_id.clone(),
+                    kind: BrainRelationKind::RelatedTo,
+                    label: "Related to stale person".into(),
+                    source_path: manifest.markdown_path.clone(),
+                    edge_id: Some("relation-stale-missing-node-link".into()),
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: evidence_ids,
+                    reason: Some(
+                        "The older proposal referenced a graph node no longer present.".into(),
+                    ),
+                },
+            }),
+            created_at: 20,
+        })
+        .expect("write stale accepted proposal");
+    drop(writer);
+
+    store
+        .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+        .expect("materialize skips stale link proposal");
+
+    let relations: Vec<BrainRelationRecord> =
+        read_json_artifact(&workspace_root.join("graph/edges.json"))
+            .expect("read materialized edges");
+    assert!(relations
+        .iter()
+        .all(|relation| relation.relation_id != "relation-stale-missing-node-link"));
+    assert!(relations.iter().all(|relation| {
+        relation.source_node_id != missing_node_id && relation.target_node_id != missing_node_id
+    }));
+    assert_materialized_brain_has_no_dangling_refs(&workspace_root);
+}
+
+#[test]
 fn workspace_merge_remaps_and_deduplicates_preserved_agent_artifacts() {
     static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");

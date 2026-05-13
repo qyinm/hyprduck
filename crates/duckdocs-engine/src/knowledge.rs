@@ -451,7 +451,7 @@ pub(super) fn compile_knowledge_project(
                 page_sections.len()
             ),
             evidence: document_evidence.clone(),
-            actions: Vec::new(),
+            actions: source_node_actions(),
             source: source_manifest.map(source_backing_from_manifest),
         },
     );
@@ -662,7 +662,7 @@ pub(super) fn compile_agent_orchestrated_project(
                 page_sections.len()
             ),
             evidence: document_evidence.clone(),
-            actions: Vec::new(),
+            actions: source_node_actions(),
             source: source_manifest.map(source_backing_from_manifest),
         },
     );
@@ -763,7 +763,7 @@ pub(super) fn aggregate_workspace_project(
                     "Immutable source in workspace {workspace_id}. HyprDuck keeps source artifacts addressable while graph evidence is aggregated across the workspace."
                 ),
                 evidence: source_evidence.clone(),
-                actions: Vec::new(),
+                actions: source_node_actions(),
                 source: Some(source_backing_from_summary(&row.summary, &row.manifest_path)),
             },
         );
@@ -960,14 +960,14 @@ pub(super) fn aggregate_workspace_project(
             GraphNodeDetail {
                 node: node.clone(),
                 canonical_name: accumulator.canonical_name.clone(),
-                aliases,
+                aliases: aliases.clone(),
                 description: format!(
                     "Workspace concept compiled from {} evidence refs across {} source(s).",
                     accumulator.evidence.len(),
                     source_ids.len()
                 ),
                 evidence: accumulator.evidence.clone(),
-                actions: Vec::new(),
+                actions: correction_actions_for_detail(&accumulator.canonical_name, &aliases),
                 source: None,
             },
         );
@@ -5098,7 +5098,20 @@ pub(super) fn correction_actions_for_detail(
             label: "Split".into(),
             disabled_reason: None,
         },
+        delete_correction_action(),
     ]
+}
+
+pub(super) fn source_node_actions() -> Vec<CorrectionAction> {
+    vec![delete_correction_action()]
+}
+
+pub(super) fn delete_correction_action() -> CorrectionAction {
+    CorrectionAction {
+        kind: CorrectionKind::Delete,
+        label: "Delete".into(),
+        disabled_reason: None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5120,6 +5133,7 @@ pub(super) fn apply_correction(
         CorrectionKind::Merge => apply_merge_correction(project, request)?,
         CorrectionKind::KeepSeparate => apply_keep_separate_correction(project, request)?,
         CorrectionKind::Split => apply_split_correction(project, request)?,
+        CorrectionKind::Delete => apply_delete_correction(project, request)?,
     }
     refresh_project_after_correction(project);
     Ok(())
@@ -5818,6 +5832,95 @@ pub(super) fn apply_split_correction(
     Ok(())
 }
 
+pub(super) fn apply_delete_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    let selected_node = project
+        .nodes
+        .iter()
+        .find(|node| node.id == request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+
+    let mut node_ids_to_remove = BTreeSet::from([request.node_id.clone()]);
+    if is_source_like_node_kind(selected_node.kind) {
+        let deleted_source_ids = source_ids_for_deleted_source_node(project, &request.node_id);
+        let linked_derived_node_ids = project
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == RelationKind::SourceDocument)
+            .filter_map(|edge| {
+                if edge.source_node_id == request.node_id {
+                    Some(edge.target_node_id.clone())
+                } else if edge.target_node_id == request.node_id {
+                    Some(edge.source_node_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        for detail in project.details_by_node_id.values() {
+            if is_source_like_node_kind(detail.node.kind) {
+                continue;
+            }
+            let evidence_source_ids = detail
+                .evidence
+                .iter()
+                .filter_map(|evidence| evidence.source_id.clone())
+                .collect::<BTreeSet<_>>();
+            let only_deleted_source_evidence = !evidence_source_ids.is_empty()
+                && !deleted_source_ids.is_empty()
+                && evidence_source_ids.is_subset(&deleted_source_ids);
+            if linked_derived_node_ids.contains(&detail.node.id) || only_deleted_source_evidence {
+                node_ids_to_remove.insert(detail.node.id.clone());
+            }
+        }
+    }
+
+    remove_project_nodes(project, &node_ids_to_remove);
+    Ok(())
+}
+
+pub(super) fn source_ids_for_deleted_source_node(
+    project: &KnowledgeProject,
+    node_id: &str,
+) -> BTreeSet<String> {
+    let mut source_ids = BTreeSet::new();
+    if let Some(source_id) = node_id.strip_prefix("source:") {
+        source_ids.insert(source_id.to_string());
+    }
+    if let Some(detail) = project.details_by_node_id.get(node_id) {
+        if let Some(source) = &detail.source {
+            source_ids.insert(source.source_id.clone());
+        }
+        for evidence in &detail.evidence {
+            if let Some(source_id) = evidence.source_id.as_deref() {
+                source_ids.insert(source_id.to_string());
+            }
+        }
+    }
+    source_ids
+}
+
+pub(super) fn remove_project_nodes(project: &mut KnowledgeProject, node_ids: &BTreeSet<String>) {
+    project.nodes.retain(|node| !node_ids.contains(&node.id));
+    project
+        .details_by_node_id
+        .retain(|node_id, _| !node_ids.contains(node_id));
+    project
+        .answer_by_node_id
+        .retain(|node_id, _| !node_ids.contains(node_id));
+    project.edges.retain(|edge| {
+        !node_ids.contains(&edge.source_node_id) && !node_ids.contains(&edge.target_node_id)
+    });
+    project.edge_details_by_id.retain(|_, detail| {
+        !node_ids.contains(&detail.edge.source_node_id)
+            && !node_ids.contains(&detail.edge.target_node_id)
+    });
+}
+
 pub(super) fn parse_split_replacement_mappings(
     request: &ApplyCorrectionRequest,
 ) -> Result<Vec<SplitReplacementMapping>> {
@@ -5893,6 +5996,8 @@ pub(super) fn refresh_project_after_correction(project: &mut KnowledgeProject) {
                 node.evidence_count = detail.evidence.len();
                 detail.actions =
                     correction_actions_for_detail(&detail.canonical_name, &detail.aliases);
+            } else if is_source_like_node_kind(node.kind) {
+                detail.actions = source_node_actions();
             } else {
                 detail.actions = Vec::new();
             }

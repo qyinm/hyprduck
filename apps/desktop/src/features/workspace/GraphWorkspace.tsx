@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Send,
   Share2,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -90,6 +91,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     WorkspaceApplyCorrectionRequest["kind"] | null
   >(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [deleteConfirmNodeId, setDeleteConfirmNodeId] = useState<string | null>(null);
   const defaultAnswerNodeId =
     selectedNode?.node.id ??
     projectNodes.find((node) => node.kind === "source")?.id ??
@@ -131,6 +133,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
     setPendingCorrectionKind(null);
     setCorrectionError(null);
+    setDeleteConfirmNodeId(null);
   }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
 
   useEffect(() => {
@@ -186,6 +189,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         nodeId: selectedNode.node.id,
         ...request,
       });
+      setDeleteConfirmNodeId(null);
     } catch (error) {
       setCorrectionError(String(error));
     } finally {
@@ -628,6 +632,53 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                                   </option>
                                 ))}
                               </select>
+                            </div>
+                          );
+                        }
+
+                        if (action.kind === "delete") {
+                          const deleteArmed = deleteConfirmNodeId === selectedNode.node.id;
+                          const isSourceDelete =
+                            selectedNode.node.kind === "source" ||
+                            selectedNode.node.kind === "document";
+                          return (
+                            <div
+                              key={action.kind}
+                              className="rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-medium text-destructive">
+                                  {action.label}
+                                </span>
+                                <Button
+                                  className="gap-1.5"
+                                  disabled={disabled}
+                                  onClick={() => {
+                                    if (!deleteArmed) {
+                                      setDeleteConfirmNodeId(selectedNode.node.id);
+                                      return;
+                                    }
+                                    void handleApplyCorrection({
+                                      kind: "delete",
+                                    });
+                                  }}
+                                  size="xs"
+                                  type="button"
+                                  variant={deleteArmed ? "destructive" : "outline"}
+                                >
+                                  <Trash2 size={13} />
+                                  {pendingCorrectionKind === "delete"
+                                    ? "Deleting..."
+                                    : deleteArmed
+                                      ? "Confirm"
+                                      : "Delete"}
+                                </Button>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                {isSourceDelete
+                                  ? "Remove this source node, the source-backed concept nodes it created, and every connected edge."
+                                  : "Remove this concept node and every connected edge."}
+                              </p>
                             </div>
                           );
                         }

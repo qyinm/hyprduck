@@ -114,6 +114,7 @@ pub enum CorrectionKind {
     KeepSeparate,
     Rename,
     Split,
+    Delete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -59,7 +59,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       aliases: materialized.aliases,
       description: nodeDescription(materialized, snapshot),
       evidence,
-      actions: [],
+      actions: correctionActionsForMaterializedNode(hydratedNode.kind, materialized.aliases),
       source:
         hydratedNode.kind === "source"
           ? sourceBackingForNode(snapshot, materialized, sourcePath, markdownPath)
@@ -122,6 +122,26 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       sourceSummaryFromPath(snapshot, sourcePath, index),
     ),
   };
+}
+
+function correctionActionsForMaterializedNode(
+  kind: WorkspaceNodeKind,
+  aliases: string[],
+): WorkspaceNodeDetail["actions"] {
+  if (kind === "source" || kind === "document") {
+    return [{ kind: "delete", label: "Delete", disabledReason: null }];
+  }
+  return [
+    { kind: "merge", label: "Merge", disabledReason: null },
+    {
+      kind: "keep_separate",
+      label: "Keep Separate",
+      disabledReason: aliases.length ? null : "No grouped aliases are available to split yet.",
+    },
+    { kind: "rename", label: "Rename", disabledReason: null },
+    { kind: "split", label: "Split", disabledReason: null },
+    { kind: "delete", label: "Delete", disabledReason: null },
+  ];
 }
 
 function materializedNodeToWorkspaceNode(

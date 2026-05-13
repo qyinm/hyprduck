@@ -78,7 +78,7 @@ export interface WorkspaceSourceSummary {
 }
 
 export interface WorkspaceCorrectionAction {
-  kind: "merge" | "keep_separate" | "rename" | "split";
+  kind: "merge" | "keep_separate" | "rename" | "split" | "delete";
   label: string;
   disabledReason?: string | null;
 }

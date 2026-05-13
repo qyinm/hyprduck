@@ -644,10 +644,17 @@ fn handle_apply_workspace_correction(
     }
 
     let aggregate = aggregate_workspace_project(workspace_id, rows.clone());
-    let selected_detail = aggregate
-        .details_by_node_id
-        .get(&request.node_id)
-        .ok_or_else(|| anyhow!("workspace node {} was not found", request.node_id))?;
+    let selected_detail = match aggregate.details_by_node_id.get(&request.node_id) {
+        Some(detail) => detail,
+        None if request.kind == CorrectionKind::Delete => {
+            return handle_delete_materialized_workspace_node(store, workspace_id, &rows, request);
+        }
+        None => bail!("workspace node {} was not found", request.node_id),
+    };
+    if request.kind == CorrectionKind::Delete && is_source_like_node_kind(selected_detail.node.kind)
+    {
+        return handle_delete_workspace_source_node(store, workspace_id, selected_detail, request);
+    }
     if selected_detail.node.kind != GraphNodeKind::Concept {
         bail!("workspace corrections only support concept nodes");
     }
@@ -666,7 +673,10 @@ fn handle_apply_workspace_correction(
             }
             Some(detail)
         }
-        CorrectionKind::KeepSeparate | CorrectionKind::Rename | CorrectionKind::Split => None,
+        CorrectionKind::KeepSeparate
+        | CorrectionKind::Rename
+        | CorrectionKind::Split
+        | CorrectionKind::Delete => None,
     };
 
     let mut replayed_source_node_ids = BTreeSet::new();
@@ -740,8 +750,98 @@ fn handle_apply_workspace_correction(
 
     let project = store
         .load_workspace_project(workspace_id)?
-        .ok_or_else(|| anyhow!("workspace {workspace_id} was not found after correction"))?;
+        .unwrap_or_else(|| empty_workspace_project(workspace_id));
     Ok(ApplyCorrectionResponseData { project })
+}
+
+fn handle_delete_materialized_workspace_node(
+    store: &KnowledgeProjectStore,
+    workspace_id: &str,
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+    request: &ApplyCorrectionRequest,
+) -> Result<ApplyCorrectionResponseData> {
+    let workspace_root = workspace_root_for_rows(rows)
+        .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
+    let snapshot = read_materialized_brain_snapshot(&workspace_root, workspace_id)?;
+    let node = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == request.node_id)
+        .ok_or_else(|| anyhow!("workspace node {} was not found", request.node_id))?;
+    store.append_workspace_correction(&WorkspaceCorrection {
+        id: Uuid::now_v7().to_string(),
+        workspace_id: workspace_id.to_string(),
+        aggregate_node_id: request.node_id.clone(),
+        kind: request.kind.clone(),
+        target_node_id: None,
+        value: request.value.clone(),
+        evidence_ids: node.evidence_ids.clone(),
+        source_node_ids: vec![format!("materialized:{}", node.node_id)],
+        created_at: unix_timestamp_seconds(),
+    })?;
+    store.materialize_workspace_brain_repo(workspace_id)?;
+
+    let project = store
+        .load_workspace_project(workspace_id)?
+        .unwrap_or_else(|| empty_workspace_project(workspace_id));
+    Ok(ApplyCorrectionResponseData { project })
+}
+
+fn handle_delete_workspace_source_node(
+    store: &KnowledgeProjectStore,
+    workspace_id: &str,
+    selected_detail: &GraphNodeDetail,
+    request: &ApplyCorrectionRequest,
+) -> Result<ApplyCorrectionResponseData> {
+    let source_id = selected_detail
+        .source
+        .as_ref()
+        .map(|source| source.source_id.clone())
+        .or_else(|| {
+            request
+                .node_id
+                .strip_prefix("source:")
+                .map(ToOwned::to_owned)
+        })
+        .ok_or_else(|| anyhow!("source node {} has no source backing", request.node_id))?;
+    let deleted_row = store
+        .delete_workspace_source(workspace_id, &source_id)?
+        .ok_or_else(|| anyhow!("source {source_id} was not found in workspace {workspace_id}"))?;
+    store.append_workspace_correction(&WorkspaceCorrection {
+        id: Uuid::now_v7().to_string(),
+        workspace_id: workspace_id.to_string(),
+        aggregate_node_id: request.node_id.clone(),
+        kind: request.kind.clone(),
+        target_node_id: None,
+        value: request.value.clone(),
+        evidence_ids: selected_detail
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        source_node_ids: vec![format!("{}:{}", deleted_row.project_id, request.node_id)],
+        created_at: unix_timestamp_seconds(),
+    })?;
+    store.materialize_workspace_brain_repo(workspace_id)?;
+
+    let project = store
+        .load_workspace_project(workspace_id)?
+        .unwrap_or_else(|| empty_workspace_project(workspace_id));
+    Ok(ApplyCorrectionResponseData { project })
+}
+
+fn empty_workspace_project(workspace_id: &str) -> KnowledgeProject {
+    finalize_workspace_project(
+        workspace_id,
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        0,
+    )
 }
 
 fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectResponseData> {
@@ -4172,11 +4272,27 @@ fn apply_accepted_proposals_to_snapshot(
     snapshot: &mut BrainRepoSnapshot,
 ) -> Result<()> {
     let node_redirects = merge_correction_node_redirects(snapshot);
+    let deleted_node_ids = delete_correction_node_ids(snapshot);
+    let valid_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
     let mut accepted = read_brain_update_proposals(root)?
         .into_iter()
         .map(|(proposal, _)| proposal)
         .filter(|proposal| proposal.workspace_id == snapshot.workspace_id)
         .filter(|proposal| proposal.status == BrainProposalStatus::Accepted)
+        .filter_map(|mut proposal| {
+            retain_proposal_refs_for_snapshot(&mut proposal, &valid_source_ids, &valid_evidence_ids)
+                .then_some(proposal)
+        })
+        .filter(|proposal| !proposal_references_deleted_node(proposal, &deleted_node_ids))
         .collect::<Vec<_>>();
     accepted.sort_by(|left, right| {
         brain_proposal_replay_priority(left.kind)
@@ -4186,10 +4302,243 @@ fn apply_accepted_proposals_to_snapshot(
     });
     for proposal in accepted {
         let proposal = remap_proposal_node_refs_for_merge(proposal, &node_redirects);
+        if proposal_references_missing_snapshot_node(&proposal, snapshot) {
+            continue;
+        }
         apply_accepted_proposal_to_snapshot_with_root(root, &proposal, snapshot)?;
     }
     normalize_snapshot_after_merge_redirects(snapshot, &node_redirects);
+    normalize_snapshot_after_deleted_nodes(snapshot, &deleted_node_ids);
     Ok(())
+}
+
+fn retain_proposal_refs_for_snapshot(
+    proposal: &mut BrainUpdateProposal,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) -> bool {
+    let source_refs = proposal_source_refs(proposal);
+    if !source_refs.is_empty()
+        && !source_refs
+            .iter()
+            .any(|source| valid_source_ids.contains(source))
+    {
+        return false;
+    }
+    let evidence_refs = proposal_evidence_refs(proposal);
+    if !evidence_refs.is_empty()
+        && !evidence_refs
+            .iter()
+            .any(|evidence| valid_evidence_ids.contains(evidence))
+    {
+        return false;
+    }
+
+    proposal
+        .source_refs
+        .retain(|source| valid_source_ids.contains(source));
+    proposal
+        .evidence_refs
+        .retain(|evidence| valid_evidence_ids.contains(evidence));
+    if let Some(payload) = &mut proposal.proposal_payload {
+        match payload {
+            AgentGraphProposalPayload::NewNode { node } => {
+                node.source_refs
+                    .retain(|source| valid_source_ids.contains(source));
+                node.evidence_refs
+                    .retain(|evidence| valid_evidence_ids.contains(evidence));
+            }
+            AgentGraphProposalPayload::NewEdge { edge } => {
+                edge.source_refs
+                    .retain(|source| valid_source_ids.contains(source));
+                edge.evidence_refs
+                    .retain(|evidence| valid_evidence_ids.contains(evidence));
+            }
+            AgentGraphProposalPayload::NewClaim { claim } => {
+                claim
+                    .source_refs
+                    .retain(|source| valid_source_ids.contains(source));
+                claim
+                    .evidence_refs
+                    .retain(|evidence| valid_evidence_ids.contains(evidence));
+            }
+            AgentGraphProposalPayload::NewMemory { memory } => {
+                memory
+                    .source_refs
+                    .retain(|source| valid_source_ids.contains(source));
+                memory
+                    .evidence_refs
+                    .retain(|evidence| valid_evidence_ids.contains(evidence));
+            }
+        }
+    }
+    true
+}
+
+fn proposal_source_refs(proposal: &BrainUpdateProposal) -> BTreeSet<String> {
+    let mut refs = proposal
+        .source_refs
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewNode { node }) => {
+            refs.extend(node.source_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => {
+            refs.extend(edge.source_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => {
+            refs.extend(claim.source_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewMemory { memory }) => {
+            refs.extend(memory.source_refs.iter().cloned());
+        }
+        None => {}
+    }
+    refs
+}
+
+fn proposal_evidence_refs(proposal: &BrainUpdateProposal) -> BTreeSet<String> {
+    let mut refs = proposal
+        .evidence_refs
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewNode { node }) => {
+            refs.extend(node.evidence_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => {
+            refs.extend(edge.evidence_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => {
+            refs.extend(claim.evidence_refs.iter().cloned());
+        }
+        Some(AgentGraphProposalPayload::NewMemory { memory }) => {
+            refs.extend(memory.evidence_refs.iter().cloned());
+        }
+        None => {}
+    }
+    refs
+}
+
+fn delete_correction_node_ids(snapshot: &BrainRepoSnapshot) -> BTreeSet<String> {
+    snapshot
+        .events
+        .iter()
+        .filter(|event| {
+            event.event_type == BrainEventKind::CorrectionApplied
+                && (event.operation_type.as_deref() == Some("delete")
+                    || event.payload_json.contains("\"kind\":\"delete\""))
+        })
+        .flat_map(|event| {
+            event
+                .target_node_ids
+                .iter()
+                .chain(event.node_refs.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn proposal_references_deleted_node(
+    proposal: &BrainUpdateProposal,
+    deleted_node_ids: &BTreeSet<String>,
+) -> bool {
+    if deleted_node_ids.is_empty() {
+        return false;
+    }
+    if proposal
+        .target_node_id
+        .as_ref()
+        .is_some_and(|node_id| deleted_node_ids.contains(node_id))
+        || proposal
+            .node_refs
+            .iter()
+            .any(|node_id| deleted_node_ids.contains(node_id))
+    {
+        return true;
+    }
+    match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewNode { node }) => node
+            .node_id
+            .as_ref()
+            .is_some_and(|node_id| deleted_node_ids.contains(node_id)),
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => {
+            deleted_node_ids.contains(&edge.source_node_id)
+                || deleted_node_ids.contains(&edge.target_node_id)
+        }
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => claim
+            .topic_refs
+            .iter()
+            .any(|node_id| deleted_node_ids.contains(node_id)),
+        Some(AgentGraphProposalPayload::NewMemory { .. }) | None => false,
+    }
+}
+
+fn proposal_references_missing_snapshot_node(
+    proposal: &BrainUpdateProposal,
+    snapshot: &BrainRepoSnapshot,
+) -> bool {
+    let required_node_ids = proposal_required_snapshot_node_refs(proposal);
+    if required_node_ids.is_empty() {
+        return false;
+    }
+    let snapshot_node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    required_node_ids
+        .iter()
+        .any(|node_id| !snapshot_node_ids.contains(node_id.as_str()))
+}
+
+fn proposal_required_snapshot_node_refs(proposal: &BrainUpdateProposal) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+    match proposal.kind {
+        BrainProposalKind::Link => {
+            insert_nonempty_node_ref(&mut refs, proposal.target_node_id.as_deref());
+            for node_id in &proposal.node_refs {
+                insert_nonempty_node_ref(&mut refs, Some(node_id));
+            }
+            if let Some(AgentGraphProposalPayload::NewEdge { edge }) = &proposal.proposal_payload {
+                insert_nonempty_node_ref(&mut refs, Some(&edge.source_node_id));
+                insert_nonempty_node_ref(&mut refs, Some(&edge.target_node_id));
+            }
+        }
+        BrainProposalKind::Claim => {
+            insert_nonempty_node_ref(&mut refs, proposal.target_node_id.as_deref());
+            for node_id in &proposal.node_refs {
+                insert_nonempty_node_ref(&mut refs, Some(node_id));
+            }
+            if let Some(AgentGraphProposalPayload::NewClaim { claim }) = &proposal.proposal_payload
+            {
+                for node_id in &claim.topic_refs {
+                    insert_nonempty_node_ref(&mut refs, Some(node_id));
+                }
+            }
+        }
+        BrainProposalKind::WikiPage => {
+            insert_nonempty_node_ref(&mut refs, proposal.target_node_id.as_deref());
+            for node_id in &proposal.node_refs {
+                insert_nonempty_node_ref(&mut refs, Some(node_id));
+            }
+        }
+        BrainProposalKind::Node
+        | BrainProposalKind::Memory
+        | BrainProposalKind::Observation
+        | BrainProposalKind::SourceNote => {}
+    }
+    refs
+}
+
+fn insert_nonempty_node_ref(refs: &mut BTreeSet<String>, value: Option<&str>) {
+    if let Some(node_id) = value.map(str::trim).filter(|node_id| !node_id.is_empty()) {
+        refs.insert(node_id.to_string());
+    }
 }
 
 fn brain_proposal_replay_priority(kind: BrainProposalKind) -> u8 {
@@ -4418,6 +4767,66 @@ fn normalize_snapshot_after_merge_redirects(
     snapshot.relations = dedupe_brain_relations(std::mem::take(&mut snapshot.relations));
     snapshot.claims = dedupe_claim_records(std::mem::take(&mut snapshot.claims));
     snapshot.wiki_pages = dedupe_wiki_pages(std::mem::take(&mut snapshot.wiki_pages));
+}
+
+fn normalize_snapshot_after_deleted_nodes(
+    snapshot: &mut BrainRepoSnapshot,
+    deleted_node_ids: &BTreeSet<String>,
+) {
+    if deleted_node_ids.is_empty() {
+        return;
+    }
+
+    let deleted_topic_paths = deleted_node_ids
+        .iter()
+        .map(|node_id| format!("wiki/topics/{}.md", sanitize_name(node_id)))
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .nodes
+        .retain(|node| !deleted_node_ids.contains(&node.node_id));
+    snapshot.relations.retain(|relation| {
+        !deleted_node_ids.contains(&relation.source_node_id)
+            && !deleted_node_ids.contains(&relation.target_node_id)
+    });
+    snapshot.claims.retain(|claim| {
+        !claim
+            .topic_refs
+            .iter()
+            .any(|node_id| deleted_node_ids.contains(node_id))
+    });
+    snapshot.entities.retain(|entity| {
+        let node_id = entity
+            .entity_id
+            .strip_prefix("ent-")
+            .unwrap_or(&entity.entity_id);
+        !deleted_node_ids.contains(node_id)
+    });
+    for extraction in &mut snapshot.extractions {
+        extraction
+            .entities
+            .retain(|entity| !deleted_node_ids.contains(&entity.entity_id));
+        extraction
+            .topics
+            .retain(|topic| !deleted_node_ids.contains(&topic.topic_id));
+        extraction.claims.retain(|claim| {
+            !claim
+                .subject_refs
+                .iter()
+                .any(|node_id| deleted_node_ids.contains(node_id))
+        });
+        extraction.relations.retain(|relation| {
+            !deleted_node_ids.contains(&relation.source_node_id)
+                && !deleted_node_ids.contains(&relation.target_node_id)
+        });
+    }
+    snapshot
+        .wiki_pages
+        .retain(|page| !deleted_topic_paths.contains(&page.path));
+    for page in &mut snapshot.wiki_pages {
+        page.node_refs
+            .retain(|node_id| !deleted_node_ids.contains(node_id));
+    }
+    refresh_materialized_wiki_pages(snapshot);
 }
 
 fn remap_merged_node_refs(
@@ -8889,6 +9298,7 @@ fn correction_kind_slug(kind: &CorrectionKind) -> &'static str {
         CorrectionKind::KeepSeparate => "keep_separate",
         CorrectionKind::Rename => "rename",
         CorrectionKind::Split => "split",
+        CorrectionKind::Delete => "delete",
     }
 }
 
@@ -8898,6 +9308,7 @@ fn correction_kind_from_slug(value: &str) -> Result<CorrectionKind> {
         "keep_separate" => Ok(CorrectionKind::KeepSeparate),
         "rename" => Ok(CorrectionKind::Rename),
         "split" => Ok(CorrectionKind::Split),
+        "delete" => Ok(CorrectionKind::Delete),
         _ => bail!("unknown correction kind {value}"),
     }
 }
@@ -9211,6 +9622,30 @@ impl KnowledgeProjectStore {
             .collect()
     }
 
+    fn delete_workspace_source(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> Result<Option<StoredSourceRow>> {
+        self.ensure_schema()?;
+        let row = self
+            .load_source_rows(workspace_id)?
+            .into_iter()
+            .find(|row| row.summary.source_id == source_id);
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let sql = format!(
+            "DELETE FROM sources WHERE workspace_id = '{workspace_id}' AND source_id = '{source_id}'; \
+             DELETE FROM projects WHERE project_id = '{project_id}' AND NOT EXISTS (SELECT 1 FROM sources WHERE project_id = '{project_id}');",
+            workspace_id = escape_sqlite(workspace_id),
+            source_id = escape_sqlite(source_id),
+            project_id = escape_sqlite(&row.project_id),
+        );
+        self.run_sql(&sql)?;
+        Ok(Some(row))
+    }
+
     fn load_projects_for_workspace(
         &self,
         workspace_id: &str,
@@ -9350,7 +9785,10 @@ impl KnowledgeProjectStore {
     fn materialize_workspace_brain_repo(&self, workspace_id: &str) -> Result<()> {
         let rows = self.load_projects_for_workspace(workspace_id)?;
         if rows.is_empty() {
-            return Ok(());
+            let workspace_root = fallback_workspace_root(&self.path, workspace_id);
+            let mut snapshot = empty_replayed_brain_snapshot(workspace_id);
+            snapshot.generated_at = unix_timestamp_seconds();
+            return write_materialized_brain_repo(&workspace_root, &snapshot);
         }
         let workspace_root = workspace_root_for_rows(&rows)
             .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id));
