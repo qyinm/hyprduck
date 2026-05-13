@@ -5556,6 +5556,7 @@ fn queued_agent_proposal_runner_applies_valid_changes_transactionally() {
         .map(|path| read_json_artifact::<AgentProposalApplyAudit>(path).expect("read audit"))
         .collect::<Vec<_>>();
     assert!(audits.iter().all(|audit| {
+        let run_root = workspace_root.join("runs").join(&audit.run_id);
         audit.status == "applied"
             && audit.error_code.is_none()
             && audit.error_message.is_none()
@@ -5565,6 +5566,13 @@ fn queued_agent_proposal_runner_applies_valid_changes_transactionally() {
                 .join(&audit.snapshot_id)
                 .join("manifest.json")
                 .exists()
+            && run_root.join("before.json").exists()
+            && run_root.join("before").exists()
+            && run_root.join("after.json").exists()
+            && run_root.join("after").exists()
+            && run_root.join("graph-diff.json").exists()
+            && run_root.join("provider-response.json").exists()
+            && run_root.join("validation-report.json").exists()
     }));
     assert!(audits.iter().any(|audit| {
         audit.proposal_id == "proposal-queued-node"

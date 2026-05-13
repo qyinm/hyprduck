@@ -58,6 +58,7 @@ mod parse;
 mod provider;
 mod provider_graph_prompt;
 mod retrieval;
+mod run_artifacts;
 mod source_index;
 
 use brain_repo::*;
@@ -75,6 +76,7 @@ use provider::{
     provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
 };
 use provider_graph_prompt::build_provider_graph_proposal_prompt;
+use run_artifacts::queued_proposal_provider_response_value;
 use source_index::{chunk_source_markdown, upsert_source_chunks};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
@@ -6169,6 +6171,21 @@ fn apply_queued_agent_proposal_transaction(
     let before = capture_materialized_file_snapshot(writer.root())?;
     persist_materialized_snapshot(writer.root(), &snapshot_id, &before)?;
     persist_agent_run_snapshot(writer.root(), &run_id, "before", &before)?;
+    write_json_pretty(
+        &writer
+            .root()
+            .join("runs")
+            .join(&run_id)
+            .join("provider-response.json"),
+        &queued_proposal_provider_response_value(
+            &run_id,
+            &proposal.workspace_id,
+            &proposal.proposal_id,
+            &proposal.actor,
+            proposal.proposal_payload.as_ref(),
+            started_at,
+        ),
+    )?;
 
     let apply_result = (|| -> Result<()> {
         enrich_agent_graph_proposal_refs(&mut proposal);
