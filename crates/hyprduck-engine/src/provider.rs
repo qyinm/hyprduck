@@ -11,6 +11,7 @@ use hyprduck_engine_types::{
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 
+use crate::chat_openai_compatible_client::{parse_openai_compatible, provider_unavailable};
 use crate::resolve_binary;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +66,7 @@ impl ProviderKind {
         }
     }
 
-    fn default_base_url(&self) -> &'static str {
+    pub(crate) fn default_base_url(&self) -> &'static str {
         match self {
             Self::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
             Self::Ollama => "http://127.0.0.1:11434/v1/chat/completions",
@@ -478,65 +479,4 @@ pub(crate) fn parse_text_with_provider(
             parse_openai_compatible(config, &prompt, None)
         }
     }
-}
-
-pub(crate) fn provider_unavailable(config: &EngineConfig) -> bool {
-    match config.provider {
-        ProviderKind::OpenRouter => config.api_key.trim().is_empty(),
-        ProviderKind::Ollama => false,
-    }
-}
-
-pub(crate) fn parse_openai_compatible(
-    config: &EngineConfig,
-    prompt: &str,
-    image_base64: Option<String>,
-) -> Result<String> {
-    parse_openai_compatible_with_timeout(config, prompt, image_base64, None)
-}
-
-pub(crate) fn parse_openai_compatible_with_timeout(
-    config: &EngineConfig,
-    prompt: &str,
-    image_base64: Option<String>,
-    timeout: Option<Duration>,
-) -> Result<String> {
-    let client = Client::builder()
-        .timeout(timeout)
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .context("failed to build provider HTTP client")?;
-    let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
-    if let Some(image_base64) = image_base64 {
-        content.push(serde_json::json!({
-            "type": "image_url",
-            "image_url": { "url": format!("data:image/png;base64,{image_base64}") }
-        }));
-    }
-
-    let body = serde_json::json!({
-        "model": config.model_id,
-        "messages": [{ "role": "user", "content": content }],
-    });
-    let endpoint = config
-        .base_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
-        .unwrap_or_else(|| config.provider.default_base_url().to_string());
-    let response = client
-        .post(&endpoint)
-        .bearer_auth(config.api_key.clone())
-        .json(&body)
-        .send()
-        .map_err(|error| anyhow!("failed to send provider request to {endpoint}: {error:#}"))?;
-    let response = response
-        .error_for_status()
-        .map_err(|error| anyhow!("provider returned error status from {endpoint}: {error:#}"))?;
-    let json: serde_json::Value = response.json().map_err(|error| {
-        anyhow!("failed to decode provider response from {endpoint}: {error:#}")
-    })?;
-    json["choices"][0]["message"]["content"]
-        .as_str()
-        .map(|value| value.to_string())
-        .ok_or_else(|| anyhow!("provider response did not include markdown text"))
 }

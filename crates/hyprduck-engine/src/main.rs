@@ -51,6 +51,7 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 mod brain_repo;
+mod chat_openai_compatible_client;
 mod consolidation;
 mod import_context;
 mod knowledge;
@@ -62,6 +63,7 @@ mod run_artifacts;
 mod source_index;
 
 use brain_repo::*;
+use chat_openai_compatible_client::{parse_openai_compatible_with_timeout, provider_unavailable};
 use consolidation::{
     build_post_import_consolidation_prompt, failed_post_import_consolidation_report_value,
     post_import_consolidation_report_value, should_run_post_import_consolidation,
@@ -72,8 +74,7 @@ use import_context::{
 use knowledge::*;
 use parse::parse_document;
 use provider::{
-    check_readiness, parse_openai_compatible_with_timeout, provider_model_catalog,
-    provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
+    check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
 use provider_graph_prompt::build_provider_graph_proposal_prompt;
 use run_artifacts::queued_proposal_provider_response_value;

@@ -153,10 +153,14 @@ fn run_mode(cases: &[GoldenCase], mode: GoldenEvalMode) -> Result<EvalCounts> {
         .with_context(|| format!("failed creating {}", eval_root.display()))?;
 
     let previous_store = std::env::var_os("HYPRDUCK_PROJECT_STORE");
+    let previous_output_dir = std::env::var_os("HYPRDUCK_OUTPUT_DIR");
+    let previous_provider_graph = std::env::var_os("HYPRDUCK_DISABLE_PROVIDER_GRAPH");
     std::env::set_var(
         "HYPRDUCK_PROJECT_STORE",
         eval_root.join("knowledge.sqlite3"),
     );
+    std::env::set_var("HYPRDUCK_OUTPUT_DIR", &eval_root);
+    std::env::set_var("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1");
 
     let result = (|| {
         let client = SubprocessEngineClient::default();
@@ -169,6 +173,8 @@ fn run_mode(cases: &[GoldenCase], mode: GoldenEvalMode) -> Result<EvalCounts> {
     })();
 
     restore_env_var("HYPRDUCK_PROJECT_STORE", previous_store);
+    restore_env_var("HYPRDUCK_OUTPUT_DIR", previous_output_dir);
+    restore_env_var("HYPRDUCK_DISABLE_PROVIDER_GRAPH", previous_provider_graph);
     let _ = fs::remove_dir_all(&eval_root);
     result
 }
