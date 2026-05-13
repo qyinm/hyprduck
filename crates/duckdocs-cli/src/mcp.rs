@@ -3,9 +3,10 @@ use std::io::{self, BufRead, Write};
 use anyhow::{anyhow, Context, Result};
 use duckdocs_engine_client::{EngineClient, SubprocessEngineClient};
 use duckdocs_engine_types::{
-    BrainActor, BrainActorType, BrainProposalKind, BrainReadScope, BrainRelationKind,
-    GetBrainHealthRequest, GetContextPackRequest, ProposeBrainUpdateRequest, ReadNodeRequest,
-    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    AgentGraphProposalPayload, BrainActor, BrainActorType, BrainProposalKind, BrainReadScope,
+    BrainRelationKind, GetBrainHealthRequest, GetContextPackRequest, ProposeBrainUpdateRequest,
+    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadRecentEventsRequest,
+    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -63,6 +64,11 @@ fn handle_message(client: &dyn EngineClient, line: &str) -> Option<Value> {
         "ping" => Some(success_response(id, json!({}))),
         "tools/list" => Some(success_response(id, json!({ "tools": tool_definitions() }))),
         "tools/call" => Some(handle_tool_call(client, id, message.get("params"))),
+        "resources/list" => Some(success_response(
+            id,
+            json!({ "resources": resource_definitions() }),
+        )),
+        "resources/read" => Some(handle_resource_read(client, id, message.get("params"))),
         _ => Some(error_response(
             id,
             -32601,
@@ -90,6 +96,10 @@ fn initialize_result(message: &Value) -> Value {
         "capabilities": {
             "tools": {
                 "listChanged": false
+            },
+            "resources": {
+                "subscribe": false,
+                "listChanged": false
             }
         },
         "serverInfo": {
@@ -116,15 +126,24 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
     };
 
     let result = match call_tool(client, name, arguments) {
-        Ok(value) => json!({
-            "content": [
-                {
-                    "type": "text",
-                    "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into())
-                }
-            ],
-            "isError": false
-        }),
+        Ok(tool_result) => {
+            let mut result = json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": serde_json::to_string_pretty(&tool_result.value)
+                            .unwrap_or_else(|_| "{}".into())
+                    }
+                ],
+                "isError": false
+            });
+            if let Some(cache_state) = tool_result.cache_state {
+                result["_meta"] = json!({
+                    "hyprduckGraphWikiCache": cache_state
+                });
+            }
+            result
+        }
         Err(error) => json!({
             "content": [
                 {
@@ -139,76 +158,291 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
     success_response(id, result)
 }
 
+fn handle_resource_read(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
+    match read_resource(client, params) {
+        Ok(value) => success_response(id, value),
+        Err(error) => error_response(id, -32602, error.to_string()),
+    }
+}
+
+fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Value> {
+    let params = params.unwrap_or(&Value::Null);
+    let uri = params
+        .get("uri")
+        .and_then(Value::as_str)
+        .filter(|uri| !uri.trim().is_empty())
+        .ok_or_else(|| anyhow!("Invalid params: missing resource uri"))?;
+    let resource = parse_resource_uri(uri)?;
+
+    match resource.kind {
+        BrainResourceKind::GraphSnapshot => {
+            let snapshot = client.read_graph_snapshot(ReadGraphSnapshotRequest {
+                scope: resource.scope,
+            })?;
+            Ok(json!({
+                "contents": [
+                    {
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": serde_json::to_string_pretty(&snapshot)?
+                    }
+                ]
+            }))
+        }
+        BrainResourceKind::WikiPage { path } => {
+            let page = client.read_wiki_page(ReadWikiPageRequest {
+                scope: resource.scope,
+                path,
+            })?;
+            Ok(json!({
+                "contents": [
+                    {
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": page.page.body
+                    }
+                ]
+            }))
+        }
+    }
+}
+
+struct BrainResource {
+    scope: BrainReadScope,
+    kind: BrainResourceKind,
+}
+
+enum BrainResourceKind {
+    GraphSnapshot,
+    WikiPage { path: String },
+}
+
+fn parse_resource_uri(uri: &str) -> Result<BrainResource> {
+    let Some(rest) = uri.strip_prefix("hyprduck://brain/") else {
+        return Err(anyhow!("unsupported HyprDuck resource uri: {uri}"));
+    };
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (workspace_id, resource_path) = path
+        .split_once('/')
+        .ok_or_else(|| anyhow!("HyprDuck resource uri must include workspace and resource path"))?;
+    if workspace_id.trim().is_empty() {
+        return Err(anyhow!("HyprDuck resource uri workspace cannot be empty"));
+    }
+    let query = parse_resource_query(query)?;
+    let scope = BrainReadScope {
+        workspace_id: percent_decode(workspace_id)?,
+        root_dir: query
+            .get("rootDir")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    let kind = if resource_path == "graph/snapshot" {
+        BrainResourceKind::GraphSnapshot
+    } else if let Some(path) = resource_path.strip_prefix("wiki/") {
+        BrainResourceKind::WikiPage {
+            path: format!("wiki/{}", percent_decode(path)?),
+        }
+    } else {
+        return Err(anyhow!(
+            "unsupported HyprDuck resource path: {resource_path}"
+        ));
+    };
+    Ok(BrainResource { scope, kind })
+}
+
+fn parse_resource_query(query: &str) -> Result<Map<String, Value>> {
+    let mut values = Map::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        values.insert(percent_decode(key)?, Value::String(percent_decode(value)?));
+    }
+    Ok(values)
+}
+
+fn percent_decode(value: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
+                    .context("resource uri contains invalid percent encoding")?;
+                let byte = u8::from_str_radix(hex, 16)
+                    .context("resource uri contains invalid percent encoding")?;
+                decoded.push(byte);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).context("resource uri contains invalid utf-8")
+}
+
 fn call_tool(
     client: &dyn EngineClient,
     name: &str,
     arguments: &Map<String, Value>,
-) -> Result<Value> {
+) -> Result<McpToolResult> {
     let scope = read_scope(arguments)?;
+    let cache_scope = scope.clone();
+    let cache_before = cache_sensitive_tool(name)
+        .then(|| read_graph_wiki_cache_state(client, &cache_scope))
+        .transpose()?
+        .flatten();
 
-    match name {
+    let value = match name {
         "search_brain" => {
             let query = required_string(arguments, "query")?;
             let limit = optional_usize(arguments, "limit")?;
-            Ok(serde_json::to_value(client.search_brain(
-                SearchBrainRequest {
-                    scope,
-                    query,
-                    limit,
-                },
-            )?)?)
+            serde_json::to_value(client.search_brain(SearchBrainRequest {
+                scope,
+                query,
+                limit,
+            })?)?
         }
         "get_context_pack" => {
             let query = required_string(arguments, "query")?;
             let budget = optional_usize(arguments, "budget")?;
-            Ok(serde_json::to_value(client.get_context_pack(
-                GetContextPackRequest {
-                    scope,
-                    query,
-                    budget,
-                },
-            )?)?)
+            serde_json::to_value(client.get_context_pack(GetContextPackRequest {
+                scope,
+                query,
+                budget,
+            })?)?
         }
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
-            Ok(serde_json::to_value(
-                client.read_source(ReadSourceRequest { scope, source_id })?,
-            )?)
+            serde_json::to_value(client.read_source(ReadSourceRequest { scope, source_id })?)?
         }
         "read_wiki_page" => {
             let path = required_string(arguments, "path")?;
-            Ok(serde_json::to_value(
-                client.read_wiki_page(ReadWikiPageRequest { scope, path })?,
-            )?)
+            serde_json::to_value(client.read_wiki_page(ReadWikiPageRequest { scope, path })?)?
         }
         "read_node" => {
             let node_id = required_string(arguments, "nodeId")?;
-            Ok(serde_json::to_value(
-                client.read_node(ReadNodeRequest { scope, node_id })?,
-            )?)
+            serde_json::to_value(client.read_node(ReadNodeRequest { scope, node_id })?)?
         }
         "read_recent_events" => {
             let limit = optional_usize(arguments, "limit")?;
-            Ok(serde_json::to_value(client.read_recent_events(
-                ReadRecentEventsRequest { scope, limit },
-            )?)?)
+            serde_json::to_value(client.read_recent_events(ReadRecentEventsRequest {
+                scope,
+                limit,
+                run_id: optional_string(arguments, "runId")?,
+                source_ref: optional_string(arguments, "sourceRef")?,
+                node_id: optional_string(arguments, "nodeId")?,
+                edge_id: optional_string(arguments, "edgeId")?,
+                claim_id: optional_string(arguments, "claimId")?,
+                memory_id: optional_string(arguments, "memoryId")?,
+                change_type: optional_string(arguments, "changeType")?,
+            })?)?
         }
-        "read_health" => Ok(serde_json::to_value(
-            client.get_brain_health(GetBrainHealthRequest { scope })?,
-        )?),
-        "propose_memory" => propose_update(client, scope, BrainProposalKind::Memory, arguments),
-        "propose_claim" => propose_update(client, scope, BrainProposalKind::Claim, arguments),
-        "propose_link" => propose_update(client, scope, BrainProposalKind::Link, arguments),
+        "read_graph_history" => {
+            let limit = optional_usize(arguments, "limit")?;
+            serde_json::to_value(
+                client.read_graph_history(ReadGraphHistoryRequest { scope, limit })?,
+            )?
+        }
+        "read_graph_snapshot" => {
+            serde_json::to_value(client.read_graph_snapshot(ReadGraphSnapshotRequest { scope })?)?
+        }
+        "read_health" => {
+            serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
+        }
+        "propose_node" => propose_update(client, scope, BrainProposalKind::Node, arguments)?,
+        "propose_memory" => propose_update(client, scope, BrainProposalKind::Memory, arguments)?,
+        "propose_claim" => propose_update(client, scope, BrainProposalKind::Claim, arguments)?,
+        "propose_link" => propose_update(client, scope, BrainProposalKind::Link, arguments)?,
         "append_observation" => {
-            propose_update(client, scope, BrainProposalKind::Observation, arguments)
+            propose_update(client, scope, BrainProposalKind::Observation, arguments)?
         }
         "add_source_note" => {
-            propose_update(client, scope, BrainProposalKind::SourceNote, arguments)
+            propose_update(client, scope, BrainProposalKind::SourceNote, arguments)?
         }
         "request_consolidation" => {
-            propose_update(client, scope, BrainProposalKind::Observation, arguments)
+            propose_update(client, scope, BrainProposalKind::Observation, arguments)?
         }
-        _ => Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
+        _ => return Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
+    };
+
+    let cache_after = cache_sensitive_tool(name)
+        .then(|| read_graph_wiki_cache_state(client, &cache_scope))
+        .transpose()?
+        .flatten();
+    Ok(McpToolResult {
+        value,
+        cache_state: cache_after.map(|after| McpGraphWikiCacheState {
+            invalidated: cache_before.as_ref() != Some(&after),
+            current: after,
+        }),
+    })
+}
+
+struct McpToolResult {
+    value: Value,
+    cache_state: Option<McpGraphWikiCacheState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpGraphWikiCacheState {
+    invalidated: bool,
+    current: McpGraphWikiCacheToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpGraphWikiCacheToken {
+    workspace_id: String,
+    snapshot_id: String,
+    source_ingest_id: String,
+    materialized_at: u64,
+    latest_readable_snapshot_path: String,
+    materialized_paths: Vec<String>,
+}
+
+fn cache_sensitive_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "read_health"
+            | "propose_node"
+            | "propose_memory"
+            | "propose_claim"
+            | "propose_link"
+            | "append_observation"
+            | "add_source_note"
+            | "request_consolidation"
+    )
+}
+
+fn read_graph_wiki_cache_state(
+    client: &dyn EngineClient,
+    scope: &BrainReadScope,
+) -> Result<Option<McpGraphWikiCacheToken>> {
+    match client.read_graph_snapshot(ReadGraphSnapshotRequest {
+        scope: scope.clone(),
+    }) {
+        Ok(snapshot) => Ok(Some(McpGraphWikiCacheToken {
+            workspace_id: snapshot.workspace_id,
+            snapshot_id: snapshot.snapshot_id,
+            source_ingest_id: snapshot.source_ingest_id,
+            materialized_at: snapshot.materialized_at,
+            latest_readable_snapshot_path: snapshot.latest_readable_snapshot_path,
+            materialized_paths: snapshot.materialized_paths,
+        })),
+        Err(error)
+            if error.to_string().contains("No such file")
+                || error.to_string().contains("not found") =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -241,6 +475,7 @@ fn propose_update(
         source_refs: optional_string_array(arguments, "sourceRefs")?,
         node_refs: optional_string_array(arguments, "nodeRefs")?,
         evidence_refs: optional_string_array(arguments, "evidenceRefs")?,
+        proposal_payload: optional_agent_proposal_payload(arguments)?,
     };
     Ok(serde_json::to_value(client.propose_brain_update(request)?)?)
 }
@@ -307,6 +542,19 @@ fn optional_relation_kind(
         .transpose()
 }
 
+fn optional_agent_proposal_payload(
+    arguments: &Map<String, Value>,
+) -> Result<Option<AgentGraphProposalPayload>> {
+    let Some(value) = arguments
+        .get("proposalPayload")
+        .or_else(|| arguments.get("proposal_payload"))
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("argument proposalPayload is not a valid agent graph proposal payload")
+}
+
 fn parse_relation_kind(raw: &str) -> Result<BrainRelationKind> {
     match raw {
         "mentions" => Ok(BrainRelationKind::Mentions),
@@ -348,6 +596,23 @@ fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {
             "message": message.into()
         }
     })
+}
+
+fn resource_definitions() -> Vec<Value> {
+    vec![
+        json!({
+            "uri": "hyprduck://brain/default/graph/snapshot",
+            "name": "Latest graph/wiki snapshot",
+            "description": "Resolved latest completed materialized graph/wiki snapshot for the default workspace.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "hyprduck://brain/default/wiki/index.md",
+            "name": "Wiki index",
+            "description": "Current materialized wiki index for the default workspace.",
+            "mimeType": "text/markdown"
+        }),
+    ]
 }
 
 fn tool_definitions() -> Vec<Value> {
@@ -401,10 +666,33 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "read_recent_events",
-            "Read recent append-only brain events.",
+            "Read append-only graph loop events, optionally filtered by run, source, node, edge, claim, memory, or change type.",
             json!({
                 "limit": { "type": "integer", "minimum": 1, "description": "Maximum event count." },
+                "runId": { "type": "string", "description": "Filter by ingest run, source run, caused-by event, or payload runId." },
+                "sourceRef": { "type": "string", "description": "Filter by source ID or markdown/source path ref." },
+                "nodeId": { "type": "string", "description": "Filter by node ref or target node ID." },
+                "edgeId": { "type": "string", "description": "Filter by edge/relation ref or target edge ID." },
+                "claimId": { "type": "string", "description": "Filter by claim ref or target claim ID." },
+                "memoryId": { "type": "string", "description": "Filter by memory ref or target memory ID." },
+                "changeType": { "type": "string", "description": "Filter by event type, operation type, or payload changeType." },
             }),
+            Vec::new(),
+            true,
+        ),
+        tool_definition(
+            "read_graph_history",
+            "List prior materialized graph states with timestamps, source run IDs, and storage locations.",
+            json!({
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum graph state count." },
+            }),
+            Vec::new(),
+            true,
+        ),
+        tool_definition(
+            "read_graph_snapshot",
+            "Read the latest completed materialized graph/wiki snapshot and its loading paths for UI, MCP, and agent consumers.",
+            json!({}),
             Vec::new(),
             true,
         ),
@@ -414,6 +702,13 @@ fn tool_definitions() -> Vec<Value> {
             json!({}),
             Vec::new(),
             true,
+        ),
+        tool_definition(
+            "propose_node",
+            "Propose a source-backed graph node using a proposalPayload with changeType new_node.",
+            proposal_properties(json!({})),
+            vec!["title", "body", "proposalPayload"],
+            false,
         ),
         tool_definition(
             "propose_memory",
@@ -511,6 +806,13 @@ fn proposal_properties(properties: Value) -> Value {
         (
             "evidenceRefs",
             json!({ "type": "array", "items": { "type": "string" }, "description": "Evidence IDs supporting this proposal." }),
+        ),
+        (
+            "proposalPayload",
+            json!({
+                "type": "object",
+                "description": "Typed agent graph change payload, tagged by changeType such as new_node, new_edge, new_claim, or new_memory. See schemas/graph-change-proposal.schema.json."
+            }),
         ),
     ] {
         merged_properties.entry(name).or_insert(schema);

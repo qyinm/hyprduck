@@ -6,15 +6,15 @@
   "type": "module",
   "main": "main.cjs",
   "scripts": {
-    "dev": "bun run sync:sidecar:debug && node scripts/dev-electron.cjs",
-    "build": "bun run frontend:build && bun run sync:sidecar:release && electron-builder --mac dir",
+    "dev": "bun run sync:engine:debug && node scripts/dev-electron.cjs",
+    "build": "bun run frontend:build && bun run sync:engine:release && electron-builder --mac dir",
     "electron:dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",
     "frontend:build": "tsc --noEmit && vite build",
     "test:ia": "bun test tests/ia-ui.test.mjs",
-    "sync:sidecar:debug": "../../scripts/sync-electron-sidecar.sh debug",
-    "sync:sidecar:release": "../../scripts/sync-electron-sidecar.sh release"
+    "sync:engine:debug": "../../scripts/sync-electron-engine.sh debug",
+    "sync:engine:release": "../../scripts/sync-electron-engine.sh release"
   },
   "build": {
     "appId": "com.duckdocs.desktop",

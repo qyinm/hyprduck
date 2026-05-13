@@ -8,12 +8,12 @@
 
 ## What This Project Does
 
-HyprDuck converts existing files into markdown packages:
+HyprDuck imports existing files into a local agent-ready brain:
 
 1. **Import**: Choose a PDF, DOCX, or DOC file.
-2. **Render**: Convert each page into an image snapshot for multimodal analysis.
-3. **Generate**: Send page images to the configured AI provider and assemble markdown output.
-4. **Save**: Write markdown plus linked page images to `~/Documents/HyprDuck/`.
+2. **Parse**: Extract markdown with the Rust engine, using fast local parsing where available.
+3. **Structure**: Compile markdown into source-backed graph/wiki/claim artifacts.
+4. **Save**: Write durable brain artifacts under the HyprDuck application data directory.
 
 The product surface is file parsing first. The active desktop shell is `apps/desktop`.
 
@@ -24,7 +24,7 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 ### If Adding File Parsing Features
 - Look at: `apps/desktop/main.cjs`, `apps/desktop/preload.cjs`, and `crates/duckdocs-engine/`
 - Key files: `main.cjs`, `preload.cjs`, `duckdocs-engine`, `duckdocs-engine-client`
-- Must handle: sidecar orchestration, config migration, output ownership
+- Must handle: engine runtime orchestration, config migration, output ownership
 
 ### If Adding AI Features
 - Look at: `crates/duckdocs-engine/src/main.rs`
@@ -41,7 +41,7 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 |------|-------------|-------|
 | Change AI model | `crates/duckdocs-engine/src/main.rs` | Update provider/model defaults and config payloads |
 | Change prompt behavior | `crates/duckdocs-engine/src/main.rs` | Keep prompt template IDs aligned with config options |
-| Modify import logic | `apps/desktop/main.cjs` | Sidecar launch, parse lifecycle, window sync |
+| Modify import logic | `apps/desktop/main.cjs` | Engine launch, parse lifecycle, window sync |
 | Add file format support | `crates/duckdocs-engine/src/main.rs` | Extend conversion/parsing pipeline |
 | Change output format | `crates/duckdocs-engine/src/main.rs` | Output folder and markdown package assembly |
 | Change main UI | `apps/desktop/src/App.tsx` | File parsing surface |
@@ -53,7 +53,7 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 ```text
 User selects file in Electron shell
     ↓
-apps/desktop backend starts duckdocs-engine sidecar
+apps/desktop backend starts duckdocs-engine runtime
     ↓
 duckdocs-engine converts/parses the document
     ↓

@@ -5,15 +5,19 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub use duckdocs_knowledge::{
-    AnswerResponse, AnswerStatus, BrainActor, BrainActorType, BrainEvent, BrainEventKind,
-    BrainNodeKind, BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
+    AgentGraphProposalPayload, AgentGraphProposalValidationCode, AgentGraphProposalValidationError,
+    AgentGraphProposalValidationIssue, AgentNewClaimPayload, AgentNewEdgePayload,
+    AgentNewMemoryPayload, AgentNewNodePayload, AnswerResponse, AnswerStatus, BrainActor,
+    BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, BrainNodeKind,
+    BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
     BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainUpdateProposal, ClaimRecord,
     CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
     GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, ProjectOverview,
     ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
     SourceRecord, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionPageRef, StructuredExtractionRelation,
-    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, BRAIN_EVENT_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +33,9 @@ pub enum EngineCommand {
     ReadWikiPage,
     ReadNode,
     ReadRecentEvents,
+    ReadGraphHistory,
+    ReadGraphSnapshot,
+    ReconstructBrain,
     GetContextPack,
     ProposeBrainUpdate,
     ListBrainReviewItems,
@@ -48,6 +55,7 @@ pub enum DocumentFormat {
     Docx,
     Doc,
     Image,
+    Markdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,12 +415,131 @@ pub struct ReadRecentEventsRequest {
     pub scope: BrainReadScope,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub edge_id: Option<String>,
+    #[serde(default)]
+    pub claim_id: Option<String>,
+    #[serde(default)]
+    pub memory_id: Option<String>,
+    #[serde(default)]
+    pub change_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadRecentEventsResponseData {
     pub events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphHistoryRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHistoryEntry {
+    pub snapshot_id: String,
+    pub materialized_at: u64,
+    pub event_id: String,
+    pub rollback_target: GraphRollbackTarget,
+    #[serde(default)]
+    pub operation_type: Option<String>,
+    #[serde(default)]
+    pub source_run_ids: Vec<String>,
+    #[serde(default)]
+    pub source_markdown_refs: Vec<String>,
+    #[serde(default)]
+    pub storage_locations: Vec<String>,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub claim_count: usize,
+    pub memory_count: usize,
+    pub wiki_page_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRollbackTarget {
+    pub snapshot_id: String,
+    pub event_id: String,
+    pub materialized_version: u64,
+    pub replay_selector: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphHistoryResponseData {
+    pub states: Vec<GraphHistoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphSnapshotRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphSnapshotResponseData {
+    pub snapshot_id: String,
+    pub source_ingest_id: String,
+    pub workspace_id: WorkspaceId,
+    pub source_of_truth_path: String,
+    pub latest_readable_snapshot_path: String,
+    pub created_at: u64,
+    pub materialized_at: u64,
+    #[serde(default)]
+    pub materialized_paths: Vec<String>,
+    #[serde(default)]
+    pub source_paths: Vec<String>,
+    #[serde(default)]
+    pub nodes: Vec<BrainNodeRecord>,
+    #[serde(default, rename = "edges")]
+    pub edges: Vec<BrainRelationRecord>,
+    #[serde(default)]
+    pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub memory_refs: Vec<String>,
+    #[serde(default)]
+    pub wiki_pages: Vec<WikiPage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconstructBrainRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub up_to_timestamp: Option<u64>,
+    #[serde(default)]
+    pub up_to_materialized_version: Option<u64>,
+    #[serde(default)]
+    pub up_to_event_id: Option<String>,
+    #[serde(default)]
+    pub output_root: Option<String>,
+    #[serde(default)]
+    pub write_materialized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconstructBrainResponseData {
+    pub snapshot: BrainRepoSnapshot,
+    pub replayed_event_count: usize,
+    pub selected_event_id: Option<String>,
+    pub snapshot_id: String,
+    pub output_root: String,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -485,6 +612,8 @@ pub struct ProposeBrainUpdateRequest {
     pub node_refs: Vec<String>,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub proposal_payload: Option<AgentGraphProposalPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,6 +852,9 @@ pub enum EngineRequest {
     ReadWikiPage(ReadWikiPageRequest),
     ReadNode(ReadNodeRequest),
     ReadRecentEvents(ReadRecentEventsRequest),
+    ReadGraphHistory(ReadGraphHistoryRequest),
+    ReadGraphSnapshot(ReadGraphSnapshotRequest),
+    ReconstructBrain(ReconstructBrainRequest),
     GetContextPack(GetContextPackRequest),
     ProposeBrainUpdate(ProposeBrainUpdateRequest),
     ListBrainReviewItems(ListBrainReviewItemsRequest),
@@ -856,6 +988,95 @@ impl From<ParseEvent> for ParseProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_snapshot_read_contract_schema_requires_materialized_state_fields() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/graph-snapshot-read.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", schema_path.display())),
+        )
+        .unwrap();
+
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema must define top-level required fields");
+        for field in [
+            "snapshotId",
+            "sourceIngestId",
+            "sourceOfTruthPath",
+            "latestReadableSnapshotPath",
+            "createdAt",
+            "materializedAt",
+            "materializedPaths",
+            "nodes",
+            "edges",
+            "claims",
+            "memoryRefs",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "schema must require {field}"
+            );
+        }
+
+        assert_eq!(
+            schema
+                .pointer("/properties/snapshotId/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/sourceIngestId/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/sourceOfTruthPath/const")
+                .and_then(Value::as_str),
+            Some("events/brain_events.jsonl")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/latestReadableSnapshotPath/const")
+                .and_then(Value::as_str),
+            Some("state/latest-readable-snapshot.json")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/materializedPaths/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/stringArray")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/nodes/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/node")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/edges/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/edge")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/claims/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/claim")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/memoryRefs/items/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+    }
 
     #[test]
     fn parse_request_round_trip() {
@@ -1109,6 +1330,20 @@ mod tests {
             EngineRequest::ReadRecentEvents(ReadRecentEventsRequest {
                 scope: scope.clone(),
                 limit: Some(3),
+                run_id: None,
+                source_ref: None,
+                node_id: None,
+                edge_id: None,
+                claim_id: None,
+                memory_id: None,
+                change_type: None,
+            }),
+            EngineRequest::ReadGraphHistory(ReadGraphHistoryRequest {
+                scope: scope.clone(),
+                limit: Some(3),
+            }),
+            EngineRequest::ReadGraphSnapshot(ReadGraphSnapshotRequest {
+                scope: scope.clone(),
             }),
             EngineRequest::GetContextPack(GetContextPackRequest {
                 scope: scope.clone(),
@@ -1133,6 +1368,7 @@ mod tests {
                 source_refs: vec![],
                 node_refs: vec!["project-hyprduck".into()],
                 evidence_refs: vec![],
+                proposal_payload: None,
             }),
             EngineRequest::ListBrainReviewItems(ListBrainReviewItemsRequest {
                 scope: scope.clone(),

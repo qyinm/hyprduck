@@ -20,10 +20,7 @@ waitForDevServer()
     electron = spawn("bun", ["run", "electron:dev"], {
       stdio: "inherit",
       shell: true,
-      env: {
-        ...process.env,
-        VITE_DEV_SERVER_URL: devUrl,
-      },
+      env: electronAppEnv(),
     });
     electron.on("error", (error) => {
       console.error("Failed to start Electron dev process via Bun:", error);
@@ -67,6 +64,15 @@ function waitForDevServer(deadline = Date.now() + 30000) {
     };
     attempt();
   });
+}
+
+function electronAppEnv() {
+  const env = {
+    ...process.env,
+    VITE_DEV_SERVER_URL: devUrl,
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
 }
 
 function shutdown(code) {

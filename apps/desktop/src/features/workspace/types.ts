@@ -78,7 +78,7 @@ export interface WorkspaceSourceSummary {
 }
 
 export interface WorkspaceCorrectionAction {
-  kind: "merge" | "keep_separate" | "rename";
+  kind: "merge" | "keep_separate" | "rename" | "split";
   label: string;
   disabledReason?: string | null;
 }
@@ -99,7 +99,7 @@ export interface WorkspaceAnswerProjectRequest {
 
 export interface WorkspaceProposeBrainUpdateRequest {
   workspaceId?: string | null;
-  kind: "memory" | "claim" | "link" | "observation" | "source_note";
+  kind: "node" | "memory" | "claim" | "link" | "observation" | "source_note";
   title: string;
   body: string;
   targetNodeId?: string | null;
@@ -111,7 +111,49 @@ export interface WorkspaceProposeBrainUpdateRequest {
   sourceRefs?: string[];
   nodeRefs?: string[];
   evidenceRefs?: string[];
+  proposalPayload?: WorkspaceAgentProposalPayload | null;
 }
+
+export type WorkspaceAgentProposalPayload =
+  | {
+      changeType: "new_node";
+      node: {
+        label: string;
+        kind: WorkspaceNodeSummary["kind"];
+        sourcePath: string;
+        nodeId?: string | null;
+        aliases?: string[];
+        sourceRefs?: string[];
+        evidenceRefs?: string[];
+        reason?: string | null;
+      };
+    }
+  | {
+      changeType: "new_claim";
+      claim: {
+        statement: string;
+        sourcePath: string;
+        claimId?: string | null;
+        topicRefs?: string[];
+        sourceRefs?: string[];
+        evidenceRefs?: string[];
+        reason?: string | null;
+      };
+    }
+  | {
+      changeType: "new_edge";
+      edge: {
+        sourceNodeId: string;
+        targetNodeId: string;
+        kind: WorkspaceRelationKind;
+        label: string;
+        sourcePath: string;
+        edgeId?: string | null;
+        sourceRefs?: string[];
+        evidenceRefs?: string[];
+        reason?: string | null;
+      };
+    };
 
 export interface WorkspaceNodeDetail {
   node: WorkspaceNodeSummary;
@@ -183,4 +225,91 @@ export interface WorkspaceProjectEnvelope {
   project: WorkspaceProject | null;
   workspace_id?: string | null;
   sources: WorkspaceSourceSummary[];
+}
+
+export type MaterializedGraphNodeKind =
+  | "source"
+  | "memory"
+  | "wiki_page"
+  | "person"
+  | "company"
+  | "project"
+  | "product"
+  | "team"
+  | "event"
+  | "decision"
+  | "task"
+  | "claim"
+  | "topic"
+  | "concept";
+
+export type MaterializedGraphRelationKind =
+  | "mentions"
+  | "supports"
+  | "contradicts"
+  | "supersedes"
+  | "same_as"
+  | "works_at"
+  | "founded"
+  | "invested_in"
+  | "advises"
+  | "attended"
+  | "owns"
+  | "responsible_for"
+  | "decided"
+  | "blocks"
+  | "depends_on"
+  | "source_of"
+  | "derived_from"
+  | "related_to";
+
+export interface MaterializedGraphNodeRecord {
+  nodeId: string;
+  kind: MaterializedGraphNodeKind;
+  label: string;
+  aliases: string[];
+  evidenceIds: string[];
+  sourceIds: string[];
+  confidence?: number | null;
+  updatedAt: number;
+}
+
+export interface MaterializedGraphRelationRecord {
+  relationId: string;
+  kind: MaterializedGraphRelationKind;
+  sourceNodeId: string;
+  targetNodeId: string;
+  label: string;
+  evidenceIds: string[];
+  confidence?: number | null;
+  updatedAt: number;
+}
+
+export interface MaterializedWikiPage {
+  pageId: string;
+  workspaceId: string;
+  path: string;
+  title: string;
+  body: string;
+  nodeRefs: string[];
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  updatedAt: number;
+}
+
+export interface MaterializedGraphSnapshot {
+  snapshotId: string;
+  sourceIngestId: string;
+  workspaceId: string;
+  sourceOfTruthPath: string;
+  latestReadableSnapshotPath: string;
+  createdAt: number;
+  materializedAt: number;
+  materializedPaths: string[];
+  sourcePaths: string[];
+  nodes: MaterializedGraphNodeRecord[];
+  edges: MaterializedGraphRelationRecord[];
+  claims: unknown[];
+  memoryRefs: string[];
+  wikiPages: MaterializedWikiPage[];
 }

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/graph-mutation-event.schema.json",
+  "title": "GraphMutationEvent",
+  "description": "Append-only graph/wiki event row stored in events/brain_events.jsonl. The JSONL file is the source of truth; materialized graph, claim, memory, and wiki files are rebuildable read models.",
+  "x-sourceOfTruth": "events/brain_events.jsonl",
+  "x-replayOrderingRules": [
+    "Replay events in physical JSONL append order after filtering by workspaceId.",
+    "Do not sort events by createdAt, eventId, or materializedVersion during replay.",
+    "upToEventId stops after applying the matching event row.",
+    "upToTimestamp and upToMaterializedVersion are cutoff selectors evaluated while scanning append order.",
+    "GraphMaterialized and MemoryAccepted events mutate materialized state; proposal, review, source, and maintenance events remain audit context unless their payload is explicitly replayable.",
+    "Rollback appends a new GraphMaterialized event with operationType graph_rollback; it never rewrites earlier rows."
+  ],
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "eventId",
+    "schemaVersion",
+    "workspaceId",
+    "scope",
+    "eventType",
+    "operationType",
+    "actor",
+    "sourceRefs",
+    "sourceMarkdownRefs",
+    "nodeRefs",
+    "relationRefs",
+    "claimRefs",
+    "memoryRefs",
+    "targetNodeIds",
+    "targetEdgeIds",
+    "targetClaimIds",
+    "targetMemoryIds",
+    "evidenceRefs",
+    "payloadJson",
+    "causality",
+    "policyResult",
+    "createdAt"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "workspaceId": { "type": "string", "minLength": 1 },
+    "scope": { "type": "string", "enum": ["project", "global"] },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "source_imported",
+        "source_ingest_queued",
+        "source_compiled",
+        "graph_materialized",
+        "wiki_materialized",
+        "correction_applied",
+        "node_proposed",
+        "memory_proposed",
+        "claim_proposed",
+        "link_proposed",
+        "observation_appended",
+        "source_note_proposed",
+        "wiki_page_proposed",
+        "memory_accepted",
+        "review_created",
+        "review_resolved",
+        "brain_maintenance_run"
+      ]
+    },
+    "operationType": {
+      "type": "string",
+      "enum": [
+        "new_node",
+        "new_edge",
+        "new_claim",
+        "new_memory",
+        "rename",
+        "split",
+        "merge",
+        "keep_separate",
+        "new_relation",
+        "graph_materialized",
+        "graph_materialize_noop",
+        "graph_rollback",
+        "wiki_materialized",
+        "source_ingest_queued",
+        "source_compiled",
+        "source_imported",
+        "correction_applied",
+        "review_created",
+        "review_resolved",
+        "brain_maintenance_run",
+        "queued_proposal_auto_accept",
+        "queued_proposal_auto_reject"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actorType", "actorId"],
+      "properties": {
+        "actorType": { "type": "string", "enum": ["system", "user", "agent"] },
+        "actorId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sourceRefs": { "$ref": "#/$defs/stringArray" },
+    "sourceMarkdownRefs": { "$ref": "#/$defs/stringArray" },
+    "nodeRefs": { "$ref": "#/$defs/stringArray" },
+    "relationRefs": { "$ref": "#/$defs/stringArray" },
+    "claimRefs": { "$ref": "#/$defs/stringArray" },
+    "memoryRefs": { "$ref": "#/$defs/stringArray" },
+    "targetNodeIds": { "$ref": "#/$defs/stringArray" },
+    "targetEdgeIds": { "$ref": "#/$defs/stringArray" },
+    "targetClaimIds": { "$ref": "#/$defs/stringArray" },
+    "targetMemoryIds": { "$ref": "#/$defs/stringArray" },
+    "evidenceRefs": { "$ref": "#/$defs/stringArray" },
+    "payloadJson": { "type": "string" },
+    "causality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "causedByEventIds",
+        "causedBySourceIds",
+        "schemaVersion"
+      ],
+      "properties": {
+        "causedByEventIds": { "$ref": "#/$defs/stringArray" },
+        "causedByProposalId": { "type": ["string", "null"] },
+        "causedBySourceIds": { "$ref": "#/$defs/stringArray" },
+        "snapshotId": { "type": ["string", "null"] },
+        "previousSnapshotId": { "type": ["string", "null"] },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "materializedVersion": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "confidence": { "type": ["string", "null"] },
+    "policyResult": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

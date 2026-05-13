@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Result};
-use duckdocs_engine_types::{BrainProposalKind, BrainRelationKind};
+use duckdocs_engine_types::{
+    BrainProposalKind, BrainRelationKind, ReadGraphHistoryRequest, ReadRecentEventsRequest,
+    ReconstructBrainRequest,
+};
 
 #[derive(Debug)]
 pub struct Cli {
@@ -52,7 +55,7 @@ impl Cli {
             Some("brain") => {
                 let subcommand = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: duckdocs brain <search|context-pack|propose-memory|propose-claim|propose-link|propose-wiki-page|append-observation|add-source-note>"))?;
+                    .ok_or_else(|| anyhow!("usage: duckdocs brain <search|context-pack|event-history|graph-history|inspect-state|rollback-state|propose-memory|propose-claim|propose-link|propose-wiki-page|append-observation|add-source-note>"))?;
                 Some(Commands::Brain {
                     command: parse_brain_command(subcommand, args.collect())?,
                 })
@@ -101,9 +104,19 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
     let mut workspace = "default".to_string();
     let mut root_dir = None;
     let mut budget = None;
+    let mut limit = None;
     let mut actor = None;
     let mut target_node_id = None;
     let mut target_source_id = None;
+    let mut run_id = None;
+    let mut source_ref = None;
+    let mut event_node_id = None;
+    let mut edge_id = None;
+    let mut claim_id = None;
+    let mut memory_id = None;
+    let mut change_type = None;
+    let mut snapshot_id = None;
+    let mut event_id = None;
     let mut relation_kind = None;
     let mut source_refs = Vec::new();
     let mut node_refs = Vec::new();
@@ -137,12 +150,35 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                         .map_err(|_| anyhow!("invalid --budget: {raw}"))?,
                 );
             }
+            "--limit" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| anyhow!("--limit needs a value"))?;
+                limit = Some(raw.parse().map_err(|_| anyhow!("invalid --limit: {raw}"))?);
+            }
             "--actor" => {
                 index += 1;
                 actor = Some(
                     args.get(index)
                         .cloned()
                         .ok_or_else(|| anyhow!("--actor needs a value"))?,
+                );
+            }
+            "--run" => {
+                index += 1;
+                run_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--run needs a value"))?,
+                );
+            }
+            "--source-ref" => {
+                index += 1;
+                source_ref = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--source-ref needs a value"))?,
                 );
             }
             "--target-node" => {
@@ -159,6 +195,62 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                     args.get(index)
                         .cloned()
                         .ok_or_else(|| anyhow!("--target-source needs a value"))?,
+                );
+            }
+            "--event-node" => {
+                index += 1;
+                event_node_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--event-node needs a value"))?,
+                );
+            }
+            "--edge" => {
+                index += 1;
+                edge_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--edge needs a value"))?,
+                );
+            }
+            "--claim" => {
+                index += 1;
+                claim_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--claim needs a value"))?,
+                );
+            }
+            "--memory" => {
+                index += 1;
+                memory_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--memory needs a value"))?,
+                );
+            }
+            "--change" => {
+                index += 1;
+                change_type = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--change needs a value"))?,
+                );
+            }
+            "--snapshot" => {
+                index += 1;
+                snapshot_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--snapshot needs a value"))?,
+                );
+            }
+            "--event" => {
+                index += 1;
+                event_id = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--event needs a value"))?,
                 );
             }
             "--relation" => {
@@ -220,8 +312,109 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 budget,
             })
         }
+        "event-history" | "events" => Ok(BrainCommand::EventHistory {
+            request: ReadRecentEventsRequest {
+                scope: duckdocs_engine_types::BrainReadScope {
+                    workspace_id: workspace,
+                    root_dir,
+                },
+                limit,
+                run_id,
+                source_ref: source_ref.or_else(|| source_refs.into_iter().next()),
+                node_id: event_node_id
+                    .or(target_node_id)
+                    .or_else(|| node_refs.into_iter().next()),
+                edge_id,
+                claim_id,
+                memory_id,
+                change_type,
+            },
+        }),
+        "graph-history" | "states" => Ok(BrainCommand::GraphHistory {
+            request: ReadGraphHistoryRequest {
+                scope: duckdocs_engine_types::BrainReadScope {
+                    workspace_id: workspace,
+                    root_dir,
+                },
+                limit,
+            },
+        }),
+        "inspect-state" | "state" => {
+            let selector = match (snapshot_id, event_id, positional.first().cloned()) {
+                (Some(snapshot_id), None, _) => GraphStateSelector::Snapshot(snapshot_id),
+                (None, Some(event_id), _) => GraphStateSelector::Event(event_id),
+                (None, None, Some(snapshot_id)) => GraphStateSelector::Snapshot(snapshot_id),
+                (Some(_), Some(_), _) => {
+                    return Err(anyhow!("use only one of --snapshot or --event"))
+                }
+                (None, None, None) => {
+                    return Err(anyhow!(
+                        "duckdocs brain inspect-state needs --snapshot <id> or --event <id>"
+                    ))
+                }
+            };
+            Ok(BrainCommand::InspectState {
+                request: ReadGraphHistoryRequest {
+                    scope: duckdocs_engine_types::BrainReadScope {
+                        workspace_id: workspace,
+                        root_dir,
+                    },
+                    limit,
+                },
+                selector,
+            })
+        }
+        "rollback-state" | "rollback" => {
+            let selector = match (snapshot_id, event_id, positional.first().cloned()) {
+                (Some(snapshot_id), None, _) => GraphStateSelector::Snapshot(snapshot_id),
+                (None, Some(event_id), _) => GraphStateSelector::Event(event_id),
+                (None, None, Some(snapshot_id)) => GraphStateSelector::Snapshot(snapshot_id),
+                (Some(_), Some(_), _) => {
+                    return Err(anyhow!("use only one of --snapshot or --event"))
+                }
+                (None, None, None) => {
+                    return Err(anyhow!(
+                        "duckdocs brain rollback-state needs --snapshot <id> or --event <id>"
+                    ))
+                }
+            };
+            Ok(BrainCommand::RollbackState {
+                history_request: ReadGraphHistoryRequest {
+                    scope: duckdocs_engine_types::BrainReadScope {
+                        workspace_id: workspace.clone(),
+                        root_dir: root_dir.clone(),
+                    },
+                    limit,
+                },
+                request: ReconstructBrainRequest {
+                    scope: duckdocs_engine_types::BrainReadScope {
+                        workspace_id: workspace,
+                        root_dir,
+                    },
+                    up_to_timestamp: None,
+                    up_to_materialized_version: None,
+                    up_to_event_id: None,
+                    output_root: None,
+                    write_materialized: true,
+                },
+                selector,
+            })
+        }
         "propose-memory" => proposal_command(
             BrainProposalKind::Memory,
+            workspace,
+            root_dir,
+            actor,
+            target_node_id,
+            target_source_id,
+            relation_kind,
+            source_refs,
+            node_refs,
+            evidence_refs,
+            positional,
+        ),
+        "propose-node" => proposal_command(
+            BrainProposalKind::Node,
             workspace,
             root_dir,
             actor,
@@ -403,6 +596,21 @@ pub enum BrainCommand {
         query: String,
         budget: Option<usize>,
     },
+    EventHistory {
+        request: ReadRecentEventsRequest,
+    },
+    GraphHistory {
+        request: ReadGraphHistoryRequest,
+    },
+    InspectState {
+        request: ReadGraphHistoryRequest,
+        selector: GraphStateSelector,
+    },
+    RollbackState {
+        history_request: ReadGraphHistoryRequest,
+        request: ReconstructBrainRequest,
+        selector: GraphStateSelector,
+    },
     ProposeUpdate {
         workspace: String,
         root_dir: Option<String>,
@@ -417,4 +625,10 @@ pub enum BrainCommand {
         node_refs: Vec<String>,
         evidence_refs: Vec<String>,
     },
+}
+
+#[derive(Debug)]
+pub enum GraphStateSelector {
+    Snapshot(String),
+    Event(String),
 }

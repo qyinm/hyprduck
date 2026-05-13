@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/graph-snapshot-read.schema.json",
+  "title": "Graph Snapshot Read Contract",
+  "description": "Materialized graph/wiki snapshot returned to UI, MCP, and agent read paths. events/brain_events.jsonl remains the source of truth; this contract describes the current read model reconstructed from append-only events.",
+  "x-sourceOfTruth": "events/brain_events.jsonl",
+  "x-latestReadableSnapshotPath": "state/latest-readable-snapshot.json",
+  "x-resolutionOrder": [
+    "Use state/latest-readable-snapshot.json only when it points to a completed graph_materialized event for the requested workspace.",
+    "If the marker is absent or unresolved, fall back to the latest completed graph_materialized event in events/brain_events.jsonl.",
+    "Always load graph/wiki content from the current materialized files listed by materializedPaths."
+  ],
+  "x-materializedReadModels": [
+    "graph/nodes.json",
+    "graph/edges.json",
+    "graph/claims.json",
+    "memory/records.json",
+    "wiki/index.md",
+    "wiki/*.md"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshotId",
+    "sourceIngestId",
+    "workspaceId",
+    "sourceOfTruthPath",
+    "latestReadableSnapshotPath",
+    "createdAt",
+    "materializedAt",
+    "materializedPaths",
+    "nodes",
+    "edges",
+    "claims",
+    "memoryRefs",
+    "wikiPages"
+  ],
+  "properties": {
+    "snapshotId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier for this materialized graph/wiki state."
+    },
+    "sourceIngestId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ingest run, source event, or replay selector that produced the snapshot."
+    },
+    "workspaceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceOfTruthPath": {
+      "const": "events/brain_events.jsonl",
+      "description": "Append-only event log that remains the replay source of truth for this read model."
+    },
+    "latestReadableSnapshotPath": {
+      "const": "state/latest-readable-snapshot.json",
+      "description": "Workspace-relative marker read first by UI, MCP, and agent consumers to identify the latest completed materialized graph/wiki snapshot."
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp for the snapshot read contract record."
+    },
+    "materializedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp or materialized version for the graph/wiki state represented by this snapshot."
+    },
+    "materializedPaths": {
+      "$ref": "#/$defs/stringArray",
+      "description": "Workspace-relative files that make up the current materialized graph/wiki read model."
+    },
+    "sourcePaths": {
+      "$ref": "#/$defs/stringArray",
+      "description": "Markdown/source paths represented in this materialized state."
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claim" }
+    },
+    "memoryRefs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+      "uniqueItems": true,
+      "description": "Durable memory IDs available in memory/records.json for this snapshot."
+    },
+    "wikiPages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/wikiPage" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "uniqueItems": true
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nodeId", "label", "kind", "sourceIds", "evidenceIds"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyString" },
+        "label": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "$ref": "#/$defs/nonEmptyString" },
+        "scope": { "$ref": "#/$defs/nonEmptyString" },
+        "aliases": { "$ref": "#/$defs/stringArray" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "evidenceIds": { "$ref": "#/$defs/stringArray" },
+        "updatedAt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["relationId", "sourceNodeId", "targetNodeId", "kind", "sourceIds", "evidenceIds"],
+      "properties": {
+        "relationId": { "$ref": "#/$defs/nonEmptyString" },
+        "sourceNodeId": { "$ref": "#/$defs/nonEmptyString" },
+        "targetNodeId": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "$ref": "#/$defs/nonEmptyString" },
+        "label": { "$ref": "#/$defs/nonEmptyString" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "evidenceIds": { "$ref": "#/$defs/stringArray" },
+        "updatedAt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["claimId", "statement", "sourceIds", "evidenceIds"],
+      "properties": {
+        "claimId": { "$ref": "#/$defs/nonEmptyString" },
+        "statement": { "$ref": "#/$defs/nonEmptyString" },
+        "topicRefs": { "$ref": "#/$defs/stringArray" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "evidenceIds": { "$ref": "#/$defs/stringArray" },
+        "updatedAt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "wikiPage": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["path", "title", "nodeRefs", "sourceRefs"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "nodeRefs": { "$ref": "#/$defs/stringArray" },
+        "sourceRefs": { "$ref": "#/$defs/stringArray" },
+        "claimRefs": { "$ref": "#/$defs/stringArray" },
+        "memoryRefs": { "$ref": "#/$defs/stringArray" },
+        "updatedAt": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -94,3 +94,32 @@ test("evidence is rendered as UI content instead of raw markdown", () => {
   expect(graphSource).toMatch(/extractMarkdownImageLabel/);
   expect(graphSource).toMatch(/Page image:/);
 });
+
+test("workspace graph reader loads the latest materialized snapshot first", () => {
+  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+
+  expect(mainSource).toMatch(/case "load_materialized_graph_snapshot"/);
+  expect(mainSource).toMatch(/command: "read_graph_snapshot"/);
+  expect(appSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
+  expect(appSource).toMatch(/loadGraphWorkspaceEnvelope/);
+  expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
+  expect(appSource).toMatch(/load_materialized_graph_snapshot/);
+  expect(appSource).toMatch(/load_workspace_project/);
+  expect(appSource).toMatch(/const nextLoad = await loadGraphWorkspaceEnvelopeResult/);
+  expect(appSource).toMatch(/setLoadedWorkspaceEnvelope\(nextLoad\.envelope\)/);
+  expect(appSource).toMatch(/\}, \[workspaceProject\]\);/);
+  expect(appSource).not.toMatch(/setLoadedWorkspaceEnvelope\(\(current\) => \(\{\s*project,/);
+});
+
+test("workspace snapshot refresh exposes loading fallback and error states", () => {
+  expect(appSource).toMatch(/type WorkspaceLoadStatus = "idle" \| "loading" \| "ready" \| "fallback" \| "error"/);
+  expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
+  expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(result\)/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad\)/);
+  expect(appSource).toMatch(/status: "fallback"/);
+  expect(appSource).toMatch(/status: "error"/);
+  expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
+  expect(appSource).toMatch(/Refreshing latest workspace snapshot/);
+  expect(appSource).toMatch(/Could not refresh the workspace snapshot/);
+});

@@ -101,7 +101,7 @@ fn run_parse(fixture: &str, format: &str) -> ParseResponseData {
 fn pdf_fixture_round_trips_through_engine() {
     let result = run_parse("sample.pdf", "pdf");
     assert_eq!(result.result.pages.len(), 1);
-    assert_eq!(result.result.assets.len(), 1);
+    assert_eq!(result.result.assets.len(), 0);
     assert!(result.result.markdown.contains("## Page 1"));
     assert!(result.saved_output_path.is_some());
 }

@@ -10,34 +10,43 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use duckdocs_engine_types::{
-    AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
-    ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventKind, BrainHealthStatus, BrainNodeKind,
-    BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainReadScope, BrainRelationKind,
-    BrainRelationRecord, BrainRepoSnapshot, BrainReviewDecision, BrainReviewItem, BrainScope,
-    BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal, ClaimRecord,
-    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
-    EngineSuccess, EntityRecord, EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData,
-    GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
-    LoadProjectRequest, LoadProjectResponseData, MemoryRecord, OutputAsset, PageArtifact,
-    ParseEvent, ParseInput, ParseMetadata, ParseOptions, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest,
-    ProposeBrainUpdateResponseData, ProviderModelCatalogResponseData, ProviderOption,
+    AgentGraphProposalPayload, AgentGraphProposalValidationCode, AgentGraphProposalValidationError,
+    AgentGraphProposalValidationIssue, AnswerProjectRequest, AnswerProjectResponseData,
+    AnswerResponse, AnswerStatus, ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor,
+    BrainActorType, BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind,
+    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainProposalKind, BrainProposalStatus,
+    BrainReadScope, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot, BrainReviewDecision,
+    BrainReviewItem, BrainScope, BrainSearchResult, BrainSearchResultKind, BrainUpdateProposal,
+    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
+    CorrectionKind, DocumentFormat, EngineCommand, EngineConfigPayload, EngineFailure,
+    EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest,
+    EngineRuntimeResponse, EngineSuccess, EntityRecord, EvidenceRef, GetBrainHealthRequest,
+    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData,
+    GraphHistoryEntry, GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary,
+    GraphRollbackTarget, IngestStatus, KnowledgeProject, ListBrainReviewItemsRequest,
+    ListBrainReviewItemsResponseData, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, MemoryRecord, OutputAsset, PageArtifact, ParseEvent, ParseInput,
+    ParseMetadata, ParseOptions, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
+    ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData,
+    ProviderModelCatalogResponseData, ProviderOption, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
     ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
     ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReadinessCheck, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionPageRef, StructuredExtractionRelation,
-    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, ValidateProviderRequest,
-    ValidateProviderResponseData, ValidationIssue, WikiPage, WorkspaceCorrection, WorkspaceId,
+    ReadinessCheck, ReconstructBrainRequest, ReconstructBrainResponseData, RelationEdgeDetail,
+    RelationEdgeSummary, RelationKind, ResolveBrainReviewItemRequest,
+    ResolveBrainReviewItemResponseData, RuntimeReadinessResponseData, SaveConfigRequest,
+    SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest,
+    SourceBacking, SourceId, SourceRecord, SourceSummary, StructuredExtractionArtifact,
+    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
+    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
+    SuggestedAction, SuggestedActionKind, ValidateProviderRequest, ValidateProviderResponseData,
+    ValidationIssue, WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
 };
+#[cfg(test)]
+use duckdocs_engine_types::{
+    AgentNewClaimPayload, AgentNewEdgePayload, AgentNewMemoryPayload, AgentNewNodePayload,
+};
+use markitdown::{model::ConversionOptions, MarkItDown};
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -46,6 +55,11 @@ use uuid::{Uuid, Version};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
+const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
+const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
+const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
+const PROVIDER_GRAPH_AGENT_ID: &str = "duckdocs-provider-graph-agent";
+const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -252,6 +266,18 @@ fn encode_success_response(
             EngineCommand::ReadRecentEvents,
             handle_read_recent_events(request)?,
         )),
+        EngineRequest::ReadGraphHistory(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadGraphHistory,
+            handle_read_graph_history(request)?,
+        )),
+        EngineRequest::ReadGraphSnapshot(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadGraphSnapshot,
+            handle_read_graph_snapshot(request)?,
+        )),
+        EngineRequest::ReconstructBrain(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReconstructBrain,
+            handle_reconstruct_brain(request)?,
+        )),
         EngineRequest::GetContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetContextPack,
             handle_get_context_pack(request)?,
@@ -344,11 +370,14 @@ fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::ReadWikiPage(_) => EngineCommand::ReadWikiPage,
         EngineRequest::ReadNode(_) => EngineCommand::ReadNode,
         EngineRequest::ReadRecentEvents(_) => EngineCommand::ReadRecentEvents,
+        EngineRequest::ReadGraphHistory(_) => EngineCommand::ReadGraphHistory,
+        EngineRequest::ReadGraphSnapshot(_) => EngineCommand::ReadGraphSnapshot,
         EngineRequest::GetContextPack(_) => EngineCommand::GetContextPack,
         EngineRequest::ProposeBrainUpdate(_) => EngineCommand::ProposeBrainUpdate,
         EngineRequest::ListBrainReviewItems(_) => EngineCommand::ListBrainReviewItems,
         EngineRequest::ResolveBrainReviewItem(_) => EngineCommand::ResolveBrainReviewItem,
         EngineRequest::GetBrainHealth(_) => EngineCommand::GetBrainHealth,
+        EngineRequest::ReconstructBrain(_) => EngineCommand::ReconstructBrain,
         EngineRequest::LoadConfig(_) => EngineCommand::LoadConfig,
         EngineRequest::SaveConfig(_) => EngineCommand::SaveConfig,
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
@@ -466,6 +495,19 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     let project = compile_knowledge_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
+    if let Some(manifest) = &source_manifest {
+        let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
+            workspace_id: workspace_id.clone(),
+            root_dir: None,
+        })?;
+        maybe_generate_provider_graph_proposals(
+            &workspace_root,
+            &workspace_id,
+            manifest,
+            &markdown,
+            &PathBuf::from(&manifest.artifact_root),
+        )?;
+    }
     Ok(CompileProjectResponseData {
         project_id: project.summary.project_id,
         workspace_id,
@@ -585,7 +627,7 @@ fn handle_apply_workspace_correction(
             }
             Some(detail)
         }
-        CorrectionKind::KeepSeparate | CorrectionKind::Rename => None,
+        CorrectionKind::KeepSeparate | CorrectionKind::Rename | CorrectionKind::Split => None,
     };
 
     let mut replayed_source_node_ids = BTreeSet::new();
@@ -756,8 +798,353 @@ fn handle_read_recent_events(
 ) -> Result<ReadRecentEventsResponseData> {
     let reader = BrainReader::open(&request.scope)?;
     Ok(ReadRecentEventsResponseData {
-        events: reader.recent_events(request.limit.unwrap_or(20)),
+        events: reader.recent_events(&request),
     })
+}
+
+fn handle_read_graph_history(
+    request: ReadGraphHistoryRequest,
+) -> Result<ReadGraphHistoryResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    let mut states = reader
+        .events
+        .iter()
+        .filter(|event| {
+            event.workspace_id == request.scope.workspace_id
+                && is_completed_graph_materialized_event(event)
+        })
+        .cloned()
+        .map(|event| graph_history_entry_from_event(&reader.root, event))
+        .collect::<Result<Vec<_>>>()?;
+    states.sort_by(|left, right| {
+        right
+            .materialized_at
+            .cmp(&left.materialized_at)
+            .then_with(|| right.event_id.cmp(&left.event_id))
+    });
+    if let Some(limit) = request.limit {
+        states.truncate(limit);
+    }
+    Ok(ReadGraphHistoryResponseData { states })
+}
+
+fn handle_read_graph_snapshot(
+    request: ReadGraphSnapshotRequest,
+) -> Result<ReadGraphSnapshotResponseData> {
+    let reader = BrainReader::open(&request.scope)?;
+    let marker = read_latest_readable_graph_snapshot_marker(&reader.root)?;
+    let marker_event = marker.as_ref().and_then(|marker| {
+        (marker.workspace_id == request.scope.workspace_id).then(|| {
+            reader.events.iter().find(|event| {
+                event.workspace_id == request.scope.workspace_id
+                    && is_completed_graph_materialized_event(event)
+                    && event.event_id == marker.event_id
+            })
+        })?
+    });
+    let latest = marker_event
+        .or_else(|| latest_graph_materialized_event(&reader.events, &request.scope.workspace_id));
+    let materialized_at = latest
+        .and_then(|event| event.causality.materialized_version)
+        .unwrap_or(reader.snapshot.generated_at);
+    let created_at = latest
+        .map(|event| event.created_at)
+        .unwrap_or(reader.snapshot.generated_at);
+    let snapshot_id = latest
+        .and_then(|event| event.causality.snapshot_id.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "snapshot-{}-{}",
+                reader.snapshot.workspace_id, materialized_at
+            )
+        });
+    let source_ingest_id = latest
+        .map(graph_snapshot_source_ingest_id)
+        .unwrap_or_else(|| format!("materialized://{}", reader.snapshot.workspace_id));
+    let materialized_paths = marker
+        .as_ref()
+        .filter(|_| marker_event.is_some())
+        .map(|marker| marker.materialized_files.clone())
+        .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
+
+    Ok(ReadGraphSnapshotResponseData {
+        snapshot_id,
+        source_ingest_id,
+        workspace_id: reader.snapshot.workspace_id.clone(),
+        source_of_truth_path: "events/brain_events.jsonl".into(),
+        latest_readable_snapshot_path: LATEST_READABLE_SNAPSHOT_PATH.into(),
+        created_at,
+        materialized_at,
+        materialized_paths,
+        source_paths: graph_snapshot_source_paths(&reader.snapshot),
+        nodes: reader.snapshot.nodes.clone(),
+        edges: reader.snapshot.relations.clone(),
+        claims: reader.snapshot.claims.clone(),
+        memory_refs: reader
+            .snapshot
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        wiki_pages: reader.read_all_wiki_pages()?,
+    })
+}
+
+fn graph_snapshot_source_ingest_id(event: &BrainEvent) -> String {
+    event
+        .source_refs
+        .first()
+        .cloned()
+        .or_else(|| event.causality.caused_by_source_ids.first().cloned())
+        .unwrap_or_else(|| event.event_id.clone())
+}
+
+fn latest_graph_materialized_event<'a>(
+    events: &'a [BrainEvent],
+    workspace_id: &str,
+) -> Option<&'a BrainEvent> {
+    events
+        .iter()
+        .filter(|event| {
+            event.workspace_id == workspace_id && is_completed_graph_materialized_event(event)
+        })
+        .max_by(|left, right| {
+            left.causality
+                .materialized_version
+                .unwrap_or(left.created_at)
+                .cmp(
+                    &right
+                        .causality
+                        .materialized_version
+                        .unwrap_or(right.created_at),
+                )
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        })
+}
+
+fn is_completed_graph_materialized_event(event: &BrainEvent) -> bool {
+    event.event_type == BrainEventKind::GraphMaterialized
+        && event.causality.materialized_version.is_some()
+        && !matches!(
+            event.policy_result.as_str(),
+            "failed" | "stale" | "in_progress" | "ingest_in_progress"
+        )
+}
+
+fn graph_snapshot_source_paths(snapshot: &BrainRepoSnapshot) -> Vec<String> {
+    snapshot
+        .sources
+        .iter()
+        .flat_map(|source| [source.source_path.clone(), source.markdown_path.clone()])
+        .filter(|path| !path.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<GraphHistoryEntry> {
+    let snapshot_id = event
+        .causality
+        .snapshot_id
+        .clone()
+        .unwrap_or_else(|| format!("snapshot-{}-{}", event.workspace_id, event.created_at));
+    let materialized_at = event
+        .causality
+        .materialized_version
+        .unwrap_or(event.created_at);
+    let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json).ok();
+    let fallback_payload =
+        serde_json::from_str::<Value>(&event.payload_json).unwrap_or(Value::Null);
+    let graph = payload.and_then(|payload| payload.materialized_graph);
+
+    Ok(GraphHistoryEntry {
+        snapshot_id: snapshot_id.clone(),
+        materialized_at,
+        event_id: event.event_id.clone(),
+        rollback_target: graph_rollback_target(&snapshot_id, &event.event_id, materialized_at),
+        operation_type: event.operation_type.clone(),
+        source_run_ids: graph_history_source_run_ids(&event),
+        source_markdown_refs: event.source_markdown_refs.clone(),
+        storage_locations: graph_history_storage_locations(
+            root,
+            &snapshot_id,
+            &event.event_id,
+            materialized_at,
+        ),
+        node_count: graph
+            .as_ref()
+            .map(|graph| graph.nodes.len())
+            .or_else(|| json_usize(&fallback_payload, "nodeCount"))
+            .unwrap_or(event.node_refs.len()),
+        edge_count: graph
+            .as_ref()
+            .map(|graph| graph.relations.len())
+            .or_else(|| json_usize(&fallback_payload, "relationCount"))
+            .unwrap_or(event.relation_refs.len()),
+        claim_count: graph
+            .as_ref()
+            .map(|graph| graph.claims.len())
+            .or_else(|| json_usize(&fallback_payload, "claimCount"))
+            .unwrap_or(event.claim_refs.len()),
+        memory_count: graph
+            .as_ref()
+            .map(|graph| graph.memories.len())
+            .or_else(|| json_usize(&fallback_payload, "memoryCount"))
+            .unwrap_or(event.memory_refs.len()),
+        wiki_page_count: graph
+            .as_ref()
+            .map(|graph| graph.wiki_pages.len())
+            .or_else(|| json_usize(&fallback_payload, "wikiPageCount"))
+            .unwrap_or(0),
+    })
+}
+
+fn graph_rollback_target(
+    snapshot_id: &str,
+    event_id: &str,
+    materialized_version: u64,
+) -> GraphRollbackTarget {
+    GraphRollbackTarget {
+        snapshot_id: snapshot_id.to_string(),
+        event_id: event_id.to_string(),
+        materialized_version,
+        replay_selector: format!("--event {event_id}"),
+    }
+}
+
+fn graph_history_source_run_ids(event: &BrainEvent) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    ids.extend(event.source_refs.iter().cloned());
+    ids.extend(event.causality.caused_by_source_ids.iter().cloned());
+    ids.extend(event.causality.caused_by_event_ids.iter().cloned());
+    ids.into_iter().collect()
+}
+
+fn graph_history_storage_locations(
+    root: &Path,
+    snapshot_id: &str,
+    event_id: &str,
+    materialized_at: u64,
+) -> Vec<String> {
+    let mut locations = vec![
+        format!("events/brain_events.jsonl#{event_id}"),
+        format!("replay://up_to_event_id={event_id}"),
+        format!("replay://up_to_materialized_version={materialized_at}"),
+    ];
+    let snapshot_files = root.join("snapshots").join(snapshot_id).join("files");
+    if snapshot_files.exists() {
+        locations.push(format!("snapshots/{snapshot_id}/files"));
+    }
+    locations.extend([
+        "brain-manifest.json".to_string(),
+        "graph/nodes.json".to_string(),
+        "graph/edges.json".to_string(),
+        "graph/claims.json".to_string(),
+        "memory/records.json".to_string(),
+        "wiki/index.md".to_string(),
+    ]);
+    locations
+}
+
+fn json_usize(value: &Value, key: &str) -> Option<usize> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn event_matches_recent_events_request(
+    event: &BrainEvent,
+    request: &ReadRecentEventsRequest,
+) -> bool {
+    if let Some(run_id) = request.run_id.as_deref() {
+        if !event_matches_run_id(event, run_id) {
+            return false;
+        }
+    }
+    if let Some(source_ref) = request.source_ref.as_deref() {
+        if !event.source_refs.iter().any(|value| value == source_ref)
+            && !event
+                .source_markdown_refs
+                .iter()
+                .any(|value| value == source_ref)
+            && !event
+                .causality
+                .caused_by_source_ids
+                .iter()
+                .any(|value| value == source_ref)
+        {
+            return false;
+        }
+    }
+    if let Some(node_id) = request.node_id.as_deref() {
+        if !event.node_refs.iter().any(|value| value == node_id)
+            && !event.target_node_ids.iter().any(|value| value == node_id)
+        {
+            return false;
+        }
+    }
+    if let Some(edge_id) = request.edge_id.as_deref() {
+        if !event.relation_refs.iter().any(|value| value == edge_id)
+            && !event.target_edge_ids.iter().any(|value| value == edge_id)
+        {
+            return false;
+        }
+    }
+    if let Some(claim_id) = request.claim_id.as_deref() {
+        if !event.claim_refs.iter().any(|value| value == claim_id)
+            && !event.target_claim_ids.iter().any(|value| value == claim_id)
+        {
+            return false;
+        }
+    }
+    if let Some(memory_id) = request.memory_id.as_deref() {
+        if !event.memory_refs.iter().any(|value| value == memory_id)
+            && !event
+                .target_memory_ids
+                .iter()
+                .any(|value| value == memory_id)
+        {
+            return false;
+        }
+    }
+    if let Some(change_type) = request.change_type.as_deref() {
+        if !event_matches_change_type(event, change_type) {
+            return false;
+        }
+    }
+    true
+}
+
+fn event_matches_run_id(event: &BrainEvent, run_id: &str) -> bool {
+    graph_history_source_run_ids(event)
+        .iter()
+        .any(|value| value == run_id)
+        || event_payload_string(event, "runId").as_deref() == Some(run_id)
+}
+
+fn event_matches_change_type(event: &BrainEvent, change_type: &str) -> bool {
+    event.operation_type.as_deref() == Some(change_type)
+        || serialized_event_type(event).as_deref() == Some(change_type)
+        || event_payload_string(event, "changeType").as_deref() == Some(change_type)
+        || event_payload_string(event, "operationType").as_deref() == Some(change_type)
+}
+
+fn serialized_event_type(event: &BrainEvent) -> Option<String> {
+    serde_json::to_value(event.event_type)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+}
+
+fn event_payload_string(event: &BrainEvent, key: &str) -> Option<String> {
+    serde_json::from_str::<Value>(&event.payload_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
 }
 
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
@@ -788,8 +1175,62 @@ fn handle_propose_brain_update(
             node_refs.push(node_id.clone());
         }
     }
+    let mut target_node_id = request.target_node_id.clone();
+    let mut relation_kind = request.relation_kind;
+    let mut evidence_refs = request.evidence_refs.clone();
+    if let Some(payload) = &request.proposal_payload {
+        match payload {
+            AgentGraphProposalPayload::NewNode { node } => {
+                for source_ref in &node.source_refs {
+                    merge_unique_string(&mut source_refs, source_ref);
+                }
+                for evidence_ref in &node.evidence_refs {
+                    merge_unique_string(&mut evidence_refs, evidence_ref);
+                }
+            }
+            AgentGraphProposalPayload::NewEdge { edge } => {
+                let source_node_id = edge.source_node_id.trim();
+                if !source_node_id.is_empty() {
+                    node_refs.retain(|node_id| node_id != source_node_id);
+                    node_refs.insert(0, source_node_id.to_string());
+                }
+                merge_unique_string(&mut node_refs, edge.target_node_id.trim());
+                for source_ref in &edge.source_refs {
+                    merge_unique_string(&mut source_refs, source_ref);
+                }
+                for evidence_ref in &edge.evidence_refs {
+                    merge_unique_string(&mut evidence_refs, evidence_ref);
+                }
+                if target_node_id.is_none() {
+                    target_node_id = Some(edge.target_node_id.trim().to_string());
+                }
+                if relation_kind.is_none() {
+                    relation_kind = Some(edge.kind);
+                }
+            }
+            AgentGraphProposalPayload::NewClaim { claim } => {
+                for topic_ref in &claim.topic_refs {
+                    merge_unique_string(&mut node_refs, topic_ref);
+                }
+                for source_ref in &claim.source_refs {
+                    merge_unique_string(&mut source_refs, source_ref);
+                }
+                for evidence_ref in &claim.evidence_refs {
+                    merge_unique_string(&mut evidence_refs, evidence_ref);
+                }
+            }
+            AgentGraphProposalPayload::NewMemory { memory } => {
+                for source_ref in &memory.source_refs {
+                    merge_unique_string(&mut source_refs, source_ref);
+                }
+                for evidence_ref in &memory.evidence_refs {
+                    merge_unique_string(&mut evidence_refs, evidence_ref);
+                }
+            }
+        }
+    }
 
-    let auto_apply = is_auto_apply_brain_proposal(request.kind);
+    let auto_apply = should_auto_apply_brain_proposal(&request);
     let proposal = BrainUpdateProposal {
         proposal_id: proposal_id.clone(),
         workspace_id: request.scope.workspace_id.clone(),
@@ -803,12 +1244,13 @@ fn handle_propose_brain_update(
         scope: BrainScope::Project,
         title: request.title.trim().to_string(),
         body: request.body.trim().to_string(),
-        target_node_id: request.target_node_id.clone(),
+        target_node_id,
         target_source_id: request.target_source_id.clone(),
-        relation_kind: request.relation_kind,
+        relation_kind,
         source_refs,
         node_refs,
-        evidence_refs: request.evidence_refs.clone(),
+        evidence_refs,
+        proposal_payload: request.proposal_payload.clone(),
         created_at,
     };
     let mut event = brain_event_for_proposal(&proposal)?;
@@ -820,6 +1262,22 @@ fn handle_propose_brain_update(
     if auto_apply {
         if proposal.kind == BrainProposalKind::SourceNote {
             writer.apply_source_note_metadata(&proposal, &request)?;
+        } else if matches!(
+            proposal.kind,
+            BrainProposalKind::Node
+                | BrainProposalKind::Claim
+                | BrainProposalKind::Link
+                | BrainProposalKind::Memory
+        ) {
+            if proposal.kind == BrainProposalKind::Memory {
+                let memory = memory_record_for_proposal(&proposal);
+                writer.upsert_memory_record(memory)?;
+                let accepted_event = brain_memory_accepted_event(&proposal)?;
+                writer.append_event(&accepted_event)?;
+            } else {
+                writer.apply_accepted_proposal(&proposal)?;
+            }
+            writer.append_event(&brain_graph_mutation_applied_event(&proposal)?)?;
         } else {
             let memory = memory_record_for_proposal(&proposal);
             writer.upsert_memory_record(memory)?;
@@ -957,7 +1415,10 @@ fn is_reviewable_brain_proposal(proposal: &BrainUpdateProposal) -> bool {
     proposal.status == BrainProposalStatus::PendingReview
         && matches!(
             proposal.kind,
-            BrainProposalKind::Claim | BrainProposalKind::Link | BrainProposalKind::WikiPage
+            BrainProposalKind::Node
+                | BrainProposalKind::Claim
+                | BrainProposalKind::Link
+                | BrainProposalKind::WikiPage
         )
 }
 
@@ -1004,22 +1465,100 @@ struct BrainMaintenanceReport {
     issue_count: usize,
     repair_count: usize,
     new_review_count: usize,
+    new_markdown_source_count: usize,
+    enqueued_markdown_source_count: usize,
+    ingest_worker_started: bool,
+    ingested_markdown_source_count: usize,
+    failed_markdown_source_count: usize,
+    applied_agent_proposal_count: usize,
+    failed_agent_proposal_count: usize,
     #[serde(default)]
     repairs: Vec<String>,
+    #[serde(default)]
+    new_markdown_sources: Vec<String>,
+    #[serde(default)]
+    enqueued_markdown_sources: Vec<String>,
+    #[serde(default)]
+    ingested_markdown_sources: Vec<String>,
+    #[serde(default)]
+    failed_markdown_sources: Vec<String>,
+    #[serde(default)]
+    applied_agent_proposals: Vec<String>,
+    #[serde(default)]
+    failed_agent_proposals: Vec<AgentProposalFailureReport>,
     #[serde(default)]
     issues: Vec<BrainLintIssue>,
 }
 
 fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceReport> {
     let root = resolve_brain_workspace_root(scope)?;
-    let writer = BrainWorkspaceWriter::open(root.clone())?;
-    let snapshot = read_materialized_brain_snapshot(&root, &scope.workspace_id)?;
+    let ingest_paths = resolve_markdown_ingest_paths(scope)?;
+    let initial_snapshot = read_materialized_brain_snapshot(&root, &scope.workspace_id)?;
+    let source_state = read_markdown_source_state(&ingest_paths)?;
+    let ingest_queue = read_markdown_ingest_queue(&ingest_paths)?;
+    let markdown_scan = scan_new_markdown_sources(
+        &ingest_paths,
+        &initial_snapshot,
+        &source_state,
+        &ingest_queue,
+    )?;
+    let enqueue_result = {
+        let writer = BrainWorkspaceWriter::open(root.clone())?;
+        enqueue_markdown_sources(&writer, &ingest_paths, &ingest_queue, &markdown_scan)?
+    };
+    write_markdown_source_state(&ingest_paths, &markdown_scan.current_state)?;
+    let queued_after_enqueue = read_markdown_ingest_queue(&ingest_paths)?;
+    let store = KnowledgeProjectStore::default()?;
+    let worker_result = run_markdown_ingest_worker(&ingest_paths, &queued_after_enqueue, &store)?;
+    let proposal_apply_result = run_queued_agent_proposal_apply_worker(&root, &scope.workspace_id)?;
+    let mut snapshot = if worker_result.processed > 0
+        || worker_result.failed > 0
+        || !proposal_apply_result.applied.is_empty()
+    {
+        read_materialized_brain_snapshot(&root, &scope.workspace_id)?
+    } else {
+        initial_snapshot
+    };
     let mut report = lint_brain_snapshot(&snapshot);
+    report.new_markdown_source_count = markdown_scan.new_sources.len();
+    report.new_markdown_sources = markdown_scan
+        .new_sources
+        .iter()
+        .map(|source| source.relative_path.display().to_string())
+        .collect();
+    report.enqueued_markdown_source_count = enqueue_result.enqueued.len();
+    report.enqueued_markdown_sources = enqueue_result
+        .enqueued
+        .iter()
+        .map(|source| source.relative_path.clone())
+        .collect();
+    report.ingest_worker_started = worker_result.started;
+    report.ingested_markdown_source_count = worker_result.processed;
+    report.failed_markdown_source_count = worker_result.failed;
+    report.ingested_markdown_sources = worker_result.processed_sources;
+    report.failed_markdown_sources = worker_result.failed_sources;
+    report.applied_agent_proposal_count = proposal_apply_result.applied.len();
+    report.failed_agent_proposal_count = proposal_apply_result.failed.len();
+    report.applied_agent_proposals = proposal_apply_result.applied;
+    report.failed_agent_proposals = proposal_apply_result.failed;
+    report.repair_count +=
+        repair_missing_materialized_wiki_stubs(&root, &mut snapshot, &mut report.repairs)?;
+    report
+        .issues
+        .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
     report.repair_count += repair_generated_brain_artifacts(&root, &snapshot, &mut report.repairs)?;
+    let writer = BrainWorkspaceWriter::open(root.clone())?;
     report.new_review_count += write_lint_review_items(&writer, &snapshot, &report.issues)?;
     report.issue_count = report.issues.len();
     write_json_pretty(&root.join("reviews/lint-reports/latest.json"), &report)?;
-    if report.repair_count > 0 || report.new_review_count > 0 {
+    if report.repair_count > 0
+        || report.new_review_count > 0
+        || report.new_markdown_source_count > 0
+        || report.enqueued_markdown_source_count > 0
+        || report.ingest_worker_started
+        || report.applied_agent_proposal_count > 0
+        || report.failed_agent_proposal_count > 0
+    {
         writer.append_event(&brain_maintenance_event(&snapshot, &report)?)?;
     }
     Ok(report)
@@ -1027,6 +1566,9 @@ fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceRepor
 
 fn read_materialized_brain_snapshot(root: &Path, workspace_id: &str) -> Result<BrainRepoSnapshot> {
     let manifest_path = root.join("brain-manifest.json");
+    if !manifest_path.exists() {
+        return Ok(empty_replayed_brain_snapshot(workspace_id));
+    }
     let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
     if snapshot.workspace_id != workspace_id {
         bail!(
@@ -1058,6 +1600,638 @@ fn read_materialized_brain_snapshot(root: &Path, workspace_id: &str) -> Result<B
     snapshot.memories = read_memory_records(root)?;
     snapshot.events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
     Ok(snapshot)
+}
+
+fn handle_reconstruct_brain(
+    request: ReconstructBrainRequest,
+) -> Result<ReconstructBrainResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let events_path = root.join("events/brain_events.jsonl");
+    let events = read_brain_events_jsonl(&events_path)
+        .with_context(|| format!("failed reading replay events {}", events_path.display()))?;
+    let replay = reconstruct_brain_snapshot_from_events(
+        &request.scope.workspace_id,
+        &events,
+        request.up_to_timestamp,
+        request.up_to_materialized_version,
+        request.up_to_event_id.as_deref(),
+    )?;
+    let snapshot_id = format!(
+        "snapshot-replay-{}-{}",
+        request.scope.workspace_id,
+        replay
+            .selected_materialized_version
+            .unwrap_or_else(unix_timestamp_seconds)
+    );
+    let output_root = request
+        .output_root
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("snapshots").join(&snapshot_id).join("files"));
+    let before = capture_materialized_file_snapshot(&output_root).unwrap_or_default();
+    persist_reconstructed_brain_snapshot(&output_root, &replay.snapshot)?;
+    let mut changed_files = changed_materialized_files(
+        &before,
+        &capture_materialized_file_snapshot(&output_root).unwrap_or_default(),
+    );
+
+    if request.write_materialized {
+        let writer = BrainWorkspaceWriter::open(root.clone())?;
+        let before_current = capture_materialized_file_snapshot(&writer.root)?;
+        let rollback_at = unix_timestamp_seconds();
+        let backup_snapshot_id = format!(
+            "snapshot-pre-rollback-{}-{}",
+            request.scope.workspace_id, rollback_at
+        );
+        let previous_snapshot =
+            read_materialized_brain_snapshot(&writer.root, &request.scope.workspace_id).ok();
+        persist_materialized_snapshot(&writer.root, &backup_snapshot_id, &before_current)?;
+        let rollback_result = (|| -> Result<Vec<String>> {
+            let mut restored_snapshot = replay.snapshot.clone();
+            restored_snapshot.generated_at = rollback_at;
+            let rollback_event = brain_graph_rollback_event(
+                &restored_snapshot,
+                &snapshot_id,
+                &backup_snapshot_id,
+                previous_snapshot.as_ref(),
+                replay.selected_event_id.as_deref(),
+                rollback_at,
+            )?;
+            restored_snapshot.events = events
+                .iter()
+                .cloned()
+                .chain(std::iter::once(rollback_event))
+                .collect();
+            restore_selected_materialized_brain_snapshot(
+                &writer.root,
+                &restored_snapshot,
+                previous_snapshot.as_ref(),
+            )?;
+            Ok(changed_materialized_files(
+                &before_current,
+                &capture_materialized_file_snapshot(&writer.root)?,
+            ))
+        })();
+        match rollback_result {
+            Ok(current_changed_files) => changed_files = current_changed_files,
+            Err(error) => {
+                restore_materialized_file_snapshot(&writer.root, &before_current)?;
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(ReconstructBrainResponseData {
+        snapshot: replay.snapshot,
+        replayed_event_count: replay.replayed_event_count,
+        selected_event_id: replay.selected_event_id,
+        snapshot_id,
+        output_root: output_root.display().to_string(),
+        changed_files,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct BrainReplayResult {
+    snapshot: BrainRepoSnapshot,
+    replayed_event_count: usize,
+    selected_event_id: Option<String>,
+    selected_materialized_version: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedGraphEventPayload {
+    #[serde(default)]
+    materialized_graph: Option<MaterializedGraphPayload>,
+    #[serde(default)]
+    proposal: Option<BrainUpdateProposal>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedGraphPayload {
+    #[serde(default)]
+    generated_at: Option<u64>,
+    #[serde(default)]
+    sources: Vec<SourceRecord>,
+    #[serde(default)]
+    nodes: Vec<BrainNodeRecord>,
+    #[serde(default, rename = "edges")]
+    relations: Vec<BrainRelationRecord>,
+    #[serde(default)]
+    evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    memories: Vec<MemoryRecord>,
+    #[serde(default)]
+    wiki_pages: Vec<WikiPage>,
+    #[serde(default)]
+    entities: Vec<EntityRecord>,
+    #[serde(default)]
+    claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    extractions: Vec<StructuredExtractionArtifact>,
+}
+
+fn reconstruct_brain_snapshot_from_events(
+    workspace_id: &str,
+    events: &[BrainEvent],
+    up_to_timestamp: Option<u64>,
+    up_to_materialized_version: Option<u64>,
+    up_to_event_id: Option<&str>,
+) -> Result<BrainReplayResult> {
+    let mut ordered = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event.workspace_id == workspace_id)
+        .map(|(index, event)| (index, event.clone()))
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.1
+            .causality
+            .materialized_version
+            .unwrap_or(left.1.created_at)
+            .cmp(
+                &right
+                    .1
+                    .causality
+                    .materialized_version
+                    .unwrap_or(right.1.created_at),
+            )
+            .then_with(|| left.1.created_at.cmp(&right.1.created_at))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    let mut replay_state = BrainReplayState::new(workspace_id);
+    let mut included = Vec::new();
+    let mut selected_event_id = None;
+    let mut selected_materialized_version = None;
+    for (_, event) in ordered {
+        if up_to_timestamp.is_some_and(|cutoff| event.created_at > cutoff) {
+            break;
+        }
+        if up_to_materialized_version.is_some_and(|cutoff| {
+            event
+                .causality
+                .materialized_version
+                .unwrap_or(event.created_at)
+                > cutoff
+        }) {
+            break;
+        }
+        selected_materialized_version = event
+            .causality
+            .materialized_version
+            .or(Some(event.created_at));
+        replay_state.apply_event(&event)?;
+        selected_event_id = Some(event.event_id.clone());
+        included.push(event.clone());
+        if up_to_event_id.is_some_and(|target| target == event.event_id) {
+            break;
+        }
+    }
+
+    let mut snapshot = replay_state.into_snapshot();
+    snapshot.events = included;
+    if let Some(target_event_id) = up_to_event_id {
+        if selected_event_id.as_deref() != Some(target_event_id) {
+            bail!("replay target event `{target_event_id}` was not found in events/brain_events.jsonl");
+        }
+    }
+    snapshot.generated_at = selected_materialized_version.unwrap_or(snapshot.generated_at);
+    refresh_materialized_wiki_pages(&mut snapshot);
+    Ok(BrainReplayResult {
+        replayed_event_count: snapshot.events.len(),
+        snapshot,
+        selected_event_id,
+        selected_materialized_version,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct BrainReplayState {
+    snapshot: BrainRepoSnapshot,
+}
+
+impl BrainReplayState {
+    fn new(workspace_id: &str) -> Self {
+        Self {
+            snapshot: empty_replayed_brain_snapshot(workspace_id),
+        }
+    }
+
+    fn apply_event(&mut self, event: &BrainEvent) -> Result<()> {
+        apply_replayed_brain_event(event, &mut self.snapshot)
+    }
+
+    fn into_snapshot(self) -> BrainRepoSnapshot {
+        self.snapshot
+    }
+}
+
+fn empty_replayed_brain_snapshot(workspace_id: &str) -> BrainRepoSnapshot {
+    BrainRepoSnapshot {
+        workspace_id: workspace_id.to_string(),
+        generated_at: 0,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    }
+}
+
+fn apply_replayed_brain_event(event: &BrainEvent, snapshot: &mut BrainRepoSnapshot) -> Result<()> {
+    match event.event_type {
+        BrainEventKind::GraphMaterialized => {
+            let payload =
+                serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
+                    .unwrap_or(MaterializedGraphEventPayload {
+                        materialized_graph: None,
+                        proposal: None,
+                    });
+            if let Some(materialized) = payload.materialized_graph {
+                apply_materialized_graph_payload(snapshot, materialized, event);
+            } else if let Some(mut proposal) = payload.proposal {
+                proposal.status = BrainProposalStatus::Accepted;
+                if proposal.kind == BrainProposalKind::Memory {
+                    upsert_replayed_memory(snapshot, memory_record_for_proposal(&proposal));
+                } else {
+                    apply_accepted_proposal_to_snapshot(&proposal, snapshot)?;
+                }
+            }
+        }
+        BrainEventKind::MemoryAccepted => {
+            if let Ok(proposal) = serde_json::from_str::<BrainUpdateProposal>(&event.payload_json) {
+                upsert_replayed_memory(snapshot, memory_record_for_proposal(&proposal));
+            } else if let Ok(memory) = serde_json::from_str::<MemoryRecord>(&event.payload_json) {
+                upsert_replayed_memory(snapshot, memory);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn apply_materialized_graph_payload(
+    snapshot: &mut BrainRepoSnapshot,
+    payload: MaterializedGraphPayload,
+    event: &BrainEvent,
+) {
+    snapshot.generated_at = payload
+        .generated_at
+        .or(event.causality.materialized_version)
+        .unwrap_or(event.created_at);
+    snapshot.sources = payload.sources;
+    snapshot.nodes = payload.nodes;
+    snapshot.relations = payload.relations;
+    snapshot.evidence = payload.evidence;
+    snapshot.memories = payload.memories;
+    snapshot.wiki_pages = payload.wiki_pages;
+    snapshot.entities = payload.entities;
+    snapshot.claims = payload.claims;
+    snapshot.extractions = payload.extractions;
+}
+
+fn upsert_replayed_memory(snapshot: &mut BrainRepoSnapshot, memory: MemoryRecord) {
+    if let Some(existing) = snapshot
+        .memories
+        .iter_mut()
+        .find(|existing| existing.memory_id == memory.memory_id)
+    {
+        merge_memory_record(existing, memory);
+    } else {
+        snapshot.memories.push(memory);
+    }
+    snapshot.memories.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.memory_id.cmp(&right.memory_id))
+    });
+}
+
+fn persist_reconstructed_brain_snapshot(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
+    ensure_materialized_brain_repo_dirs(root)?;
+    persist_materialized_graph_and_wiki_state(root, snapshot)?;
+    write_json_pretty(&root.join("memory/records.json"), &snapshot.memories)?;
+    write_structured_extraction_artifacts(root, &snapshot.extractions)?;
+    write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
+    publish_latest_readable_graph_snapshot_marker(root, snapshot)?;
+    Ok(())
+}
+
+fn restore_selected_materialized_brain_snapshot(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    previous_snapshot: Option<&BrainRepoSnapshot>,
+) -> Result<()> {
+    ensure_materialized_brain_repo_dirs(root)?;
+    if let Some(previous_snapshot) = previous_snapshot {
+        let next_wiki_paths = snapshot
+            .wiki_pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<BTreeSet<_>>();
+        for page in &previous_snapshot.wiki_pages {
+            if !next_wiki_paths.contains(page.path.as_str()) && is_wiki_markdown_ref(&page.path) {
+                let path = root.join(&page.path);
+                if path.exists() {
+                    fs::remove_file(&path).with_context(|| {
+                        format!("failed removing stale wiki page {}", path.display())
+                    })?;
+                }
+            }
+        }
+    }
+    persist_materialized_graph_and_wiki_state(root, snapshot)?;
+    write_json_pretty(&root.join("memory/records.json"), &snapshot.memories)?;
+    write_structured_extraction_artifacts(root, &snapshot.extractions)?;
+    write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
+    publish_latest_readable_graph_snapshot_marker(root, snapshot)?;
+    Ok(())
+}
+
+fn brain_graph_rollback_event(
+    snapshot: &BrainRepoSnapshot,
+    snapshot_id: &str,
+    pre_rollback_snapshot_id: &str,
+    previous_snapshot: Option<&BrainRepoSnapshot>,
+    selected_event_id: Option<&str>,
+    rollback_at: u64,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: snapshot.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_rollback".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-rollback".into(),
+        },
+        source_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: snapshot
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        target_node_ids: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        target_memory_ids: snapshot
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        evidence_refs: snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: rollback_materialized_graph_event_payload_json(
+            snapshot,
+            snapshot_id,
+            pre_rollback_snapshot_id,
+            previous_snapshot,
+            selected_event_id,
+        )?,
+        causality: BrainEventCausality {
+            caused_by_event_ids: selected_event_id
+                .map(|event_id| vec![event_id.to_string()])
+                .unwrap_or_default(),
+            caused_by_source_ids: snapshot
+                .sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            snapshot_id: Some(snapshot_id.to_string()),
+            previous_snapshot_id: Some(pre_rollback_snapshot_id.to_string()),
+            materialized_version: Some(rollback_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "rollback_applied".into(),
+        created_at: rollback_at,
+    })
+}
+
+fn rollback_materialized_graph_event_payload_json(
+    snapshot: &BrainRepoSnapshot,
+    restored_snapshot_id: &str,
+    pre_rollback_snapshot_id: &str,
+    previous_snapshot: Option<&BrainRepoSnapshot>,
+    selected_event_id: Option<&str>,
+) -> Result<String> {
+    serde_json::to_string(&json!({
+        "nodeCount": snapshot.nodes.len(),
+        "relationCount": snapshot.relations.len(),
+        "sourceCount": snapshot.sources.len(),
+        "rollback": {
+            "restoredSnapshotId": restored_snapshot_id,
+            "preRollbackSnapshotId": pre_rollback_snapshot_id,
+            "selectedEventId": selected_event_id,
+            "replaySelector": selected_event_id
+                .map(|event_id| format!("--event {event_id}"))
+                .unwrap_or_else(|| "--latest".into()),
+            "sourceEventCount": snapshot.events.len(),
+            "sourceOfTruth": "events/brain_events.jsonl",
+        },
+        "diff": rollback_snapshot_diff(previous_snapshot, snapshot),
+        "materializedGraph": {
+            "generatedAt": snapshot.generated_at,
+            "sources": snapshot.sources,
+            "nodes": snapshot.nodes,
+            "edges": snapshot.relations,
+            "evidence": snapshot.evidence,
+            "memories": snapshot.memories,
+            "wikiPages": snapshot.wiki_pages,
+            "entities": snapshot.entities,
+            "claims": snapshot.claims,
+            "extractions": snapshot.extractions,
+        }
+    }))
+    .context("failed to encode rollback materialized graph event payload")
+}
+
+fn rollback_snapshot_diff(
+    previous_snapshot: Option<&BrainRepoSnapshot>,
+    snapshot: &BrainRepoSnapshot,
+) -> Value {
+    let previous_node_ids = previous_snapshot
+        .map(|snapshot| {
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_edge_ids = previous_snapshot
+        .map(|snapshot| {
+            snapshot
+                .relations
+                .iter()
+                .map(|relation| relation.relation_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_edge_ids = snapshot
+        .relations
+        .iter()
+        .map(|relation| relation.relation_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_claim_ids = previous_snapshot
+        .map(|snapshot| {
+            snapshot
+                .claims
+                .iter()
+                .map(|claim| claim.claim_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_claim_ids = snapshot
+        .claims
+        .iter()
+        .map(|claim| claim.claim_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_memory_ids = previous_snapshot
+        .map(|snapshot| {
+            snapshot
+                .memories
+                .iter()
+                .map(|memory| memory.memory_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_memory_ids = snapshot
+        .memories
+        .iter()
+        .map(|memory| memory.memory_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_wiki_paths = previous_snapshot
+        .map(|snapshot| {
+            snapshot
+                .wiki_pages
+                .iter()
+                .map(|page| page.path.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_wiki_paths = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| page.path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    json!({
+        "nodeCountBefore": previous_node_ids.len(),
+        "nodeCountAfter": next_node_ids.len(),
+        "edgeCountBefore": previous_edge_ids.len(),
+        "edgeCountAfter": next_edge_ids.len(),
+        "claimCountBefore": previous_claim_ids.len(),
+        "claimCountAfter": next_claim_ids.len(),
+        "memoryCountBefore": previous_memory_ids.len(),
+        "memoryCountAfter": next_memory_ids.len(),
+        "wikiPageCountBefore": previous_wiki_paths.len(),
+        "wikiPageCountAfter": next_wiki_paths.len(),
+        "addedNodeIds": sorted_set_difference(&next_node_ids, &previous_node_ids),
+        "removedNodeIds": sorted_set_difference(&previous_node_ids, &next_node_ids),
+        "addedEdgeIds": sorted_set_difference(&next_edge_ids, &previous_edge_ids),
+        "removedEdgeIds": sorted_set_difference(&previous_edge_ids, &next_edge_ids),
+        "addedClaimIds": sorted_set_difference(&next_claim_ids, &previous_claim_ids),
+        "removedClaimIds": sorted_set_difference(&previous_claim_ids, &next_claim_ids),
+        "addedMemoryIds": sorted_set_difference(&next_memory_ids, &previous_memory_ids),
+        "removedMemoryIds": sorted_set_difference(&previous_memory_ids, &next_memory_ids),
+        "addedWikiPaths": sorted_set_difference(&next_wiki_paths, &previous_wiki_paths),
+        "removedWikiPaths": sorted_set_difference(&previous_wiki_paths, &next_wiki_paths),
+    })
+}
+
+fn sorted_set_difference(left: &BTreeSet<&str>, right: &BTreeSet<&str>) -> Vec<String> {
+    left.difference(right)
+        .map(|value| (*value).to_string())
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialized_graph_event_payload_json(
+    generated_at: u64,
+    sources: &[SourceRecord],
+    nodes: &[BrainNodeRecord],
+    relations: &[BrainRelationRecord],
+    evidence: &[EvidenceRef],
+    memories: &[MemoryRecord],
+    wiki_pages: &[WikiPage],
+    entities: &[EntityRecord],
+    claims: &[ClaimRecord],
+    extractions: &[StructuredExtractionArtifact],
+) -> Result<String> {
+    serde_json::to_string(&json!({
+        "nodeCount": nodes.len(),
+        "relationCount": relations.len(),
+        "sourceCount": sources.len(),
+        "materializedGraph": {
+            "generatedAt": generated_at,
+            "sources": sources,
+            "nodes": nodes,
+            "edges": relations,
+            "evidence": evidence,
+            "memories": memories,
+            "wikiPages": wiki_pages,
+            "entities": entities,
+            "claims": claims,
+            "extractions": extractions,
+        }
+    }))
+    .context("failed to encode materialized graph event payload")
 }
 
 fn lint_brain_snapshot(snapshot: &BrainRepoSnapshot) -> BrainMaintenanceReport {
@@ -1245,7 +2419,20 @@ fn lint_brain_snapshot(snapshot: &BrainRepoSnapshot) -> BrainMaintenanceReport {
         issue_count: issues.len(),
         repair_count: 0,
         new_review_count: 0,
+        new_markdown_source_count: 0,
+        enqueued_markdown_source_count: 0,
+        ingest_worker_started: false,
+        ingested_markdown_source_count: 0,
+        failed_markdown_source_count: 0,
+        applied_agent_proposal_count: 0,
+        failed_agent_proposal_count: 0,
         repairs: Vec::new(),
+        new_markdown_sources: Vec::new(),
+        enqueued_markdown_sources: Vec::new(),
+        ingested_markdown_sources: Vec::new(),
+        failed_markdown_sources: Vec::new(),
+        applied_agent_proposals: Vec::new(),
+        failed_agent_proposals: Vec::new(),
         issues,
     }
 }
@@ -1255,6 +2442,461 @@ fn missing_refs(refs: &[String], existing: &BTreeSet<String>) -> Vec<String> {
         .filter(|value| !existing.contains(*value))
         .cloned()
         .collect()
+}
+
+fn lint_missing_materialized_wiki_refs(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Vec<BrainLintIssue> {
+    let wiki_paths = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| page.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut missing = BTreeMap::<String, BrainLintIssue>::new();
+
+    for page in &snapshot.wiki_pages {
+        if !root.join(&page.path).exists() {
+            upsert_missing_wiki_issue(
+                &mut missing,
+                &page.path,
+                &format!("wiki-page:{}", page.page_id),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+    }
+
+    for node in &snapshot.nodes {
+        let missing_refs = missing_wiki_refs(root, &wiki_paths, &node.source_ids);
+        for path in missing_refs {
+            upsert_missing_wiki_issue(
+                &mut missing,
+                &path,
+                &format!("node:{}", node.node_id),
+                vec![node.node_id.clone()],
+                node.source_ids.clone(),
+                node.evidence_ids.clone(),
+            );
+        }
+    }
+
+    for claim in &snapshot.claims {
+        let missing_refs = missing_wiki_refs(root, &wiki_paths, &claim.source_refs);
+        for path in missing_refs {
+            upsert_missing_wiki_issue(
+                &mut missing,
+                &path,
+                &format!("claim:{}", claim.claim_id),
+                claim.topic_refs.clone(),
+                claim.source_refs.clone(),
+                claim.evidence_refs.clone(),
+            );
+        }
+    }
+
+    for memory in &snapshot.memories {
+        let missing_refs = missing_wiki_refs(root, &wiki_paths, &memory.source_refs);
+        for path in missing_refs {
+            upsert_missing_wiki_issue(
+                &mut missing,
+                &path,
+                &format!("memory:{}", memory.memory_id),
+                Vec::new(),
+                memory.source_refs.clone(),
+                memory.evidence_refs.clone(),
+            );
+        }
+    }
+
+    for event in &snapshot.events {
+        if !is_graph_or_memory_change_event(event.event_type) {
+            continue;
+        }
+        let event_refs = event
+            .source_refs
+            .iter()
+            .chain(event.source_markdown_refs.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in missing_wiki_refs(root, &wiki_paths, &event_refs) {
+            upsert_missing_wiki_issue(
+                &mut missing,
+                &path,
+                &format!("event:{}", event.event_id),
+                event.node_refs.clone(),
+                event_refs.clone(),
+                event.evidence_refs.clone(),
+            );
+        }
+    }
+
+    missing.into_values().collect()
+}
+
+#[derive(Debug, Clone, Default)]
+struct MissingWikiPageStub {
+    path: String,
+    title: String,
+    contexts: Vec<String>,
+    node_refs: Vec<String>,
+    source_refs: Vec<String>,
+    evidence_refs: Vec<String>,
+}
+
+fn repair_missing_materialized_wiki_stubs(
+    root: &Path,
+    snapshot: &mut BrainRepoSnapshot,
+    repairs: &mut Vec<String>,
+) -> Result<usize> {
+    let wiki_paths = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| page.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut stubs = BTreeMap::<String, MissingWikiPageStub>::new();
+    let node_labels = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.clone(), node.label.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    for page in &snapshot.wiki_pages {
+        if !root.join(&page.path).exists() {
+            let path_node_ref = page
+                .path
+                .strip_prefix("wiki/topics/")
+                .and_then(|path| path.strip_suffix(".md"))
+                .map(ToString::to_string);
+            let page_node_refs = merge_string_refs(
+                &page.node_refs,
+                &path_node_ref.clone().into_iter().collect::<Vec<_>>(),
+            );
+            let page_context = if page_node_refs.is_empty() {
+                format!(
+                    "Existing materialized page record `{}` was missing on disk.",
+                    page.page_id
+                )
+            } else {
+                let labels = page
+                    .node_refs
+                    .iter()
+                    .chain(path_node_ref.iter())
+                    .map(|node_id| {
+                        node_labels
+                            .get(node_id)
+                            .map(String::as_str)
+                            .unwrap_or(node_id.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "Markdown-derived node page record `{}` was missing on disk for: {}.",
+                    page.page_id, labels
+                )
+            };
+            upsert_missing_wiki_stub(
+                &mut stubs,
+                &page.path,
+                &page.title,
+                page_context,
+                page_node_refs,
+                page.source_refs.clone(),
+                page.evidence_refs.clone(),
+            );
+        }
+    }
+
+    for node in &snapshot.nodes {
+        for path in missing_wiki_refs(root, &wiki_paths, &node.source_ids) {
+            upsert_missing_wiki_stub(
+                &mut stubs,
+                &path,
+                &node.label,
+                format!(
+                    "Markdown-derived node `{}` (`{}`) originated from this missing wiki page.",
+                    node.node_id, node.label
+                ),
+                vec![node.node_id.clone()],
+                node.source_ids.clone(),
+                node.evidence_ids.clone(),
+            );
+        }
+    }
+
+    for claim in &snapshot.claims {
+        for path in missing_wiki_refs(root, &wiki_paths, &claim.source_refs) {
+            upsert_missing_wiki_stub(
+                &mut stubs,
+                &path,
+                "Recovered Claim Context",
+                format!(
+                    "Markdown-derived claim `{}`: {}",
+                    claim.claim_id, claim.statement
+                ),
+                claim.topic_refs.clone(),
+                claim.source_refs.clone(),
+                claim.evidence_refs.clone(),
+            );
+        }
+    }
+
+    for memory in &snapshot.memories {
+        for path in missing_wiki_refs(root, &wiki_paths, &memory.source_refs) {
+            upsert_missing_wiki_stub(
+                &mut stubs,
+                &path,
+                &memory.title,
+                format!(
+                    "Markdown-derived memory `{}`: {}",
+                    memory.memory_id, memory.body
+                ),
+                Vec::new(),
+                memory.source_refs.clone(),
+                memory.evidence_refs.clone(),
+            );
+        }
+    }
+
+    for event in &snapshot.events {
+        if !is_graph_or_memory_change_event(event.event_type) {
+            continue;
+        }
+        let event_refs = event
+            .source_refs
+            .iter()
+            .chain(event.source_markdown_refs.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in missing_wiki_refs(root, &wiki_paths, &event_refs) {
+            let mut context = format!(
+                "Event `{}` applied `{}` from markdown-derived graph context.",
+                event.event_id,
+                event.operation_type.as_deref().unwrap_or("graph_change")
+            );
+            if !event.relation_refs.is_empty() {
+                let relation_contexts = event
+                    .relation_refs
+                    .iter()
+                    .filter_map(|relation_id| {
+                        snapshot
+                            .relations
+                            .iter()
+                            .find(|relation| &relation.relation_id == relation_id)
+                    })
+                    .map(|relation| {
+                        let source = node_labels
+                            .get(&relation.source_node_id)
+                            .map(String::as_str)
+                            .unwrap_or(&relation.source_node_id);
+                        let target = node_labels
+                            .get(&relation.target_node_id)
+                            .map(String::as_str)
+                            .unwrap_or(&relation.target_node_id);
+                        format!(
+                            "edge `{}` connects `{}` to `{}` as `{}`",
+                            relation.relation_id, source, target, relation.label
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !relation_contexts.is_empty() {
+                    context.push_str(" Related edge context: ");
+                    context.push_str(&relation_contexts.join("; "));
+                    context.push('.');
+                }
+            }
+            upsert_missing_wiki_stub(
+                &mut stubs,
+                &path,
+                "Recovered Graph Context",
+                context,
+                event.node_refs.clone(),
+                event_refs.clone(),
+                event.evidence_refs.clone(),
+            );
+        }
+    }
+
+    if stubs.is_empty() {
+        return Ok(0);
+    }
+
+    let existing_paths = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| page.path.clone())
+        .collect::<BTreeSet<_>>();
+    let updated_at = unix_timestamp_seconds();
+    for stub in stubs.values() {
+        if !existing_paths.contains(&stub.path) {
+            let existing_body = fs::read_to_string(root.join(&stub.path)).ok();
+            snapshot.wiki_pages.push(WikiPage {
+                page_id: format!("wiki-stub-{}", sanitize_name(&stub.path)),
+                workspace_id: snapshot.workspace_id.clone(),
+                path: stub.path.clone(),
+                title: stub.title.clone(),
+                body: existing_body.unwrap_or_else(|| missing_wiki_stub_body(stub)),
+                node_refs: merge_string_refs(&stub.node_refs, &[]),
+                source_refs: merge_string_refs(&stub.source_refs, &[stub.path.clone()]),
+                evidence_refs: merge_string_refs(&stub.evidence_refs, &[]),
+                updated_at,
+            });
+        } else if let Some(page) = snapshot
+            .wiki_pages
+            .iter_mut()
+            .find(|page| page.path == stub.path)
+        {
+            page.body = missing_wiki_stub_body(stub);
+            page.node_refs = merge_string_refs(&page.node_refs, &stub.node_refs);
+            page.source_refs = merge_string_refs(&page.source_refs, &stub.source_refs);
+            page.evidence_refs = merge_string_refs(&page.evidence_refs, &stub.evidence_refs);
+            page.updated_at = page.updated_at.max(updated_at);
+        }
+        merge_unique_string(repairs, &stub.path);
+    }
+    snapshot.wiki_pages = dedupe_wiki_pages(std::mem::take(&mut snapshot.wiki_pages));
+    persist_materialized_graph_and_wiki_state(root, snapshot)?;
+    Ok(stubs.len())
+}
+
+fn upsert_missing_wiki_stub(
+    stubs: &mut BTreeMap<String, MissingWikiPageStub>,
+    path: &str,
+    title: &str,
+    context: String,
+    node_refs: Vec<String>,
+    source_refs: Vec<String>,
+    evidence_refs: Vec<String>,
+) {
+    if !is_wiki_markdown_ref(path) {
+        return;
+    }
+    let stub = stubs
+        .entry(path.to_string())
+        .or_insert_with(|| MissingWikiPageStub {
+            path: path.to_string(),
+            title: if title.trim().is_empty() {
+                title_from_wiki_path(path)
+            } else {
+                title.trim().to_string()
+            },
+            contexts: Vec::new(),
+            node_refs: Vec::new(),
+            source_refs: vec![path.to_string()],
+            evidence_refs: Vec::new(),
+        });
+    merge_unique_string(&mut stub.contexts, &context);
+    for node_ref in node_refs {
+        merge_unique_string(&mut stub.node_refs, &node_ref);
+    }
+    for source_ref in source_refs {
+        merge_unique_string(&mut stub.source_refs, &source_ref);
+    }
+    for evidence_ref in evidence_refs {
+        merge_unique_string(&mut stub.evidence_refs, &evidence_ref);
+    }
+}
+
+fn missing_wiki_stub_body(stub: &MissingWikiPageStub) -> String {
+    let contexts = if stub.contexts.is_empty() {
+        "- Recovered from a missing materialized wiki reference.".into()
+    } else {
+        stub.contexts
+            .iter()
+            .map(|context| format!("- {context}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "# {}\n\nThis page was automatically regenerated as a reviewable stub from markdown-derived graph context.\n\n## Origin Context\n\n{}\n\n## Refs\n\n- Nodes: {}\n- Sources: {}\n- Evidence: {}\n",
+        stub.title,
+        contexts,
+        join_or_none(&stub.node_refs),
+        join_or_none(&stub.source_refs),
+        join_or_none(&stub.evidence_refs)
+    )
+}
+
+fn title_from_wiki_path(path: &str) -> String {
+    path.trim_start_matches("wiki/")
+        .trim_end_matches(".md")
+        .rsplit('/')
+        .next()
+        .unwrap_or("Recovered Wiki Page")
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn missing_wiki_refs(root: &Path, wiki_paths: &BTreeSet<String>, refs: &[String]) -> Vec<String> {
+    refs.iter()
+        .filter(|value| is_wiki_markdown_ref(value))
+        .filter(|value| !wiki_paths.contains(*value) || !root.join(value).exists())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn is_wiki_markdown_ref(value: &str) -> bool {
+    value.starts_with("wiki/") && value.ends_with(".md") && !value.contains("..")
+}
+
+fn is_graph_or_memory_change_event(event_type: BrainEventKind) -> bool {
+    matches!(
+        event_type,
+        BrainEventKind::GraphMaterialized
+            | BrainEventKind::WikiMaterialized
+            | BrainEventKind::NodeProposed
+            | BrainEventKind::MemoryProposed
+            | BrainEventKind::ClaimProposed
+            | BrainEventKind::LinkProposed
+            | BrainEventKind::MemoryAccepted
+            | BrainEventKind::ReviewResolved
+            | BrainEventKind::CorrectionApplied
+            | BrainEventKind::BrainMaintenanceRun
+    )
+}
+
+fn upsert_missing_wiki_issue(
+    issues: &mut BTreeMap<String, BrainLintIssue>,
+    path: &str,
+    origin: &str,
+    node_refs: Vec<String>,
+    source_refs: Vec<String>,
+    evidence_refs: Vec<String>,
+) {
+    let issue = issues.entry(path.to_string()).or_insert_with(|| BrainLintIssue {
+        issue_id: stable_lint_issue_id("missing-wiki-page", path, &[]),
+        kind: "missing_wiki_page".into(),
+        severity: "risky".into(),
+        title: format!("Wiki page is not materialized: {path}"),
+        body: "A graph or memory change references a wiki page that is absent from the materialized wiki. Re-run replay/materialization before agents use this path.".into(),
+        source_refs: vec![path.to_string()],
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        evidence_refs: Vec::new(),
+    });
+    merge_unique_string(&mut issue.source_refs, path);
+    merge_unique_string(&mut issue.source_refs, origin);
+    for source_ref in source_refs {
+        merge_unique_string(&mut issue.source_refs, &source_ref);
+    }
+    for node_ref in node_refs {
+        merge_unique_string(&mut issue.node_refs, &node_ref);
+    }
+    for evidence_ref in evidence_refs {
+        merge_unique_string(&mut issue.evidence_refs, &evidence_ref);
+    }
 }
 
 fn stable_lint_issue_id(kind: &str, primary: &str, rest: &[String]) -> String {
@@ -1415,6 +3057,7 @@ fn write_lint_review_items(
             source_refs: issue.source_refs.clone(),
             node_refs: issue.node_refs.clone(),
             evidence_refs: issue.evidence_refs.clone(),
+            proposal_payload: None,
             created_at: unix_timestamp_seconds(),
         };
         writer.write_proposal(&proposal)?;
@@ -1430,16 +3073,26 @@ fn brain_review_created_event(
 ) -> Result<BrainEvent> {
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
         event_type: BrainEventKind::ReviewCreated,
+        operation_type: Some("review_created".into()),
         actor: proposal.actor.clone(),
         source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
         node_refs: proposal.node_refs.clone(),
         relation_refs: issue.relation_refs.clone(),
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
         evidence_refs: proposal.evidence_refs.clone(),
         payload_json: serde_json::to_string(issue)
             .context("failed to encode lint review event payload")?,
+        causality: proposal_event_causality(proposal),
         confidence: None,
         policy_result: "needs_review".into(),
         created_at: proposal.created_at,
@@ -1452,19 +3105,36 @@ fn brain_maintenance_event(
 ) -> Result<BrainEvent> {
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: snapshot.workspace_id.clone(),
         scope: BrainScope::Project,
         event_type: BrainEventKind::BrainMaintenanceRun,
+        operation_type: Some("brain_maintenance_run".into()),
         actor: BrainActor {
             actor_type: BrainActorType::System,
             actor_id: "duckdocs-maintenance".into(),
         },
         source_refs: Vec::new(),
+        source_markdown_refs: Vec::new(),
         node_refs: Vec::new(),
         relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
         evidence_refs: Vec::new(),
         payload_json: serde_json::to_string(report)
             .context("failed to encode maintenance event payload")?,
+        causality: BrainEventCausality {
+            snapshot_id: Some(format!(
+                "snapshot-{}-{}",
+                snapshot.workspace_id, snapshot.generated_at
+            )),
+            materialized_version: Some(snapshot.generated_at),
+            ..Default::default()
+        },
         confidence: None,
         policy_result: if report.issue_count == 0 {
             "auto_repaired".into()
@@ -1475,36 +3145,267 @@ fn brain_maintenance_event(
     })
 }
 
-fn is_auto_apply_brain_proposal(kind: BrainProposalKind) -> bool {
+fn markdown_source_queued_event(
+    workspace_id: &str,
+    queued: &MarkdownIngestQueueRecord,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: workspace_id.to_string(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::SourceIngestQueued,
+        operation_type: Some("source_ingest_queued".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        source_refs: vec![queued.queue_id.clone()],
+        source_markdown_refs: vec![queued.relative_path.clone()],
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: Vec::new(),
+        payload_json: serde_json::to_string(queued)
+            .context("failed to encode source ingest queued event payload")?,
+        causality: BrainEventCausality {
+            caused_by_source_ids: vec![queued.queue_id.clone()],
+            materialized_version: Some(queued.enqueued_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "auto_enqueued".into(),
+        created_at: queued.enqueued_at,
+    })
+}
+
+fn markdown_source_compiled_event(
+    record: &MarkdownIngestQueueRecord,
+    manifest: Option<&SourceArtifactManifest>,
+) -> Result<BrainEvent> {
+    let source_refs = manifest
+        .map(|manifest| vec![manifest.source_id.clone()])
+        .unwrap_or_else(|| vec![record.queue_id.clone()]);
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: record.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::SourceCompiled,
+        operation_type: Some("source_compiled".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        source_refs,
+        source_markdown_refs: vec![record.relative_path.clone()],
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: Vec::new(),
+        payload_json: serde_json::to_string(record)
+            .context("failed to encode source compiled event payload")?,
+        causality: BrainEventCausality {
+            caused_by_source_ids: manifest
+                .map(|manifest| vec![manifest.source_id.clone()])
+                .unwrap_or_else(|| vec![record.queue_id.clone()]),
+            materialized_version: record.completed_at,
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: if record.status == "ingested" {
+            "auto_compiled".into()
+        } else {
+            "failed".into()
+        },
+        created_at: record.completed_at.unwrap_or_else(unix_timestamp_seconds),
+    })
+}
+
+fn markdown_ingest_idempotent_noop_event(
+    record: &MarkdownIngestQueueRecord,
+    manifest: &SourceArtifactManifest,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<BrainEvent> {
+    let snapshot_id = format!(
+        "snapshot-{}-{}",
+        snapshot.workspace_id, snapshot.generated_at
+    );
+    let evidence_refs = snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(manifest.source_id.as_str()))
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: record.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_materialize_noop".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        source_refs: vec![manifest.source_id.clone()],
+        source_markdown_refs: vec![record.relative_path.clone(), manifest.markdown_path.clone()],
+        node_refs: snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.source_ids.contains(&manifest.source_id))
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: Vec::new(),
+        claim_refs: snapshot
+            .claims
+            .iter()
+            .filter(|claim| claim.source_refs.contains(&manifest.source_id))
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: snapshot
+            .memories
+            .iter()
+            .filter(|memory| memory.source_refs.contains(&manifest.source_id))
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: evidence_refs.into_iter().collect(),
+        payload_json: serde_json::to_string(&json!({
+            "mutationType": "noop",
+            "result": "idempotent",
+            "reason": "markdown_source_already_materialized",
+            "sourceId": manifest.source_id,
+            "sourcePath": record.relative_path,
+            "contentHash": record.content_hash,
+            "snapshotId": snapshot_id,
+            "diff": {
+                "changedFiles": [],
+                "nodeChanges": [],
+                "edgeChanges": [],
+                "claimChanges": [],
+                "memoryChanges": [],
+                "wikiChanges": []
+            },
+            "rollbackHint": "No materialized graph/wiki files changed; replay remains anchored by events/brain_events.jsonl."
+        }))
+        .context("failed to encode idempotent markdown ingest event payload")?,
+        causality: BrainEventCausality {
+            caused_by_source_ids: vec![manifest.source_id.clone()],
+            snapshot_id: Some(snapshot_id),
+            materialized_version: Some(snapshot.generated_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "idempotent_noop".into(),
+        created_at: record.completed_at.unwrap_or_else(unix_timestamp_seconds),
+    })
+}
+
+fn should_auto_apply_brain_proposal(request: &ProposeBrainUpdateRequest) -> bool {
+    if matches!(
+        request.kind,
+        BrainProposalKind::Node
+            | BrainProposalKind::Memory
+            | BrainProposalKind::Observation
+            | BrainProposalKind::SourceNote
+    ) {
+        return true;
+    }
     matches!(
-        kind,
-        BrainProposalKind::Memory | BrainProposalKind::Observation | BrainProposalKind::SourceNote
+        (&request.kind, &request.proposal_payload),
+        (
+            BrainProposalKind::Claim,
+            Some(AgentGraphProposalPayload::NewClaim { .. })
+        ) | (
+            BrainProposalKind::Link,
+            Some(AgentGraphProposalPayload::NewEdge { .. })
+        )
     )
 }
 
 fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result<()> {
+    let mut issues = Vec::new();
     if request.title.trim().is_empty() {
-        bail!("brain update proposal title cannot be empty");
+        push_agent_proposal_issue(
+            &mut issues,
+            AgentGraphProposalValidationCode::MissingRequiredField,
+            "title",
+            "brain update proposal title cannot be empty",
+        );
     }
     if request.body.trim().is_empty() {
-        bail!("brain update proposal body cannot be empty");
+        push_agent_proposal_issue(
+            &mut issues,
+            AgentGraphProposalValidationCode::MissingRequiredField,
+            "body",
+            "brain update proposal body cannot be empty",
+        );
     }
     match request.kind {
+        BrainProposalKind::Node => {
+            if !matches!(
+                &request.proposal_payload,
+                Some(AgentGraphProposalPayload::NewNode { .. })
+            ) {
+                push_agent_proposal_issue(
+                    &mut issues,
+                    AgentGraphProposalValidationCode::KindPayloadMismatch,
+                    "proposalPayload.changeType",
+                    "node proposal needs new_node proposalPayload",
+                );
+            }
+        }
         BrainProposalKind::Link => {
+            let payload_edge = match &request.proposal_payload {
+                Some(AgentGraphProposalPayload::NewEdge { edge }) => Some(edge),
+                _ => None,
+            };
             if request
                 .target_node_id
                 .as_deref()
+                .or_else(|| payload_edge.map(|edge| edge.target_node_id.as_str()))
                 .unwrap_or("")
                 .trim()
                 .is_empty()
             {
-                bail!("link proposal needs --target-node");
+                push_agent_proposal_issue(
+                    &mut issues,
+                    AgentGraphProposalValidationCode::MissingTargetNode,
+                    "targetNodeId",
+                    "link proposal needs --target-node",
+                );
             }
-            if request.node_refs.is_empty() {
-                bail!("link proposal needs at least one --node ref");
+            if request.node_refs.is_empty()
+                && !payload_edge.is_some_and(|edge| !edge.source_node_id.trim().is_empty())
+            {
+                push_agent_proposal_issue(
+                    &mut issues,
+                    AgentGraphProposalValidationCode::MissingNodeRefs,
+                    "nodeRefs",
+                    "link proposal needs at least one --node ref",
+                );
             }
-            if request.relation_kind.is_none() {
-                bail!("link proposal needs --relation");
+            if request.relation_kind.is_none() && payload_edge.is_none() {
+                push_agent_proposal_issue(
+                    &mut issues,
+                    AgentGraphProposalValidationCode::MissingRelationKind,
+                    "relationKind",
+                    "link proposal needs --relation",
+                );
             }
         }
         BrainProposalKind::SourceNote => {
@@ -1515,7 +3416,12 @@ fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result
                 .trim()
                 .is_empty()
             {
-                bail!("source note proposal needs --source");
+                push_agent_proposal_issue(
+                    &mut issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "targetSourceId",
+                    "source note proposal needs --source",
+                );
             }
         }
         BrainProposalKind::Memory
@@ -1523,11 +3429,327 @@ fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result
         | BrainProposalKind::Observation
         | BrainProposalKind::WikiPage => {}
     }
+    if let Some(payload) = &request.proposal_payload {
+        validate_agent_graph_proposal_payload(request, payload, &mut issues);
+    }
+    if !issues.is_empty() {
+        return Err(anyhow!(AgentGraphProposalValidationError::new(issues)));
+    }
     Ok(())
+}
+
+fn validate_agent_graph_proposal_payload(
+    request: &ProposeBrainUpdateRequest,
+    payload: &AgentGraphProposalPayload,
+    issues: &mut Vec<AgentGraphProposalValidationIssue>,
+) {
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => {
+            if request.kind != BrainProposalKind::Node {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::KindPayloadMismatch,
+                    "proposalPayload.changeType",
+                    "new_node proposal payload requires kind=node",
+                );
+            }
+            if node.label.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.node.label",
+                    "new_node proposal payload needs node.label",
+                );
+            }
+            if node.source_path.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.node.sourcePath",
+                    "new_node proposal payload needs node.sourcePath",
+                );
+            }
+            if node.source_refs.is_empty() && request.source_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingSourceRefs,
+                    "proposalPayload.node.sourceRefs",
+                    "new_node proposal payload needs sourceRefs",
+                );
+            }
+            if node.evidence_refs.is_empty() && request.evidence_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingEvidenceRefs,
+                    "proposalPayload.node.evidenceRefs",
+                    "new_node proposal payload needs evidenceRefs",
+                );
+            }
+        }
+        AgentGraphProposalPayload::NewEdge { edge } => {
+            if request.kind != BrainProposalKind::Link {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::KindPayloadMismatch,
+                    "proposalPayload.changeType",
+                    "new_edge proposal payload requires kind=link",
+                );
+            }
+            if edge.source_node_id.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.edge.sourceNodeId",
+                    "new_edge proposal payload needs edge.sourceNodeId",
+                );
+            }
+            if edge.target_node_id.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.edge.targetNodeId",
+                    "new_edge proposal payload needs edge.targetNodeId",
+                );
+            }
+            if edge.label.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.edge.label",
+                    "new_edge proposal payload needs edge.label",
+                );
+            }
+            if edge.source_path.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.edge.sourcePath",
+                    "new_edge proposal payload needs edge.sourcePath",
+                );
+            }
+            if edge.source_refs.is_empty() && request.source_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingSourceRefs,
+                    "proposalPayload.edge.sourceRefs",
+                    "new_edge proposal payload needs sourceRefs",
+                );
+            }
+            if edge.evidence_refs.is_empty() && request.evidence_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingEvidenceRefs,
+                    "proposalPayload.edge.evidenceRefs",
+                    "new_edge proposal payload needs evidenceRefs",
+                );
+            }
+        }
+        AgentGraphProposalPayload::NewClaim { claim } => {
+            if request.kind != BrainProposalKind::Claim {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::KindPayloadMismatch,
+                    "proposalPayload.changeType",
+                    "new_claim proposal payload requires kind=claim",
+                );
+            }
+            if claim.statement.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.claim.statement",
+                    "new_claim proposal payload needs claim.statement",
+                );
+            }
+            if claim.source_path.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.claim.sourcePath",
+                    "new_claim proposal payload needs claim.sourcePath",
+                );
+            }
+            if claim.topic_refs.is_empty() && request.node_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingTopicRefs,
+                    "proposalPayload.claim.topicRefs",
+                    "new_claim proposal payload needs topicRefs",
+                );
+            }
+            if claim.source_refs.is_empty() && request.source_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingSourceRefs,
+                    "proposalPayload.claim.sourceRefs",
+                    "new_claim proposal payload needs sourceRefs",
+                );
+            }
+            if claim.evidence_refs.is_empty() && request.evidence_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingEvidenceRefs,
+                    "proposalPayload.claim.evidenceRefs",
+                    "new_claim proposal payload needs evidenceRefs",
+                );
+            }
+        }
+        AgentGraphProposalPayload::NewMemory { memory } => {
+            if request.kind != BrainProposalKind::Memory {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::KindPayloadMismatch,
+                    "proposalPayload.changeType",
+                    "new_memory proposal payload requires kind=memory",
+                );
+            }
+            if memory.title.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.memory.title",
+                    "new_memory proposal payload needs memory.title",
+                );
+            }
+            if memory.body.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.memory.body",
+                    "new_memory proposal payload needs memory.body",
+                );
+            }
+            if memory.source_path.trim().is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingRequiredField,
+                    "proposalPayload.memory.sourcePath",
+                    "new_memory proposal payload needs memory.sourcePath",
+                );
+            }
+            if memory.source_refs.is_empty() && request.source_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingSourceRefs,
+                    "proposalPayload.memory.sourceRefs",
+                    "new_memory proposal payload needs sourceRefs",
+                );
+            }
+            if memory.evidence_refs.is_empty() && request.evidence_refs.is_empty() {
+                push_agent_proposal_issue(
+                    issues,
+                    AgentGraphProposalValidationCode::MissingEvidenceRefs,
+                    "proposalPayload.memory.evidenceRefs",
+                    "new_memory proposal payload needs evidenceRefs",
+                );
+            }
+        }
+    }
+}
+
+fn push_agent_proposal_issue(
+    issues: &mut Vec<AgentGraphProposalValidationIssue>,
+    code: AgentGraphProposalValidationCode,
+    field: &str,
+    message: &str,
+) {
+    issues.push(AgentGraphProposalValidationIssue::new(code, field, message));
+}
+
+fn proposal_operation_type(proposal: &BrainUpdateProposal) -> Option<String> {
+    Some(
+        match proposal.kind {
+            BrainProposalKind::Node => "new_node",
+            BrainProposalKind::Memory => "new_memory",
+            BrainProposalKind::Claim => "new_claim",
+            BrainProposalKind::Link => "new_edge",
+            BrainProposalKind::Observation => "new_observation",
+            BrainProposalKind::SourceNote => "source_note",
+            BrainProposalKind::WikiPage => "wiki_page",
+        }
+        .into(),
+    )
+}
+
+fn proposal_source_markdown_refs(proposal: &BrainUpdateProposal) -> Vec<String> {
+    let mut refs = Vec::new();
+    match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewNode { node }) => {
+            merge_unique_string(&mut refs, node.source_path.trim());
+        }
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => {
+            merge_unique_string(&mut refs, edge.source_path.trim());
+        }
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => {
+            merge_unique_string(&mut refs, claim.source_path.trim());
+        }
+        Some(AgentGraphProposalPayload::NewMemory { memory }) => {
+            merge_unique_string(&mut refs, memory.source_path.trim());
+        }
+        None => {}
+    }
+    refs
+}
+
+fn proposal_target_node_ids(proposal: &BrainUpdateProposal) -> Result<Vec<String>> {
+    let mut node_ids = proposal.node_refs.clone();
+    if let Some(target_node_id) = proposal.target_node_id.as_deref() {
+        merge_unique_string(&mut node_ids, target_node_id);
+    }
+    match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewNode { .. }) => {
+            merge_unique_string(&mut node_ids, &agent_new_node_payload_node_id(proposal)?);
+        }
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => {
+            merge_unique_string(&mut node_ids, edge.source_node_id.trim());
+            merge_unique_string(&mut node_ids, edge.target_node_id.trim());
+        }
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => {
+            for topic_ref in &claim.topic_refs {
+                merge_unique_string(&mut node_ids, topic_ref);
+            }
+        }
+        Some(AgentGraphProposalPayload::NewMemory { .. }) | None => {}
+    }
+    Ok(node_ids)
+}
+
+fn proposal_target_edge_ids(proposal: &BrainUpdateProposal) -> Result<Vec<String>> {
+    if proposal.kind == BrainProposalKind::Link {
+        Ok(vec![relation_record_for_proposal(proposal)?.relation_id])
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn proposal_target_claim_ids(proposal: &BrainUpdateProposal) -> Vec<String> {
+    if proposal.kind == BrainProposalKind::Claim {
+        vec![claim_record_for_proposal(proposal).claim_id]
+    } else {
+        Vec::new()
+    }
+}
+
+fn proposal_target_memory_ids(proposal: &BrainUpdateProposal) -> Vec<String> {
+    if proposal.kind == BrainProposalKind::Memory {
+        vec![memory_record_for_proposal(proposal).memory_id]
+    } else {
+        Vec::new()
+    }
+}
+
+fn proposal_event_causality(proposal: &BrainUpdateProposal) -> BrainEventCausality {
+    BrainEventCausality {
+        caused_by_proposal_id: Some(proposal.proposal_id.clone()),
+        caused_by_source_ids: proposal.source_refs.clone(),
+        materialized_version: Some(proposal.created_at),
+        ..Default::default()
+    }
 }
 
 fn brain_event_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainEvent> {
     let event_type = match proposal.kind {
+        BrainProposalKind::Node => BrainEventKind::NodeProposed,
         BrainProposalKind::Memory => BrainEventKind::MemoryProposed,
         BrainProposalKind::Claim => BrainEventKind::ClaimProposed,
         BrainProposalKind::Link => BrainEventKind::LinkProposed,
@@ -1535,33 +3757,131 @@ fn brain_event_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainEvent
         BrainProposalKind::SourceNote => BrainEventKind::SourceNoteProposed,
         BrainProposalKind::WikiPage => BrainEventKind::WikiPageProposed,
     };
+    let relation_refs = if proposal.kind == BrainProposalKind::Link {
+        vec![relation_record_for_proposal(proposal)?.relation_id]
+    } else {
+        Vec::new()
+    };
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
         event_type,
+        operation_type: proposal_operation_type(proposal),
         actor: proposal.actor.clone(),
         source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
         node_refs: proposal.node_refs.clone(),
-        relation_refs: Vec::new(),
+        relation_refs,
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
         evidence_refs: proposal.evidence_refs.clone(),
         payload_json: serde_json::to_string(proposal)
             .context("failed to encode proposal event payload")?,
+        causality: proposal_event_causality(proposal),
         confidence: None,
         policy_result: "needs_review".into(),
         created_at: proposal.created_at,
     })
 }
 
-fn memory_record_for_proposal(proposal: &BrainUpdateProposal) -> MemoryRecord {
-    MemoryRecord {
-        memory_id: format!("memory-{}", brain_proposal_fingerprint(proposal)),
+fn brain_graph_mutation_applied_event(proposal: &BrainUpdateProposal) -> Result<BrainEvent> {
+    let mutation_type = match proposal.kind {
+        BrainProposalKind::Node => "new_node",
+        BrainProposalKind::Claim => "new_claim",
+        BrainProposalKind::Link => "new_edge",
+        BrainProposalKind::Memory => "new_memory",
+        _ => bail!(
+            "proposal {} is not an auto-applied graph mutation",
+            proposal.proposal_id
+        ),
+    };
+    let mut node_refs = proposal.node_refs.clone();
+    if proposal.kind == BrainProposalKind::Node {
+        merge_unique_string(&mut node_refs, &agent_new_node_payload_node_id(proposal)?);
+    }
+    let relation_refs = if proposal.kind == BrainProposalKind::Link {
+        vec![relation_record_for_proposal(proposal)?.relation_id]
+    } else {
+        Vec::new()
+    };
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
-        title: proposal.title.clone(),
-        body: proposal.body.clone(),
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some(mutation_type.into()),
+        actor: proposal.actor.clone(),
         source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
+        node_refs,
+        relation_refs,
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
         evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(&json!({
+            "mutationType": mutation_type,
+            "proposalId": proposal.proposal_id,
+            "proposal": proposal,
+        }))
+        .context("failed to encode applied graph mutation event payload")?,
+        causality: proposal_event_causality(proposal),
+        confidence: None,
+        policy_result: "auto_applied".into(),
+        created_at: proposal.created_at,
+    })
+}
+
+fn memory_record_for_proposal(proposal: &BrainUpdateProposal) -> MemoryRecord {
+    let payload_memory = match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewMemory { memory }) => Some(memory),
+        _ => None,
+    };
+    let mut source_refs = payload_memory
+        .map(|memory| merge_unique_strings(&proposal.source_refs, &memory.source_refs))
+        .unwrap_or_else(|| proposal.source_refs.clone());
+    if source_refs.is_empty() {
+        if let Some(source_path) = payload_memory
+            .map(|memory| memory.source_path.trim())
+            .filter(|source_path| !source_path.is_empty())
+        {
+            source_refs.push(source_path.to_string());
+        }
+    }
+    let evidence_refs = payload_memory
+        .map(|memory| merge_unique_strings(&proposal.evidence_refs, &memory.evidence_refs))
+        .unwrap_or_else(|| proposal.evidence_refs.clone());
+    MemoryRecord {
+        memory_id: payload_memory
+            .and_then(|memory| memory.memory_id.as_deref())
+            .map(str::trim)
+            .filter(|memory_id| !memory_id.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("memory-{}", brain_proposal_fingerprint(proposal))),
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        title: payload_memory
+            .map(|memory| memory.title.trim())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| proposal.title.trim())
+            .to_string(),
+        body: payload_memory
+            .map(|memory| memory.body.trim())
+            .filter(|body| !body.is_empty())
+            .unwrap_or_else(|| proposal.body.trim())
+            .to_string(),
+        source_refs,
+        evidence_refs,
         created_at: proposal.created_at,
         updated_at: proposal.created_at,
     }
@@ -1570,16 +3890,26 @@ fn memory_record_for_proposal(proposal: &BrainUpdateProposal) -> MemoryRecord {
 fn brain_memory_accepted_event(proposal: &BrainUpdateProposal) -> Result<BrainEvent> {
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
         event_type: BrainEventKind::MemoryAccepted,
+        operation_type: Some("new_memory".into()),
         actor: proposal.actor.clone(),
         source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
         node_refs: proposal.node_refs.clone(),
         relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: proposal_target_memory_ids(proposal),
         evidence_refs: proposal.evidence_refs.clone(),
         payload_json: serde_json::to_string(proposal)
             .context("failed to encode accepted memory event payload")?,
+        causality: proposal_event_causality(proposal),
         confidence: None,
         policy_result: "auto_applied".into(),
         created_at: proposal.created_at,
@@ -1596,13 +3926,22 @@ fn brain_review_resolved_event(
     };
     Ok(BrainEvent {
         event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: proposal.workspace_id.clone(),
         scope: proposal.scope,
         event_type: BrainEventKind::ReviewResolved,
+        operation_type: Some("review_resolved".into()),
         actor: request.actor.clone(),
         source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
         node_refs: proposal.node_refs.clone(),
         relation_refs: Vec::new(),
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
         evidence_refs: proposal.evidence_refs.clone(),
         payload_json: serde_json::to_string(&json!({
             "proposalId": proposal.proposal_id,
@@ -1611,6 +3950,7 @@ fn brain_review_resolved_event(
             "status": proposal.status,
         }))
         .context("failed to encode review resolved event payload")?,
+        causality: proposal_event_causality(proposal),
         confidence: None,
         policy_result: decision.into(),
         created_at: unix_timestamp_seconds(),
@@ -1648,7 +3988,7 @@ struct BrainWorkspaceWriter {
 impl BrainWorkspaceWriter {
     fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root).with_context(|| format!("failed creating {}", root.display()))?;
-        let lock = WorkspaceLock::acquire(root.join("brain.lock"))?;
+        let lock = WorkspaceLock::acquire(root.join(BRAIN_LOCK_DIRECTORY_NAME))?;
         for dir in [
             root.join("events"),
             root.join("memory"),
@@ -1746,19 +4086,21 @@ impl BrainWorkspaceWriter {
             return Ok(());
         }
         let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
-        apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
-        write_json_pretty(&manifest_path, &snapshot)?;
         match proposal.kind {
-            BrainProposalKind::Claim => {
-                write_json_pretty(&self.root.join("graph/claims.json"), &snapshot.claims)?;
+            BrainProposalKind::Node => {
+                apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
+                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
             }
-            BrainProposalKind::Link => {
-                write_json_pretty(&self.root.join("graph/edges.json"), &snapshot.relations)?;
+            BrainProposalKind::Claim | BrainProposalKind::Link => {
+                apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
+                refresh_materialized_wiki_pages(&mut snapshot);
+                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
             }
             BrainProposalKind::WikiPage => {
-                let page = wiki_page_for_proposal(proposal);
-                let page_path = self.root.join(&page.path);
-                write_file_atomic(&page_path, page.body.as_bytes())?;
+                let page =
+                    resolve_persisted_wiki_page_for_proposal(&self.root, &snapshot, proposal);
+                apply_wiki_page_to_snapshot(&mut snapshot, page.clone());
+                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
             }
             BrainProposalKind::Memory
             | BrainProposalKind::Observation
@@ -1799,14 +4141,50 @@ fn apply_accepted_proposals_to_snapshot(
     root: &Path,
     snapshot: &mut BrainRepoSnapshot,
 ) -> Result<()> {
-    for (proposal, _) in read_brain_update_proposals(root)? {
-        if proposal.workspace_id == snapshot.workspace_id
-            && proposal.status == BrainProposalStatus::Accepted
-        {
-            apply_accepted_proposal_to_snapshot(&proposal, snapshot)?;
-        }
+    let node_redirects = merge_correction_node_redirects(snapshot);
+    let mut accepted = read_brain_update_proposals(root)?
+        .into_iter()
+        .map(|(proposal, _)| proposal)
+        .filter(|proposal| proposal.workspace_id == snapshot.workspace_id)
+        .filter(|proposal| proposal.status == BrainProposalStatus::Accepted)
+        .collect::<Vec<_>>();
+    accepted.sort_by(|left, right| {
+        brain_proposal_replay_priority(left.kind)
+            .cmp(&brain_proposal_replay_priority(right.kind))
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.proposal_id.cmp(&right.proposal_id))
+    });
+    for proposal in accepted {
+        let proposal = remap_proposal_node_refs_for_merge(proposal, &node_redirects);
+        apply_accepted_proposal_to_snapshot_with_root(root, &proposal, snapshot)?;
     }
+    normalize_snapshot_after_merge_redirects(snapshot, &node_redirects);
     Ok(())
+}
+
+fn brain_proposal_replay_priority(kind: BrainProposalKind) -> u8 {
+    match kind {
+        BrainProposalKind::Node => 0,
+        BrainProposalKind::Claim => 1,
+        BrainProposalKind::Link => 2,
+        BrainProposalKind::WikiPage => 3,
+        BrainProposalKind::Memory
+        | BrainProposalKind::Observation
+        | BrainProposalKind::SourceNote => 4,
+    }
+}
+
+fn apply_accepted_proposal_to_snapshot_with_root(
+    root: &Path,
+    proposal: &BrainUpdateProposal,
+    snapshot: &mut BrainRepoSnapshot,
+) -> Result<()> {
+    if proposal.kind == BrainProposalKind::WikiPage {
+        let page = resolve_persisted_wiki_page_for_proposal(root, snapshot, proposal);
+        apply_wiki_page_to_snapshot(snapshot, page);
+        return Ok(());
+    }
+    apply_accepted_proposal_to_snapshot(proposal, snapshot)
 }
 
 fn apply_accepted_proposal_to_snapshot(
@@ -1814,14 +4192,48 @@ fn apply_accepted_proposal_to_snapshot(
     snapshot: &mut BrainRepoSnapshot,
 ) -> Result<()> {
     match proposal.kind {
+        BrainProposalKind::Node => {
+            let node = node_record_for_proposal(proposal)?;
+            if let Some(existing) = snapshot
+                .nodes
+                .iter_mut()
+                .find(|existing| existing.node_id == node.node_id)
+            {
+                merge_brain_node_record(existing, node.clone());
+            } else {
+                snapshot.nodes.push(node.clone());
+            }
+            snapshot.nodes.sort_by(|left, right| {
+                left.node_id
+                    .cmp(&right.node_id)
+                    .then_with(|| left.label.cmp(&right.label))
+            });
+            if let Some(entity) = entity_record_for_node(proposal.workspace_id.as_str(), &node) {
+                if let Some(existing) = snapshot
+                    .entities
+                    .iter_mut()
+                    .find(|existing| existing.entity_id == entity.entity_id)
+                {
+                    *existing = entity;
+                } else {
+                    snapshot.entities.push(entity);
+                }
+                snapshot.entities.sort_by(|left, right| {
+                    left.entity_id
+                        .cmp(&right.entity_id)
+                        .then_with(|| left.name.cmp(&right.name))
+                });
+            }
+            refresh_materialized_wiki_pages(snapshot);
+        }
         BrainProposalKind::Claim => {
             let claim = claim_record_for_proposal(proposal);
             if let Some(existing) = snapshot
                 .claims
                 .iter_mut()
-                .find(|existing| existing.claim_id == claim.claim_id)
+                .find(|existing| claim_records_match_for_reuse(existing, &claim))
             {
-                *existing = claim;
+                merge_claim_record(existing, claim);
             } else {
                 snapshot.claims.push(claim);
             }
@@ -1832,13 +4244,14 @@ fn apply_accepted_proposal_to_snapshot(
             });
         }
         BrainProposalKind::Link => {
+            validate_relation_node_refs(proposal, snapshot)?;
             let relation = relation_record_for_proposal(proposal)?;
             if let Some(existing) = snapshot
                 .relations
                 .iter_mut()
                 .find(|existing| existing.relation_id == relation.relation_id)
             {
-                *existing = relation;
+                merge_brain_relation_record(existing, relation);
             } else {
                 snapshot.relations.push(relation);
             }
@@ -1849,21 +4262,7 @@ fn apply_accepted_proposal_to_snapshot(
             });
         }
         BrainProposalKind::WikiPage => {
-            let page = wiki_page_for_proposal(proposal);
-            if let Some(existing) = snapshot
-                .wiki_pages
-                .iter_mut()
-                .find(|existing| existing.page_id == page.page_id)
-            {
-                *existing = page;
-            } else {
-                snapshot.wiki_pages.push(page);
-            }
-            snapshot.wiki_pages.sort_by(|left, right| {
-                left.path
-                    .cmp(&right.path)
-                    .then_with(|| left.page_id.cmp(&right.page_id))
-            });
+            apply_wiki_page_to_snapshot(snapshot, wiki_page_for_proposal(proposal));
         }
         BrainProposalKind::Memory
         | BrainProposalKind::Observation
@@ -1872,15 +4271,481 @@ fn apply_accepted_proposal_to_snapshot(
     Ok(())
 }
 
+fn apply_wiki_page_to_snapshot(snapshot: &mut BrainRepoSnapshot, page: WikiPage) {
+    if let Some(existing) = snapshot
+        .wiki_pages
+        .iter_mut()
+        .find(|existing| existing.page_id == page.page_id)
+    {
+        *existing = page;
+    } else {
+        snapshot.wiki_pages.push(page);
+    }
+    snapshot.wiki_pages.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.page_id.cmp(&right.page_id))
+    });
+}
+
+fn merge_correction_node_redirects(snapshot: &BrainRepoSnapshot) -> BTreeMap<String, String> {
+    let existing_nodes = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut redirects = BTreeMap::new();
+    for event in &snapshot.events {
+        if event.event_type != BrainEventKind::CorrectionApplied
+            || !event.payload_json.contains("\"kind\":\"merge\"")
+        {
+            continue;
+        }
+        let Some(source_node_id) = event.node_refs.first() else {
+            continue;
+        };
+        let Some(target_node_id) = event.node_refs.get(1) else {
+            continue;
+        };
+        if source_node_id != target_node_id && existing_nodes.contains(target_node_id) {
+            redirects.insert(source_node_id.clone(), target_node_id.clone());
+        }
+    }
+    redirects
+}
+
+fn remap_proposal_node_refs_for_merge(
+    mut proposal: BrainUpdateProposal,
+    redirects: &BTreeMap<String, String>,
+) -> BrainUpdateProposal {
+    if redirects.is_empty() {
+        return proposal;
+    }
+    proposal.target_node_id = proposal
+        .target_node_id
+        .map(|node_id| remap_merged_node_ref(&node_id, redirects));
+    proposal.node_refs = remap_merged_node_refs(&proposal.node_refs, redirects);
+    if let Some(payload) = proposal.proposal_payload {
+        proposal.proposal_payload = Some(match payload {
+            AgentGraphProposalPayload::NewNode { mut node } => {
+                node.node_id = node
+                    .node_id
+                    .map(|node_id| remap_merged_node_ref(&node_id, redirects));
+                AgentGraphProposalPayload::NewNode { node }
+            }
+            AgentGraphProposalPayload::NewEdge { mut edge } => {
+                edge.source_node_id = remap_merged_node_ref(&edge.source_node_id, redirects);
+                edge.target_node_id = remap_merged_node_ref(&edge.target_node_id, redirects);
+                AgentGraphProposalPayload::NewEdge { edge }
+            }
+            AgentGraphProposalPayload::NewClaim { mut claim } => {
+                claim.topic_refs = remap_merged_node_refs(&claim.topic_refs, redirects);
+                AgentGraphProposalPayload::NewClaim { claim }
+            }
+            AgentGraphProposalPayload::NewMemory { memory } => {
+                AgentGraphProposalPayload::NewMemory { memory }
+            }
+        });
+    }
+    proposal
+}
+
+fn normalize_snapshot_after_merge_redirects(
+    snapshot: &mut BrainRepoSnapshot,
+    redirects: &BTreeMap<String, String>,
+) {
+    if !redirects.is_empty() {
+        for node in &mut snapshot.nodes {
+            node.evidence_ids = merge_string_refs(&node.evidence_ids, &[]);
+            node.source_ids = merge_string_refs(&node.source_ids, &[]);
+            node.aliases = merge_string_refs(&node.aliases, &[]);
+        }
+        for entity in &mut snapshot.entities {
+            entity.evidence_refs = merge_string_refs(&entity.evidence_refs, &[]);
+            entity.source_refs = merge_string_refs(&entity.source_refs, &[]);
+            entity.aliases = merge_string_refs(&entity.aliases, &[]);
+        }
+        for relation in &mut snapshot.relations {
+            relation.source_node_id = remap_merged_node_ref(&relation.source_node_id, redirects);
+            relation.target_node_id = remap_merged_node_ref(&relation.target_node_id, redirects);
+            relation.evidence_ids = merge_string_refs(&relation.evidence_ids, &[]);
+        }
+        for claim in &mut snapshot.claims {
+            claim.topic_refs = remap_merged_node_refs(&claim.topic_refs, redirects);
+            claim.source_refs = merge_string_refs(&claim.source_refs, &[]);
+            claim.evidence_refs = merge_string_refs(&claim.evidence_refs, &[]);
+        }
+        for memory in &mut snapshot.memories {
+            memory.source_refs = merge_string_refs(&memory.source_refs, &[]);
+            memory.evidence_refs = merge_string_refs(&memory.evidence_refs, &[]);
+        }
+        for page in &mut snapshot.wiki_pages {
+            page.node_refs = remap_merged_node_refs(&page.node_refs, redirects);
+            page.source_refs = merge_string_refs(&page.source_refs, &[]);
+            page.evidence_refs = merge_string_refs(&page.evidence_refs, &[]);
+        }
+    }
+    snapshot.relations = dedupe_brain_relations(std::mem::take(&mut snapshot.relations));
+    snapshot.claims = dedupe_claim_records(std::mem::take(&mut snapshot.claims));
+    snapshot.wiki_pages = dedupe_wiki_pages(std::mem::take(&mut snapshot.wiki_pages));
+}
+
+fn remap_merged_node_refs(
+    node_refs: &[String],
+    redirects: &BTreeMap<String, String>,
+) -> Vec<String> {
+    node_refs
+        .iter()
+        .map(|node_id| remap_merged_node_ref(node_id, redirects))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn remap_merged_node_ref(node_id: &str, redirects: &BTreeMap<String, String>) -> String {
+    let mut current = node_id.to_string();
+    let mut seen = BTreeSet::new();
+    while let Some(next) = redirects.get(&current) {
+        if !seen.insert(current.clone()) {
+            break;
+        }
+        current = next.clone();
+    }
+    current
+}
+
+fn dedupe_brain_relations(relations: Vec<BrainRelationRecord>) -> Vec<BrainRelationRecord> {
+    let mut merged = BTreeMap::<(String, String, String, String), BrainRelationRecord>::new();
+    for relation in relations
+        .into_iter()
+        .filter(|relation| relation.source_node_id != relation.target_node_id)
+    {
+        let key = (
+            format!("{:?}", relation.kind),
+            relation.source_node_id.clone(),
+            relation.target_node_id.clone(),
+            relation.label.clone(),
+        );
+        match merged.get_mut(&key) {
+            Some(existing) => merge_brain_relation_record(existing, relation),
+            None => {
+                merged.insert(key, relation);
+            }
+        }
+    }
+    let mut relations = merged.into_values().collect::<Vec<_>>();
+    relations.sort_by(|left, right| {
+        left.relation_id
+            .cmp(&right.relation_id)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    relations
+}
+
+fn merge_brain_relation_record(existing: &mut BrainRelationRecord, incoming: BrainRelationRecord) {
+    existing.evidence_ids = merge_string_refs(&existing.evidence_ids, &incoming.evidence_ids);
+    existing.confidence = match (existing.confidence, incoming.confidence) {
+        (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    };
+    existing.updated_at = existing.updated_at.max(incoming.updated_at);
+}
+
+fn brain_relation_record_content_matches(
+    left: &BrainRelationRecord,
+    right: &BrainRelationRecord,
+) -> bool {
+    left.relation_id == right.relation_id
+        && left.kind == right.kind
+        && left.source_node_id == right.source_node_id
+        && left.target_node_id == right.target_node_id
+        && left.label == right.label
+        && left.evidence_ids == right.evidence_ids
+        && left.confidence == right.confidence
+}
+
+fn dedupe_claim_records(claims: Vec<ClaimRecord>) -> Vec<ClaimRecord> {
+    let mut merged = BTreeMap::<(String, Vec<String>), ClaimRecord>::new();
+    for claim in claims {
+        let key = claim_record_reuse_key(&claim);
+        match merged.get_mut(&key) {
+            Some(existing) => merge_claim_record(existing, claim),
+            None => {
+                merged.insert(key, claim);
+            }
+        }
+    }
+    let mut claims = merged.into_values().collect::<Vec<_>>();
+    claims.sort_by(|left, right| {
+        left.claim_id
+            .cmp(&right.claim_id)
+            .then_with(|| left.statement.cmp(&right.statement))
+    });
+    claims
+}
+
+fn claim_records_match_for_reuse(existing: &ClaimRecord, incoming: &ClaimRecord) -> bool {
+    existing.claim_id == incoming.claim_id
+        || claim_record_reuse_key(existing) == claim_record_reuse_key(incoming)
+}
+
+fn claim_record_reuse_key(claim: &ClaimRecord) -> (String, Vec<String>) {
+    (
+        normalize_claim_record_statement(&claim.statement),
+        merge_string_refs(&claim.topic_refs, &[]),
+    )
+}
+
+fn normalize_claim_record_statement(statement: &str) -> String {
+    statement
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn dedupe_wiki_pages(pages: Vec<WikiPage>) -> Vec<WikiPage> {
+    let mut merged = BTreeMap::<String, WikiPage>::new();
+    for mut page in pages {
+        page.node_refs = merge_string_refs(&page.node_refs, &[]);
+        page.source_refs = merge_string_refs(&page.source_refs, &[]);
+        page.evidence_refs = merge_string_refs(&page.evidence_refs, &[]);
+        match merged.get_mut(&page.path) {
+            Some(existing) => merge_wiki_page_record(existing, page),
+            None => {
+                merged.insert(page.path.clone(), page);
+            }
+        }
+    }
+    let mut pages = merged.into_values().collect::<Vec<_>>();
+    pages.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.page_id.cmp(&right.page_id))
+    });
+    pages
+}
+
+fn merge_wiki_page_record(existing: &mut WikiPage, incoming: WikiPage) {
+    existing.node_refs = merge_string_refs(&existing.node_refs, &incoming.node_refs);
+    existing.source_refs = merge_string_refs(&existing.source_refs, &incoming.source_refs);
+    existing.evidence_refs = merge_string_refs(&existing.evidence_refs, &incoming.evidence_refs);
+    if incoming.updated_at >= existing.updated_at {
+        existing.page_id = incoming.page_id;
+        existing.workspace_id = incoming.workspace_id;
+        existing.title = incoming.title;
+        existing.body = incoming.body;
+        existing.updated_at = incoming.updated_at;
+    }
+}
+
+fn validate_relation_node_refs(
+    proposal: &BrainUpdateProposal,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    if proposal.kind != BrainProposalKind::Link {
+        return Ok(());
+    }
+
+    let node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let source_node_id = proposal
+        .node_refs
+        .first()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .context("accepted link proposal needs a source node ref")?;
+    let target_node_id = proposal
+        .target_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("accepted link proposal needs a target node ref")?;
+    let mut missing = proposal
+        .node_refs
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter(|node_id| !node_ids.contains(node_id))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !node_ids.contains(source_node_id)
+        && !missing.iter().any(|node_id| node_id == source_node_id)
+    {
+        missing.push(source_node_id.to_string());
+    }
+    if !node_ids.contains(target_node_id)
+        && !missing.iter().any(|node_id| node_id == target_node_id)
+    {
+        missing.push(target_node_id.to_string());
+    }
+
+    if !missing.is_empty() {
+        bail!(
+            "link proposal {} references missing graph node id(s): {}",
+            proposal.proposal_id,
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn node_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainNodeRecord> {
+    let Some(AgentGraphProposalPayload::NewNode { node }) = &proposal.proposal_payload else {
+        bail!("accepted node proposal needs new_node proposalPayload");
+    };
+    let node_id = agent_new_node_payload_node_id(proposal)?;
+    let mut source_ids = merge_unique_strings(&proposal.source_refs, &node.source_refs);
+    if source_ids.is_empty() {
+        source_ids.push(node.source_path.clone());
+    }
+    Ok(BrainNodeRecord {
+        node_id,
+        kind: node.kind,
+        label: node.label.trim().to_string(),
+        scope: proposal.scope,
+        aliases: merge_unique_strings(&node.aliases, &[]),
+        evidence_ids: merge_unique_strings(&proposal.evidence_refs, &node.evidence_refs),
+        source_ids,
+        confidence: None,
+        updated_at: proposal.created_at,
+    })
+}
+
+fn agent_new_node_payload_node_id(proposal: &BrainUpdateProposal) -> Result<String> {
+    let Some(AgentGraphProposalPayload::NewNode { node }) = &proposal.proposal_payload else {
+        bail!("node proposal needs new_node proposalPayload");
+    };
+    Ok(node
+        .node_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("concept-{}", bounded_artifact_key(&node.label, 80))))
+}
+
+fn merge_brain_node_record(existing: &mut BrainNodeRecord, incoming: BrainNodeRecord) {
+    existing.kind = incoming.kind;
+    existing.label = incoming.label;
+    existing.scope = incoming.scope;
+    existing.aliases = merge_unique_strings(&existing.aliases, &incoming.aliases);
+    existing.evidence_ids = merge_unique_strings(&existing.evidence_ids, &incoming.evidence_ids);
+    existing.source_ids = merge_unique_strings(&existing.source_ids, &incoming.source_ids);
+    existing.confidence = incoming.confidence.or(existing.confidence);
+    existing.updated_at = incoming.updated_at;
+}
+
+fn brain_node_record_content_matches(left: &BrainNodeRecord, right: &BrainNodeRecord) -> bool {
+    left.node_id == right.node_id
+        && left.kind == right.kind
+        && left.label == right.label
+        && left.scope == right.scope
+        && left.aliases == right.aliases
+        && left.evidence_ids == right.evidence_ids
+        && left.source_ids == right.source_ids
+        && left.confidence == right.confidence
+}
+
+fn entity_record_for_node(workspace_id: &str, node: &BrainNodeRecord) -> Option<EntityRecord> {
+    matches!(node.kind, BrainNodeKind::Concept | BrainNodeKind::Topic).then(|| EntityRecord {
+        entity_id: format!("ent-{}", node.node_id),
+        workspace_id: workspace_id.to_string(),
+        kind: node.kind,
+        name: node.label.clone(),
+        aliases: node.aliases.clone(),
+        source_refs: node.source_ids.clone(),
+        evidence_refs: node.evidence_ids.clone(),
+        updated_at: node.updated_at,
+    })
+}
+
+fn merge_unique_strings(left: &[String], right: &[String]) -> Vec<String> {
+    left.iter()
+        .chain(right.iter())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn merge_unique_string(values: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() && !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
+}
+
+fn refresh_materialized_wiki_pages(snapshot: &mut BrainRepoSnapshot) {
+    let generated = build_materialized_wiki_pages(
+        &snapshot.workspace_id,
+        &snapshot.sources,
+        &snapshot.nodes,
+        unix_timestamp_seconds(),
+    );
+    let generated_paths = generated
+        .iter()
+        .map(|page| page.path.clone())
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .wiki_pages
+        .retain(|page| !generated_paths.contains(&page.path));
+    snapshot.wiki_pages.extend(generated);
+    snapshot.wiki_pages.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.page_id.cmp(&right.page_id))
+    });
+}
+
 fn claim_record_for_proposal(proposal: &BrainUpdateProposal) -> ClaimRecord {
+    let payload_claim = match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewClaim { claim }) => Some(claim),
+        _ => None,
+    };
+    let statement = payload_claim
+        .map(|claim| claim.statement.trim())
+        .filter(|statement| !statement.is_empty())
+        .unwrap_or_else(|| proposal.body.trim())
+        .to_string();
+    let topic_refs = payload_claim
+        .map(|claim| merge_unique_strings(&proposal.node_refs, &claim.topic_refs))
+        .unwrap_or_else(|| proposal.node_refs.clone());
+    let mut source_refs = payload_claim
+        .map(|claim| merge_unique_strings(&proposal.source_refs, &claim.source_refs))
+        .unwrap_or_else(|| proposal.source_refs.clone());
+    if source_refs.is_empty() {
+        if let Some(source_path) = payload_claim
+            .map(|claim| claim.source_path.trim())
+            .filter(|source_path| !source_path.is_empty())
+        {
+            source_refs.push(source_path.to_string());
+        }
+    }
+    let evidence_refs = payload_claim
+        .map(|claim| merge_unique_strings(&proposal.evidence_refs, &claim.evidence_refs))
+        .unwrap_or_else(|| proposal.evidence_refs.clone());
+    let claim_id = payload_claim
+        .and_then(|claim| claim.claim_id.as_deref())
+        .map(str::trim)
+        .filter(|claim_id| !claim_id.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("claim-{}", brain_proposal_fingerprint(proposal)));
     ClaimRecord {
-        claim_id: format!("claim-{}", brain_proposal_fingerprint(proposal)),
+        claim_id,
         workspace_id: proposal.workspace_id.clone(),
-        statement: proposal.body.clone(),
-        topic_refs: proposal.node_refs.clone(),
-        source_refs: proposal.source_refs.clone(),
-        evidence_refs: proposal.evidence_refs.clone(),
-        status: if proposal.evidence_refs.is_empty() {
+        statement,
+        topic_refs,
+        source_refs,
+        evidence_refs: evidence_refs.clone(),
+        status: if evidence_refs.is_empty() {
             "accepted".into()
         } else {
             "supported".into()
@@ -1890,24 +4755,45 @@ fn claim_record_for_proposal(proposal: &BrainUpdateProposal) -> ClaimRecord {
 }
 
 fn relation_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainRelationRecord> {
+    let payload_edge = match &proposal.proposal_payload {
+        Some(AgentGraphProposalPayload::NewEdge { edge }) => Some(edge),
+        _ => None,
+    };
     let source_node_id = proposal
         .node_refs
         .first()
-        .cloned()
+        .map(|value| value.trim().to_string())
+        .or_else(|| payload_edge.map(|edge| edge.source_node_id.trim().to_string()))
+        .filter(|value| !value.is_empty())
         .context("accepted link proposal needs a source node ref")?;
     let target_node_id = proposal
         .target_node_id
         .clone()
+        .or_else(|| payload_edge.map(|edge| edge.target_node_id.trim().to_string()))
+        .filter(|value| !value.is_empty())
         .context("accepted link proposal needs a target node ref")?;
+    let evidence_ids = payload_edge
+        .map(|edge| merge_unique_strings(&proposal.evidence_refs, &edge.evidence_refs))
+        .unwrap_or_else(|| proposal.evidence_refs.clone());
     Ok(BrainRelationRecord {
-        relation_id: format!("relation-{}", brain_proposal_fingerprint(proposal)),
+        relation_id: payload_edge
+            .and_then(|edge| edge.edge_id.as_deref())
+            .map(str::trim)
+            .filter(|edge_id| !edge_id.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("relation-{}", brain_proposal_fingerprint(proposal))),
         kind: proposal
             .relation_kind
+            .or_else(|| payload_edge.map(|edge| edge.kind))
             .unwrap_or(BrainRelationKind::RelatedTo),
         source_node_id,
         target_node_id,
-        label: proposal.title.clone(),
-        evidence_ids: proposal.evidence_refs.clone(),
+        label: payload_edge
+            .map(|edge| edge.label.trim())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| proposal.title.as_str())
+            .to_string(),
+        evidence_ids,
         confidence: None,
         updated_at: proposal.created_at,
     })
@@ -1933,6 +4819,93 @@ fn wiki_page_for_proposal(proposal: &BrainUpdateProposal) -> WikiPage {
         evidence_refs: proposal.evidence_refs.clone(),
         updated_at: proposal.created_at,
     }
+}
+
+fn resolve_persisted_wiki_page_for_proposal(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    proposal: &BrainUpdateProposal,
+) -> WikiPage {
+    let mut page = wiki_page_for_proposal(proposal);
+    if let Some(existing) = snapshot
+        .wiki_pages
+        .iter()
+        .find(|existing| existing.page_id == page.page_id)
+    {
+        page.path = existing.path.clone();
+        return page;
+    }
+    if let Some(existing_path) = persisted_wiki_page_path_for_id(root, &page.page_id) {
+        page.path = existing_path;
+        return page;
+    }
+    page.path = non_overwriting_wiki_page_path(root, snapshot, &page);
+    page
+}
+
+fn persisted_wiki_page_path_for_id(root: &Path, page_id: &str) -> Option<String> {
+    read_json_artifact::<BrainRepoSnapshot>(&root.join("brain-manifest.json"))
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .wiki_pages
+                .into_iter()
+                .find(|page| page.page_id == page_id)
+                .map(|page| page.path)
+        })
+}
+
+fn non_overwriting_wiki_page_path(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    page: &WikiPage,
+) -> String {
+    if wiki_page_path_is_available(root, snapshot, &page.path, &page.page_id) {
+        return page.path.clone();
+    }
+    let fingerprint = page
+        .page_id
+        .strip_prefix("wiki-save-back-")
+        .unwrap_or(&page.page_id);
+    let suffix = &fingerprint[..fingerprint.len().min(12)];
+    let mut candidate = wiki_page_path_with_suffix(&page.path, suffix);
+    let mut counter = 2;
+    while !wiki_page_path_is_available(root, snapshot, &candidate, &page.page_id) {
+        candidate = wiki_page_path_with_suffix(&page.path, &format!("{suffix}-{counter}"));
+        counter += 1;
+    }
+    candidate
+}
+
+fn wiki_page_path_is_available(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    path: &str,
+    page_id: &str,
+) -> bool {
+    match snapshot.wiki_pages.iter().find(|page| page.path == path) {
+        Some(existing) => existing.page_id == page_id,
+        None => !root.join(path).exists(),
+    }
+}
+
+fn wiki_page_path_with_suffix(path: &str, suffix: &str) -> String {
+    let path = Path::new(path);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("page");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    let file_name = format!("{stem}-{suffix}{extension}");
+    path.parent()
+        .map(|parent| parent.join(&file_name))
+        .unwrap_or_else(|| PathBuf::from(file_name))
+        .to_string_lossy()
+        .to_string()
 }
 
 fn join_or_none(values: &[String]) -> String {
@@ -1971,14 +4944,8 @@ impl WorkspaceLock {
     fn acquire(path: PathBuf) -> Result<Self> {
         let started = Instant::now();
         loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id())
-                        .with_context(|| format!("failed writing {}", path.display()))?;
-                    file.sync_all()
-                        .with_context(|| format!("failed syncing {}", path.display()))?;
-                    return Ok(Self { path });
-                }
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     if started.elapsed() > Duration::from_secs(5) {
                         bail!(
@@ -1999,7 +4966,7 @@ impl WorkspaceLock {
 
 impl Drop for WorkspaceLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.path);
     }
 }
 
@@ -2013,6 +4980,13 @@ impl BrainReader {
     fn open(scope: &BrainReadScope) -> Result<Self> {
         let root = resolve_brain_workspace_root(scope)?;
         let manifest_path = root.join("brain-manifest.json");
+        if !manifest_path.exists() {
+            return Ok(Self {
+                root,
+                snapshot: empty_replayed_brain_snapshot(&scope.workspace_id),
+                events: Vec::new(),
+            });
+        }
         let manifest_json = fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed reading {}", manifest_path.display()))?;
         let mut snapshot: BrainRepoSnapshot = serde_json::from_str(&manifest_json)
@@ -2250,15 +5224,29 @@ impl BrainReader {
         Ok(page)
     }
 
-    fn recent_events(&self, limit: usize) -> Vec<BrainEvent> {
-        let mut events = self.events.clone();
+    fn read_all_wiki_pages(&self) -> Result<Vec<WikiPage>> {
+        self.snapshot
+            .wiki_pages
+            .iter()
+            .cloned()
+            .map(|page| self.read_wiki_page_body(page))
+            .collect()
+    }
+
+    fn recent_events(&self, request: &ReadRecentEventsRequest) -> Vec<BrainEvent> {
+        let mut events = self
+            .events
+            .iter()
+            .filter(|event| event_matches_recent_events_request(event, request))
+            .cloned()
+            .collect::<Vec<_>>();
         events.sort_by(|left, right| {
             right
                 .created_at
                 .cmp(&left.created_at)
                 .then_with(|| right.event_id.cmp(&left.event_id))
         });
-        events.truncate(limit);
+        events.truncate(request.limit.unwrap_or(20));
         events
     }
 
@@ -2503,7 +5491,20 @@ impl BrainReader {
 
         let warnings = context_pack_warnings(&nodes, &evidence, budget);
         trim_context_pack_to_budget(budget, &mut wiki_pages, &mut nodes);
-        let recent_events = self.recent_events(5);
+        let recent_events = self.recent_events(&ReadRecentEventsRequest {
+            scope: BrainReadScope {
+                workspace_id: self.snapshot.workspace_id.clone(),
+                root_dir: Some(self.root.display().to_string()),
+            },
+            limit: Some(5),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
+        });
         Ok(BrainContextPack {
             workspace_id: self.snapshot.workspace_id.clone(),
             query: query.to_string(),
@@ -2550,6 +5551,2300 @@ fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
     Ok(std::env::temp_dir()
         .join("HyprDuck")
         .join(&scope.workspace_id))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownIngestPaths {
+    workspace_root: PathBuf,
+    source_dir: PathBuf,
+    wiki_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewMarkdownSource {
+    source_path: PathBuf,
+    relative_path: PathBuf,
+    size_bytes: u64,
+    modified_at: Option<u64>,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownSourceStateFile {
+    generated_at: u64,
+    #[serde(default)]
+    sources: Vec<MarkdownSourceStateRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownSourceStateRecord {
+    source_path: String,
+    relative_path: String,
+    normalized_path: String,
+    size_bytes: u64,
+    #[serde(default)]
+    modified_at: Option<u64>,
+    content_hash: String,
+    first_seen_at: u64,
+    last_seen_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownSourceScan {
+    new_sources: Vec<NewMarkdownSource>,
+    current_state: MarkdownSourceStateFile,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownIngestQueueFile {
+    generated_at: u64,
+    #[serde(default)]
+    records: Vec<MarkdownIngestQueueRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownIngestQueueRecord {
+    queue_id: String,
+    workspace_id: String,
+    source_path: String,
+    relative_path: String,
+    normalized_path: String,
+    size_bytes: u64,
+    #[serde(default)]
+    modified_at: Option<u64>,
+    content_hash: String,
+    status: String,
+    #[serde(default = "default_markdown_trigger_status")]
+    trigger_status: String,
+    #[serde(default)]
+    trigger_error_message: Option<String>,
+    discovered_at: u64,
+    enqueued_at: u64,
+    #[serde(default)]
+    started_at: Option<u64>,
+    #[serde(default)]
+    completed_at: Option<u64>,
+    #[serde(default)]
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MarkdownEnqueueResult {
+    enqueued: Vec<MarkdownIngestQueueRecord>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MarkdownIngestWorkerResult {
+    started: bool,
+    processed: usize,
+    failed: usize,
+    processed_sources: Vec<String>,
+    failed_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedMarkdownSourceMetadata {
+    workspace_id: String,
+    queue_id: String,
+    source_id: String,
+    source_path: String,
+    relative_path: String,
+    normalized_path: String,
+    markdown_path: String,
+    manifest_path: String,
+    artifact_root: String,
+    size_bytes: u64,
+    modified_at: Option<u64>,
+    content_hash: String,
+    discovered_at: u64,
+    enqueued_at: u64,
+    started_at: Option<u64>,
+    completed_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedMarkdownIngest {
+    record: MarkdownIngestQueueRecord,
+    manifest: SourceArtifactManifest,
+    source_metadata: CompletedMarkdownSourceMetadata,
+}
+
+impl CompletedMarkdownIngest {
+    fn new(record: &MarkdownIngestQueueRecord, manifest: &SourceArtifactManifest) -> Self {
+        Self {
+            record: record.clone(),
+            manifest: manifest.clone(),
+            source_metadata: CompletedMarkdownSourceMetadata {
+                workspace_id: record.workspace_id.clone(),
+                queue_id: record.queue_id.clone(),
+                source_id: manifest.source_id.clone(),
+                source_path: record.source_path.clone(),
+                relative_path: record.relative_path.clone(),
+                normalized_path: record.normalized_path.clone(),
+                markdown_path: manifest.markdown_path.clone(),
+                manifest_path: manifest.manifest_path.clone(),
+                artifact_root: manifest.artifact_root.clone(),
+                size_bytes: record.size_bytes,
+                modified_at: record.modified_at,
+                content_hash: record.content_hash.clone(),
+                discovered_at: record.discovered_at,
+                enqueued_at: record.enqueued_at,
+                started_at: record.started_at,
+                completed_at: record.completed_at,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct QueuedAgentProposalApplyResult {
+    applied: Vec<String>,
+    failed: Vec<AgentProposalFailureReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProposalFailureReport {
+    proposal_id: String,
+    run_id: String,
+    snapshot_id: String,
+    error_code: String,
+    error_message: String,
+    #[serde(default)]
+    validation_issues: Vec<AgentGraphProposalValidationIssue>,
+    audit_path: String,
+}
+
+impl std::fmt::Display for AgentProposalFailureReport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {}: {}",
+            self.proposal_id, self.error_code, self.error_message
+        )
+    }
+}
+
+impl std::error::Error for AgentProposalFailureReport {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProposalApplyAudit {
+    run_id: String,
+    snapshot_id: String,
+    workspace_id: String,
+    proposal_id: String,
+    status: String,
+    started_at: u64,
+    completed_at: u64,
+    #[serde(default)]
+    changed_files: Vec<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    validation_issues: Vec<AgentGraphProposalValidationIssue>,
+    #[serde(default)]
+    rollback_hint: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MaterializedFileSnapshot {
+    files: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LatestReadableGraphSnapshotMarker {
+    schema_version: u32,
+    workspace_id: String,
+    snapshot_id: String,
+    event_id: String,
+    source_ingest_id: String,
+    materialized_at: u64,
+    published_at: u64,
+    #[serde(default)]
+    source_markdown_refs: Vec<String>,
+    #[serde(default)]
+    materialized_files: Vec<String>,
+}
+
+fn default_markdown_trigger_status() -> String {
+    "accepted".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownSourceFileState {
+    source_path: PathBuf,
+    relative_path: PathBuf,
+    normalized_absolute_path: String,
+    normalized_relative_path: String,
+    size_bytes: u64,
+    modified_at: Option<u64>,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrainWorkspaceConfig {
+    #[serde(default, alias = "markdown_sources_dir")]
+    markdown_sources_dir: Option<String>,
+    #[serde(default, alias = "wiki_dir")]
+    wiki_dir: Option<String>,
+}
+
+fn resolve_markdown_ingest_paths(scope: &BrainReadScope) -> Result<MarkdownIngestPaths> {
+    let workspace_root = resolve_brain_workspace_root(scope)?;
+    let config = read_brain_workspace_config(&workspace_root)?;
+    let configured_source_dir = config.markdown_sources_dir.as_deref();
+    let source_dir =
+        resolve_workspace_config_path(&workspace_root, configured_source_dir, "sources")?;
+    let wiki_dir =
+        resolve_workspace_config_path(&workspace_root, config.wiki_dir.as_deref(), "wiki")?;
+
+    if configured_source_dir.is_some() && !source_dir.is_dir() {
+        bail!(
+            "configured markdown source directory {} does not exist or is not a directory",
+            source_dir.display()
+        );
+    }
+    if configured_source_dir.is_none() {
+        fs::create_dir_all(&source_dir).with_context(|| {
+            format!(
+                "failed creating markdown source directory {}",
+                source_dir.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(&wiki_dir)
+        .with_context(|| format!("failed creating wiki directory {}", wiki_dir.display()))?;
+
+    Ok(MarkdownIngestPaths {
+        workspace_root,
+        source_dir,
+        wiki_dir,
+    })
+}
+
+fn scan_new_markdown_sources(
+    paths: &MarkdownIngestPaths,
+    snapshot: &BrainRepoSnapshot,
+    source_state: &MarkdownSourceStateFile,
+    ingest_queue: &MarkdownIngestQueueFile,
+) -> Result<MarkdownSourceScan> {
+    let mut known_paths = BTreeSet::new();
+    for source in &snapshot.sources {
+        for raw_path in [
+            source.original_path.as_str(),
+            source.source_path.as_str(),
+            source.markdown_path.as_str(),
+        ] {
+            if !raw_path.trim().is_empty() {
+                known_paths.insert(normalize_ingest_path_for_compare(raw_path));
+            }
+        }
+    }
+    let previous_state_by_path = source_state_by_path(source_state);
+    for record in previous_state_by_path.values() {
+        known_paths.insert(record.normalized_path.clone());
+        known_paths.insert(normalize_ingest_path_for_compare(&record.relative_path));
+        known_paths.insert(normalize_ingest_path_for_compare(&record.source_path));
+    }
+    for record in &ingest_queue.records {
+        known_paths.insert(record.normalized_path.clone());
+        known_paths.insert(normalize_ingest_path_for_compare(&record.relative_path));
+        known_paths.insert(normalize_ingest_path_for_compare(&record.source_path));
+    }
+    for event in &snapshot.events {
+        if event.event_type != BrainEventKind::SourceIngestQueued {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<MarkdownIngestQueueRecord>(&event.payload_json) {
+            known_paths.insert(record.normalized_path);
+            known_paths.insert(normalize_ingest_path_for_compare(&record.relative_path));
+            known_paths.insert(normalize_ingest_path_for_compare(&record.source_path));
+        }
+    }
+
+    let mut file_states = Vec::new();
+    collect_markdown_source_file_states(&paths.source_dir, &paths.source_dir, &mut file_states)?;
+    file_states.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+    let mut new_sources = file_states
+        .iter()
+        .filter(|file| {
+            !known_paths.contains(&file.normalized_absolute_path)
+                && !known_paths.contains(&file.normalized_relative_path)
+        })
+        .map(|file| NewMarkdownSource {
+            source_path: file.source_path.clone(),
+            relative_path: file.relative_path.clone(),
+            size_bytes: file.size_bytes,
+            modified_at: file.modified_at,
+            content_hash: file.content_hash.clone(),
+        })
+        .collect::<Vec<_>>();
+    new_sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+    let generated_at = unix_timestamp_seconds();
+    let current_state = MarkdownSourceStateFile {
+        generated_at,
+        sources: file_states
+            .into_iter()
+            .map(|file| {
+                let previous = previous_state_by_path
+                    .get(&file.normalized_relative_path)
+                    .or_else(|| previous_state_by_path.get(&file.normalized_absolute_path));
+                MarkdownSourceStateRecord {
+                    source_path: file.source_path.display().to_string(),
+                    relative_path: file.relative_path.display().to_string(),
+                    normalized_path: file.normalized_relative_path,
+                    size_bytes: file.size_bytes,
+                    modified_at: file.modified_at,
+                    content_hash: file.content_hash,
+                    first_seen_at: previous
+                        .map(|record| record.first_seen_at)
+                        .unwrap_or(generated_at),
+                    last_seen_at: generated_at,
+                }
+            })
+            .collect(),
+    };
+
+    Ok(MarkdownSourceScan {
+        new_sources,
+        current_state,
+    })
+}
+
+fn enqueue_markdown_sources(
+    writer: &BrainWorkspaceWriter,
+    paths: &MarkdownIngestPaths,
+    ingest_queue: &MarkdownIngestQueueFile,
+    scan: &MarkdownSourceScan,
+) -> Result<MarkdownEnqueueResult> {
+    if scan.new_sources.is_empty() {
+        write_markdown_ingest_queue(paths, ingest_queue)?;
+        return Ok(MarkdownEnqueueResult::default());
+    }
+
+    let mut records = ingest_queue.records.clone();
+    let mut queued_keys = records
+        .iter()
+        .map(markdown_queue_dedupe_key)
+        .collect::<BTreeSet<_>>();
+    let mut enqueued = Vec::new();
+    let enqueued_at = unix_timestamp_seconds();
+
+    for source in &scan.new_sources {
+        let normalized_path =
+            normalize_ingest_path_for_compare(&source.relative_path.display().to_string());
+        let key = format!("{}:{}", normalized_path, source.content_hash);
+        if queued_keys.contains(&key) {
+            continue;
+        }
+        let record = MarkdownIngestQueueRecord {
+            queue_id: format!("markdown-source-{}", sanitize_name(&key)),
+            workspace_id: paths
+                .workspace_root
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into()),
+            source_path: source.source_path.display().to_string(),
+            relative_path: source.relative_path.display().to_string(),
+            normalized_path,
+            size_bytes: source.size_bytes,
+            modified_at: source.modified_at,
+            content_hash: source.content_hash.clone(),
+            status: "queued".into(),
+            trigger_status: "accepted".into(),
+            trigger_error_message: None,
+            discovered_at: enqueued_at,
+            enqueued_at,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+        };
+        writer.append_event(&markdown_source_queued_event(
+            &record.workspace_id,
+            &record,
+        )?)?;
+        queued_keys.insert(markdown_queue_dedupe_key(&record));
+        records.push(record.clone());
+        enqueued.push(record);
+    }
+
+    records.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then_with(|| left.queue_id.cmp(&right.queue_id))
+    });
+    write_markdown_ingest_queue(
+        paths,
+        &MarkdownIngestQueueFile {
+            generated_at: enqueued_at,
+            records,
+        },
+    )?;
+
+    Ok(MarkdownEnqueueResult { enqueued })
+}
+
+fn run_markdown_ingest_worker(
+    paths: &MarkdownIngestPaths,
+    ingest_queue: &MarkdownIngestQueueFile,
+    store: &KnowledgeProjectStore,
+) -> Result<MarkdownIngestWorkerResult> {
+    run_markdown_ingest_worker_with_post_ingest_hook(paths, ingest_queue, store, &mut |_| Ok(()))
+}
+
+fn run_markdown_ingest_worker_with_post_ingest_hook(
+    paths: &MarkdownIngestPaths,
+    ingest_queue: &MarkdownIngestQueueFile,
+    store: &KnowledgeProjectStore,
+    post_ingest_hook: &mut dyn FnMut(&CompletedMarkdownIngest) -> Result<()>,
+) -> Result<MarkdownIngestWorkerResult> {
+    let queued_indexes = ingest_queue
+        .records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.status == "queued").then_some(index))
+        .collect::<Vec<_>>();
+    if queued_indexes.is_empty() {
+        return Ok(MarkdownIngestWorkerResult::default());
+    }
+
+    let mut queue = ingest_queue.clone();
+    let mut result = MarkdownIngestWorkerResult {
+        started: true,
+        ..MarkdownIngestWorkerResult::default()
+    };
+
+    for index in queued_indexes {
+        let started_at = unix_timestamp_seconds();
+        queue.records[index].status = "ingesting".into();
+        queue.records[index].started_at = Some(started_at);
+        queue.records[index].error_message = None;
+        write_markdown_ingest_queue(paths, &queue)?;
+
+        let compile_result = compile_queued_markdown_source(paths, &queue.records[index], store);
+        let completed_at = unix_timestamp_seconds();
+        queue.records[index].completed_at = Some(completed_at);
+        match compile_result {
+            Ok(manifest) => {
+                queue.records[index].status = "ingested".into();
+                queue.records[index].error_message = None;
+                result.processed += 1;
+                result
+                    .processed_sources
+                    .push(queue.records[index].relative_path.clone());
+                let completed_ingest =
+                    CompletedMarkdownIngest::new(&queue.records[index], &manifest);
+                post_ingest_hook(&completed_ingest).with_context(|| {
+                    format!(
+                        "post-ingest hook failed for markdown source {}",
+                        queue.records[index].relative_path
+                    )
+                })?;
+                let writer = BrainWorkspaceWriter::open(paths.workspace_root.clone())?;
+                writer.append_event(&markdown_source_compiled_event(
+                    &queue.records[index],
+                    Some(&manifest),
+                )?)?;
+            }
+            Err(error) => {
+                queue.records[index].status = "failed".into();
+                queue.records[index].error_message = Some(error.to_string());
+                result.failed += 1;
+                result
+                    .failed_sources
+                    .push(queue.records[index].relative_path.clone());
+                let writer = BrainWorkspaceWriter::open(paths.workspace_root.clone())?;
+                writer.append_event(&markdown_source_compiled_event(
+                    &queue.records[index],
+                    None,
+                )?)?;
+            }
+        }
+        write_markdown_ingest_queue(paths, &queue)?;
+    }
+
+    Ok(result)
+}
+
+fn run_queued_agent_proposal_apply_worker(
+    root: &Path,
+    workspace_id: &str,
+) -> Result<QueuedAgentProposalApplyResult> {
+    let writer = BrainWorkspaceWriter::open(root.to_path_buf())?;
+    let mut result = QueuedAgentProposalApplyResult::default();
+    let mut proposals = read_brain_update_proposals(root)?
+        .into_iter()
+        .map(|(proposal, _)| proposal)
+        .filter(|proposal| is_queued_agent_graph_proposal(proposal, workspace_id))
+        .collect::<Vec<_>>();
+    proposals.sort_by(|left, right| {
+        brain_proposal_replay_priority(left.kind)
+            .cmp(&brain_proposal_replay_priority(right.kind))
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.proposal_id.cmp(&right.proposal_id))
+    });
+
+    for proposal in proposals {
+        match apply_queued_agent_proposal_transaction(&writer, proposal) {
+            Ok(audit) => {
+                result.applied.push(audit.proposal_id);
+            }
+            Err(error) => {
+                if let Some(failure) = error.downcast_ref::<AgentProposalFailureReport>() {
+                    result.failed.push(failure.clone());
+                } else {
+                    result.failed.push(AgentProposalFailureReport {
+                        proposal_id: proposal_id_from_apply_error(&error)
+                            .unwrap_or_else(|| "unknown-proposal".into()),
+                        run_id: "unknown-run".into(),
+                        snapshot_id: "unknown-snapshot".into(),
+                        error_code: "apply_error".into(),
+                        error_message: format!("{error:#}"),
+                        validation_issues: Vec::new(),
+                        audit_path: String::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn is_queued_agent_graph_proposal(proposal: &BrainUpdateProposal, workspace_id: &str) -> bool {
+    proposal.workspace_id == workspace_id
+        && proposal.status == BrainProposalStatus::PendingReview
+        && proposal.actor.actor_type == BrainActorType::Agent
+        && matches!(
+            proposal.kind,
+            BrainProposalKind::Node
+                | BrainProposalKind::Claim
+                | BrainProposalKind::Link
+                | BrainProposalKind::Memory
+        )
+        && proposal.proposal_payload.is_some()
+}
+
+fn apply_queued_agent_proposal_transaction(
+    writer: &BrainWorkspaceWriter,
+    mut proposal: BrainUpdateProposal,
+) -> Result<AgentProposalApplyAudit> {
+    let run_id = format!("apply-{}", Uuid::now_v7());
+    let snapshot_id = format!("snapshot-{}", Uuid::now_v7());
+    let started_at = unix_timestamp_seconds();
+    let before = capture_materialized_file_snapshot(&writer.root)?;
+    persist_materialized_snapshot(&writer.root, &snapshot_id, &before)?;
+
+    let apply_result = (|| -> Result<()> {
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        validate_queued_agent_proposal(&proposal)?;
+        proposal.status = BrainProposalStatus::Accepted;
+        writer.write_proposal(&proposal)?;
+        let mut proposed_event = brain_event_for_proposal(&proposal)?;
+        proposed_event.policy_result = "auto_applied".into();
+        writer.append_event(&proposed_event)?;
+        match proposal.kind {
+            BrainProposalKind::Memory => {
+                let memory = memory_record_for_proposal(&proposal);
+                writer.upsert_memory_record(memory)?;
+                writer.append_event(&brain_memory_accepted_event(&proposal)?)?;
+            }
+            BrainProposalKind::Node | BrainProposalKind::Claim | BrainProposalKind::Link => {
+                writer.apply_accepted_proposal(&proposal)?;
+            }
+            BrainProposalKind::Observation
+            | BrainProposalKind::SourceNote
+            | BrainProposalKind::WikiPage => {}
+        }
+        writer.append_event(&queued_agent_proposal_applied_event(
+            &proposal,
+            &run_id,
+            &snapshot_id,
+        )?)?;
+        Ok(())
+    })();
+
+    match apply_result {
+        Ok(()) => {
+            let after = capture_materialized_file_snapshot(&writer.root)?;
+            let changed_files = changed_materialized_files(&before, &after);
+            let completed_at = unix_timestamp_seconds();
+            let audit_path = writer
+                .root
+                .join("reviews/applied-runs")
+                .join(format!("{run_id}.json"));
+            let audit = AgentProposalApplyAudit {
+                run_id,
+                snapshot_id,
+                workspace_id: proposal.workspace_id.clone(),
+                proposal_id: proposal.proposal_id.clone(),
+                status: "applied".into(),
+                started_at,
+                completed_at,
+                changed_files,
+                error_message: None,
+                error_code: None,
+                validation_issues: Vec::new(),
+                rollback_hint: "Restore files from snapshots/<snapshotId>/files or replay accepted events/proposals by rematerializing the workspace brain repo.".into(),
+            };
+            write_json_pretty(&audit_path, &audit)?;
+            Ok(audit)
+        }
+        Err(error) => {
+            restore_materialized_file_snapshot(&writer.root, &before)?;
+            let completed_at = unix_timestamp_seconds();
+            let validation_error = error.downcast_ref::<AgentGraphProposalValidationError>();
+            let error_code = validation_error
+                .map(|error| error.error.clone())
+                .unwrap_or_else(|| "agent_proposal_apply_failed".into());
+            let validation_issues = validation_error
+                .map(|error| error.issues.clone())
+                .unwrap_or_default();
+            let audit_path = writer
+                .root
+                .join("reviews/applied-runs")
+                .join(format!("{run_id}.json"));
+            let audit = AgentProposalApplyAudit {
+                run_id,
+                snapshot_id,
+                workspace_id: proposal.workspace_id.clone(),
+                proposal_id: proposal.proposal_id.clone(),
+                status: "failed".into(),
+                started_at,
+                completed_at,
+                changed_files: Vec::new(),
+                error_message: Some(error.to_string()),
+                error_code: Some(error_code.clone()),
+                validation_issues: validation_issues.clone(),
+                rollback_hint: "No graph mutation was kept; the pre-apply snapshot was restored."
+                    .into(),
+            };
+            write_json_pretty(&audit_path, &audit)?;
+            proposal.status = BrainProposalStatus::Rejected;
+            writer.write_proposal(&proposal)?;
+            writer.append_event(&queued_agent_proposal_failed_event(
+                &proposal,
+                &audit,
+                &error_code,
+                &validation_issues,
+            )?)?;
+            Err(anyhow!(AgentProposalFailureReport {
+                proposal_id: proposal.proposal_id.clone(),
+                run_id: audit.run_id.clone(),
+                snapshot_id: audit.snapshot_id.clone(),
+                error_code,
+                error_message: error.to_string(),
+                validation_issues,
+                audit_path: audit_path.display().to_string(),
+            }))
+        }
+    }
+}
+
+fn enrich_agent_graph_proposal_refs(proposal: &mut BrainUpdateProposal) {
+    let Some(payload) = &proposal.proposal_payload else {
+        return;
+    };
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => {
+            for source_ref in &node.source_refs {
+                merge_unique_string(&mut proposal.source_refs, source_ref);
+            }
+            for evidence_ref in &node.evidence_refs {
+                merge_unique_string(&mut proposal.evidence_refs, evidence_ref);
+            }
+        }
+        AgentGraphProposalPayload::NewEdge { edge } => {
+            let source_node_id = edge.source_node_id.trim();
+            if !source_node_id.is_empty() {
+                proposal
+                    .node_refs
+                    .retain(|node_id| node_id != source_node_id);
+                proposal.node_refs.insert(0, source_node_id.to_string());
+            }
+            merge_unique_string(&mut proposal.node_refs, edge.target_node_id.trim());
+            for source_ref in &edge.source_refs {
+                merge_unique_string(&mut proposal.source_refs, source_ref);
+            }
+            for evidence_ref in &edge.evidence_refs {
+                merge_unique_string(&mut proposal.evidence_refs, evidence_ref);
+            }
+            if proposal.target_node_id.is_none() {
+                proposal.target_node_id = Some(edge.target_node_id.trim().to_string());
+            }
+            if proposal.relation_kind.is_none() {
+                proposal.relation_kind = Some(edge.kind);
+            }
+        }
+        AgentGraphProposalPayload::NewClaim { claim } => {
+            for topic_ref in &claim.topic_refs {
+                merge_unique_string(&mut proposal.node_refs, topic_ref);
+            }
+            for source_ref in &claim.source_refs {
+                merge_unique_string(&mut proposal.source_refs, source_ref);
+            }
+            for evidence_ref in &claim.evidence_refs {
+                merge_unique_string(&mut proposal.evidence_refs, evidence_ref);
+            }
+        }
+        AgentGraphProposalPayload::NewMemory { memory } => {
+            for source_ref in &memory.source_refs {
+                merge_unique_string(&mut proposal.source_refs, source_ref);
+            }
+            for evidence_ref in &memory.evidence_refs {
+                merge_unique_string(&mut proposal.evidence_refs, evidence_ref);
+            }
+        }
+    }
+}
+
+fn validate_queued_agent_proposal(proposal: &BrainUpdateProposal) -> Result<()> {
+    validate_brain_update_proposal(&ProposeBrainUpdateRequest {
+        scope: BrainReadScope {
+            workspace_id: proposal.workspace_id.clone(),
+            root_dir: None,
+        },
+        kind: proposal.kind,
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        actor: proposal.actor.clone(),
+        target_node_id: proposal.target_node_id.clone(),
+        target_source_id: proposal.target_source_id.clone(),
+        relation_kind: proposal.relation_kind,
+        source_description: None,
+        source_user_context: None,
+        source_ingest_instruction: None,
+        source_refs: proposal.source_refs.clone(),
+        node_refs: proposal.node_refs.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        proposal_payload: proposal.proposal_payload.clone(),
+    })
+}
+
+fn queued_agent_proposal_applied_event(
+    proposal: &BrainUpdateProposal,
+    run_id: &str,
+    snapshot_id: &str,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        event_type: BrainEventKind::ReviewResolved,
+        operation_type: Some("queued_proposal_auto_accept".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-apply".into(),
+        },
+        source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
+        node_refs: proposal.node_refs.clone(),
+        relation_refs: if proposal.kind == BrainProposalKind::Link {
+            vec![relation_record_for_proposal(proposal)?.relation_id]
+        } else {
+            Vec::new()
+        },
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(&json!({
+            "proposalId": proposal.proposal_id,
+            "decision": "auto_accept",
+            "runId": run_id,
+            "snapshotId": snapshot_id,
+            "status": proposal.status,
+        }))
+        .context("failed to encode queued proposal apply event payload")?,
+        causality: BrainEventCausality {
+            caused_by_proposal_id: Some(proposal.proposal_id.clone()),
+            caused_by_source_ids: proposal.source_refs.clone(),
+            snapshot_id: Some(snapshot_id.to_string()),
+            materialized_version: Some(proposal.created_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "auto_applied".into(),
+        created_at: unix_timestamp_seconds(),
+    })
+}
+
+fn queued_agent_proposal_failed_event(
+    proposal: &BrainUpdateProposal,
+    audit: &AgentProposalApplyAudit,
+    error_code: &str,
+    validation_issues: &[AgentGraphProposalValidationIssue],
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: format!("evt-{}", Uuid::now_v7()),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: proposal.workspace_id.clone(),
+        scope: proposal.scope,
+        event_type: BrainEventKind::ReviewResolved,
+        operation_type: Some("queued_proposal_auto_reject".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-apply".into(),
+        },
+        source_refs: proposal.source_refs.clone(),
+        source_markdown_refs: proposal_source_markdown_refs(proposal),
+        node_refs: proposal.node_refs.clone(),
+        relation_refs: Vec::new(),
+        claim_refs: proposal_target_claim_ids(proposal),
+        memory_refs: proposal_target_memory_ids(proposal),
+        target_node_ids: proposal_target_node_ids(proposal)?,
+        target_edge_ids: proposal_target_edge_ids(proposal)?,
+        target_claim_ids: proposal_target_claim_ids(proposal),
+        target_memory_ids: proposal_target_memory_ids(proposal),
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(&json!({
+            "proposalId": proposal.proposal_id,
+            "decision": "auto_reject",
+            "runId": audit.run_id,
+            "snapshotId": audit.snapshot_id,
+            "status": proposal.status,
+            "errorCode": error_code,
+            "errorMessage": audit.error_message,
+            "validationIssues": validation_issues,
+            "auditPath": format!("reviews/applied-runs/{}.json", audit.run_id),
+        }))
+        .context("failed to encode queued proposal failed event payload")?,
+        causality: BrainEventCausality {
+            caused_by_proposal_id: Some(proposal.proposal_id.clone()),
+            caused_by_source_ids: proposal.source_refs.clone(),
+            snapshot_id: Some(audit.snapshot_id.clone()),
+            materialized_version: Some(proposal.created_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "auto_rejected".into(),
+        created_at: unix_timestamp_seconds(),
+    })
+}
+
+fn proposal_id_from_apply_error(error: &anyhow::Error) -> Option<String> {
+    let message = error.to_string();
+    message
+        .split_once(':')
+        .map(|(proposal_id, _)| proposal_id.to_string())
+        .filter(|proposal_id| proposal_id.starts_with("proposal-"))
+}
+
+fn capture_materialized_file_snapshot(root: &Path) -> Result<MaterializedFileSnapshot> {
+    let mut snapshot = MaterializedFileSnapshot::default();
+    collect_materialized_snapshot_files(root, root, &mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn collect_materialized_snapshot_files(
+    root: &Path,
+    dir: &Path,
+    snapshot: &mut MaterializedFileSnapshot,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).with_context(|| format!("failed reading {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("failed reading entry in {}", dir.display()))?;
+        let path = entry.path();
+        let relative_path = path
+            .strip_prefix(root)
+            .with_context(|| format!("failed relativizing {}", path.display()))?;
+        if should_skip_materialized_snapshot_path(relative_path) {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed reading metadata for {}", path.display()))?;
+        if file_type.is_dir() {
+            collect_materialized_snapshot_files(root, &path, snapshot)?;
+        } else if file_type.is_file() && is_materialized_snapshot_path(relative_path) {
+            snapshot.files.insert(
+                relative_path.to_string_lossy().replace('\\', "/"),
+                fs::read(&path).with_context(|| format!("failed reading {}", path.display()))?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_materialized_snapshot_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized == "brain-manifest.json"
+        || normalized.starts_with("graph/")
+        || normalized.starts_with("memory/")
+        || normalized == LATEST_READABLE_SNAPSHOT_PATH
+        || normalized.starts_with("wiki/")
+        || normalized.starts_with("events/")
+        || normalized.starts_with("reviews/proposed-updates/")
+}
+
+fn should_skip_materialized_snapshot_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized == "brain.lock"
+        || normalized == BRAIN_LOCK_DIRECTORY_NAME
+        || normalized.starts_with("snapshots/")
+        || normalized.starts_with("reviews/applied-runs/")
+        || normalized.contains("/.")
+        || normalized.starts_with('.')
+}
+
+fn persist_materialized_snapshot(
+    root: &Path,
+    snapshot_id: &str,
+    snapshot: &MaterializedFileSnapshot,
+) -> Result<()> {
+    let snapshot_root = root.join("snapshots").join(snapshot_id).join("files");
+    for (relative_path, bytes) in &snapshot.files {
+        write_file_atomic(&snapshot_root.join(relative_path), bytes)?;
+    }
+    write_json_pretty(
+        &root
+            .join("snapshots")
+            .join(snapshot_id)
+            .join("manifest.json"),
+        &json!({
+            "snapshotId": snapshot_id,
+            "fileCount": snapshot.files.len(),
+            "createdAt": unix_timestamp_seconds(),
+        }),
+    )
+}
+
+fn restore_materialized_file_snapshot(
+    root: &Path,
+    snapshot: &MaterializedFileSnapshot,
+) -> Result<()> {
+    let after = capture_materialized_file_snapshot(root)?;
+    for relative_path in after.files.keys() {
+        if !snapshot.files.contains_key(relative_path) {
+            let path = root.join(relative_path);
+            if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed removing {}", path.display()))?;
+            }
+        }
+    }
+    for (relative_path, bytes) in &snapshot.files {
+        write_file_atomic(&root.join(relative_path), bytes)?;
+    }
+    Ok(())
+}
+
+fn changed_materialized_files(
+    before: &MaterializedFileSnapshot,
+    after: &MaterializedFileSnapshot,
+) -> Vec<String> {
+    let keys = before
+        .files
+        .keys()
+        .chain(after.files.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    keys.into_iter()
+        .filter(|key| before.files.get(key) != after.files.get(key))
+        .collect()
+}
+
+fn compile_queued_markdown_source(
+    paths: &MarkdownIngestPaths,
+    record: &MarkdownIngestQueueRecord,
+    store: &KnowledgeProjectStore,
+) -> Result<SourceArtifactManifest> {
+    let source_path = PathBuf::from(&record.source_path);
+    let markdown = fs::read_to_string(&source_path).with_context(|| {
+        format!(
+            "failed reading queued markdown source {}",
+            source_path.display()
+        )
+    })?;
+    let source_id = build_source_id(
+        &format!("{}:{}", record.normalized_path, record.content_hash),
+        0,
+    );
+    if let Some(manifest) = read_idempotent_markdown_ingest_manifest(paths, record, &source_id)? {
+        let snapshot = read_json_artifact::<BrainRepoSnapshot>(
+            &paths.workspace_root.join("brain-manifest.json"),
+        )?;
+        let writer = BrainWorkspaceWriter::open(paths.workspace_root.clone())?;
+        writer.append_event(&markdown_ingest_idempotent_noop_event(
+            record, &manifest, &snapshot,
+        )?)?;
+        return Ok(manifest);
+    }
+    let safe_name = sanitize_name(
+        source_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("markdown-source"),
+    );
+    let artifact_root = paths.workspace_root.join("artifacts").join(&source_id);
+    let pages_dir = artifact_root.join("pages");
+    fs::create_dir_all(&pages_dir)
+        .with_context(|| format!("failed creating {}", pages_dir.display()))?;
+    let markdown_path = artifact_root.join(format!("{safe_name}.md"));
+    let page_markdown_path = pages_dir.join("page_1.md");
+    let node_candidates = extract_markdown_node_candidates_for_workspace(
+        &markdown,
+        &source_path.display().to_string(),
+        &paths.workspace_root,
+    )?;
+    let mut markdown_signals = extract_markdown_signals(
+        &markdown,
+        &source_path.display().to_string(),
+        Some(source_id.as_str()),
+        &node_candidates,
+    );
+    markdown_signals.related_pages = rank_related_wiki_pages_for_signals(
+        &paths.workspace_root,
+        &record.workspace_id,
+        &markdown_signals,
+    )?;
+    let edge_candidates = extract_markdown_relationship_evidence(
+        &markdown,
+        &source_path.display().to_string(),
+        Some(source_id.as_str()),
+        &node_candidates,
+    );
+    let claim_candidates = extract_markdown_claim_candidates(
+        &markdown,
+        &source_path.display().to_string(),
+        Some(source_id.as_str()),
+        &node_candidates,
+    );
+    write_file_atomic(&markdown_path, markdown.as_bytes())?;
+    write_file_atomic(&page_markdown_path, markdown.as_bytes())?;
+    write_json_pretty(
+        &artifact_root.join("node-candidates.json"),
+        &node_candidates,
+    )?;
+    write_json_pretty(
+        &artifact_root.join("markdown-signals.json"),
+        &markdown_signals,
+    )?;
+    write_json_pretty(
+        &artifact_root.join("relationship-evidence.json"),
+        &edge_candidates,
+    )?;
+    write_json_pretty(
+        &artifact_root.join("edge-candidates.json"),
+        &edge_candidates,
+    )?;
+    write_json_pretty(
+        &artifact_root.join("claim-candidates.json"),
+        &claim_candidates,
+    )?;
+
+    let now = unix_timestamp_seconds();
+    let manifest_path = artifact_root.join("source-manifest.json");
+    let manifest = SourceArtifactManifest {
+        workspace_id: record.workspace_id.clone(),
+        source_id: source_id.clone(),
+        original_path: record.source_path.clone(),
+        source_path: record.source_path.clone(),
+        markdown_path: markdown_path.display().to_string(),
+        artifact_root: artifact_root.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        format: DocumentFormat::Markdown,
+        output_name: safe_name,
+        status: IngestStatus::Ingested,
+        description: format!("Markdown source ingested from {}", record.relative_path),
+        user_context: String::new(),
+        ingest_instruction: "Autonomous markdown source ingest loop".into(),
+        pages: vec![PageArtifact {
+            index: 0,
+            label: "Page 1".into(),
+            image_path: None,
+            markdown_path: Some(page_markdown_path.display().to_string()),
+            plain_text_path: None,
+            error_message: None,
+        }],
+        created_at: record.discovered_at,
+        updated_at: now,
+    };
+    write_source_manifest(&manifest)?;
+
+    let request = CompileProjectRequest {
+        source_markdown_path: markdown_path.display().to_string(),
+        source_document_path: Some(record.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(record.workspace_id.clone()),
+        source_id: Some(source_id.clone()),
+    };
+    let project = compile_knowledge_project(&request, &markdown, Some(&manifest));
+    store.save_project(&project, &request, Some(&manifest))?;
+    persist_completed_ingest_related_wiki_pages(
+        &paths.workspace_root,
+        &record.workspace_id,
+        &source_id,
+        &markdown_signals.related_pages,
+    )?;
+    persist_completed_ingest_wiki_update_targets(
+        &paths.workspace_root,
+        &record.workspace_id,
+        &source_id,
+        &artifact_root,
+        &markdown_signals.related_pages,
+    )?;
+    maybe_generate_provider_graph_proposals(
+        &paths.workspace_root,
+        &record.workspace_id,
+        &manifest,
+        &markdown,
+        &artifact_root,
+    )?;
+    Ok(manifest)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderGraphProposalGenerationReport {
+    status: String,
+    provider: String,
+    model: String,
+    source_id: String,
+    proposal_count: usize,
+    applied_count: usize,
+    failed_count: usize,
+    #[serde(default)]
+    proposal_ids: Vec<String>,
+    #[serde(default)]
+    applied_proposal_ids: Vec<String>,
+    #[serde(default)]
+    failed_proposals: Vec<AgentProposalFailureReport>,
+    #[serde(default)]
+    skipped_reason: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    updated_at: u64,
+}
+
+fn maybe_generate_provider_graph_proposals(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    artifact_root: &Path,
+) -> Result<ProviderGraphProposalGenerationReport> {
+    let report_path = artifact_root.join("provider-graph-proposals.json");
+    if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
+    {
+        if !existing.proposal_ids.is_empty() && existing.source_id == manifest.source_id {
+            return Ok(existing);
+        }
+    }
+
+    let config = match EngineConfigStore::default().and_then(|store| store.load()) {
+        Ok(config) => config,
+        Err(error) => {
+            let report = ProviderGraphProposalGenerationReport {
+                status: "failed".into(),
+                provider: "unknown".into(),
+                model: "unknown".into(),
+                source_id: manifest.source_id.clone(),
+                proposal_count: 0,
+                applied_count: 0,
+                failed_count: 0,
+                proposal_ids: Vec::new(),
+                applied_proposal_ids: Vec::new(),
+                failed_proposals: Vec::new(),
+                skipped_reason: None,
+                error_message: Some(format!("{error:#}")),
+                updated_at: unix_timestamp_seconds(),
+            };
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+    let mut report = ProviderGraphProposalGenerationReport {
+        status: "skipped".into(),
+        provider: config.provider.id_slug().into(),
+        model: config.model_id.clone(),
+        source_id: manifest.source_id.clone(),
+        proposal_count: 0,
+        applied_count: 0,
+        failed_count: 0,
+        proposal_ids: Vec::new(),
+        applied_proposal_ids: Vec::new(),
+        failed_proposals: Vec::new(),
+        skipped_reason: None,
+        error_message: None,
+        updated_at: unix_timestamp_seconds(),
+    };
+
+    if provider_graph_generation_disabled_for_process() {
+        report.skipped_reason = Some("provider_graph_generation_disabled".into());
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    if provider_unavailable(&config) {
+        report.skipped_reason = Some("provider_unavailable".into());
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
+    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot);
+    let provider_response = match parse_openai_compatible(&config, &prompt, None) {
+        Ok(response) => response,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+
+    let mut payloads = match parse_provider_graph_proposal_payloads(&provider_response) {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+
+    if payloads.is_empty() {
+        report.status = "empty".into();
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let default_evidence_refs =
+        source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    for payload in &mut payloads {
+        normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
+    }
+
+    let writer = BrainWorkspaceWriter::open(workspace_root.to_path_buf())?;
+    for payload in payloads {
+        let mut proposal = provider_graph_payload_to_proposal(
+            workspace_id,
+            &format!("{PROVIDER_GRAPH_AGENT_ID}:{}", config.provider.id_slug()),
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let request = ProposeBrainUpdateRequest {
+            scope: BrainReadScope {
+                workspace_id: workspace_id.to_string(),
+                root_dir: Some(
+                    workspace_root
+                        .parent()
+                        .unwrap_or(workspace_root)
+                        .display()
+                        .to_string(),
+                ),
+            },
+            kind: proposal.kind,
+            title: proposal.title.clone(),
+            body: proposal.body.clone(),
+            actor: proposal.actor.clone(),
+            target_node_id: proposal.target_node_id.clone(),
+            target_source_id: proposal.target_source_id.clone(),
+            relation_kind: proposal.relation_kind,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: proposal.source_refs.clone(),
+            node_refs: proposal.node_refs.clone(),
+            evidence_refs: proposal.evidence_refs.clone(),
+            proposal_payload: proposal.proposal_payload.clone(),
+        };
+        if let Err(error) = validate_brain_update_proposal(&request) {
+            report.failed_count += 1;
+            report.failed_proposals.push(AgentProposalFailureReport {
+                proposal_id: proposal.proposal_id.clone(),
+                run_id: "provider-graph-generation".into(),
+                snapshot_id: "not_applied".into(),
+                error_code: "provider_payload_validation_failed".into(),
+                error_message: format!("{error:#}"),
+                validation_issues: error
+                    .downcast_ref::<AgentGraphProposalValidationError>()
+                    .map(|error| error.issues.clone())
+                    .unwrap_or_default(),
+                audit_path: report_path.display().to_string(),
+            });
+            continue;
+        }
+        writer.write_proposal(&proposal)?;
+        writer.append_event(&brain_event_for_proposal(&proposal)?)?;
+        report.proposal_ids.push(proposal.proposal_id.clone());
+    }
+    drop(writer);
+
+    report.proposal_count = report.proposal_ids.len();
+    if report.proposal_count == 0 {
+        report.status = if report.failed_count > 0 {
+            "failed".into()
+        } else {
+            "empty".into()
+        };
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let apply_result = run_queued_agent_proposal_apply_worker(workspace_root, workspace_id)?;
+    report.applied_count = apply_result.applied.len();
+    report.failed_count += apply_result.failed.len();
+    report.applied_proposal_ids = apply_result.applied;
+    report.failed_proposals.extend(apply_result.failed);
+    report.status = if report.failed_count == 0 {
+        "applied".into()
+    } else if report.applied_count > 0 {
+        "partially_applied".into()
+    } else {
+        "failed".into()
+    };
+    report.updated_at = unix_timestamp_seconds();
+    write_json_pretty(&report_path, &report)?;
+    Ok(report)
+}
+
+fn provider_graph_generation_disabled_for_process() -> bool {
+    std::env::var_os("DUCKDOCS_DISABLE_PROVIDER_GRAPH").is_some()
+        || (cfg!(test) && std::env::var_os("DUCKDOCS_TEST_ENABLE_PROVIDER_GRAPH").is_none())
+}
+
+fn build_provider_graph_proposal_prompt(
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    snapshot: &BrainRepoSnapshot,
+) -> String {
+    let existing_nodes = snapshot
+        .nodes
+        .iter()
+        .take(80)
+        .map(|node| {
+            format!(
+                "- nodeId: {}, kind: {:?}, label: {}, sources: {}",
+                node.node_id,
+                node.kind,
+                node.label,
+                join_or_none(&node.source_ids)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let existing_edges = snapshot
+        .relations
+        .iter()
+        .take(80)
+        .map(|edge| {
+            format!(
+                "- edgeId: {}, kind: {:?}, source: {}, target: {}, label: {}",
+                edge.relation_id, edge.kind, edge.source_node_id, edge.target_node_id, edge.label
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let existing_claims = snapshot
+        .claims
+        .iter()
+        .take(40)
+        .map(|claim| {
+            format!(
+                "- claimId: {}, statement: {}",
+                claim.claim_id, claim.statement
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let evidence_refs = source_evidence_refs_for_provider_proposals(snapshot, &manifest.source_id);
+
+    format!(
+        r#"You are HyprDuck's local brain graph maintenance agent.
+
+Goal:
+- Read the new source markdown and the existing brain graph.
+- Propose only durable, evidence-backed graph updates.
+- Add new nodes, new edges, new claims, and important memories when useful.
+- Reuse existing nodeId values when the new source refers to an existing thing.
+- If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
+
+Hard output rule:
+- Return JSON only. No markdown fence, no prose.
+- Shape: {{"proposals":[AgentGraphProposalPayload...]}}
+- Use camelCase object fields and snake_case enum values.
+
+Allowed payloads:
+1. {{"changeType":"new_node","node":{{"label":"...","kind":"concept|topic|person|company|project|product|team|event|decision|task|claim","sourcePath":"...","nodeId":"optional-stable-id","aliases":[],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+2. {{"changeType":"new_edge","edge":{{"sourceNodeId":"...","targetNodeId":"...","kind":"mentions|supports|contradicts|supersedes|same_as|works_at|founded|invested_in|advises|attended|owns|responsible_for|decided|blocks|depends_on|source_of|derived_from|related_to","label":"...","sourcePath":"...","edgeId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+3. {{"changeType":"new_claim","claim":{{"statement":"...","sourcePath":"...","claimId":"optional-stable-id","topicRefs":["node-id"],"sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+4. {{"changeType":"new_memory","memory":{{"title":"...","body":"...","sourcePath":"...","memoryId":"optional-stable-id","sourceRefs":["..."],"evidenceRefs":["..."],"reason":"..."}}}}
+
+Source:
+- sourceId: {source_id}
+- sourcePath: {source_path}
+- markdownPath: {markdown_path}
+- evidenceRefs you may cite: {evidence_refs}
+
+Existing nodes:
+{existing_nodes}
+
+Existing edges:
+{existing_edges}
+
+Existing claims:
+{existing_claims}
+
+New source markdown:
+{markdown}
+"#,
+        source_id = manifest.source_id,
+        source_path = manifest.source_path,
+        markdown_path = manifest.markdown_path,
+        evidence_refs = join_or_none(&evidence_refs),
+        existing_nodes = if existing_nodes.is_empty() {
+            "(none)"
+        } else {
+            &existing_nodes
+        },
+        existing_edges = if existing_edges.is_empty() {
+            "(none)"
+        } else {
+            &existing_edges
+        },
+        existing_claims = if existing_claims.is_empty() {
+            "(none)"
+        } else {
+            &existing_claims
+        },
+        markdown = truncate_for_prompt(markdown, 24000)
+    )
+}
+
+fn parse_provider_graph_proposal_payloads(raw: &str) -> Result<Vec<AgentGraphProposalPayload>> {
+    let value = extract_provider_json_value(raw)?;
+    if value.is_array() {
+        return serde_json::from_value(value)
+            .context("failed to decode provider graph proposal array");
+    }
+    let proposals = value
+        .get("proposals")
+        .cloned()
+        .ok_or_else(|| anyhow!("provider graph response missing proposals array"))?;
+    serde_json::from_value(proposals).context("failed to decode provider graph proposals")
+}
+
+fn extract_provider_json_value(raw: &str) -> Result<Value> {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+
+    let unfenced = trimmed
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let Ok(value) = serde_json::from_str::<Value>(unfenced) {
+        return Ok(value);
+    }
+
+    let starts = raw
+        .char_indices()
+        .filter_map(|(index, ch)| matches!(ch, '{' | '[').then_some(index))
+        .collect::<Vec<_>>();
+    let ends = raw
+        .char_indices()
+        .filter_map(|(index, ch)| matches!(ch, '}' | ']').then_some(index + ch.len_utf8()))
+        .rev()
+        .collect::<Vec<_>>();
+    for start in starts {
+        for end in &ends {
+            if *end <= start {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(&raw[start..*end]) {
+                return Ok(value);
+            }
+        }
+    }
+    bail!("provider graph response did not contain valid JSON")
+}
+
+fn normalize_provider_graph_proposal_payload(
+    payload: &mut AgentGraphProposalPayload,
+    manifest: &SourceArtifactManifest,
+    default_evidence_refs: &[String],
+) {
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => {
+            normalize_provider_payload_refs(
+                &mut node.source_path,
+                &mut node.source_refs,
+                &mut node.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if node.node_id.is_none() {
+                node.node_id = Some(format!(
+                    "node-provider-{}",
+                    sanitize_id_fragment(&node.label)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewEdge { edge } => {
+            normalize_provider_payload_refs(
+                &mut edge.source_path,
+                &mut edge.source_refs,
+                &mut edge.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if edge.edge_id.is_none() {
+                edge.edge_id = Some(format!(
+                    "edge-provider-{}-{}-{}",
+                    sanitize_id_fragment(&edge.source_node_id),
+                    relation_kind_slug(edge.kind),
+                    sanitize_id_fragment(&edge.target_node_id)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewClaim { claim } => {
+            normalize_provider_payload_refs(
+                &mut claim.source_path,
+                &mut claim.source_refs,
+                &mut claim.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if claim.claim_id.is_none() {
+                claim.claim_id = Some(format!(
+                    "claim-provider-{}",
+                    sanitize_id_fragment(&claim.statement)
+                ));
+            }
+        }
+        AgentGraphProposalPayload::NewMemory { memory } => {
+            normalize_provider_payload_refs(
+                &mut memory.source_path,
+                &mut memory.source_refs,
+                &mut memory.evidence_refs,
+                manifest,
+                default_evidence_refs,
+            );
+            if memory.memory_id.is_none() {
+                memory.memory_id = Some(format!(
+                    "memory-provider-{}",
+                    sanitize_id_fragment(&memory.title)
+                ));
+            }
+        }
+    }
+}
+
+fn normalize_provider_payload_refs(
+    source_path: &mut String,
+    source_refs: &mut Vec<String>,
+    evidence_refs: &mut Vec<String>,
+    manifest: &SourceArtifactManifest,
+    default_evidence_refs: &[String],
+) {
+    if source_path.trim().is_empty() {
+        *source_path = manifest.markdown_path.clone();
+    }
+    merge_unique_string(source_refs, &manifest.source_id);
+    if evidence_refs.is_empty() {
+        for evidence_ref in default_evidence_refs.iter().take(3) {
+            merge_unique_string(evidence_refs, evidence_ref);
+        }
+    }
+}
+
+fn provider_graph_payload_to_proposal(
+    workspace_id: &str,
+    actor_id: &str,
+    payload: AgentGraphProposalPayload,
+) -> BrainUpdateProposal {
+    let kind = provider_graph_payload_kind(&payload);
+    let (title, body, target_node_id, relation_kind, source_refs, node_refs, evidence_refs) =
+        provider_graph_payload_proposal_fields(&payload);
+    BrainUpdateProposal {
+        proposal_id: format!("proposal-{}", Uuid::now_v7()),
+        workspace_id: workspace_id.to_string(),
+        kind,
+        status: BrainProposalStatus::PendingReview,
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: actor_id.to_string(),
+        },
+        scope: BrainScope::Project,
+        title,
+        body,
+        target_node_id,
+        target_source_id: source_refs.first().cloned(),
+        relation_kind,
+        source_refs,
+        node_refs,
+        evidence_refs,
+        proposal_payload: Some(payload),
+        created_at: unix_timestamp_seconds(),
+    }
+}
+
+fn provider_graph_payload_kind(payload: &AgentGraphProposalPayload) -> BrainProposalKind {
+    match payload {
+        AgentGraphProposalPayload::NewNode { .. } => BrainProposalKind::Node,
+        AgentGraphProposalPayload::NewEdge { .. } => BrainProposalKind::Link,
+        AgentGraphProposalPayload::NewClaim { .. } => BrainProposalKind::Claim,
+        AgentGraphProposalPayload::NewMemory { .. } => BrainProposalKind::Memory,
+    }
+}
+
+fn provider_graph_payload_proposal_fields(
+    payload: &AgentGraphProposalPayload,
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<BrainRelationKind>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+) {
+    match payload {
+        AgentGraphProposalPayload::NewNode { node } => (
+            format!("Add graph node: {}", node.label),
+            node.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Provider identified `{}` as a durable graph node.",
+                    node.label
+                )
+            }),
+            node.node_id.clone(),
+            None,
+            node.source_refs.clone(),
+            node.node_id.iter().cloned().collect(),
+            node.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewEdge { edge } => (
+            format!("Connect graph nodes: {}", edge.label),
+            edge.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Provider identified a {:?} relation from {} to {}.",
+                    edge.kind, edge.source_node_id, edge.target_node_id
+                )
+            }),
+            Some(edge.target_node_id.clone()),
+            Some(edge.kind),
+            edge.source_refs.clone(),
+            vec![edge.source_node_id.clone(), edge.target_node_id.clone()],
+            edge.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewClaim { claim } => (
+            format!(
+                "Add graph claim: {}",
+                truncate_for_prompt(&claim.statement, 80)
+            ),
+            claim.reason.clone().unwrap_or_else(|| {
+                "Provider identified a source-backed claim for the graph.".into()
+            }),
+            claim.topic_refs.first().cloned(),
+            None,
+            claim.source_refs.clone(),
+            claim.topic_refs.clone(),
+            claim.evidence_refs.clone(),
+        ),
+        AgentGraphProposalPayload::NewMemory { memory } => (
+            format!("Add brain memory: {}", memory.title),
+            memory.reason.clone().unwrap_or_else(|| memory.body.clone()),
+            None,
+            None,
+            memory.source_refs.clone(),
+            Vec::new(),
+            memory.evidence_refs.clone(),
+        ),
+    }
+}
+
+fn source_evidence_refs_for_provider_proposals(
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+) -> Vec<String> {
+    snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+        .map(|evidence| evidence.id.clone())
+        .take(8)
+        .collect()
+}
+
+fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+    let mut output = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        output.push_str("\n...[truncated]");
+    }
+    output
+}
+
+fn sanitize_id_fragment(value: &str) -> String {
+    let mut fragment = value
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                Some(ch.to_ascii_lowercase())
+            } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '/' | ':' | '.') {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    while fragment.contains("--") {
+        fragment = fragment.replace("--", "-");
+    }
+    let fragment = fragment.trim_matches('-');
+    if fragment.is_empty() {
+        Uuid::now_v7().to_string()
+    } else {
+        fragment.chars().take(64).collect()
+    }
+}
+
+fn relation_kind_slug(kind: BrainRelationKind) -> &'static str {
+    match kind {
+        BrainRelationKind::Mentions => "mentions",
+        BrainRelationKind::Supports => "supports",
+        BrainRelationKind::Contradicts => "contradicts",
+        BrainRelationKind::Supersedes => "supersedes",
+        BrainRelationKind::SameAs => "same-as",
+        BrainRelationKind::WorksAt => "works-at",
+        BrainRelationKind::Founded => "founded",
+        BrainRelationKind::InvestedIn => "invested-in",
+        BrainRelationKind::Advises => "advises",
+        BrainRelationKind::Attended => "attended",
+        BrainRelationKind::Owns => "owns",
+        BrainRelationKind::ResponsibleFor => "responsible-for",
+        BrainRelationKind::Decided => "decided",
+        BrainRelationKind::Blocks => "blocks",
+        BrainRelationKind::DependsOn => "depends-on",
+        BrainRelationKind::SourceOf => "source-of",
+        BrainRelationKind::DerivedFrom => "derived-from",
+        BrainRelationKind::RelatedTo => "related-to",
+    }
+}
+
+fn read_idempotent_markdown_ingest_manifest(
+    paths: &MarkdownIngestPaths,
+    record: &MarkdownIngestQueueRecord,
+    source_id: &str,
+) -> Result<Option<SourceArtifactManifest>> {
+    let manifest_path = paths.workspace_root.join("brain-manifest.json");
+    if !manifest_path.exists() || !materialized_markdown_source_files_exist(paths, source_id) {
+        return Ok(None);
+    }
+
+    let snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
+    let Some(source) = snapshot.sources.iter().find(|source| {
+        source.source_id == source_id
+            && source.workspace_id == record.workspace_id
+            && source.original_path == record.source_path
+            && source.source_path == record.source_path
+            && source.status == "ingested"
+    }) else {
+        return Ok(None);
+    };
+    if !snapshot
+        .wiki_pages
+        .iter()
+        .any(|page| page.source_refs.contains(&source.source_id))
+    {
+        return Ok(None);
+    }
+
+    let source_manifest_path = paths
+        .workspace_root
+        .join("artifacts")
+        .join(source_id)
+        .join("source-manifest.json");
+    let source_manifest: SourceArtifactManifest = read_json_artifact(&source_manifest_path)?;
+    if source_manifest.source_id != source.source_id
+        || source_manifest.workspace_id != record.workspace_id
+        || source_manifest.source_path != record.source_path
+    {
+        return Ok(None);
+    }
+    Ok(Some(source_manifest))
+}
+
+fn materialized_markdown_source_files_exist(paths: &MarkdownIngestPaths, source_id: &str) -> bool {
+    [
+        paths.workspace_root.join("brain-manifest.json"),
+        paths.workspace_root.join("graph/nodes.json"),
+        paths.workspace_root.join("graph/edges.json"),
+        paths.workspace_root.join("graph/claims.json"),
+        paths.workspace_root.join("memory/records.json"),
+        paths.workspace_root.join("wiki/index.md"),
+        paths
+            .workspace_root
+            .join("artifacts")
+            .join(source_id)
+            .join("source-manifest.json"),
+    ]
+    .iter()
+    .all(|path| path.exists())
+}
+
+fn persist_completed_ingest_related_wiki_pages(
+    workspace_root: &Path,
+    workspace_id: &str,
+    source_id: &str,
+    related_pages: &[MarkdownRelatedPageSignal],
+) -> Result<()> {
+    if related_pages.is_empty() {
+        return Ok(());
+    }
+
+    let manifest_path = workspace_root.join("brain-manifest.json");
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+
+    let mut snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)?;
+    let Some(page_index) = snapshot.wiki_pages.iter().position(|page| {
+        page.page_id == format!("wiki-source-{source_id}")
+            || (page.path.starts_with("wiki/sources/")
+                && page.source_refs.iter().any(|source| source == source_id))
+    }) else {
+        return Ok(());
+    };
+
+    {
+        let page = &mut snapshot.wiki_pages[page_index];
+        let base_body = strip_related_wiki_pages_section(&page.body);
+        page.body = format!(
+            "{}\n\n## Related Wiki Pages\n\n{}",
+            base_body.trim_end(),
+            related_wiki_pages_markdown(related_pages)
+        );
+        page.updated_at = unix_timestamp_seconds();
+    }
+
+    let page_path = snapshot.wiki_pages[page_index].path.clone();
+    let page_body = materialized_wiki_page_body(&snapshot.wiki_pages[page_index], &snapshot);
+    write_json_pretty(&manifest_path, &snapshot)?;
+    write_file_atomic(&workspace_root.join(page_path), page_body.as_bytes())?;
+    Ok(())
+}
+
+fn strip_related_wiki_pages_section(body: &str) -> String {
+    body.split("\n\n## Related Wiki Pages\n\n")
+        .next()
+        .unwrap_or(body)
+        .to_string()
+}
+
+fn related_wiki_pages_markdown(related_pages: &[MarkdownRelatedPageSignal]) -> String {
+    let rows = related_pages
+        .iter()
+        .map(|page| {
+            let link_target = wiki_source_page_relative_link(&page.path);
+            format!(
+                "- [{}]({}) (score: {}; reason: {}; matched: {})",
+                page.title,
+                link_target,
+                page.score,
+                page.reason,
+                join_or_none(&page.matched_terms)
+            )
+        })
+        .collect::<Vec<_>>();
+    format!("{}\n", rows.join("\n"))
+}
+
+fn wiki_source_page_relative_link(path: &str) -> String {
+    path.strip_prefix("wiki/")
+        .map(|relative| format!("../{relative}"))
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn persist_completed_ingest_wiki_update_targets(
+    workspace_root: &Path,
+    workspace_id: &str,
+    source_id: &str,
+    artifact_root: &Path,
+    related_pages: &[MarkdownRelatedPageSignal],
+) -> Result<()> {
+    let targets = if workspace_root.join("brain-manifest.json").exists() {
+        let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)?;
+        build_wiki_update_targets_for_source(&snapshot, source_id, related_pages)
+    } else {
+        Vec::new()
+    };
+    write_json_pretty(&artifact_root.join("wiki-update-targets.json"), &targets)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownWikiUpdateTarget {
+    entity_type: String,
+    entity_id: String,
+    #[serde(default)]
+    entity_label: String,
+    change_kind: String,
+    page_id: String,
+    path: String,
+    title: String,
+    target_section: String,
+    reason: String,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    #[serde(default)]
+    node_refs: Vec<String>,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
+}
+
+fn build_wiki_update_targets_for_source(
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+    related_pages: &[MarkdownRelatedPageSignal],
+) -> Vec<MarkdownWikiUpdateTarget> {
+    let evidence_by_id = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    let related_paths = related_pages
+        .iter()
+        .map(|page| page.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut targets = BTreeMap::<(String, String, String, String), MarkdownWikiUpdateTarget>::new();
+
+    for node in snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.source_ids.iter().any(|source| source == source_id))
+    {
+        upsert_wiki_update_targets(
+            &mut targets,
+            snapshot,
+            &related_paths,
+            "node",
+            &node.node_id,
+            &node.label,
+            "changed",
+            std::slice::from_ref(&node.node_id),
+            &node.source_ids,
+            &node.evidence_ids,
+            "## Evidence",
+            "node source or evidence refs overlap this ingest source",
+        );
+    }
+
+    for relation in snapshot
+        .relations
+        .iter()
+        .filter(|relation| refs_include_source(&relation.evidence_ids, source_id, &evidence_by_id))
+    {
+        upsert_wiki_update_targets(
+            &mut targets,
+            snapshot,
+            &related_paths,
+            "edge",
+            &relation.relation_id,
+            &relation.label,
+            "changed",
+            &[
+                relation.source_node_id.clone(),
+                relation.target_node_id.clone(),
+            ],
+            &[source_id.to_string()],
+            &relation.evidence_ids,
+            "## Relations",
+            "edge evidence refs overlap this ingest source",
+        );
+    }
+
+    for claim in snapshot.claims.iter().filter(|claim| {
+        claim.source_refs.iter().any(|source| source == source_id)
+            || refs_include_source(&claim.evidence_refs, source_id, &evidence_by_id)
+    }) {
+        upsert_wiki_update_targets(
+            &mut targets,
+            snapshot,
+            &related_paths,
+            "claim",
+            &claim.claim_id,
+            &claim.statement,
+            "changed",
+            &claim.topic_refs,
+            &claim.source_refs,
+            &claim.evidence_refs,
+            "## Claims",
+            "claim source or evidence refs overlap this ingest source",
+        );
+    }
+
+    for memory in snapshot.memories.iter().filter(|memory| {
+        memory.source_refs.iter().any(|source| source == source_id)
+            || refs_include_source(&memory.evidence_refs, source_id, &evidence_by_id)
+    }) {
+        upsert_wiki_update_targets(
+            &mut targets,
+            snapshot,
+            &related_paths,
+            "memory",
+            &memory.memory_id,
+            &memory.title,
+            "changed",
+            &[],
+            &memory.source_refs,
+            &memory.evidence_refs,
+            "## Memories",
+            "memory source or evidence refs overlap this ingest source",
+        );
+    }
+
+    targets.into_values().collect()
+}
+
+fn refs_include_source(
+    refs: &[String],
+    source_id: &str,
+    evidence_by_id: &BTreeMap<&str, &EvidenceRef>,
+) -> bool {
+    refs.iter().any(|reference| {
+        reference == source_id
+            || evidence_by_id
+                .get(reference.as_str())
+                .and_then(|evidence| evidence.source_id.as_deref())
+                .is_some_and(|evidence_source_id| evidence_source_id == source_id)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn upsert_wiki_update_targets(
+    targets: &mut BTreeMap<(String, String, String, String), MarkdownWikiUpdateTarget>,
+    snapshot: &BrainRepoSnapshot,
+    related_paths: &BTreeSet<&str>,
+    entity_type: &str,
+    entity_id: &str,
+    entity_label: &str,
+    change_kind: &str,
+    node_refs: &[String],
+    source_refs: &[String],
+    evidence_refs: &[String],
+    target_section: &str,
+    reason: &str,
+) {
+    for page in snapshot.wiki_pages.iter().filter(|page| {
+        wiki_page_matches_entity(page, related_paths, node_refs, source_refs, evidence_refs)
+    }) {
+        let key = (
+            entity_type.to_string(),
+            entity_id.to_string(),
+            page.path.clone(),
+            target_section.to_string(),
+        );
+        targets
+            .entry(key)
+            .or_insert_with(|| MarkdownWikiUpdateTarget {
+                entity_type: entity_type.to_string(),
+                entity_id: entity_id.to_string(),
+                entity_label: entity_label.to_string(),
+                change_kind: change_kind.to_string(),
+                page_id: page.page_id.clone(),
+                path: page.path.clone(),
+                title: page.title.clone(),
+                target_section: target_section.to_string(),
+                reason: reason.to_string(),
+                source_refs: merge_string_refs(source_refs, &page.source_refs),
+                node_refs: merge_string_refs(node_refs, &page.node_refs),
+                evidence_refs: merge_string_refs(evidence_refs, &page.evidence_refs),
+            });
+    }
+}
+
+fn wiki_page_matches_entity(
+    page: &WikiPage,
+    related_paths: &BTreeSet<&str>,
+    node_refs: &[String],
+    source_refs: &[String],
+    evidence_refs: &[String],
+) -> bool {
+    related_paths.contains(page.path.as_str())
+        || refs_overlap(&page.node_refs, node_refs)
+        || refs_overlap(&page.source_refs, source_refs)
+        || refs_overlap(&page.evidence_refs, evidence_refs)
+}
+
+fn refs_overlap(left: &[String], right: &[String]) -> bool {
+    !left.is_empty()
+        && left
+            .iter()
+            .any(|value| right.iter().any(|other| other == value))
+}
+
+fn collect_markdown_source_file_states(
+    root: &Path,
+    dir: &Path,
+    sources: &mut Vec<MarkdownSourceFileState>,
+) -> Result<()> {
+    let entries = fs::read_dir(dir).with_context(|| format!("failed reading {}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed reading entry in {}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed reading metadata for {}", path.display()))?;
+        if file_type.is_dir() {
+            collect_markdown_source_file_states(root, &path, sources)?;
+            continue;
+        }
+        if !file_type.is_file() || !is_markdown_source_path(&path) {
+            continue;
+        }
+        let relative_path = path
+            .strip_prefix(root)
+            .with_context(|| {
+                format!(
+                    "failed deriving markdown source path {} relative to {}",
+                    path.display(),
+                    root.display()
+                )
+            })?
+            .to_path_buf();
+        let metadata = fs::metadata(&path)
+            .with_context(|| format!("failed reading metadata for {}", path.display()))?;
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        let contents =
+            fs::read(&path).with_context(|| format!("failed reading {}", path.display()))?;
+        sources.push(MarkdownSourceFileState {
+            normalized_absolute_path: normalize_ingest_path_for_compare(
+                &path.display().to_string(),
+            ),
+            normalized_relative_path: normalize_ingest_path_for_compare(
+                &relative_path.display().to_string(),
+            ),
+            source_path: path,
+            relative_path,
+            size_bytes: metadata.len(),
+            modified_at,
+            content_hash: format!("{:016x}", fnv1a_hash(&contents)),
+        });
+    }
+    Ok(())
+}
+
+fn read_markdown_source_state(paths: &MarkdownIngestPaths) -> Result<MarkdownSourceStateFile> {
+    read_optional_json_artifact(&paths.workspace_root.join(MARKDOWN_SOURCE_STATE_PATH))
+}
+
+fn write_markdown_source_state(
+    paths: &MarkdownIngestPaths,
+    state: &MarkdownSourceStateFile,
+) -> Result<()> {
+    write_json_pretty(
+        &paths.workspace_root.join(MARKDOWN_SOURCE_STATE_PATH),
+        state,
+    )
+}
+
+fn read_markdown_ingest_queue(paths: &MarkdownIngestPaths) -> Result<MarkdownIngestQueueFile> {
+    read_optional_json_artifact(&paths.workspace_root.join(MARKDOWN_INGEST_QUEUE_PATH))
+}
+
+fn write_markdown_ingest_queue(
+    paths: &MarkdownIngestPaths,
+    queue: &MarkdownIngestQueueFile,
+) -> Result<()> {
+    write_json_pretty(
+        &paths.workspace_root.join(MARKDOWN_INGEST_QUEUE_PATH),
+        queue,
+    )
+}
+
+fn markdown_queue_dedupe_key(record: &MarkdownIngestQueueRecord) -> String {
+    format!("{}:{}", record.normalized_path, record.content_hash)
+}
+
+fn source_state_by_path(
+    state: &MarkdownSourceStateFile,
+) -> BTreeMap<String, MarkdownSourceStateRecord> {
+    let mut by_path = BTreeMap::new();
+    for record in &state.sources {
+        by_path.insert(record.normalized_path.clone(), record.clone());
+        by_path.insert(
+            normalize_ingest_path_for_compare(&record.source_path),
+            record.clone(),
+        );
+        by_path.insert(
+            normalize_ingest_path_for_compare(&record.relative_path),
+            record.clone(),
+        );
+    }
+    by_path
+}
+
+fn is_markdown_source_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
+        .unwrap_or(false)
+}
+
+fn normalize_ingest_path_for_compare(path: &str) -> String {
+    let path = PathBuf::from(path);
+    path.components()
+        .collect::<PathBuf>()
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn read_brain_workspace_config(workspace_root: &Path) -> Result<BrainWorkspaceConfig> {
+    let path = workspace_root.join("brain-config.json");
+    if !path.exists() {
+        return Ok(BrainWorkspaceConfig::default());
+    }
+    read_json_artifact(&path)
+}
+
+fn resolve_workspace_config_path(
+    workspace_root: &Path,
+    configured: Option<&str>,
+    fallback: &str,
+) -> Result<PathBuf> {
+    let raw = configured.unwrap_or(fallback).trim();
+    if raw.is_empty() {
+        bail!("configured workspace path cannot be empty");
+    }
+    let path = PathBuf::from(raw);
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("configured workspace path cannot contain ..");
+    }
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(workspace_root.join(path))
+    }
 }
 
 fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -2793,8 +8088,190 @@ struct ExtractedClaim {
 struct ExtractedRelation {
     source_concept_id: String,
     target_concept_id: String,
+    relation_kind: BrainRelationKind,
+    confidence: f32,
     evidence_ids: Vec<String>,
     page_labels: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownNodeCandidate {
+    candidate_id: String,
+    label: String,
+    kind: BrainNodeKind,
+    source_path: String,
+    line_start: usize,
+    evidence_snippet: String,
+    confidence: f32,
+    reason: String,
+    #[serde(default)]
+    matched_node_id: Option<String>,
+    #[serde(default)]
+    matched_node_label: Option<String>,
+    #[serde(default)]
+    match_score: Option<f32>,
+    #[serde(default)]
+    match_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownRelationshipEvidence {
+    candidate_id: String,
+    evidence_id: String,
+    source_path: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    line_start: usize,
+    snippet: String,
+    source_label: String,
+    target_label: String,
+    relation_kind: BrainRelationKind,
+    relation_label: String,
+    confidence: f32,
+    reason: String,
+    #[serde(default)]
+    matched_source_node_id: Option<String>,
+    #[serde(default)]
+    matched_target_node_id: Option<String>,
+    #[serde(default)]
+    resolved_source_node_id: Option<String>,
+    #[serde(default)]
+    resolved_target_node_id: Option<String>,
+    #[serde(default)]
+    endpoint_resolution: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownClaimCandidate {
+    candidate_id: String,
+    evidence_id: String,
+    statement: String,
+    #[serde(default)]
+    classification: MarkdownClaimClassification,
+    #[serde(default)]
+    durable: bool,
+    #[serde(default)]
+    memory_candidate: bool,
+    source_path: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    line_start: usize,
+    line_end: usize,
+    char_start: usize,
+    char_end: usize,
+    evidence_span: MarkdownEvidenceSpan,
+    evidence_snippet: String,
+    #[serde(default)]
+    subject_labels: Vec<String>,
+    #[serde(default)]
+    subject_refs: Vec<String>,
+    confidence: f32,
+    reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownSignalArtifact {
+    source_path: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    headings: Vec<MarkdownHeadingSignal>,
+    #[serde(default)]
+    links: Vec<MarkdownLinkSignal>,
+    #[serde(default)]
+    entities: Vec<MarkdownEntitySignal>,
+    #[serde(default)]
+    keywords: Vec<MarkdownKeywordSignal>,
+    #[serde(default)]
+    related_pages: Vec<MarkdownRelatedPageSignal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownHeadingSignal {
+    text: String,
+    level: usize,
+    line_start: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownLinkSignal {
+    label: String,
+    target: String,
+    kind: String,
+    line_start: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownEntitySignal {
+    label: String,
+    line_start: usize,
+    confidence: f32,
+    reason: String,
+    #[serde(default)]
+    matched_node_id: Option<String>,
+    #[serde(default)]
+    matched_node_label: Option<String>,
+    #[serde(default)]
+    match_score: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownKeywordSignal {
+    term: String,
+    count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownRelatedPageSignal {
+    page_id: String,
+    path: String,
+    title: String,
+    score: usize,
+    matched_terms: Vec<String>,
+    reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownEvidenceSpan {
+    source_path: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    line_start: usize,
+    line_end: usize,
+    char_start: usize,
+    char_end: usize,
+    snippet: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MarkdownClaimClassification {
+    DurableFact,
+    Decision,
+}
+
+impl Default for MarkdownClaimClassification {
+    fn default() -> Self {
+        Self::DurableFact
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2819,12 +8296,26 @@ struct PageConceptSet {
 struct CollectedConcepts {
     concepts: Vec<ConceptAccumulator>,
     page_concepts: Vec<PageConceptSet>,
+    relation_candidates: Vec<RelationCandidateAccumulator>,
 }
 
 #[derive(Debug, Clone)]
 struct EdgeAccumulator {
     source_node_id: String,
     target_node_id: String,
+    relation_kind: BrainRelationKind,
+    label: String,
+    confidence: Option<f32>,
+    evidence: Vec<EvidenceRef>,
+    page_labels: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RelationCandidateAccumulator {
+    source_node_id: String,
+    target_node_id: String,
+    relation_kind: BrainRelationKind,
+    confidence: f32,
     evidence: Vec<EvidenceRef>,
     page_labels: BTreeSet<String>,
 }
@@ -2871,10 +8362,32 @@ fn compile_knowledge_project(
         .map(|manifest| build_source_backed_project_id(&manifest.workspace_id, &manifest.source_id))
         .unwrap_or_else(|| build_project_id(request));
 
-    let extraction = build_extraction_artifact(
-        &page_sections,
+    let node_candidates = source_manifest
+        .filter(|manifest| manifest.format == DocumentFormat::Markdown)
+        .map(|manifest| {
+            extract_markdown_node_candidates_for_workspace(
+                markdown,
+                &source_path_for_evidence,
+                workspace_root_from_manifest(manifest).as_path(),
+            )
+            .unwrap_or_else(|_| {
+                extract_markdown_node_candidates(markdown, &source_path_for_evidence)
+            })
+        })
+        .unwrap_or_default();
+    let claim_candidates = extract_markdown_claim_candidates(
+        markdown,
         &source_path_for_evidence,
         source_id_for_evidence.as_deref(),
+        &node_candidates,
+    );
+    let extraction = build_extraction_artifact(
+        &page_sections,
+        markdown,
+        &source_path_for_evidence,
+        source_id_for_evidence.as_deref(),
+        &node_candidates,
+        &claim_candidates,
     );
     let collected = collected_concepts_from_artifact(&extraction);
     let concept_accumulators = collected.concepts;
@@ -2941,6 +8454,7 @@ fn compile_knowledge_project(
             &document_node,
             &concept_accumulators,
             &collected.page_concepts,
+            &collected.relation_candidates,
             &source_path_for_evidence,
             source_id_for_evidence.as_deref(),
         );
@@ -3711,6 +9225,9 @@ fn build_brain_repo_snapshot(
     rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
     aggregate: &KnowledgeProject,
     corrections: &[WorkspaceCorrection],
+    existing_memories: &[MemoryRecord],
+    existing_nodes: &[BrainNodeRecord],
+    existing_relations: &[BrainRelationRecord],
 ) -> BrainRepoSnapshot {
     let generated_at = unix_timestamp_seconds();
     let sources = rows
@@ -3742,7 +9259,33 @@ fn build_brain_repo_snapshot(
             evidence_by_id.insert(evidence.id.clone(), evidence.clone());
         }
     }
+    for (row, _) in rows {
+        for candidate in read_markdown_claim_candidates_for_row(row) {
+            evidence_by_id
+                .entry(candidate.evidence_id.clone())
+                .or_insert_with(|| EvidenceRef {
+                    id: candidate.evidence_id.clone(),
+                    page_label: "Imported text".into(),
+                    page_index: Some(0),
+                    snippet: candidate.evidence_snippet,
+                    source_path: Some(candidate.source_path),
+                    source_id: candidate
+                        .source_id
+                        .or_else(|| Some(row.summary.source_id.clone())),
+                    markdown_path: Some(row.summary.markdown_path.clone()),
+                    image_path: None,
+                    provenance: Some(format!(
+                        "Claim candidate extracted from markdown line {} during autonomous ingest.",
+                        candidate.line_start
+                    )),
+                });
+        }
+    }
 
+    let existing_node_by_id = existing_nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
     let nodes = aggregate
         .details_by_node_id
         .values()
@@ -3761,7 +9304,7 @@ fn build_brain_repo_snapshot(
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            BrainNodeRecord {
+            let mut node = BrainNodeRecord {
                 node_id: detail.node.id.clone(),
                 kind: brain_node_kind_for_graph_kind(detail.node.kind),
                 label: detail.canonical_name.clone(),
@@ -3771,7 +9314,13 @@ fn build_brain_repo_snapshot(
                 source_ids,
                 confidence: detail.node.confidence,
                 updated_at: generated_at,
+            };
+            if let Some(existing) = existing_node_by_id.get(node.node_id.as_str()) {
+                if brain_node_record_content_matches(existing, &node) {
+                    node.updated_at = existing.updated_at;
+                }
             }
+            node
         })
         .collect::<Vec<_>>();
 
@@ -3790,7 +9339,7 @@ fn build_brain_repo_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let claims = aggregate
+    let mut claims = aggregate
         .details_by_node_id
         .values()
         .filter(|detail| {
@@ -3836,7 +9385,34 @@ fn build_brain_repo_snapshot(
             }
         })
         .collect::<Vec<_>>();
+    for (row, _) in rows {
+        claims.extend(
+            read_markdown_claim_candidates_for_row(row)
+                .into_iter()
+                .map(|candidate| ClaimRecord {
+                    claim_id: format!("claim-{}", bounded_artifact_key(&candidate.statement, 80)),
+                    workspace_id: workspace_id.to_string(),
+                    statement: candidate.statement,
+                    topic_refs: candidate.subject_refs,
+                    source_refs: if candidate.source_refs.is_empty() {
+                        vec![row.summary.source_id.clone()]
+                    } else {
+                        candidate.source_refs
+                    },
+                    evidence_refs: vec![candidate.evidence_id],
+                    status: "candidate".into(),
+                    updated_at: generated_at,
+                }),
+        );
+    }
+    claims = merge_matching_claim_records(claims);
 
+    let memories =
+        build_durable_memory_records(workspace_id, rows, generated_at, existing_memories);
+    let existing_relation_by_id = existing_relations
+        .iter()
+        .map(|relation| (relation.relation_id.as_str(), relation))
+        .collect::<BTreeMap<_, _>>();
     let relations = aggregate
         .edges
         .iter()
@@ -3857,16 +9433,22 @@ fn build_brain_repo_snapshot(
             if evidence_ids.is_empty() {
                 return None;
             }
-            Some(BrainRelationRecord {
+            let mut relation = BrainRelationRecord {
                 relation_id: edge.id.clone(),
-                kind: brain_relation_kind_for_relation_kind(edge.kind),
+                kind: brain_relation_kind_for_edge(edge),
                 source_node_id: edge.source_node_id.clone(),
                 target_node_id: edge.target_node_id.clone(),
                 label: edge.label.clone(),
                 evidence_ids,
                 confidence: edge.confidence,
                 updated_at: generated_at,
-            })
+            };
+            if let Some(existing) = existing_relation_by_id.get(relation.relation_id.as_str()) {
+                if brain_relation_record_content_matches(existing, &relation) {
+                    relation.updated_at = existing.updated_at;
+                }
+            }
+            Some(relation)
         })
         .collect::<Vec<_>>();
 
@@ -3875,9 +9457,11 @@ fn build_brain_repo_snapshot(
     let mut events = vec![
         BrainEvent {
             event_id: format!("evt-{workspace_id}-graph-materialized-{generated_at}"),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
             workspace_id: workspace_id.to_string(),
             scope: BrainScope::Project,
             event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some("graph_materialized".into()),
             actor: BrainActor {
                 actor_type: BrainActorType::System,
                 actor_id: "duckdocs-engine".into(),
@@ -3886,63 +9470,134 @@ fn build_brain_repo_snapshot(
                 .iter()
                 .map(|source| source.source_id.clone())
                 .collect::<Vec<_>>(),
+            source_markdown_refs: sources
+                .iter()
+                .map(|source| source.markdown_path.clone())
+                .collect::<Vec<_>>(),
             node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
             relation_refs: relations
                 .iter()
                 .map(|relation| relation.relation_id.clone())
                 .collect(),
+            claim_refs: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
+            memory_refs: memories
+                .iter()
+                .map(|memory| memory.memory_id.clone())
+                .collect(),
+            target_node_ids: nodes.iter().map(|node| node.node_id.clone()).collect(),
+            target_edge_ids: relations
+                .iter()
+                .map(|relation| relation.relation_id.clone())
+                .collect(),
+            target_claim_ids: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
+            target_memory_ids: memories
+                .iter()
+                .map(|memory| memory.memory_id.clone())
+                .collect(),
             evidence_refs: evidence_by_id.keys().cloned().collect(),
-            payload_json: format!(
-                "{{\"nodeCount\":{},\"relationCount\":{},\"sourceCount\":{}}}",
-                nodes.len(),
-                relations.len(),
-                sources.len()
-            ),
+            payload_json: materialized_graph_event_payload_json(
+                generated_at,
+                &sources,
+                &nodes,
+                &relations,
+                &evidence_by_id.values().cloned().collect::<Vec<_>>(),
+                &memories,
+                &wiki_pages,
+                &entities,
+                &claims,
+                &extractions,
+            )
+            .unwrap_or_else(|_| {
+                format!(
+                    "{{\"nodeCount\":{},\"relationCount\":{},\"sourceCount\":{}}}",
+                    nodes.len(),
+                    relations.len(),
+                    sources.len()
+                )
+            }),
+            causality: BrainEventCausality {
+                caused_by_source_ids: sources
+                    .iter()
+                    .map(|source| source.source_id.clone())
+                    .collect(),
+                snapshot_id: Some(format!("snapshot-{workspace_id}-{generated_at}")),
+                materialized_version: Some(generated_at),
+                ..Default::default()
+            },
             confidence: None,
             policy_result: "materialized".into(),
             created_at: generated_at,
         },
         BrainEvent {
             event_id: format!("evt-{workspace_id}-wiki-materialized-{generated_at}"),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
             workspace_id: workspace_id.to_string(),
             scope: BrainScope::Project,
             event_type: BrainEventKind::WikiMaterialized,
+            operation_type: Some("wiki_materialized".into()),
             actor: BrainActor {
                 actor_type: BrainActorType::System,
                 actor_id: "duckdocs-engine".into(),
             },
             source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
             node_refs: wiki_pages
                 .iter()
                 .flat_map(|page| page.node_refs.clone())
                 .collect(),
             relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: wiki_pages
+                .iter()
+                .flat_map(|page| page.node_refs.clone())
+                .collect(),
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
             evidence_refs: wiki_pages
                 .iter()
                 .flat_map(|page| page.evidence_refs.clone())
                 .collect(),
             payload_json: format!("{{\"pageCount\":{}}}", wiki_pages.len()),
+            causality: BrainEventCausality {
+                snapshot_id: Some(format!("snapshot-{workspace_id}-{generated_at}")),
+                materialized_version: Some(generated_at),
+                ..Default::default()
+            },
             confidence: None,
             policy_result: "materialized".into(),
             created_at: generated_at,
         },
     ];
+    events.extend(memories.iter().map(memory_record_auto_accepted_event));
     events.extend(corrections.iter().map(|correction| {
         BrainEvent {
             event_id: format!("evt-{}", correction.id),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
             workspace_id: correction.workspace_id.clone(),
             scope: BrainScope::Project,
             event_type: BrainEventKind::CorrectionApplied,
+            operation_type: Some(correction_kind_slug(&correction.kind).into()),
             actor: BrainActor {
                 actor_type: BrainActorType::User,
                 actor_id: "local-user".into(),
             },
             source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
             node_refs: std::iter::once(correction.aggregate_node_id.clone())
                 .chain(correction.target_node_id.clone())
                 .chain(correction.source_node_ids.clone())
                 .collect(),
             relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: std::iter::once(correction.aggregate_node_id.clone())
+                .chain(correction.target_node_id.clone())
+                .collect(),
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
             evidence_refs: correction.evidence_ids.clone(),
             payload_json: format!(
                 "{{\"kind\":\"{}\",\"value\":{}}}",
@@ -3953,6 +9608,10 @@ fn build_brain_repo_snapshot(
                     .map(|value| json!(value).to_string())
                     .unwrap_or_else(|| "null".into())
             ),
+            causality: BrainEventCausality {
+                materialized_version: Some(correction.created_at),
+                ..Default::default()
+            },
             confidence: None,
             policy_result: "applied".into(),
             created_at: correction.created_at,
@@ -3966,12 +9625,247 @@ fn build_brain_repo_snapshot(
         nodes,
         relations,
         evidence: evidence_by_id.into_values().collect(),
-        memories: Vec::new(),
+        memories,
         wiki_pages,
         entities,
         claims,
         extractions,
         events,
+    }
+}
+
+fn merge_matching_claim_records(claims: Vec<ClaimRecord>) -> Vec<ClaimRecord> {
+    let mut merged = BTreeMap::<String, ClaimRecord>::new();
+    for claim in claims {
+        match merged.get_mut(&claim.claim_id) {
+            Some(existing) => merge_claim_record(existing, claim),
+            None => {
+                merged.insert(claim.claim_id.clone(), claim);
+            }
+        }
+    }
+    merged.into_values().collect()
+}
+
+fn merge_claim_record(existing: &mut ClaimRecord, incoming: ClaimRecord) {
+    existing.topic_refs = merge_string_refs(&existing.topic_refs, &incoming.topic_refs);
+    existing.source_refs = merge_string_refs(&existing.source_refs, &incoming.source_refs);
+    existing.evidence_refs = merge_string_refs(&existing.evidence_refs, &incoming.evidence_refs);
+    if claim_status_rank(&incoming.status) > claim_status_rank(&existing.status) {
+        existing.status = incoming.status;
+    }
+    existing.updated_at = existing.updated_at.max(incoming.updated_at);
+}
+
+fn merge_string_refs(left: &[String], right: &[String]) -> Vec<String> {
+    left.iter()
+        .chain(right.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn claim_status_rank(status: &str) -> u8 {
+    match status {
+        "supported" => 3,
+        "accepted" => 2,
+        "candidate" => 1,
+        _ => 0,
+    }
+}
+
+fn build_durable_memory_records(
+    workspace_id: &str,
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+    generated_at: u64,
+    existing_memories: &[MemoryRecord],
+) -> Vec<MemoryRecord> {
+    let mut memories = BTreeMap::<String, MemoryRecord>::new();
+    for (row, _) in rows {
+        for candidate in read_markdown_claim_candidates_for_row(row)
+            .into_iter()
+            .filter(|candidate| candidate.durable && candidate.memory_candidate)
+        {
+            let generated_memory_id = memory_id_for_claim_candidate(&candidate);
+            let memory_id =
+                matching_memory_id_for_candidate(&candidate, existing_memories, memories.values())
+                    .unwrap_or(generated_memory_id);
+            let mut memory = MemoryRecord {
+                memory_id: memory_id.clone(),
+                workspace_id: workspace_id.to_string(),
+                scope: BrainScope::Project,
+                title: durable_memory_title(&candidate),
+                body: candidate.statement,
+                source_refs: if candidate.source_refs.is_empty() {
+                    vec![row.summary.source_id.clone()]
+                } else {
+                    candidate.source_refs
+                },
+                evidence_refs: vec![candidate.evidence_id],
+                created_at: generated_at,
+                updated_at: generated_at,
+            };
+            if let Some(existing) = existing_memories
+                .iter()
+                .find(|existing| existing.memory_id == memory_id)
+            {
+                if memory_record_content_matches(existing, &memory) {
+                    memory.created_at = existing.created_at;
+                    memory.updated_at = existing.updated_at;
+                } else {
+                    merge_memory_record(&mut memory, existing.clone());
+                }
+            }
+            match memories.get_mut(&memory_id) {
+                Some(existing) => merge_memory_record(existing, memory),
+                None => {
+                    memories.insert(memory_id, memory);
+                }
+            }
+        }
+    }
+    memories.into_values().collect()
+}
+
+fn matching_memory_id_for_candidate<'a>(
+    candidate: &MarkdownClaimCandidate,
+    existing_memories: &'a [MemoryRecord],
+    generated_memories: impl Iterator<Item = &'a MemoryRecord>,
+) -> Option<String> {
+    let incoming = MemoryRecord {
+        memory_id: memory_id_for_claim_candidate(candidate),
+        workspace_id: String::new(),
+        scope: BrainScope::Project,
+        title: durable_memory_title(candidate),
+        body: candidate.statement.clone(),
+        source_refs: candidate.source_refs.clone(),
+        evidence_refs: vec![candidate.evidence_id.clone()],
+        created_at: 0,
+        updated_at: 0,
+    };
+    generated_memories
+        .chain(existing_memories.iter())
+        .filter_map(|memory| {
+            memory_match_score(&incoming, memory)
+                .map(|score| (score, memory.updated_at, memory.memory_id.clone()))
+        })
+        .max_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| right.2.cmp(&left.2))
+        })
+        .map(|(_, _, memory_id)| memory_id)
+}
+
+fn memory_match_score(incoming: &MemoryRecord, existing: &MemoryRecord) -> Option<u16> {
+    if incoming.memory_id == existing.memory_id {
+        return Some(1000);
+    }
+    if normalize_key(&incoming.body) == normalize_key(&existing.body) {
+        return Some(950);
+    }
+    if normalize_key(&incoming.title) == normalize_key(&existing.title) {
+        return Some(900);
+    }
+    if !incoming.evidence_refs.is_empty()
+        && incoming
+            .evidence_refs
+            .iter()
+            .any(|evidence_id| existing.evidence_refs.contains(evidence_id))
+    {
+        return Some(850);
+    }
+
+    let incoming_terms = search_terms(&format!("{} {}", incoming.title, incoming.body));
+    let existing_terms = search_terms(&format!("{} {}", existing.title, existing.body));
+    if incoming_terms.is_empty() || existing_terms.is_empty() {
+        return None;
+    }
+    let existing_terms = existing_terms.into_iter().collect::<BTreeSet<_>>();
+    let shared = incoming_terms
+        .iter()
+        .filter(|term| existing_terms.contains(*term))
+        .count();
+    let smaller = incoming_terms.len().min(existing_terms.len());
+    let larger = incoming_terms.len().max(existing_terms.len());
+    if shared < 4 {
+        return None;
+    }
+    let smaller_coverage = shared * 100 / smaller;
+    let larger_coverage = shared * 100 / larger;
+    (smaller_coverage >= 80 && larger_coverage >= 65).then_some(700 + larger_coverage as u16)
+}
+
+fn durable_memory_title(candidate: &MarkdownClaimCandidate) -> String {
+    let prefix = match candidate.classification {
+        MarkdownClaimClassification::Decision => "Decision",
+        MarkdownClaimClassification::DurableFact => "Fact",
+    };
+    format!("{}: {}", prefix, excerpt(&candidate.statement, 72))
+}
+
+fn memory_id_for_claim_candidate(candidate: &MarkdownClaimCandidate) -> String {
+    format!("memory-{}", bounded_artifact_key(&candidate.statement, 96))
+}
+
+fn markdown_claim_classification_slug(classification: MarkdownClaimClassification) -> &'static str {
+    match classification {
+        MarkdownClaimClassification::Decision => "decision",
+        MarkdownClaimClassification::DurableFact => "durable_fact",
+    }
+}
+
+fn merge_memory_record(existing: &mut MemoryRecord, incoming: MemoryRecord) {
+    existing.source_refs = merge_string_refs(&existing.source_refs, &incoming.source_refs);
+    existing.evidence_refs = merge_string_refs(&existing.evidence_refs, &incoming.evidence_refs);
+    existing.created_at = existing.created_at.min(incoming.created_at);
+    existing.updated_at = existing.updated_at.max(incoming.updated_at);
+}
+
+fn memory_record_content_matches(left: &MemoryRecord, right: &MemoryRecord) -> bool {
+    left.workspace_id == right.workspace_id
+        && left.scope == right.scope
+        && left.title == right.title
+        && left.body == right.body
+        && merge_string_refs(&left.source_refs, &[]) == merge_string_refs(&right.source_refs, &[])
+        && merge_string_refs(&left.evidence_refs, &[])
+            == merge_string_refs(&right.evidence_refs, &[])
+}
+
+fn memory_record_auto_accepted_event(memory: &MemoryRecord) -> BrainEvent {
+    BrainEvent {
+        event_id: format!("evt-{}-accepted", memory.memory_id),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: memory.workspace_id.clone(),
+        scope: memory.scope,
+        event_type: BrainEventKind::MemoryAccepted,
+        operation_type: Some("new_memory".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        },
+        source_refs: memory.source_refs.clone(),
+        source_markdown_refs: Vec::new(),
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: vec![memory.memory_id.clone()],
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: vec![memory.memory_id.clone()],
+        evidence_refs: memory.evidence_refs.clone(),
+        payload_json: serde_json::to_string(memory).unwrap_or_else(|_| "{}".into()),
+        causality: BrainEventCausality {
+            caused_by_source_ids: memory.source_refs.clone(),
+            materialized_version: Some(memory.updated_at),
+            ..Default::default()
+        },
+        confidence: Some("0.78".into()),
+        policy_result: "auto_applied".into(),
+        created_at: memory.updated_at,
     }
 }
 
@@ -4013,6 +9907,7 @@ fn build_structured_extraction_artifact_for_source(
             topics: Vec::new(),
             claims: Vec::new(),
             relations: Vec::new(),
+            memories: Vec::new(),
             evidence_refs: Vec::new(),
             confidence: Some(0.0),
             provenance: "No compiled project snapshot was available for this source.".into(),
@@ -4034,6 +9929,28 @@ fn build_structured_extraction_artifact_for_source(
                 evidence_by_id.insert(evidence.id.clone(), evidence.clone());
             }
         }
+    }
+    let claim_candidates = read_markdown_claim_candidates_for_row(row);
+    for candidate in &claim_candidates {
+        evidence_by_id
+            .entry(candidate.evidence_id.clone())
+            .or_insert_with(|| EvidenceRef {
+                id: candidate.evidence_id.clone(),
+                page_label: "Imported text".into(),
+                page_index: Some(0),
+                snippet: candidate.evidence_snippet.clone(),
+                source_path: Some(candidate.source_path.clone()),
+                source_id: candidate
+                    .source_id
+                    .clone()
+                    .or_else(|| Some(source_id.clone())),
+                markdown_path: Some(row.summary.markdown_path.clone()),
+                image_path: None,
+                provenance: Some(format!(
+                    "Claim candidate extracted from markdown line {} during autonomous ingest.",
+                    candidate.line_start
+                )),
+            });
     }
 
     let page_refs = page_refs_from_evidence(evidence_by_id.values());
@@ -4095,7 +10012,7 @@ fn build_structured_extraction_artifact_for_source(
         })
         .collect::<Vec<_>>();
 
-    let claims = project
+    let mut claims = project
         .details_by_node_id
         .values()
         .filter(|detail| matches!(detail.node.kind, GraphNodeKind::Concept | GraphNodeKind::Page))
@@ -4132,6 +10049,62 @@ fn build_structured_extraction_artifact_for_source(
             })
         })
         .collect::<Vec<_>>();
+    let memories = claim_candidates
+        .iter()
+        .filter(|candidate| candidate.durable && candidate.memory_candidate)
+        .map(|candidate| {
+            let page_refs = evidence_by_id
+                .get(&candidate.evidence_id)
+                .map(|evidence| page_refs_from_evidence(std::iter::once(evidence)))
+                .unwrap_or_default();
+            StructuredExtractionMemoryCandidate {
+                memory_id: memory_id_for_claim_candidate(candidate),
+                title: durable_memory_title(candidate),
+                body: candidate.statement.clone(),
+                kind: markdown_claim_classification_slug(candidate.classification).into(),
+                source_refs: if candidate.source_refs.is_empty() {
+                    vec![source_id.clone()]
+                } else {
+                    candidate.source_refs.clone()
+                },
+                evidence_refs: vec![candidate.evidence_id.clone()],
+                page_refs,
+                confidence: Some(candidate.confidence),
+                status: "auto_apply_candidate".into(),
+                provenance: format!(
+                    "Autonomous markdown ingest promoted this {} into a memory candidate at line {} because {}.",
+                    markdown_claim_classification_slug(candidate.classification),
+                    candidate.line_start,
+                    candidate.reason
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    claims.extend(claim_candidates.into_iter().map(|candidate| {
+        let page_refs = evidence_by_id
+            .get(&candidate.evidence_id)
+            .map(|evidence| page_refs_from_evidence(std::iter::once(evidence)))
+            .unwrap_or_default();
+        StructuredExtractionClaim {
+            claim_id: format!("claim-{}", bounded_artifact_key(&candidate.statement, 80)),
+            statement: candidate.statement,
+            subject_refs: candidate.subject_refs,
+            source_refs: if candidate.source_refs.is_empty() {
+                vec![source_id.clone()]
+            } else {
+                candidate.source_refs
+            },
+            evidence_refs: vec![candidate.evidence_id],
+            page_refs,
+            confidence: Some(candidate.confidence),
+            status: "candidate".into(),
+            provenance: format!(
+                "Autonomous markdown ingest extracted this source claim at line {} because {}.",
+                candidate.line_start, candidate.reason
+            ),
+        }
+    }));
 
     let relations = project
         .edges
@@ -4151,7 +10124,7 @@ fn build_structured_extraction_artifact_for_source(
             }
             Some(StructuredExtractionRelation {
                 relation_id: edge.id.clone(),
-                kind: brain_relation_kind_for_relation_kind(edge.kind),
+                kind: brain_relation_kind_for_edge(edge),
                 source_node_id: edge.source_node_id.clone(),
                 target_node_id: edge.target_node_id.clone(),
                 label: edge.label.clone(),
@@ -4179,6 +10152,7 @@ fn build_structured_extraction_artifact_for_source(
         topics,
         claims,
         relations,
+        memories,
         evidence_refs: evidence_by_id.into_values().collect(),
         confidence: Some(if project.summary.status == ProjectStatus::Ready {
             0.7
@@ -4232,10 +10206,17 @@ fn brain_node_kind_for_graph_kind(kind: GraphNodeKind) -> BrainNodeKind {
     }
 }
 
-fn brain_relation_kind_for_relation_kind(kind: RelationKind) -> BrainRelationKind {
-    match kind {
+fn brain_relation_kind_for_edge(edge: &RelationEdgeSummary) -> BrainRelationKind {
+    match edge.kind {
         RelationKind::SourceDocument => BrainRelationKind::DerivedFrom,
-        RelationKind::RelatedTo => BrainRelationKind::RelatedTo,
+        RelationKind::RelatedTo => match edge.label.as_str() {
+            "Supports" => BrainRelationKind::Supports,
+            "Contradicts" => BrainRelationKind::Contradicts,
+            "Supersedes" => BrainRelationKind::Supersedes,
+            "Same as" => BrainRelationKind::SameAs,
+            "Depends on" => BrainRelationKind::DependsOn,
+            _ => BrainRelationKind::RelatedTo,
+        },
     }
 }
 
@@ -4341,12 +10322,39 @@ fn build_materialized_wiki_pages(
 fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
     let writer = BrainWorkspaceWriter::open(root.to_path_buf())?;
     let root = writer.root.as_path();
+    ensure_materialized_brain_repo_dirs(root)?;
+    let mut effective_snapshot = snapshot.clone();
+    effective_snapshot.memories =
+        merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
+    effective_snapshot.events = merge_preserved_brain_events(
+        snapshot.events.clone(),
+        &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
+    );
+    apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
+
+    persist_materialized_graph_and_wiki_state(root, &effective_snapshot)?;
+    write_json_pretty(
+        &root.join("memory/records.json"),
+        &effective_snapshot.memories,
+    )?;
+    write_structured_extraction_artifacts(root, &effective_snapshot.extractions)?;
+    write_brain_events_jsonl(
+        &root.join("events/brain_events.jsonl"),
+        &effective_snapshot.events,
+    )?;
+    publish_latest_readable_graph_snapshot_marker(root, &effective_snapshot)?;
+
+    Ok(())
+}
+
+fn ensure_materialized_brain_repo_dirs(root: &Path) -> Result<()> {
     let wiki_root = root.join("wiki");
     for dir in [
         root.join("graph"),
         root.join("artifacts"),
         root.join("events"),
         root.join("memory"),
+        root.join("state"),
         root.join("reviews/proposed-updates"),
         root.join("reviews/lint-reports"),
         wiki_root.join("sources"),
@@ -4358,34 +10366,123 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
         fs::create_dir_all(&dir).with_context(|| format!("failed creating {}", dir.display()))?;
     }
 
-    let mut effective_snapshot = snapshot.clone();
-    effective_snapshot.memories = read_memory_records(root)?;
-    effective_snapshot.events = merge_preserved_brain_events(
-        snapshot.events.clone(),
-        &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
-    );
-    apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
+    fs::write(root.join("reviews/proposed-updates/.gitkeep"), "")
+        .context("failed writing proposed updates placeholder")?;
+    fs::write(root.join("reviews/lint-reports/.gitkeep"), "")
+        .context("failed writing lint reports placeholder")?;
+    fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
+    Ok(())
+}
 
-    write_json_pretty(&root.join("brain-manifest.json"), &effective_snapshot)?;
-    write_json_pretty(&root.join("graph/nodes.json"), &effective_snapshot.nodes)?;
-    write_json_pretty(
-        &root.join("graph/edges.json"),
-        &effective_snapshot.relations,
-    )?;
-    write_json_pretty(
-        &root.join("graph/evidence.json"),
-        &effective_snapshot.evidence,
-    )?;
-    write_json_pretty(
-        &root.join("graph/entities.json"),
-        &effective_snapshot.entities,
-    )?;
-    write_json_pretty(&root.join("graph/claims.json"), &effective_snapshot.claims)?;
-    write_json_pretty(
-        &root.join("memory/records.json"),
-        &effective_snapshot.memories,
-    )?;
-    for extraction in &effective_snapshot.extractions {
+fn publish_latest_readable_graph_snapshot_marker(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<Option<LatestReadableGraphSnapshotMarker>> {
+    validate_latest_readable_materialized_files(root, snapshot)?;
+    let Some(event) = latest_graph_materialized_event(&snapshot.events, &snapshot.workspace_id)
+    else {
+        return Ok(None);
+    };
+    let materialized_at = event
+        .causality
+        .materialized_version
+        .unwrap_or(event.created_at);
+    let snapshot_id = event
+        .causality
+        .snapshot_id
+        .clone()
+        .unwrap_or_else(|| format!("snapshot-{}-{materialized_at}", snapshot.workspace_id));
+    let marker = LatestReadableGraphSnapshotMarker {
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: snapshot.workspace_id.clone(),
+        snapshot_id,
+        event_id: event.event_id.clone(),
+        source_ingest_id: graph_snapshot_source_ingest_id(event),
+        materialized_at,
+        published_at: unix_timestamp_seconds(),
+        source_markdown_refs: event.source_markdown_refs.clone(),
+        materialized_files: latest_readable_materialized_file_refs(snapshot),
+    };
+    write_json_pretty(&root.join(LATEST_READABLE_SNAPSHOT_PATH), &marker)?;
+    Ok(Some(marker))
+}
+
+fn read_latest_readable_graph_snapshot_marker(
+    root: &Path,
+) -> Result<Option<LatestReadableGraphSnapshotMarker>> {
+    let path = root.join(LATEST_READABLE_SNAPSHOT_PATH);
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_artifact(&path).map(Some)
+}
+
+fn validate_latest_readable_materialized_files(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let manifest: BrainRepoSnapshot = read_json_artifact(&root.join("brain-manifest.json"))?;
+    if manifest.workspace_id != snapshot.workspace_id {
+        bail!(
+            "materialized brain manifest workspace_id {} does not match {}",
+            manifest.workspace_id,
+            snapshot.workspace_id
+        );
+    }
+    let nodes: Vec<BrainNodeRecord> = read_json_artifact(&root.join("graph/nodes.json"))?;
+    let edges: Vec<BrainRelationRecord> = read_json_artifact(&root.join("graph/edges.json"))?;
+    let claims: Vec<ClaimRecord> = read_json_artifact(&root.join("graph/claims.json"))?;
+    let memories = read_memory_records(root)?;
+    let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    if nodes != snapshot.nodes {
+        bail!("materialized graph/nodes.json does not match the completed snapshot");
+    }
+    if edges != snapshot.relations {
+        bail!("materialized graph/edges.json does not match the completed snapshot");
+    }
+    if claims != snapshot.claims {
+        bail!("materialized graph/claims.json does not match the completed snapshot");
+    }
+    if memories != snapshot.memories {
+        bail!("materialized memory/records.json does not match the completed snapshot");
+    }
+    if events != snapshot.events {
+        bail!("materialized events/brain_events.jsonl does not match the completed snapshot");
+    }
+    for page in &snapshot.wiki_pages {
+        let page_body = fs::read_to_string(root.join(&page.path))
+            .with_context(|| format!("failed reading materialized wiki page {}", page.path))?;
+        let expected = materialized_wiki_page_body(page, snapshot);
+        if page_body != expected {
+            bail!(
+                "materialized wiki page {} does not match the completed snapshot",
+                page.path
+            );
+        }
+    }
+    Ok(())
+}
+
+fn latest_readable_materialized_file_refs(snapshot: &BrainRepoSnapshot) -> Vec<String> {
+    let mut files = vec![
+        "brain-manifest.json".to_string(),
+        "graph/nodes.json".to_string(),
+        "graph/edges.json".to_string(),
+        "graph/claims.json".to_string(),
+        "memory/records.json".to_string(),
+        "events/brain_events.jsonl".to_string(),
+    ];
+    files.extend(snapshot.wiki_pages.iter().map(|page| page.path.clone()));
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn write_structured_extraction_artifacts(
+    root: &Path,
+    extractions: &[StructuredExtractionArtifact],
+) -> Result<()> {
+    for extraction in extractions {
         write_json_pretty(
             &root
                 .join("artifacts")
@@ -4394,29 +10491,51 @@ fn write_materialized_brain_repo(root: &Path, snapshot: &BrainRepoSnapshot) -> R
             extraction,
         )?;
     }
-    write_brain_events_jsonl(
-        &root.join("events/brain_events.jsonl"),
-        &effective_snapshot.events,
-    )?;
-
-    for page in &effective_snapshot.wiki_pages {
-        let path = root.join(&page.path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed creating {}", parent.display()))?;
-        }
-        fs::write(
-            &path,
-            materialized_wiki_page_body(page, &effective_snapshot),
-        )
-        .with_context(|| format!("failed writing wiki page {}", path.display()))?;
-    }
-    fs::write(root.join("reviews/proposed-updates/.gitkeep"), "")
-        .context("failed writing proposed updates placeholder")?;
-    fs::write(root.join("reviews/lint-reports/.gitkeep"), "")
-        .context("failed writing lint reports placeholder")?;
-    fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
     Ok(())
+}
+
+fn persist_materialized_graph_and_wiki_state(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    write_json_pretty(&root.join("brain-manifest.json"), snapshot)?;
+    write_json_pretty(&root.join("graph/nodes.json"), &snapshot.nodes)?;
+    write_json_pretty(&root.join("graph/edges.json"), &snapshot.relations)?;
+    write_json_pretty(&root.join("graph/evidence.json"), &snapshot.evidence)?;
+    write_json_pretty(&root.join("graph/entities.json"), &snapshot.entities)?;
+    write_json_pretty(&root.join("graph/claims.json"), &snapshot.claims)?;
+
+    for page in &snapshot.wiki_pages {
+        let path = root.join(&page.path);
+        write_file_atomic(
+            &path,
+            materialized_wiki_page_body(page, snapshot).as_bytes(),
+        )?;
+    }
+    Ok(())
+}
+
+fn merge_materialized_memory_records(
+    generated: Vec<MemoryRecord>,
+    existing: Vec<MemoryRecord>,
+) -> Vec<MemoryRecord> {
+    let mut merged = BTreeMap::<String, MemoryRecord>::new();
+    for memory in generated.into_iter().chain(existing.into_iter()) {
+        match merged.get_mut(&memory.memory_id) {
+            Some(existing) => merge_memory_record(existing, memory),
+            None => {
+                merged.insert(memory.memory_id.clone(), memory);
+            }
+        }
+    }
+    let mut memories = merged.into_values().collect::<Vec<_>>();
+    memories.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.memory_id.cmp(&right.memory_id))
+    });
+    memories
 }
 
 fn read_structured_extraction_artifacts(
@@ -4437,6 +10556,15 @@ fn read_structured_extraction_artifacts(
         }
     }
     Ok(artifacts)
+}
+
+fn read_markdown_claim_candidates_for_row(row: &StoredSourceRow) -> Vec<MarkdownClaimCandidate> {
+    Path::new(&row.manifest_path)
+        .parent()
+        .map(|artifact_root| artifact_root.join("claim-candidates.json"))
+        .filter(|path| path.exists())
+        .and_then(|path| read_json_artifact::<Vec<MarkdownClaimCandidate>>(&path).ok())
+        .unwrap_or_default()
 }
 
 fn merge_preserved_brain_events(
@@ -4463,7 +10591,10 @@ fn merge_preserved_brain_events(
 fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
     matches!(
         event_type,
-        BrainEventKind::MemoryProposed
+        BrainEventKind::NodeProposed
+            | BrainEventKind::MemoryProposed
+            | BrainEventKind::SourceIngestQueued
+            | BrainEventKind::SourceCompiled
             | BrainEventKind::ClaimProposed
             | BrainEventKind::LinkProposed
             | BrainEventKind::ObservationAppended
@@ -4521,7 +10652,220 @@ fn materialized_wiki_page_body(page: &WikiPage, snapshot: &BrainRepoSnapshot) ->
             .collect::<Vec<_>>()
             .join("\n");
     }
+    if page.path.starts_with("wiki/topics/") {
+        let page_node_ids = page.node_refs.iter().collect::<BTreeSet<_>>();
+        let evidence_by_id = snapshot
+            .evidence
+            .iter()
+            .map(|evidence| (evidence.id.as_str(), evidence))
+            .collect::<BTreeMap<_, _>>();
+        let node_descriptions = snapshot
+            .nodes
+            .iter()
+            .filter(|node| page_node_ids.contains(&node.node_id))
+            .filter_map(|node| {
+                let evidence = node
+                    .evidence_ids
+                    .iter()
+                    .filter_map(|evidence_id| evidence_by_id.get(evidence_id.as_str()).copied())
+                    .find(|evidence| !evidence.snippet.trim().is_empty())?;
+                Some(format!(
+                    "- `{}`: {} _(source: {}; evidence: `{}`)_",
+                    node.node_id,
+                    evidence.snippet.trim(),
+                    evidence
+                        .source_id
+                        .as_deref()
+                        .or(evidence.source_path.as_deref())
+                        .unwrap_or("unknown"),
+                    evidence.id
+                ))
+            })
+            .collect::<Vec<_>>();
+        let attached_claims = snapshot
+            .claims
+            .iter()
+            .filter(|claim| {
+                claim
+                    .topic_refs
+                    .iter()
+                    .any(|node_id| page_node_ids.contains(node_id))
+            })
+            .map(|claim| {
+                format!(
+                    "- `{}` {} _(sources: {}; evidence: {})_",
+                    claim.status,
+                    claim.statement,
+                    join_or_none(&claim.source_refs),
+                    join_or_none(&claim.evidence_refs)
+                )
+            })
+            .collect::<Vec<_>>();
+        let node_labels = snapshot
+            .nodes
+            .iter()
+            .map(|node| (node.node_id.as_str(), node.label.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let topic_page_paths = snapshot
+            .wiki_pages
+            .iter()
+            .filter(|page| page.path.starts_with("wiki/topics/"))
+            .flat_map(|page| {
+                page.node_refs
+                    .iter()
+                    .map(move |node_id| (node_id.as_str(), page.path.as_str()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let attached_relations = snapshot
+            .relations
+            .iter()
+            .filter(|relation| {
+                page_node_ids.contains(&relation.source_node_id)
+                    || page_node_ids.contains(&relation.target_node_id)
+            })
+            .map(|relation| {
+                let source_label = node_labels
+                    .get(relation.source_node_id.as_str())
+                    .copied()
+                    .unwrap_or(relation.source_node_id.as_str());
+                let target_label = node_labels
+                    .get(relation.target_node_id.as_str())
+                    .copied()
+                    .unwrap_or(relation.target_node_id.as_str());
+                let source_link = topic_node_wiki_link(
+                    source_label,
+                    &relation.source_node_id,
+                    &page.path,
+                    &topic_page_paths,
+                );
+                let target_link = topic_node_wiki_link(
+                    target_label,
+                    &relation.target_node_id,
+                    &page.path,
+                    &topic_page_paths,
+                );
+                let relation_source_refs =
+                    source_refs_for_evidence_ids(&relation.evidence_ids, &evidence_by_id);
+                format!(
+                    "- `{}` {} -> {} _(relation: {}; sources: {}; evidence: {})_",
+                    relation.relation_id,
+                    source_link,
+                    target_link,
+                    relation.label,
+                    join_or_none(&relation_source_refs),
+                    join_or_none(&relation.evidence_ids)
+                )
+            })
+            .collect::<Vec<_>>();
+        let source_references = topic_source_references_markdown(page, snapshot, &evidence_by_id);
+        if !node_descriptions.is_empty()
+            || !attached_claims.is_empty()
+            || !attached_relations.is_empty()
+            || !source_references.is_empty()
+        {
+            let mut body = page.body.trim_end().to_string();
+            if !source_references.is_empty() {
+                body.push_str("\n\n## Source References\n\n");
+                body.push_str(&source_references.join("\n"));
+                body.push('\n');
+            }
+            if !node_descriptions.is_empty() {
+                body.push_str("\n\n## Node Description\n\n");
+                body.push_str(&node_descriptions.join("\n"));
+                body.push('\n');
+            }
+            if !attached_claims.is_empty() {
+                body.push_str(
+                    "\n\n## Claims\n\n_Source-backed claims linked to materialized evidence._\n\n",
+                );
+                body.push_str(&attached_claims.join("\n"));
+                body.push('\n');
+            }
+            if !attached_relations.is_empty() {
+                body.push_str("\n\n## Relations\n\n");
+                body.push_str(&attached_relations.join("\n"));
+                body.push('\n');
+            }
+            return body;
+        }
+    }
     page.body.clone()
+}
+
+fn topic_source_references_markdown(
+    page: &WikiPage,
+    snapshot: &BrainRepoSnapshot,
+    evidence_by_id: &BTreeMap<&str, &EvidenceRef>,
+) -> Vec<String> {
+    let mut source_refs = page.source_refs.iter().cloned().collect::<BTreeSet<_>>();
+    for evidence_id in &page.evidence_refs {
+        if let Some(evidence) = evidence_by_id.get(evidence_id.as_str()) {
+            if let Some(source_id) = evidence.source_id.as_deref() {
+                if !source_id.trim().is_empty() {
+                    source_refs.insert(source_id.to_string());
+                }
+            }
+        }
+    }
+    let sources_by_id = snapshot
+        .sources
+        .iter()
+        .map(|source| (source.source_id.as_str(), source))
+        .collect::<BTreeMap<_, _>>();
+    source_refs
+        .into_iter()
+        .map(|source_ref| {
+            if let Some(source) = sources_by_id.get(source_ref.as_str()) {
+                format!(
+                    "- [{}](../sources/{}.md) _(source: `{}`; markdown: `{}`)_",
+                    source.source_id,
+                    sanitize_name(&source.source_id),
+                    source.source_path,
+                    source.markdown_path
+                )
+            } else {
+                format!("- `{source_ref}`")
+            }
+        })
+        .collect()
+}
+
+fn source_refs_for_evidence_ids(
+    evidence_ids: &[String],
+    evidence_by_id: &BTreeMap<&str, &EvidenceRef>,
+) -> Vec<String> {
+    evidence_ids
+        .iter()
+        .filter_map(|evidence_id| evidence_by_id.get(evidence_id.as_str()).copied())
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_deref()
+                .or(evidence.source_path.as_deref())
+        })
+        .filter(|source_ref| !source_ref.trim().is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn topic_node_wiki_link(
+    label: &str,
+    node_id: &str,
+    current_page_path: &str,
+    topic_page_paths: &BTreeMap<&str, &str>,
+) -> String {
+    let Some(target_path) = topic_page_paths.get(node_id).copied() else {
+        return label.to_string();
+    };
+    if target_path == current_page_path {
+        return label.to_string();
+    }
+    let relative_path = target_path
+        .strip_prefix("wiki/topics/")
+        .unwrap_or(target_path);
+    format!("[{}]({})", label, relative_path)
 }
 
 fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -4689,15 +11033,1154 @@ fn source_backing_from_manifest(manifest: &SourceArtifactManifest) -> SourceBack
     }
 }
 
-fn build_extraction_artifact(
-    page_sections: &[PageSection],
+fn workspace_root_from_manifest(manifest: &SourceArtifactManifest) -> PathBuf {
+    Path::new(&manifest.artifact_root)
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            Path::new(&manifest.manifest_path)
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(&manifest.artifact_root))
+        })
+}
+
+fn extract_markdown_node_candidates(
+    markdown: &str,
+    source_path: &str,
+) -> Vec<MarkdownNodeCandidate> {
+    let mut candidates = Vec::<MarkdownNodeCandidate>::new();
+    let mut seen = BTreeSet::<String>::new();
+    let mut in_frontmatter = false;
+    let mut frontmatter_closed = false;
+
+    for (line_index, raw_line) in markdown.lines().enumerate() {
+        let line_start = line_index + 1;
+        let trimmed = raw_line.trim();
+        if line_index == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+                frontmatter_closed = true;
+                continue;
+            }
+            if let Some(title) = frontmatter_title_candidate(trimmed) {
+                push_markdown_node_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    title,
+                    source_path,
+                    line_start,
+                    trimmed,
+                    0.92,
+                    "frontmatter title declares a stable node label",
+                );
+            }
+            continue;
+        }
+
+        if !frontmatter_closed && trimmed == "---" {
+            continue;
+        }
+        if let Some(heading) = markdown_heading_candidate(trimmed) {
+            push_markdown_node_candidate(
+                &mut candidates,
+                &mut seen,
+                heading,
+                source_path,
+                line_start,
+                trimmed,
+                0.88,
+                "markdown heading declares a stable node label",
+            );
+            continue;
+        }
+        let cleaned = clean_candidate_line(trimmed);
+        if let Some(label) = derive_concept_label(&cleaned) {
+            push_markdown_node_candidate(
+                &mut candidates,
+                &mut seen,
+                label,
+                source_path,
+                line_start,
+                trimmed,
+                0.68,
+                "markdown body line produced a stable candidate label",
+            );
+        }
+        if candidates.len() >= 24 {
+            break;
+        }
+    }
+
+    candidates
+}
+
+fn extract_markdown_node_candidates_for_workspace(
+    markdown: &str,
+    source_path: &str,
+    workspace_root: &Path,
+) -> Result<Vec<MarkdownNodeCandidate>> {
+    let candidates = extract_markdown_node_candidates(markdown, source_path);
+    let existing_nodes = read_existing_graph_nodes(workspace_root)?;
+    Ok(match_markdown_node_candidates(candidates, &existing_nodes))
+}
+
+fn extract_markdown_relationship_evidence(
+    markdown: &str,
     source_path: &str,
     source_id: Option<&str>,
+    node_candidates: &[MarkdownNodeCandidate],
+) -> Vec<MarkdownRelationshipEvidence> {
+    let mut evidence = Vec::new();
+    let mut seen = BTreeSet::<String>::new();
+    let mut in_frontmatter = false;
+
+    for (line_index, raw_line) in markdown.lines().enumerate() {
+        let line_start = line_index + 1;
+        let trimmed = raw_line.trim();
+        if line_index == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let relation_kind = infer_markdown_relation_kind(trimmed);
+        if relation_kind.is_none() && !line_has_explicit_link_signal(trimmed) {
+            continue;
+        }
+
+        let mentions = relationship_mentions_in_line(trimmed, node_candidates);
+        if mentions.len() < 2 {
+            continue;
+        }
+
+        for left_index in 0..mentions.len() {
+            for right_index in (left_index + 1)..mentions.len() {
+                let left = &mentions[left_index];
+                let right = &mentions[right_index];
+                let key = format!(
+                    "{}:{}:{}",
+                    line_start,
+                    normalize_key(&left.label),
+                    normalize_key(&right.label)
+                );
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                let relation_kind = relation_kind.unwrap_or(BrainRelationKind::RelatedTo);
+                let candidate_id = format!("edge-candidate-{key}");
+                evidence.push(MarkdownRelationshipEvidence {
+                    candidate_id,
+                    evidence_id: format!("ev-relation-{key}"),
+                    source_path: source_path.to_string(),
+                    source_id: source_id.map(ToString::to_string),
+                    source_refs: source_id
+                        .map(|source_id| vec![source_id.to_string()])
+                        .unwrap_or_default(),
+                    line_start,
+                    snippet: excerpt(trimmed, 220),
+                    source_label: left.label.clone(),
+                    target_label: right.label.clone(),
+                    relation_kind,
+                    relation_label: markdown_relation_label(relation_kind),
+                    confidence: if relation_kind == BrainRelationKind::RelatedTo {
+                        0.74
+                    } else {
+                        0.82
+                    },
+                    reason: relationship_reason(trimmed, Some(relation_kind)),
+                    matched_source_node_id: left.matched_node_id.clone(),
+                    matched_target_node_id: right.matched_node_id.clone(),
+                    resolved_source_node_id: Some(left.resolved_node_id.clone()),
+                    resolved_target_node_id: Some(right.resolved_node_id.clone()),
+                    endpoint_resolution: format!(
+                        "{} -> {}; {} -> {}",
+                        left.label,
+                        left.endpoint_resolution,
+                        right.label,
+                        right.endpoint_resolution
+                    ),
+                });
+                if evidence.len() >= 32 {
+                    return evidence;
+                }
+            }
+        }
+    }
+
+    evidence
+}
+
+fn extract_markdown_claim_candidates(
+    markdown: &str,
+    source_path: &str,
+    source_id: Option<&str>,
+    node_candidates: &[MarkdownNodeCandidate],
+) -> Vec<MarkdownClaimCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::<String>::new();
+    let mut in_frontmatter = false;
+
+    for (line_index, raw_line) in markdown.lines().enumerate() {
+        let line_start = line_index + 1;
+        let trimmed = raw_line.trim();
+        if line_index == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("![") {
+            continue;
+        }
+
+        let Some(statement) = normalize_claim_statement(trimmed) else {
+            continue;
+        };
+        let claim_key = bounded_artifact_key(&statement, 80);
+        let evidence_scope_key = source_id
+            .map(|source_id| bounded_artifact_key(source_id, 48))
+            .unwrap_or_else(|| bounded_artifact_key(source_path, 48));
+        if claim_key.is_empty() || !seen.insert(claim_key.clone()) {
+            continue;
+        }
+        let char_start = raw_line
+            .find(statement.as_str())
+            .or_else(|| raw_line.find(trimmed))
+            .unwrap_or(0);
+        let char_end = char_start + statement.len();
+        let evidence_snippet = excerpt(&statement, 220);
+        let mentions = relationship_mentions_in_line(&statement, node_candidates);
+        let subject_labels = mentions
+            .iter()
+            .take(4)
+            .map(|mention| mention.label.clone())
+            .collect::<Vec<_>>();
+        let mut subject_refs = mentions
+            .iter()
+            .take(4)
+            .map(|mention| mention.resolved_node_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if subject_refs.is_empty() {
+            if let Some(label) = derive_concept_label(&statement) {
+                subject_refs.push(format!("concept-{}", normalize_key(&label)));
+            }
+        }
+
+        let confidence = claim_candidate_confidence(&statement, !subject_refs.is_empty());
+        let classification = classify_markdown_claim_statement(&statement);
+        candidates.push(MarkdownClaimCandidate {
+            candidate_id: format!("claim-candidate-{evidence_scope_key}-{line_start}-{claim_key}"),
+            evidence_id: format!("ev-claim-{evidence_scope_key}-{line_start}-{claim_key}"),
+            statement: statement.clone(),
+            classification,
+            durable: true,
+            memory_candidate: markdown_claim_should_be_memory_candidate(&statement, classification),
+            source_path: source_path.to_string(),
+            source_id: source_id.map(ToString::to_string),
+            source_refs: source_id
+                .map(|source_id| vec![source_id.to_string()])
+                .unwrap_or_default(),
+            line_start,
+            line_end: line_start,
+            char_start,
+            char_end,
+            evidence_span: MarkdownEvidenceSpan {
+                source_path: source_path.to_string(),
+                source_id: source_id.map(ToString::to_string),
+                line_start,
+                line_end: line_start,
+                char_start,
+                char_end,
+                snippet: evidence_snippet.clone(),
+            },
+            evidence_snippet,
+            subject_labels,
+            subject_refs,
+            confidence,
+            reason: claim_candidate_reason(&statement),
+        });
+        if candidates.len() >= 32 {
+            break;
+        }
+    }
+
+    candidates
+}
+
+fn extract_markdown_signals(
+    markdown: &str,
+    source_path: &str,
+    source_id: Option<&str>,
+    node_candidates: &[MarkdownNodeCandidate],
+) -> MarkdownSignalArtifact {
+    let mut title = None;
+    let mut headings = Vec::<MarkdownHeadingSignal>::new();
+    let mut links = Vec::<MarkdownLinkSignal>::new();
+    let mut keyword_counts = BTreeMap::<String, usize>::new();
+    let mut in_frontmatter = false;
+
+    for (line_index, raw_line) in markdown.lines().enumerate() {
+        let line_start = line_index + 1;
+        let trimmed = raw_line.trim();
+        if line_index == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+                continue;
+            }
+            if title.is_none() {
+                title = frontmatter_title_candidate(trimmed);
+            }
+            continue;
+        }
+        if let Some(heading) = markdown_heading_signal(trimmed, line_start) {
+            if title.is_none() && heading.level == 1 {
+                title = Some(heading.text.clone());
+            }
+            headings.push(heading);
+        }
+        links.extend(markdown_link_signals(trimmed, line_start));
+        for term in markdown_signal_terms(trimmed) {
+            *keyword_counts.entry(term).or_default() += 1;
+        }
+    }
+
+    let mut keywords = keyword_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(term, count)| MarkdownKeywordSignal { term, count })
+        .collect::<Vec<_>>();
+    keywords.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.term.cmp(&right.term))
+    });
+    keywords.truncate(16);
+
+    MarkdownSignalArtifact {
+        source_path: source_path.to_string(),
+        source_id: source_id.map(ToString::to_string),
+        source_refs: source_id
+            .map(|source_id| vec![source_id.to_string()])
+            .unwrap_or_default(),
+        title,
+        headings,
+        links,
+        entities: node_candidates
+            .iter()
+            .map(|candidate| MarkdownEntitySignal {
+                label: candidate.label.clone(),
+                line_start: candidate.line_start,
+                confidence: candidate.confidence,
+                reason: candidate.reason.clone(),
+                matched_node_id: candidate.matched_node_id.clone(),
+                matched_node_label: candidate.matched_node_label.clone(),
+                match_score: candidate.match_score,
+            })
+            .collect(),
+        keywords,
+        related_pages: Vec::new(),
+    }
+}
+
+fn rank_related_wiki_pages_for_signals(
+    workspace_root: &Path,
+    workspace_id: &str,
+    signals: &MarkdownSignalArtifact,
+) -> Result<Vec<MarkdownRelatedPageSignal>> {
+    if !workspace_root.join("brain-manifest.json").exists() {
+        return Ok(Vec::new());
+    }
+
+    let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)?;
+    let weighted_terms = weighted_markdown_signal_terms(signals);
+    if weighted_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut related_pages = snapshot
+        .wiki_pages
+        .iter()
+        .filter_map(|page| {
+            let metadata_text = wiki_page_metadata_text(page);
+            let body = fs::read_to_string(workspace_root.join(&page.path))
+                .unwrap_or_else(|_| materialized_wiki_page_body(page, &snapshot));
+            let metadata_frequencies = search_token_frequencies(&metadata_text);
+            let content_frequencies = search_token_frequencies(&body);
+            let mut metadata_score = 0usize;
+            let mut content_score = 0usize;
+            let mut matched_terms = Vec::<String>::new();
+
+            for (term, weight) in &weighted_terms {
+                let metadata_count = metadata_frequencies.get(term).copied().unwrap_or(0);
+                let content_count = content_frequencies.get(term).copied().unwrap_or(0);
+                if metadata_count == 0 && content_count == 0 {
+                    continue;
+                }
+                metadata_score += metadata_count.saturating_mul(*weight).saturating_mul(8);
+                content_score += content_count.saturating_mul(*weight).saturating_mul(2);
+                matched_terms.push(term.clone());
+            }
+
+            let score = metadata_score + content_score + matched_terms.len().saturating_mul(3);
+            if score == 0 {
+                return None;
+            }
+            let reason = match (metadata_score > 0, content_score > 0) {
+                (true, true) => {
+                    "ranked by overlap with existing wiki page metadata and content".into()
+                }
+                (true, false) => "ranked by overlap with existing wiki page metadata".into(),
+                (false, true) => "ranked by overlap with existing wiki page content".into(),
+                (false, false) => "ranked by signal overlap".into(),
+            };
+            Some(MarkdownRelatedPageSignal {
+                page_id: page.page_id.clone(),
+                path: page.path.clone(),
+                title: page.title.clone(),
+                score,
+                matched_terms,
+                reason,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    related_pages.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    related_pages.truncate(8);
+    Ok(related_pages)
+}
+
+fn weighted_markdown_signal_terms(signals: &MarkdownSignalArtifact) -> BTreeMap<String, usize> {
+    let mut terms = BTreeMap::<String, usize>::new();
+    if let Some(title) = &signals.title {
+        add_weighted_terms(&mut terms, title, 8);
+    }
+    for heading in &signals.headings {
+        let weight = if heading.level == 1 { 7 } else { 5 };
+        add_weighted_terms(&mut terms, &heading.text, weight);
+    }
+    for entity in &signals.entities {
+        add_weighted_terms(&mut terms, &entity.label, 6);
+        if let Some(label) = &entity.matched_node_label {
+            add_weighted_terms(&mut terms, label, 6);
+        }
+    }
+    for link in &signals.links {
+        add_weighted_terms(&mut terms, &link.label, 4);
+        add_weighted_terms(&mut terms, &link.target, 3);
+    }
+    for keyword in &signals.keywords {
+        *terms.entry(keyword.term.clone()).or_default() += keyword.count.min(4);
+    }
+    terms
+}
+
+fn add_weighted_terms(terms: &mut BTreeMap<String, usize>, text: &str, weight: usize) {
+    for term in markdown_signal_terms(text) {
+        *terms.entry(term).or_default() += weight;
+    }
+}
+
+fn wiki_page_metadata_text(page: &WikiPage) -> String {
+    [
+        page.page_id.as_str(),
+        page.path.as_str(),
+        page.title.as_str(),
+        &page.node_refs.join(" "),
+        &page.source_refs.join(" "),
+        &page.evidence_refs.join(" "),
+    ]
+    .join(" ")
+}
+
+fn markdown_heading_signal(line: &str, line_start: usize) -> Option<MarkdownHeadingSignal> {
+    if !line.starts_with('#') {
+        return None;
+    }
+    let level = line.chars().take_while(|char| *char == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let text = markdown_scalar_label(line[level..].trim())?;
+    Some(MarkdownHeadingSignal {
+        text,
+        level,
+        line_start,
+    })
+}
+
+fn markdown_link_signals(line: &str, line_start: usize) -> Vec<MarkdownLinkSignal> {
+    let mut links = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find("[[") {
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find("]]") else {
+            break;
+        };
+        let target = after_start[..end].trim();
+        if !target.is_empty() {
+            let label = target
+                .split('|')
+                .next_back()
+                .unwrap_or(target)
+                .trim()
+                .to_string();
+            links.push(MarkdownLinkSignal {
+                label,
+                target: target.to_string(),
+                kind: "wiki".into(),
+                line_start,
+            });
+        }
+        rest = &after_start[end + 2..];
+    }
+
+    let mut rest = line;
+    while let Some(label_start) = rest.find('[') {
+        if rest[..label_start].ends_with('!') {
+            rest = &rest[label_start + 1..];
+            continue;
+        }
+        if rest[label_start..].starts_with("[[") {
+            let after_wiki_start = &rest[label_start + 2..];
+            rest = match after_wiki_start.find("]]") {
+                Some(wiki_end) => &after_wiki_start[wiki_end + 2..],
+                None => &rest[label_start + 2..],
+            };
+            continue;
+        }
+        let after_label_start = &rest[label_start + 1..];
+        let Some(label_end) = after_label_start.find("](") else {
+            break;
+        };
+        let label = after_label_start[..label_end].trim();
+        let after_target_start = &after_label_start[label_end + 2..];
+        let Some(target_end) = after_target_start.find(')') else {
+            break;
+        };
+        let target = after_target_start[..target_end].trim();
+        if !label.is_empty() && !target.is_empty() {
+            links.push(MarkdownLinkSignal {
+                label: label.to_string(),
+                target: target.to_string(),
+                kind: "markdown".into(),
+                line_start,
+            });
+        }
+        rest = &after_target_start[target_end + 1..];
+    }
+
+    links
+}
+
+fn markdown_signal_terms(line: &str) -> Vec<String> {
+    let line = strip_inline_markdown_targets(line);
+    search_terms(&line)
+        .into_iter()
+        .filter(|term| !is_markdown_signal_stopword(term))
+        .collect()
+}
+
+fn strip_inline_markdown_targets(line: &str) -> String {
+    line.replace("[[", " ")
+        .replace("]]", " ")
+        .replace("](", " ")
+        .replace(['[', ']', '(', ')', '#', '`', '*'], " ")
+}
+
+fn is_markdown_signal_stopword(term: &str) -> bool {
+    matches!(
+        term,
+        "and"
+            | "are"
+            | "but"
+            | "for"
+            | "from"
+            | "into"
+            | "the"
+            | "this"
+            | "that"
+            | "with"
+            | "without"
+            | "source"
+            | "evidence"
+            | "remain"
+            | "keep"
+            | "keeps"
+            | "durable"
+    )
+}
+
+fn classify_markdown_claim_statement(statement: &str) -> MarkdownClaimClassification {
+    let lower = format!(" {} ", statement.to_ascii_lowercase());
+    if [
+        " decision ",
+        " decided ",
+        " chose ",
+        " chosen ",
+        " approved ",
+        " accepted ",
+        " source of truth ",
+        " must ",
+        " should ",
+        " will ",
+        " no human approval ",
+        " records approved ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        MarkdownClaimClassification::Decision
+    } else {
+        MarkdownClaimClassification::DurableFact
+    }
+}
+
+fn markdown_claim_should_be_memory_candidate(
+    statement: &str,
+    classification: MarkdownClaimClassification,
+) -> bool {
+    if classification == MarkdownClaimClassification::Decision {
+        return true;
+    }
+    let lower = statement.to_ascii_lowercase();
+    [
+        "remember",
+        "retain",
+        "persistent",
+        "durable memory",
+        "agent memory",
+        "memory candidate",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn normalize_claim_statement(line: &str) -> Option<String> {
+    let statement = clean_candidate_line(line)
+        .trim_start_matches('>')
+        .trim_start_matches(|char: char| char == '-' || char == '*')
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string();
+    if statement.len() < 18 || statement.split_whitespace().count() < 4 {
+        return None;
+    }
+    if !line_looks_like_claim(&statement) {
+        return None;
+    }
+    Some(statement)
+}
+
+fn line_looks_like_claim(statement: &str) -> bool {
+    let lower = format!(" {} ", statement.to_ascii_lowercase());
+    [
+        " is ",
+        " are ",
+        " was ",
+        " were ",
+        " has ",
+        " have ",
+        " had ",
+        " can ",
+        " should ",
+        " must ",
+        " will ",
+        " remains ",
+        " keeps ",
+        " records ",
+        " stores ",
+        " supports ",
+        " depends on ",
+        " relies on ",
+        " requires ",
+        " enables ",
+        " blocks ",
+        " contradicts ",
+        " supersedes ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn claim_candidate_confidence(statement: &str, has_subject: bool) -> f32 {
+    let lower = statement.to_ascii_lowercase();
+    let explicit = lower.contains(" is ")
+        || lower.contains(" are ")
+        || lower.contains(" must ")
+        || lower.contains(" should ")
+        || lower.contains(" depends on ")
+        || lower.contains(" supports ");
+    match (explicit, has_subject) {
+        (true, true) => 0.84,
+        (true, false) => 0.76,
+        (false, true) => 0.72,
+        (false, false) => 0.64,
+    }
+}
+
+fn claim_candidate_reason(statement: &str) -> String {
+    match classify_markdown_claim_statement(statement) {
+        MarkdownClaimClassification::Decision => {
+            return "the line states a durable decision or operating rule with source evidence"
+                .into();
+        }
+        MarkdownClaimClassification::DurableFact => {}
+    }
+    if infer_markdown_relation_kind(statement).is_some() {
+        return "the line states an explicit relation that can be audited as a claim".into();
+    }
+    "the line contains a factual modal or copular assertion with source evidence".into()
+}
+
+fn bounded_artifact_key(value: &str, max_chars: usize) -> String {
+    normalize_key(value)
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+#[derive(Debug, Clone)]
+struct RelationshipMention {
+    label: String,
+    position: usize,
+    matched_node_id: Option<String>,
+    resolved_node_id: String,
+    endpoint_resolution: String,
+}
+
+fn relationship_mentions_in_line(
+    line: &str,
+    node_candidates: &[MarkdownNodeCandidate],
+) -> Vec<RelationshipMention> {
+    let lower_line = line.to_ascii_lowercase();
+    let mut mentions = Vec::new();
+    let mut seen = BTreeSet::<String>::new();
+    for candidate in node_candidates {
+        let labels = candidate
+            .matched_node_label
+            .iter()
+            .chain(std::iter::once(&candidate.label));
+        for label in labels {
+            let needle = label.to_ascii_lowercase();
+            if needle.len() < 4 {
+                continue;
+            }
+            let Some(position) = lower_line.find(&needle) else {
+                continue;
+            };
+            let key = candidate
+                .matched_node_id
+                .clone()
+                .unwrap_or_else(|| normalize_key(label));
+            if !seen.insert(key) {
+                continue;
+            }
+            let resolved_node_id = candidate
+                .matched_node_id
+                .clone()
+                .unwrap_or_else(|| format!("concept-{}", normalize_key(&candidate.label)));
+            let endpoint_resolution = if candidate.matched_node_id.is_some() {
+                "existing_node".into()
+            } else {
+                "proposed_node".into()
+            };
+            mentions.push(RelationshipMention {
+                label: label.clone(),
+                position,
+                matched_node_id: candidate.matched_node_id.clone(),
+                resolved_node_id,
+                endpoint_resolution,
+            });
+        }
+    }
+    mentions.sort_by(|left, right| {
+        left.position
+            .cmp(&right.position)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    mentions
+}
+
+fn infer_markdown_relation_kind(line: &str) -> Option<BrainRelationKind> {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains(" depends on ")
+        || lower.contains(" relies on ")
+        || lower.contains(" requires ")
+        || lower.contains(" blocked by ")
+    {
+        return Some(BrainRelationKind::DependsOn);
+    }
+    if lower.contains(" supports ")
+        || lower.contains(" enables ")
+        || lower.contains(" grounds ")
+        || lower.contains(" backs ")
+        || lower.contains(" cites ")
+    {
+        return Some(BrainRelationKind::Supports);
+    }
+    if lower.contains(" contradicts ") || lower.contains(" conflicts with ") {
+        return Some(BrainRelationKind::Contradicts);
+    }
+    if lower.contains(" supersedes ") || lower.contains(" replaces ") {
+        return Some(BrainRelationKind::Supersedes);
+    }
+    if lower.contains(" same as ") || lower.contains(" alias of ") {
+        return Some(BrainRelationKind::SameAs);
+    }
+    if line.contains("->") || line.contains("<->") || lower.contains(" links ") {
+        return Some(BrainRelationKind::RelatedTo);
+    }
+    None
+}
+
+fn markdown_relation_label(kind: BrainRelationKind) -> String {
+    match kind {
+        BrainRelationKind::Supports => "Supports".into(),
+        BrainRelationKind::Contradicts => "Contradicts".into(),
+        BrainRelationKind::Supersedes => "Supersedes".into(),
+        BrainRelationKind::SameAs => "Same as".into(),
+        BrainRelationKind::DependsOn => "Depends on".into(),
+        _ => "Related in source".into(),
+    }
+}
+
+fn line_has_explicit_link_signal(line: &str) -> bool {
+    line.contains("[[") || line.contains("](") || line.contains("->") || line.contains("<->")
+}
+
+fn relationship_reason(line: &str, relation_kind: Option<BrainRelationKind>) -> String {
+    if let Some(kind) = relation_kind {
+        return format!("the line contains an explicit {:?} relationship cue", kind);
+    }
+    if line.contains("[[") {
+        return "the line contains wiki-link syntax connecting mentioned nodes".into();
+    }
+    if line.contains("](") {
+        return "the line contains markdown-link syntax connecting mentioned nodes".into();
+    }
+    "the line contains an explicit link signal connecting mentioned nodes".into()
+}
+
+fn read_existing_graph_nodes(workspace_root: &Path) -> Result<Vec<BrainNodeRecord>> {
+    read_optional_json_artifact(&workspace_root.join("graph/nodes.json"))
+}
+
+fn read_existing_graph_relations(workspace_root: &Path) -> Result<Vec<BrainRelationRecord>> {
+    read_optional_json_artifact(&workspace_root.join("graph/edges.json"))
+}
+
+fn match_markdown_node_candidates(
+    candidates: Vec<MarkdownNodeCandidate>,
+    existing_nodes: &[BrainNodeRecord],
+) -> Vec<MarkdownNodeCandidate> {
+    candidates
+        .into_iter()
+        .map(|mut candidate| {
+            if let Some(node_match) = best_existing_node_match(&candidate, existing_nodes) {
+                candidate.matched_node_id = Some(node_match.node_id);
+                candidate.matched_node_label = Some(node_match.label);
+                candidate.match_score = Some(node_match.score);
+                candidate.match_reason = Some(node_match.reason);
+            }
+            candidate
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ExistingNodeMatch {
+    node_id: String,
+    label: String,
+    score: f32,
+    reason: String,
+}
+
+fn best_existing_node_match(
+    candidate: &MarkdownNodeCandidate,
+    existing_nodes: &[BrainNodeRecord],
+) -> Option<ExistingNodeMatch> {
+    existing_nodes
+        .iter()
+        .filter(|node| matches!(node.kind, BrainNodeKind::Concept | BrainNodeKind::Topic))
+        .filter_map(|node| score_existing_node_match(candidate, node))
+        .max_by(|left, right| {
+            left.score
+                .partial_cmp(&right.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.node_id.cmp(&left.node_id))
+        })
+        .filter(|node_match| node_match.score >= 0.72)
+}
+
+fn score_existing_node_match(
+    candidate: &MarkdownNodeCandidate,
+    node: &BrainNodeRecord,
+) -> Option<ExistingNodeMatch> {
+    let candidate_key = normalize_key(&candidate.label);
+    if candidate_key.is_empty() {
+        return None;
+    }
+
+    let mut identity_labels = vec![node.label.as_str()];
+    identity_labels.extend(node.aliases.iter().map(String::as_str));
+    for label in &identity_labels {
+        if normalize_key(label) == candidate_key {
+            return Some(ExistingNodeMatch {
+                node_id: node.node_id.clone(),
+                label: node.label.clone(),
+                score: 1.0,
+                reason: "candidate label exactly matched an existing graph node label or alias"
+                    .into(),
+            });
+        }
+    }
+
+    let candidate_terms = candidate_label_terms(&candidate.label);
+    if candidate_terms.len() < 2 {
+        return None;
+    }
+    let node_terms = identity_labels
+        .iter()
+        .flat_map(|label| candidate_label_terms(label))
+        .collect::<BTreeSet<_>>();
+    if node_terms.is_empty() {
+        return None;
+    }
+    let intersection_count = candidate_terms.intersection(&node_terms).count();
+    if intersection_count == 0 {
+        return None;
+    }
+    let union_count = candidate_terms.union(&node_terms).count();
+    let score = if candidate_terms.is_subset(&node_terms) || node_terms.is_subset(&candidate_terms)
+    {
+        0.86
+    } else {
+        intersection_count as f32 / union_count as f32
+    };
+    (score >= 0.72).then(|| ExistingNodeMatch {
+        node_id: node.node_id.clone(),
+        label: node.label.clone(),
+        score,
+        reason: "candidate label strongly overlapped an existing graph node label or alias".into(),
+    })
+}
+
+fn candidate_label_terms(label: &str) -> BTreeSet<String> {
+    label
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .filter_map(normalize_search_token)
+        .collect()
+}
+
+fn push_markdown_node_candidate(
+    candidates: &mut Vec<MarkdownNodeCandidate>,
+    seen: &mut BTreeSet<String>,
+    label: String,
+    source_path: &str,
+    line_start: usize,
+    evidence: &str,
+    confidence: f32,
+    reason: &str,
+) {
+    let label = normalize_candidate_label(&label);
+    let key = normalize_key(&label);
+    if key.is_empty() || !seen.insert(key.clone()) {
+        return;
+    }
+    candidates.push(MarkdownNodeCandidate {
+        candidate_id: format!("candidate-{key}"),
+        label,
+        kind: BrainNodeKind::Concept,
+        source_path: source_path.to_string(),
+        line_start,
+        evidence_snippet: excerpt(evidence, 180),
+        confidence,
+        reason: reason.into(),
+        matched_node_id: None,
+        matched_node_label: None,
+        match_score: None,
+        match_reason: None,
+    });
+}
+
+fn frontmatter_title_candidate(line: &str) -> Option<String> {
+    let value = line.strip_prefix("title:")?.trim();
+    markdown_scalar_label(value)
+}
+
+fn markdown_heading_candidate(line: &str) -> Option<String> {
+    if !line.starts_with('#') {
+        return None;
+    }
+    let hash_count = line.chars().take_while(|char| *char == '#').count();
+    if hash_count == 0 || hash_count > 4 {
+        return None;
+    }
+    let value = line[hash_count..].trim();
+    if value.to_ascii_lowercase().starts_with("page ") {
+        return None;
+    }
+    markdown_scalar_label(value)
+}
+
+fn markdown_scalar_label(value: &str) -> Option<String> {
+    let label = normalize_candidate_label(value.trim_matches(['"', '\'']));
+    let word_count = label.split_whitespace().count();
+    (label.len() >= 4 && word_count <= 10).then_some(label)
+}
+
+fn normalize_candidate_label(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|char: char| !char.is_alphanumeric())
+        .replace('`', "")
+        .replace('*', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn page_section_for_candidate<'a>(
+    sections: &'a [PageSection],
+    candidate: &MarkdownNodeCandidate,
+) -> Option<&'a PageSection> {
+    sections.iter().find(|section| {
+        section.content.contains(&candidate.evidence_snippet)
+            || section.content.contains(&candidate.label)
+    })
+}
+
+fn page_section_for_line(sections: &[PageSection], _line_start: usize) -> Option<&PageSection> {
+    sections.first()
+}
+
+fn build_extraction_artifact(
+    page_sections: &[PageSection],
+    markdown: &str,
+    source_path: &str,
+    source_id: Option<&str>,
+    node_candidates: &[MarkdownNodeCandidate],
+    claim_candidates: &[MarkdownClaimCandidate],
 ) -> ExtractionArtifact {
     let mut concepts = BTreeMap::<String, ExtractedConcept>::new();
     let mut claims = Vec::new();
     let mut evidence_refs = BTreeMap::new();
     let mut concept_ids_by_page = Vec::<(String, Vec<String>, Vec<String>)>::new();
+
+    for candidate in node_candidates.iter().take(20) {
+        let matched_label = candidate
+            .matched_node_label
+            .as_deref()
+            .unwrap_or(&candidate.label);
+        let key = candidate
+            .matched_node_id
+            .as_deref()
+            .and_then(|node_id| node_id.strip_prefix("concept-"))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| normalize_key(matched_label));
+        if key.is_empty() {
+            continue;
+        }
+        let concept_id = candidate
+            .matched_node_id
+            .clone()
+            .unwrap_or_else(|| format!("concept-{key}"));
+        let evidence_id = format!("ev-candidate-{key}");
+        let section =
+            page_section_for_candidate(page_sections, candidate).or_else(|| page_sections.first());
+        let page_index = section.map(|section| section.page_index).unwrap_or(0);
+        let page_label = section
+            .map(|section| section.page_label.clone())
+            .unwrap_or_else(|| "Imported text".into());
+        let markdown_path = section.and_then(|section| section.markdown_path.clone());
+        let image_path = section.and_then(|section| section.image_path.clone());
+        let concept = concepts
+            .entry(key.clone())
+            .or_insert_with(|| ExtractedConcept {
+                id: concept_id.clone(),
+                label: matched_label.to_string(),
+                aliases: BTreeSet::new(),
+                evidence_ids: Vec::new(),
+                page_labels: BTreeSet::new(),
+            });
+        if concept.label != candidate.label {
+            concept.aliases.insert(candidate.label.clone());
+        }
+        if let Some(matched_label) = &candidate.matched_node_label {
+            if concept.label != *matched_label {
+                concept.aliases.insert(matched_label.clone());
+            }
+        }
+        concept.page_labels.insert(page_label.clone());
+        if !concept.evidence_ids.iter().any(|id| id == &evidence_id) {
+            concept.evidence_ids.push(evidence_id.clone());
+        }
+        evidence_refs
+            .entry(evidence_id.clone())
+            .or_insert_with(|| ExtractionEvidenceRef {
+                id: evidence_id.clone(),
+                page_index,
+                page_label: page_label.clone(),
+                snippet: candidate.evidence_snippet.clone(),
+                source_path: source_path.to_string(),
+                source_id: source_id.map(ToString::to_string),
+                markdown_path,
+                image_path,
+                provenance: format!(
+                    "Node candidate '{}' was extracted from the markdown source at line {} because {}{}.",
+                    candidate.label,
+                    candidate.line_start,
+                    candidate.reason,
+                    candidate
+                        .matched_node_id
+                        .as_ref()
+                        .map(|node_id| format!(" It matched existing graph node {node_id}"))
+                        .unwrap_or_default()
+                ),
+            });
+        claims.push(ExtractedClaim {
+            id: format!("claim-candidate-{}", key),
+            text: matched_label.to_string(),
+            subject_concept_id: concept_id.clone(),
+            evidence_id: evidence_id.clone(),
+        });
+        concept_ids_by_page.push((page_label, vec![concept_id], vec![evidence_id]));
+    }
 
     for section in page_sections {
         let mut seen_on_page = BTreeSet::new();
@@ -4760,6 +12243,57 @@ fn build_extraction_artifact(
         }
     }
 
+    for candidate in claim_candidates {
+        let section = page_section_for_line(page_sections, candidate.line_start)
+            .or_else(|| page_sections.first());
+        let page_index = section.map(|section| section.page_index).unwrap_or(0);
+        let page_label = section
+            .map(|section| section.page_label.clone())
+            .unwrap_or_else(|| "Imported text".into());
+        let markdown_path = section.and_then(|section| section.markdown_path.clone());
+        let image_path = section.and_then(|section| section.image_path.clone());
+        evidence_refs
+            .entry(candidate.evidence_id.clone())
+            .or_insert_with(|| ExtractionEvidenceRef {
+                id: candidate.evidence_id.clone(),
+                page_index,
+                page_label: page_label.clone(),
+                snippet: candidate.evidence_snippet.clone(),
+                source_path: source_path.to_string(),
+                source_id: source_id.map(ToString::to_string),
+                markdown_path,
+                image_path,
+                provenance: format!(
+                    "Claim candidate was extracted from markdown line {} because {}.",
+                    candidate.line_start, candidate.reason
+                ),
+            });
+
+        let mut claim_subjects = candidate
+            .subject_refs
+            .iter()
+            .filter(|subject_ref| concepts.values().any(|concept| &concept.id == *subject_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        if claim_subjects.is_empty() {
+            if let Some(label) = derive_concept_label(&candidate.statement) {
+                let key = normalize_key(&label);
+                let concept_id = format!("concept-{key}");
+                if concepts.contains_key(&key) {
+                    claim_subjects.push(concept_id);
+                }
+            }
+        }
+        for subject_concept_id in claim_subjects {
+            claims.push(ExtractedClaim {
+                id: candidate.candidate_id.clone(),
+                text: candidate.statement.clone(),
+                subject_concept_id,
+                evidence_id: candidate.evidence_id.clone(),
+            });
+        }
+    }
+
     if concepts.is_empty() {
         for (index, section) in page_sections.iter().enumerate() {
             let label = fallback_concept_label(&section.content, &section.page_label);
@@ -4813,6 +12347,63 @@ fn build_extraction_artifact(
         .map(|concept| concept.id.clone())
         .collect::<BTreeSet<_>>();
     let mut relations = Vec::new();
+    let relationship_evidence =
+        extract_markdown_relationship_evidence(markdown, source_path, source_id, node_candidates);
+    for evidence in relationship_evidence {
+        let source_key = normalize_key(&evidence.source_label);
+        let target_key = normalize_key(&evidence.target_label);
+        if source_key.is_empty() || target_key.is_empty() || source_key == target_key {
+            continue;
+        }
+        let source_concept_id = evidence
+            .resolved_source_node_id
+            .clone()
+            .or_else(|| evidence.matched_source_node_id.clone())
+            .unwrap_or_else(|| format!("concept-{source_key}"));
+        let target_concept_id = evidence
+            .resolved_target_node_id
+            .clone()
+            .or_else(|| evidence.matched_target_node_id.clone())
+            .unwrap_or_else(|| format!("concept-{target_key}"));
+        if source_concept_id == target_concept_id {
+            continue;
+        }
+        if !allowed_ids.contains(&source_concept_id) || !allowed_ids.contains(&target_concept_id) {
+            continue;
+        }
+        let section = page_section_for_line(page_sections, evidence.line_start)
+            .or_else(|| page_sections.first());
+        let page_index = section.map(|section| section.page_index).unwrap_or(0);
+        let page_label = section
+            .map(|section| section.page_label.clone())
+            .unwrap_or_else(|| "Imported text".into());
+        let markdown_path = section.and_then(|section| section.markdown_path.clone());
+        let image_path = section.and_then(|section| section.image_path.clone());
+        evidence_refs
+            .entry(evidence.evidence_id.clone())
+            .or_insert_with(|| ExtractionEvidenceRef {
+                id: evidence.evidence_id.clone(),
+                page_index,
+                page_label: page_label.clone(),
+                snippet: evidence.snippet.clone(),
+                source_path: source_path.to_string(),
+                source_id: source_id.map(ToString::to_string),
+                markdown_path,
+                image_path,
+                provenance: format!(
+                    "Relationship evidence was extracted from markdown line {} because {}. Endpoints resolved as {}.",
+                    evidence.line_start, evidence.reason, evidence.endpoint_resolution
+                ),
+            });
+        relations.push(ExtractedRelation {
+            source_concept_id,
+            target_concept_id,
+            relation_kind: evidence.relation_kind,
+            confidence: evidence.confidence,
+            evidence_ids: vec![evidence.evidence_id],
+            page_labels: [page_label].into_iter().collect(),
+        });
+    }
     for (page_label, mut concept_ids, evidence_ids) in concept_ids_by_page {
         concept_ids.retain(|id| allowed_ids.contains(id));
         concept_ids.sort();
@@ -4834,6 +12425,8 @@ fn build_extraction_artifact(
                 relations.push(ExtractedRelation {
                     source_concept_id,
                     target_concept_id,
+                    relation_kind: BrainRelationKind::RelatedTo,
+                    confidence: 0.0,
                     evidence_ids: evidence_ids.clone(),
                     page_labels: [page_label.clone()].into_iter().collect(),
                 });
@@ -4896,23 +12489,36 @@ fn collected_concepts_from_artifact(artifact: &ExtractionArtifact) -> CollectedC
             page.snippet = claim.text.clone();
         }
     }
+    let mut relation_candidates = Vec::new();
     for relation in &artifact.relations {
         if !allowed_ids.contains(&relation.source_concept_id)
             || !allowed_ids.contains(&relation.target_concept_id)
         {
             continue;
         }
+        let relation_evidence_refs = relation
+            .evidence_ids
+            .iter()
+            .filter_map(|id| artifact.evidence_refs.get(id))
+            .collect::<Vec<_>>();
+        let relation_evidence = relation_evidence_refs
+            .iter()
+            .map(|evidence| evidence_ref_from_extraction(evidence))
+            .collect::<Vec<_>>();
+        relation_candidates.push(RelationCandidateAccumulator {
+            source_node_id: relation.source_concept_id.clone(),
+            target_node_id: relation.target_concept_id.clone(),
+            relation_kind: relation.relation_kind,
+            confidence: relation.confidence,
+            evidence: relation_evidence,
+            page_labels: relation.page_labels.clone(),
+        });
         for page_label in &relation.page_labels {
-            let evidence_refs = relation
-                .evidence_ids
-                .iter()
-                .filter_map(|id| artifact.evidence_refs.get(id))
-                .collect::<Vec<_>>();
-            let relation_evidence = evidence_refs
+            let relation_evidence = relation_evidence_refs
                 .iter()
                 .find(|evidence| &evidence.page_label == page_label)
                 .copied()
-                .or_else(|| evidence_refs.first().copied());
+                .or_else(|| relation_evidence_refs.first().copied());
             let Some(evidence) = relation_evidence else {
                 continue;
             };
@@ -4928,6 +12534,11 @@ fn collected_concepts_from_artifact(artifact: &ExtractionArtifact) -> CollectedC
                 });
             page.concept_ids.push(relation.source_concept_id.clone());
             page.concept_ids.push(relation.target_concept_id.clone());
+            if evidence.snippet.len() > page.snippet.len()
+                || evidence.id.starts_with("ev-relation-")
+            {
+                page.snippet = evidence.snippet.clone();
+            }
         }
     }
     let page_concepts = page_concepts_by_label
@@ -4941,6 +12552,7 @@ fn collected_concepts_from_artifact(artifact: &ExtractionArtifact) -> CollectedC
     CollectedConcepts {
         concepts,
         page_concepts,
+        relation_candidates,
     }
 }
 
@@ -4962,6 +12574,7 @@ fn build_relation_edges(
     document_node: &GraphNodeSummary,
     concept_accumulators: &[ConceptAccumulator],
     page_concepts: &[PageConceptSet],
+    relation_candidates: &[RelationCandidateAccumulator],
     source_path: &str,
     source_id: Option<&str>,
 ) -> (
@@ -5011,6 +12624,49 @@ fn build_relation_edges(
     }
 
     let mut concept_edge_accumulators = BTreeMap::<(String, String), EdgeAccumulator>::new();
+    for candidate in relation_candidates {
+        let (source_node_id, target_node_id) =
+            if candidate.source_node_id <= candidate.target_node_id {
+                (
+                    candidate.source_node_id.clone(),
+                    candidate.target_node_id.clone(),
+                )
+            } else {
+                (
+                    candidate.target_node_id.clone(),
+                    candidate.source_node_id.clone(),
+                )
+            };
+        let accumulator = concept_edge_accumulators
+            .entry((source_node_id.clone(), target_node_id.clone()))
+            .or_insert_with(|| EdgeAccumulator {
+                source_node_id: source_node_id.clone(),
+                target_node_id: target_node_id.clone(),
+                relation_kind: candidate.relation_kind,
+                label: markdown_relation_label(candidate.relation_kind),
+                confidence: Some(candidate.confidence),
+                evidence: Vec::new(),
+                page_labels: BTreeSet::new(),
+            });
+        if accumulator.relation_kind == BrainRelationKind::RelatedTo
+            && candidate.relation_kind != BrainRelationKind::RelatedTo
+        {
+            accumulator.relation_kind = candidate.relation_kind;
+            accumulator.label = markdown_relation_label(candidate.relation_kind);
+        }
+        accumulator.confidence = match (accumulator.confidence, Some(candidate.confidence)) {
+            (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+        accumulator
+            .page_labels
+            .extend(candidate.page_labels.iter().cloned());
+        accumulator
+            .evidence
+            .extend(candidate.evidence.iter().cloned());
+    }
     for page in page_concepts {
         if page.concept_ids.len() < 2 {
             continue;
@@ -5029,6 +12685,9 @@ fn build_relation_edges(
                     .or_insert_with(|| EdgeAccumulator {
                         source_node_id: source_node_id.clone(),
                         target_node_id: target_node_id.clone(),
+                        relation_kind: BrainRelationKind::RelatedTo,
+                        label: "Related in source".into(),
+                        confidence: None,
                         evidence: Vec::new(),
                         page_labels: BTreeSet::new(),
                     });
@@ -5083,10 +12742,10 @@ fn build_relation_edges(
             source_node_id: accumulator.source_node_id.clone(),
             target_node_id: accumulator.target_node_id.clone(),
             kind: RelationKind::RelatedTo,
-            label: "Related in source".into(),
-            confidence: Some(
-                (0.56 + (accumulator.page_labels.len().min(3) as f32 * 0.08)).min(0.84),
-            ),
+            label: accumulator.label.clone(),
+            confidence: accumulator.confidence.or_else(|| {
+                Some((0.56 + (accumulator.page_labels.len().min(3) as f32 * 0.08)).min(0.84))
+            }),
             evidence_count: accumulator.evidence.len(),
         };
         edge_details_by_id.insert(
@@ -5377,6 +13036,11 @@ fn correction_actions_for_detail(
             label: "Rename".into(),
             disabled_reason: None,
         },
+        CorrectionAction {
+            kind: CorrectionKind::Split,
+            label: "Split".into(),
+            disabled_reason: None,
+        },
     ]
 }
 
@@ -5398,6 +13062,7 @@ fn apply_correction(
         CorrectionKind::Rename => apply_rename_correction(project, request)?,
         CorrectionKind::Merge => apply_merge_correction(project, request)?,
         CorrectionKind::KeepSeparate => apply_keep_separate_correction(project, request)?,
+        CorrectionKind::Split => apply_split_correction(project, request)?,
     }
     refresh_project_after_correction(project);
     Ok(())
@@ -5548,23 +13213,37 @@ fn apply_rename_correction(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("rename needs a non-empty canonical name"))?;
+    let node_kind = project
+        .nodes
+        .iter()
+        .find(|node| node.id == request.node_id)
+        .map(|node| node.kind)
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    if node_kind != GraphNodeKind::Concept {
+        bail!("only concept nodes can be renamed");
+    }
+
+    let previous_name = project
+        .details_by_node_id
+        .get(&request.node_id)
+        .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?
+        .canonical_name
+        .clone();
+    if previous_name == next_name {
+        return Ok(());
+    }
+    let previous_node_id = request.node_id.clone();
+    let next_node_id = unique_renamed_node_id(project, &previous_node_id, next_name);
+
     let node = project
         .nodes
         .iter_mut()
         .find(|node| node.id == request.node_id)
         .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
-    if node.kind != GraphNodeKind::Concept {
-        bail!("only concept nodes can be renamed");
-    }
-
     let detail = project
         .details_by_node_id
         .get_mut(&request.node_id)
         .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
-    let previous_name = detail.canonical_name.clone();
-    if previous_name == next_name {
-        return Ok(());
-    }
 
     let mut aliases = detail.aliases.iter().cloned().collect::<BTreeSet<_>>();
     aliases.insert(previous_name.clone());
@@ -5575,10 +13254,60 @@ fn apply_rename_correction(
         "Renamed from {} to {}. HyprDuck kept the previous canonical label as an alias so the evidence trail stays intact.",
         previous_name, next_name
     );
+    node.id = next_node_id.clone();
     node.label = next_name.to_string();
     detail.node = node.clone();
 
+    if next_node_id != previous_node_id {
+        let detail = project
+            .details_by_node_id
+            .remove(&previous_node_id)
+            .ok_or_else(|| anyhow!("node detail {previous_node_id} was not found"))?;
+        project
+            .details_by_node_id
+            .insert(next_node_id.clone(), detail);
+        if let Some(answer) = project.answer_by_node_id.remove(&previous_node_id) {
+            project
+                .answer_by_node_id
+                .insert(next_node_id.clone(), answer);
+        }
+        rewrite_project_edges(project, Some((&previous_node_id, &next_node_id)));
+    }
+
     Ok(())
+}
+
+fn unique_renamed_node_id(
+    project: &KnowledgeProject,
+    current_node_id: &str,
+    label: &str,
+) -> String {
+    let base = normalize_key(label);
+    if base.is_empty() {
+        return current_node_id.to_string();
+    }
+    let base_id = format!("concept-{base}");
+    if base_id == current_node_id
+        || !project
+            .nodes
+            .iter()
+            .any(|node| node.id == base_id && node.id != current_node_id)
+    {
+        return base_id;
+    }
+
+    let mut suffix = 2usize;
+    loop {
+        let candidate = format!("concept-{base}-rename-{suffix}");
+        if !project
+            .nodes
+            .iter()
+            .any(|node| node.id == candidate && node.id != current_node_id)
+        {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn apply_merge_correction(
@@ -5788,6 +13517,276 @@ fn apply_keep_separate_correction(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SplitReplacementMapping {
+    #[serde(default)]
+    replacement_node_id: Option<String>,
+    replacement_label: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    evidence_ids: Vec<String>,
+    #[serde(default)]
+    edge_ids: Vec<String>,
+}
+
+fn apply_split_correction(
+    project: &mut KnowledgeProject,
+    request: &ApplyCorrectionRequest,
+) -> Result<()> {
+    let source_node = project
+        .nodes
+        .iter()
+        .find(|node| node.id == request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    if source_node.kind != GraphNodeKind::Concept {
+        bail!("split only supports concept nodes");
+    }
+    let source_detail = project
+        .details_by_node_id
+        .get(&request.node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("node detail {} was not found", request.node_id))?;
+    let mappings = parse_split_replacement_mappings(request)?;
+    let source_evidence_ids = source_detail
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut replacement_ids = BTreeSet::new();
+    let mut replacements = Vec::new();
+    for (index, mapping) in mappings.iter().enumerate() {
+        let label = mapping.replacement_label.trim();
+        if label.is_empty() {
+            bail!("split replacement label cannot be empty");
+        }
+        if mapping.evidence_ids.is_empty() {
+            bail!("split replacement {label} needs evidenceIds");
+        }
+        let selected_evidence_ids = mapping
+            .evidence_ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<BTreeSet<_>>();
+        if selected_evidence_ids.is_empty() {
+            bail!("split replacement {label} needs non-empty evidenceIds");
+        }
+        if !selected_evidence_ids
+            .iter()
+            .all(|id| source_evidence_ids.contains(id))
+        {
+            bail!("split replacement {label} references evidence outside the selected node");
+        }
+        let replacement_evidence = source_detail
+            .evidence
+            .iter()
+            .filter(|evidence| selected_evidence_ids.contains(&evidence.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let replacement_node_id = mapping
+            .replacement_node_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| unique_manual_node_id(project, label));
+        if replacement_node_id == request.node_id {
+            bail!("split replacement {label} cannot reuse the original node id");
+        }
+        if !replacement_ids.insert(replacement_node_id.clone()) {
+            bail!("split replacement node id {replacement_node_id} is duplicated");
+        }
+        if project
+            .nodes
+            .iter()
+            .any(|node| node.id == replacement_node_id && node.id != request.node_id)
+        {
+            bail!("split replacement node id {replacement_node_id} already exists");
+        }
+        replacements.push((
+            mapping,
+            replacement_node_id,
+            selected_evidence_ids,
+            replacement_evidence,
+            index,
+        ));
+    }
+
+    let source_like_ids = source_like_node_ids_for_concept(project, &request.node_id);
+    let existing_edges = project.edges.clone();
+    let existing_edge_details = project.edge_details_by_id.clone();
+
+    project.nodes.retain(|node| node.id != request.node_id);
+    project.details_by_node_id.remove(&request.node_id);
+    project.answer_by_node_id.remove(&request.node_id);
+    project.edges.retain(|edge| {
+        edge.source_node_id != request.node_id && edge.target_node_id != request.node_id
+    });
+    project.edge_details_by_id.retain(|_, detail| {
+        detail.edge.source_node_id != request.node_id
+            && detail.edge.target_node_id != request.node_id
+    });
+
+    for (mapping, replacement_node_id, selected_evidence_ids, replacement_evidence, index) in
+        replacements
+    {
+        let label = mapping.replacement_label.trim().to_string();
+        let aliases = mapping
+            .aliases
+            .iter()
+            .map(|alias| alias.trim().to_string())
+            .filter(|alias| !alias.is_empty() && alias != &label)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let new_node = GraphNodeSummary {
+            id: replacement_node_id.clone(),
+            label: label.clone(),
+            kind: GraphNodeKind::Concept,
+            confidence: Some(source_node.confidence.unwrap_or(0.7).min(0.88)),
+            related_count: 0,
+            evidence_count: replacement_evidence.len(),
+            position: manual_split_position(&source_node.position, index),
+        };
+        project.nodes.push(new_node.clone());
+        project.details_by_node_id.insert(
+            replacement_node_id.clone(),
+            GraphNodeDetail {
+                node: new_node,
+                canonical_name: label.clone(),
+                aliases,
+                description: format!(
+                    "Created from an explicit split correction on {}. HyprDuck moved the mapped evidence, edges, claims, and wiki references onto this replacement concept.",
+                    source_detail.canonical_name
+                ),
+                evidence: replacement_evidence.clone(),
+                actions: Vec::new(),
+                source: None,
+            },
+        );
+
+        let mut copied_source_edges = BTreeSet::new();
+        for edge in &existing_edges {
+            if edge.source_node_id != request.node_id && edge.target_node_id != request.node_id {
+                continue;
+            }
+            let edge_evidence = existing_edge_details
+                .get(&edge.id)
+                .map(|detail| detail.evidence.clone())
+                .unwrap_or_default();
+            if !split_mapping_matches_edge(mapping, &selected_evidence_ids, edge, &edge_evidence) {
+                continue;
+            }
+            let mut next_edge = edge.clone();
+            if next_edge.source_node_id == request.node_id {
+                next_edge.source_node_id = replacement_node_id.clone();
+            }
+            if next_edge.target_node_id == request.node_id {
+                next_edge.target_node_id = replacement_node_id.clone();
+            }
+            if next_edge.source_node_id == next_edge.target_node_id {
+                continue;
+            }
+            if next_edge.kind == RelationKind::SourceDocument {
+                for node_id in [&next_edge.source_node_id, &next_edge.target_node_id] {
+                    if source_like_ids.contains(node_id) {
+                        copied_source_edges.insert(node_id.clone());
+                    }
+                }
+            }
+            next_edge.id = relation_edge_id(
+                next_edge.kind,
+                &next_edge.source_node_id,
+                &next_edge.target_node_id,
+            );
+            let next_evidence = if edge_evidence.is_empty() {
+                replacement_evidence.iter().take(2).cloned().collect()
+            } else {
+                edge_evidence
+            };
+            next_edge.evidence_count = next_evidence.len();
+            project.edges.push(next_edge.clone());
+            project.edge_details_by_id.insert(
+                next_edge.id.clone(),
+                RelationEdgeDetail {
+                    edge: next_edge,
+                    explanation: String::new(),
+                    evidence: next_evidence,
+                },
+            );
+        }
+
+        for source_node_id in source_like_ids
+            .iter()
+            .filter(|source_node_id| !copied_source_edges.contains(*source_node_id))
+        {
+            let document_evidence = replacement_evidence
+                .iter()
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>();
+            let document_edge = RelationEdgeSummary {
+                id: relation_edge_id(
+                    RelationKind::SourceDocument,
+                    source_node_id,
+                    &replacement_node_id,
+                ),
+                source_node_id: source_node_id.clone(),
+                target_node_id: replacement_node_id.clone(),
+                kind: RelationKind::SourceDocument,
+                label: "Compiled from source".into(),
+                confidence: Some(0.76),
+                evidence_count: document_evidence.len(),
+            };
+            project.edges.push(document_edge.clone());
+            project.edge_details_by_id.insert(
+                document_edge.id.clone(),
+                RelationEdgeDetail {
+                    edge: document_edge,
+                    explanation: String::new(),
+                    evidence: document_evidence,
+                },
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_split_replacement_mappings(
+    request: &ApplyCorrectionRequest,
+) -> Result<Vec<SplitReplacementMapping>> {
+    let value = request
+        .value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("split needs value JSON with replacement mappings"))?;
+    let mappings: Vec<SplitReplacementMapping> =
+        serde_json::from_str(value).context("split value must be a JSON array of mappings")?;
+    if mappings.len() < 2 {
+        bail!("split needs at least two replacement mappings");
+    }
+    Ok(mappings)
+}
+
+fn split_mapping_matches_edge(
+    mapping: &SplitReplacementMapping,
+    selected_evidence_ids: &BTreeSet<String>,
+    edge: &RelationEdgeSummary,
+    edge_evidence: &[EvidenceRef],
+) -> bool {
+    if mapping.edge_ids.iter().any(|edge_id| edge_id == &edge.id) {
+        return true;
+    }
+    edge_evidence
+        .iter()
+        .any(|evidence| selected_evidence_ids.contains(&evidence.id))
 }
 
 fn refresh_project_after_correction(project: &mut KnowledgeProject) {
@@ -6351,6 +14350,14 @@ fn normalized_edge_label(kind: RelationKind, label: &str) -> String {
         RelationKind::RelatedTo if label == "Separated by correction" => {
             "Separated by correction".into()
         }
+        RelationKind::RelatedTo
+            if matches!(
+                label,
+                "Supports" | "Contradicts" | "Supersedes" | "Same as" | "Depends on"
+            ) =>
+        {
+            label.into()
+        }
         RelationKind::RelatedTo => "Related in source".into(),
     }
 }
@@ -6360,6 +14367,15 @@ fn preferred_edge_label(current: &str, incoming: &str, kind: RelationKind) -> St
         RelationKind::SourceDocument => "Compiled from source".into(),
         RelationKind::RelatedTo if current == "Separated by correction" => current.into(),
         RelationKind::RelatedTo if incoming == "Separated by correction" => incoming.into(),
+        RelationKind::RelatedTo if current != "Related in source" => current.into(),
+        RelationKind::RelatedTo
+            if matches!(
+                incoming,
+                "Supports" | "Contradicts" | "Supersedes" | "Same as" | "Depends on"
+            ) =>
+        {
+            incoming.into()
+        }
         RelationKind::RelatedTo => "Related in source".into(),
     }
 }
@@ -6485,11 +14501,77 @@ fn parse_document(
     config: &EngineConfig,
 ) -> Result<ParsedDocument> {
     match input.format {
-        DocumentFormat::Pdf | DocumentFormat::Image => {
-            parse_visual_document(input, template, config)
+        DocumentFormat::Pdf => parse_markitdown_document(input)
+            .or_else(|_| parse_visual_document(input, template, config)),
+        DocumentFormat::Image => parse_visual_document(input, template, config),
+        DocumentFormat::Docx => parse_markitdown_document(input)
+            .or_else(|_| parse_text_document(input, template, config)),
+        DocumentFormat::Doc | DocumentFormat::Markdown => {
+            parse_text_document(input, template, config)
         }
-        DocumentFormat::Docx | DocumentFormat::Doc => parse_text_document(input, template, config),
     }
+}
+
+fn parse_markitdown_document(input: &ParseInput) -> Result<ParsedDocument> {
+    emit_event(&ParseEvent::ConvertingPages {
+        current: 1,
+        total: 1,
+    })?;
+    emit_event(&ParseEvent::Parsing {
+        current: 1,
+        total: 1,
+    })?;
+
+    let converter = MarkItDown::new();
+    let options = ConversionOptions {
+        file_extension: Some(markitdown_extension_for_format(&input.format).into()),
+        url: None,
+        llm_client: None,
+        llm_model: None,
+    };
+    let result = converter
+        .convert(&input.path, Some(options))
+        .with_context(|| format!("markitdown-rs failed for {}", input.path))?
+        .with_context(|| format!("markitdown-rs did not support {}", input.path))?;
+
+    build_markitdown_parsed_document(result.text_content)
+}
+
+fn markitdown_extension_for_format(format: &DocumentFormat) -> &'static str {
+    match format {
+        DocumentFormat::Pdf => ".pdf",
+        DocumentFormat::Docx => ".docx",
+        DocumentFormat::Doc => ".doc",
+        DocumentFormat::Markdown => ".md",
+        DocumentFormat::Image => ".png",
+    }
+}
+
+fn build_single_page_parsed_document(
+    markdown: String,
+    parser_name: &str,
+) -> Result<ParsedDocument> {
+    if markdown.trim().is_empty() {
+        bail!("{parser_name} produced empty markdown");
+    }
+    Ok(ParsedDocument {
+        pages: vec![ParsedPage {
+            index: 0,
+            markdown: Some(markdown.clone()),
+            plain_text: Some(markdown),
+            svg: None,
+            image_asset_path: None,
+            error_message: None,
+        }],
+        assets: Vec::new(),
+        page_count: 1,
+        success_count: 1,
+        failed_count: 0,
+    })
+}
+
+fn build_markitdown_parsed_document(markdown: String) -> Result<ParsedDocument> {
+    build_single_page_parsed_document(markdown, "markitdown-rs")
 }
 
 fn parse_visual_document(
@@ -6569,7 +14651,12 @@ fn parse_text_document(
     template: &str,
     config: &EngineConfig,
 ) -> Result<ParsedDocument> {
-    let text = extract_text_via_textutil(Path::new(&input.path))?;
+    let text = if input.format == DocumentFormat::Markdown {
+        fs::read_to_string(&input.path)
+            .with_context(|| format!("failed reading markdown {}", input.path))?
+    } else {
+        extract_text_via_textutil(Path::new(&input.path))?
+    };
     emit_event(&ParseEvent::ConvertingPages {
         current: 1,
         total: 1,
@@ -7146,6 +15233,7 @@ fn correction_kind_slug(kind: &CorrectionKind) -> &'static str {
         CorrectionKind::Merge => "merge",
         CorrectionKind::KeepSeparate => "keep_separate",
         CorrectionKind::Rename => "rename",
+        CorrectionKind::Split => "split",
     }
 }
 
@@ -7154,6 +15242,7 @@ fn correction_kind_from_slug(value: &str) -> Result<CorrectionKind> {
         "merge" => Ok(CorrectionKind::Merge),
         "keep_separate" => Ok(CorrectionKind::KeepSeparate),
         "rename" => Ok(CorrectionKind::Rename),
+        "split" => Ok(CorrectionKind::Split),
         _ => bail!("unknown correction kind {value}"),
     }
 }
@@ -7217,6 +15306,7 @@ fn document_format_slug(format: &DocumentFormat) -> &'static str {
         DocumentFormat::Docx => "docx",
         DocumentFormat::Doc => "doc",
         DocumentFormat::Image => "image",
+        DocumentFormat::Markdown => "markdown",
     }
 }
 
@@ -7226,6 +15316,7 @@ fn document_format_from_slug(value: &str) -> Result<DocumentFormat> {
         "docx" => Ok(DocumentFormat::Docx),
         "doc" => Ok(DocumentFormat::Doc),
         "image" => Ok(DocumentFormat::Image),
+        "markdown" | "md" => Ok(DocumentFormat::Markdown),
         _ => bail!("unknown document format {value}"),
     }
 }
@@ -7610,7 +15701,18 @@ impl KnowledgeProjectStore {
             .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id));
         let aggregate = aggregate_workspace_project(workspace_id, rows.clone());
         let corrections = self.load_workspace_corrections(workspace_id)?;
-        let snapshot = build_brain_repo_snapshot(workspace_id, &rows, &aggregate, &corrections);
+        let existing_memories = read_memory_records(&workspace_root)?;
+        let existing_nodes = read_existing_graph_nodes(&workspace_root)?;
+        let existing_relations = read_existing_graph_relations(&workspace_root)?;
+        let snapshot = build_brain_repo_snapshot(
+            workspace_id,
+            &rows,
+            &aggregate,
+            &corrections,
+            &existing_memories,
+            &existing_nodes,
+            &existing_relations,
+        );
         write_materialized_brain_repo(&workspace_root, &snapshot)
     }
 
@@ -8288,6 +16390,132 @@ mod tests {
         )
     }
 
+    #[test]
+    fn provider_graph_parser_accepts_fenced_payloads() {
+        let raw = r#"```json
+{
+  "proposals": [
+    {
+      "changeType": "new_node",
+      "node": {
+        "label": "HyprDuck",
+        "kind": "project",
+        "sourcePath": "/tmp/source.md",
+        "nodeId": "node-provider-hyprduck",
+        "sourceRefs": ["source-a"],
+        "evidenceRefs": ["ev-a"],
+        "reason": "Project identity is explicit."
+      }
+    },
+    {
+      "changeType": "new_edge",
+      "edge": {
+        "sourceNodeId": "node-provider-hyprduck",
+        "targetNodeId": "node-provider-agent-brain",
+        "kind": "related_to",
+        "label": "relates to",
+        "sourcePath": "/tmp/source.md",
+        "sourceRefs": ["source-a"],
+        "evidenceRefs": ["ev-a"]
+      }
+    }
+  ]
+}
+```"#;
+
+        let payloads = parse_provider_graph_proposal_payloads(raw).expect("parse provider JSON");
+
+        assert_eq!(payloads.len(), 2);
+        assert!(matches!(
+            &payloads[0],
+            AgentGraphProposalPayload::NewNode { node }
+                if node.label == "HyprDuck" && node.kind == BrainNodeKind::Project
+        ));
+        assert!(matches!(
+            &payloads[1],
+            AgentGraphProposalPayload::NewEdge { edge }
+                if edge.kind == BrainRelationKind::RelatedTo
+                    && edge.source_node_id == "node-provider-hyprduck"
+        ));
+    }
+
+    #[test]
+    fn provider_graph_payload_normalization_adds_source_and_evidence_refs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = sample_manifest_with_source(&temp, "source-agent", "source", 1);
+        let mut payload = AgentGraphProposalPayload::NewClaim {
+            claim: AgentNewClaimPayload {
+                statement: "HyprDuck keeps graph updates source-backed.".into(),
+                source_path: String::new(),
+                claim_id: None,
+                topic_refs: vec!["node-provider-hyprduck".into()],
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                reason: None,
+            },
+        };
+
+        normalize_provider_graph_proposal_payload(&mut payload, &manifest, &["ev-agent".into()]);
+
+        let AgentGraphProposalPayload::NewClaim { claim } = payload else {
+            panic!("expected claim payload");
+        };
+        assert_eq!(claim.source_path, manifest.markdown_path);
+        assert_eq!(claim.source_refs, vec!["source-agent"]);
+        assert_eq!(claim.evidence_refs, vec!["ev-agent"]);
+        assert!(claim
+            .claim_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("claim-provider-")));
+    }
+
+    #[test]
+    fn provider_graph_payload_proposal_is_auto_applied_by_queue_worker() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        write_json_pretty(
+            &workspace_root.join("brain-manifest.json"),
+            &empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID),
+        )
+        .expect("write baseline manifest");
+        let payload = AgentGraphProposalPayload::NewNode {
+            node: AgentNewNodePayload {
+                label: "Agent maintained graph".into(),
+                kind: BrainNodeKind::Concept,
+                source_path: "/tmp/source.md".into(),
+                node_id: Some("node-provider-agent-maintained-graph".into()),
+                aliases: Vec::new(),
+                source_refs: vec!["source-agent".into()],
+                evidence_refs: vec!["ev-agent".into()],
+                reason: Some("The source defines the durable graph behavior.".into()),
+            },
+        };
+        let mut proposal = provider_graph_payload_to_proposal(
+            DEFAULT_WORKSPACE_ID,
+            PROVIDER_GRAPH_AGENT_ID,
+            payload,
+        );
+        enrich_agent_graph_proposal_refs(&mut proposal);
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("open writer");
+        writer.write_proposal(&proposal).expect("write proposal");
+        writer
+            .append_event(&brain_event_for_proposal(&proposal).expect("proposal event"))
+            .expect("append event");
+        drop(writer);
+
+        let result = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("apply provider proposal");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+
+        assert_eq!(result.applied, vec![proposal.proposal_id]);
+        assert!(snapshot.nodes.iter().any(|node| {
+            node.node_id == "node-provider-agent-maintained-graph"
+                && node.label == "Agent maintained graph"
+        }));
+    }
+
     fn sample_parse_result() -> ParseResult {
         ParseResult {
             version: "1".into(),
@@ -8454,6 +16682,173 @@ mod tests {
         detail.node.label = canonical_name.into();
     }
 
+    fn assert_materialized_brain_has_no_dangling_refs(workspace_root: &Path) {
+        let snapshot: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read brain manifest");
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("read materialized nodes");
+        let edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json"))
+                .expect("read materialized edges");
+        let claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read materialized claims");
+        let memories: Vec<MemoryRecord> =
+            read_json_artifact(&workspace_root.join("memory/records.json"))
+                .expect("read materialized memories");
+
+        let node_ids = nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let source_ids = snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let evidence_ids = snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let wiki_paths = snapshot
+            .wiki_pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<BTreeSet<_>>();
+
+        for edge in &edges {
+            assert!(
+                node_ids.contains(edge.source_node_id.as_str()),
+                "edge {} has dangling source node {}",
+                edge.relation_id,
+                edge.source_node_id
+            );
+            assert!(
+                node_ids.contains(edge.target_node_id.as_str()),
+                "edge {} has dangling target node {}",
+                edge.relation_id,
+                edge.target_node_id
+            );
+            for evidence_id in &edge.evidence_ids {
+                assert!(
+                    evidence_ids.contains(evidence_id.as_str()),
+                    "edge {} has dangling evidence {}",
+                    edge.relation_id,
+                    evidence_id
+                );
+            }
+        }
+
+        for claim in &claims {
+            for node_id in &claim.topic_refs {
+                assert!(
+                    node_ids.contains(node_id.as_str()),
+                    "claim {} has dangling topic {}",
+                    claim.claim_id,
+                    node_id
+                );
+            }
+            for source_id in &claim.source_refs {
+                assert!(
+                    source_ids.contains(source_id.as_str()),
+                    "claim {} has dangling source {}",
+                    claim.claim_id,
+                    source_id
+                );
+            }
+            for evidence_id in &claim.evidence_refs {
+                assert!(
+                    evidence_ids.contains(evidence_id.as_str()),
+                    "claim {} has dangling evidence {}",
+                    claim.claim_id,
+                    evidence_id
+                );
+            }
+        }
+
+        for memory in &memories {
+            for source_id in &memory.source_refs {
+                assert!(
+                    source_ids.contains(source_id.as_str()),
+                    "memory {} has dangling source {}",
+                    memory.memory_id,
+                    source_id
+                );
+            }
+            for evidence_id in &memory.evidence_refs {
+                assert!(
+                    evidence_ids.contains(evidence_id.as_str()),
+                    "memory {} has dangling evidence {}",
+                    memory.memory_id,
+                    evidence_id
+                );
+            }
+        }
+
+        for page in &snapshot.wiki_pages {
+            assert!(
+                workspace_root.join(&page.path).exists(),
+                "wiki page {} is listed but missing on disk",
+                page.path
+            );
+            for node_id in &page.node_refs {
+                assert!(
+                    node_ids.contains(node_id.as_str()),
+                    "wiki page {} has dangling node {}",
+                    page.path,
+                    node_id
+                );
+            }
+            for source_id in &page.source_refs {
+                assert!(
+                    source_ids.contains(source_id.as_str()),
+                    "wiki page {} has dangling source {}",
+                    page.path,
+                    source_id
+                );
+            }
+            for evidence_id in &page.evidence_refs {
+                assert!(
+                    evidence_ids.contains(evidence_id.as_str()),
+                    "wiki page {} has dangling evidence {}",
+                    page.path,
+                    evidence_id
+                );
+            }
+
+            let body =
+                fs::read_to_string(workspace_root.join(&page.path)).expect("read wiki page body");
+            for linked_topic in markdown_topic_links(&body) {
+                let linked_path = format!("wiki/topics/{linked_topic}");
+                assert!(
+                    wiki_paths.contains(linked_path.as_str()),
+                    "wiki page {} links to missing topic page {}",
+                    page.path,
+                    linked_path
+                );
+                assert!(
+                    workspace_root.join(&linked_path).exists(),
+                    "wiki page {} links to topic page {} missing on disk",
+                    page.path,
+                    linked_path
+                );
+            }
+        }
+    }
+
+    fn markdown_topic_links(body: &str) -> Vec<String> {
+        body.match_indices("](topics/")
+            .filter_map(|(start, marker)| {
+                let path_start = start + marker.len();
+                let rest = &body[path_start..];
+                rest.find(')').map(|end| rest[..end].to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn compile_and_store_project_round_trip() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -8533,6 +16928,2953 @@ mod tests {
         assert_eq!(sources[0].format, DocumentFormat::Pdf);
         assert_eq!(sources[0].success_count, 1);
         assert_eq!(sources[0].failed_count, 0);
+    }
+
+    #[test]
+    fn markdown_ingest_paths_resolve_configured_source_and_wiki_dirs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let inbox = root.join("incoming-markdown");
+        fs::create_dir_all(&inbox).expect("source dir");
+        fs::create_dir_all(root.join("custom-wiki")).expect("wiki dir");
+        fs::write(
+            root.join("brain-config.json"),
+            serde_json::json!({
+                "markdownSourcesDir": "incoming-markdown",
+                "wikiDir": "custom-wiki"
+            })
+            .to_string(),
+        )
+        .expect("write brain config");
+
+        let paths = resolve_markdown_ingest_paths(&BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        })
+        .expect("resolve ingest paths");
+
+        assert_eq!(paths.workspace_root, root);
+        assert_eq!(paths.source_dir, inbox);
+        assert_eq!(paths.wiki_dir, paths.workspace_root.join("custom-wiki"));
+        assert!(paths.source_dir.exists());
+        assert!(paths.wiki_dir.exists());
+    }
+
+    #[test]
+    fn markdown_ingest_paths_default_to_workspace_sources_and_wiki() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+
+        let paths = resolve_markdown_ingest_paths(&BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        })
+        .expect("resolve default ingest paths");
+
+        assert_eq!(paths.workspace_root, workspace_root);
+        assert_eq!(paths.source_dir, paths.workspace_root.join("sources"));
+        assert_eq!(paths.wiki_dir, paths.workspace_root.join("wiki"));
+        assert!(paths.source_dir.exists());
+        assert!(paths.wiki_dir.exists());
+    }
+
+    #[test]
+    fn markdown_ingest_paths_reject_missing_configured_source_dir() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(&root).expect("workspace root");
+        fs::write(
+            root.join("brain-config.json"),
+            serde_json::json!({
+                "markdownSourcesDir": "missing-inbox",
+                "wikiDir": "wiki"
+            })
+            .to_string(),
+        )
+        .expect("write brain config");
+
+        let error = resolve_markdown_ingest_paths(&BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        })
+        .expect_err("missing configured source dir should fail");
+
+        assert!(format!("{error:#}").contains("configured markdown source directory"));
+    }
+
+    #[test]
+    fn markdown_ingest_scan_finds_new_markdown_sources_only() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(source_dir.join("nested")).expect("source dirs");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let alpha = source_dir.join("alpha.md");
+        let beta = source_dir.join("nested/beta.markdown");
+        let old = source_dir.join("old.md");
+        let ignored = source_dir.join("notes.txt");
+        fs::write(&alpha, "# Alpha\n").expect("alpha");
+        fs::write(&beta, "# Beta\n").expect("beta");
+        fs::write(&old, "# Old\n").expect("old");
+        fs::write(&ignored, "ignore").expect("ignored");
+
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: vec![SourceRecord {
+                source_id: "source-old".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: old.display().to_string(),
+                source_path: old.display().to_string(),
+                markdown_path: old.display().to_string(),
+                format: "markdown".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let paths = MarkdownIngestPaths {
+            workspace_root,
+            source_dir,
+            wiki_dir,
+        };
+
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan markdown sources");
+
+        assert_eq!(scan.new_sources.len(), 2);
+        assert_eq!(scan.new_sources[0].source_path, alpha);
+        assert_eq!(scan.new_sources[0].relative_path, PathBuf::from("alpha.md"));
+        assert_eq!(scan.new_sources[1].source_path, beta);
+        assert_eq!(
+            scan.new_sources[1].relative_path,
+            PathBuf::from("nested/beta.markdown")
+        );
+        assert_eq!(scan.current_state.sources.len(), 3);
+    }
+
+    #[test]
+    fn markdown_ingest_scan_uses_persisted_state_to_avoid_repeat_reports() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let source = source_dir.join("agent-loop.md");
+        fs::write(&source, "# Agent loop\n\nEvents are the source of truth.\n").expect("source");
+
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let paths = MarkdownIngestPaths {
+            workspace_root,
+            source_dir,
+            wiki_dir,
+        };
+
+        let first_scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        assert_eq!(first_scan.new_sources.len(), 1);
+        write_markdown_source_state(&paths, &first_scan.current_state).expect("persist state");
+
+        let persisted = read_markdown_source_state(&paths).expect("read persisted state");
+        let second_scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &persisted,
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("second scan");
+
+        assert!(second_scan.new_sources.is_empty());
+        assert_eq!(second_scan.current_state.sources.len(), 1);
+        assert_eq!(
+            second_scan.current_state.sources[0].relative_path,
+            "agent-loop.md"
+        );
+    }
+
+    #[test]
+    fn markdown_ingest_enqueue_appends_one_event_and_queue_record() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let source = source_dir.join("agent-maintained-graph.md");
+        fs::write(
+            &source,
+            "# Agent-maintained graph\n\nEvents are the source of truth.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let mut snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+
+        let first_scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan new source");
+        let first_enqueue = enqueue_markdown_sources(
+            &writer,
+            &paths,
+            &MarkdownIngestQueueFile::default(),
+            &first_scan,
+        )
+        .expect("enqueue new source");
+
+        assert_eq!(first_enqueue.enqueued.len(), 1);
+        let queue = read_markdown_ingest_queue(&paths).expect("read queue");
+        assert_eq!(queue.records.len(), 1);
+        assert_eq!(queue.records[0].status, "queued");
+        assert_eq!(queue.records[0].trigger_status, "accepted");
+        assert_eq!(queue.records[0].trigger_error_message, None);
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == BrainEventKind::SourceIngestQueued)
+                .count(),
+            1
+        );
+        let trigger_event = events
+            .iter()
+            .find(|event| event.event_type == BrainEventKind::SourceIngestQueued)
+            .expect("trigger event");
+        let trigger_payload: MarkdownIngestQueueRecord =
+            serde_json::from_str(&trigger_event.payload_json).expect("trigger payload");
+        assert_eq!(trigger_payload.relative_path, "agent-maintained-graph.md");
+        assert_eq!(trigger_payload.status, "queued");
+        assert_eq!(trigger_payload.trigger_status, "accepted");
+        assert_eq!(trigger_payload.trigger_error_message, None);
+
+        snapshot.events = events;
+        let second_scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("rescan source");
+        let second_enqueue =
+            enqueue_markdown_sources(&writer, &paths, &queue, &second_scan).expect("re-enqueue");
+
+        assert!(second_scan.new_sources.is_empty());
+        assert!(second_enqueue.enqueued.is_empty());
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read final events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == BrainEventKind::SourceIngestQueued)
+                .count(),
+            1
+        );
+        assert_eq!(
+            read_markdown_ingest_queue(&paths)
+                .expect("read final queue")
+                .records
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn markdown_ingest_worker_starts_for_queued_sources_and_materializes_graph() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let source = source_dir.join("agent-maintained-graph.md");
+        fs::write(
+            &source,
+            "# Agent-maintained graph\n\nEvents JSONL is the source of truth.\nThe worker updates graph nodes, claims, memory candidates, and wiki pages.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let nodes_path = workspace_root.join("graph/nodes.json");
+        fs::write(
+            workspace_root.join("wiki/index.md"),
+            "# Stale Brain Index\n",
+        )
+        .expect("stale wiki index");
+        assert!(!nodes_path.exists());
+        let queue = read_markdown_ingest_queue(&paths).expect("read queue");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let mut completed_ingests = Vec::<CompletedMarkdownIngest>::new();
+        let result = run_markdown_ingest_worker_with_post_ingest_hook(
+            &paths,
+            &queue,
+            &store,
+            &mut |completed| {
+                completed_ingests.push(completed.clone());
+                Ok(())
+            },
+        )
+        .expect("run ingest worker");
+
+        assert!(result.started);
+        assert_eq!(result.processed, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(completed_ingests.len(), 1);
+        assert_eq!(
+            completed_ingests[0].source_metadata.relative_path,
+            "agent-maintained-graph.md"
+        );
+        assert_eq!(
+            completed_ingests[0].source_metadata.source_path,
+            source.display().to_string()
+        );
+        assert_eq!(
+            completed_ingests[0].source_metadata.content_hash,
+            queue.records[0].content_hash
+        );
+        assert_eq!(
+            completed_ingests[0].source_metadata.source_id,
+            completed_ingests[0].manifest.source_id
+        );
+        assert_eq!(
+            completed_ingests[0].record.queue_id,
+            queue.records[0].queue_id
+        );
+        assert_eq!(completed_ingests[0].record.status, "ingested");
+        assert!(completed_ingests[0].source_metadata.started_at.is_some());
+        assert!(completed_ingests[0].source_metadata.completed_at.is_some());
+        let queue = read_markdown_ingest_queue(&paths).expect("read processed queue");
+        assert_eq!(queue.records.len(), 1);
+        assert_eq!(queue.records[0].status, "ingested");
+        assert!(queue.records[0].started_at.is_some());
+        assert!(queue.records[0].completed_at.is_some());
+        assert!(workspace_root.join("brain-manifest.json").exists());
+        assert!(nodes_path.exists());
+        assert!(workspace_root.join("graph/edges.json").exists());
+        assert!(workspace_root.join("graph/claims.json").exists());
+        assert!(workspace_root.join("memory/records.json").exists());
+        assert!(workspace_root.join("wiki/index.md").exists());
+
+        let manifest: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json")).expect("manifest");
+        assert_eq!(manifest.sources.len(), 1);
+        assert_eq!(manifest.sources[0].format, "markdown");
+        assert!(!manifest.nodes.is_empty());
+        assert!(!manifest.claims.is_empty());
+        let materialized_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&nodes_path).expect("read materialized nodes");
+        assert_eq!(materialized_nodes, manifest.nodes);
+        assert!(materialized_nodes.iter().any(|node| {
+            node.label == "Agent-maintained graph"
+                && node.source_ids == vec![manifest.sources[0].source_id.clone()]
+                && !node.evidence_ids.is_empty()
+        }));
+        let candidates_path = workspace_root
+            .join("artifacts")
+            .join(&manifest.sources[0].source_id)
+            .join("node-candidates.json");
+        let candidates: Vec<MarkdownNodeCandidate> =
+            read_json_artifact(&candidates_path).expect("node candidates");
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.label == "Agent-maintained graph"));
+        assert!(manifest
+            .nodes
+            .iter()
+            .any(|node| node.label == "Agent-maintained graph"));
+        let wiki_index =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki index");
+        assert!(!wiki_index.contains("Stale Brain Index"));
+        assert!(wiki_index.contains(&format!(
+            "[{}](sources/{}.md)",
+            manifest.sources[0].source_id,
+            sanitize_name(&manifest.sources[0].source_id)
+        )));
+        assert!(wiki_index
+            .contains("[Agent-maintained graph](topics/concept-agent-maintained-graph.md)"));
+        let topic_path = "wiki/topics/concept-agent-maintained-graph.md";
+        let source_wiki_path = format!(
+            "wiki/sources/{}.md",
+            sanitize_name(&manifest.sources[0].source_id)
+        );
+        assert!(manifest
+            .wiki_pages
+            .iter()
+            .any(|page| page.path == topic_path
+                && page.node_refs == vec!["concept-agent-maintained-graph".to_string()]
+                && page.source_refs == vec![manifest.sources[0].source_id.clone()]));
+        assert!(manifest
+            .wiki_pages
+            .iter()
+            .any(|page| page.path == source_wiki_path
+                && page.source_refs == vec![manifest.sources[0].source_id.clone()]));
+        let topic_body =
+            fs::read_to_string(workspace_root.join(topic_path)).expect("read topic wiki page");
+        assert!(topic_body.contains("# Agent-maintained graph"));
+        assert!(topic_body.contains("- Node: `concept-agent-maintained-graph`"));
+        assert!(topic_body.contains(&format!("- Sources: {}", manifest.sources[0].source_id)));
+        assert!(topic_body.contains("## Source References"));
+        assert!(topic_body.contains(&format!(
+            "[{}](../sources/{}.md)",
+            manifest.sources[0].source_id,
+            sanitize_name(&manifest.sources[0].source_id)
+        )));
+        assert!(topic_body.contains(&source.display().to_string()));
+        assert!(topic_body.contains(&manifest.sources[0].markdown_path));
+        let source_page_body = fs::read_to_string(workspace_root.join(&source_wiki_path))
+            .expect("read source wiki page");
+        assert!(source_page_body.contains(&format!("# {}", manifest.sources[0].source_id)));
+        assert!(source_page_body.contains("agent-maintained-graph.md"));
+        let persisted_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("read persisted snapshot");
+        assert!(persisted_snapshot
+            .wiki_pages
+            .iter()
+            .any(|page| page.path == topic_path));
+        let read_topic = handle_read_wiki_page(ReadWikiPageRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            path: topic_path.into(),
+        })
+        .expect("read topic through wiki read path");
+        assert_eq!(read_topic.page.path, topic_path);
+        assert!(read_topic.page.body.contains("# Agent-maintained graph"));
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events");
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::SourceIngestQueued));
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::SourceCompiled));
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == BrainEventKind::GraphMaterialized));
+        let read_snapshot = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("read latest graph/wiki snapshot after ingest");
+        assert_eq!(
+            read_snapshot.latest_readable_snapshot_path,
+            "state/latest-readable-snapshot.json"
+        );
+        assert_eq!(
+            read_snapshot.snapshot_id,
+            format!("snapshot-default-{}", manifest.generated_at)
+        );
+        assert_eq!(read_snapshot.nodes, manifest.nodes);
+        assert_eq!(read_snapshot.edges, manifest.relations);
+        assert_eq!(read_snapshot.claims, manifest.claims);
+        assert_eq!(
+            read_snapshot.memory_refs,
+            manifest
+                .memories
+                .iter()
+                .map(|memory| memory.memory_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(read_snapshot
+            .materialized_paths
+            .iter()
+            .any(|path| path == "graph/nodes.json"));
+        assert!(read_snapshot
+            .materialized_paths
+            .iter()
+            .any(|path| path == "wiki/index.md"));
+        assert!(workspace_root
+            .join("state/latest-readable-snapshot.json")
+            .exists());
+
+        let second_result =
+            run_markdown_ingest_worker(&paths, &queue, &store).expect("rerun ingest worker");
+        assert!(!second_result.started);
+        assert_eq!(second_result.processed, 0);
+    }
+
+    #[test]
+    fn replay_state_applies_node_edge_claim_and_memory_events_in_memory() {
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-replay".into(),
+        };
+        let source_ref = "source-agent-graph-loop".to_string();
+        let source_path = "sources/agent-graph-loop.md".to_string();
+        let node_a_id = "concept-agent-graph-loop".to_string();
+        let node_b_id = "concept-materialized-wiki".to_string();
+
+        let node_a = BrainUpdateProposal {
+            proposal_id: "proposal-replay-node-a".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Node,
+            status: BrainProposalStatus::Accepted,
+            actor: actor.clone(),
+            scope: BrainScope::Project,
+            title: "Agent graph loop".into(),
+            body: "Agent graph loop is maintained from events.".into(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![source_ref.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["ev-node-a".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Agent graph loop".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: source_path.clone(),
+                    node_id: Some(node_a_id.clone()),
+                    aliases: vec!["Autonomous graph loop".into()],
+                    source_refs: vec![source_ref.clone()],
+                    evidence_refs: vec!["ev-node-a".into()],
+                    reason: Some("source introduced the graph loop".into()),
+                },
+            }),
+            created_at: 100,
+        };
+        let node_b = BrainUpdateProposal {
+            proposal_id: "proposal-replay-node-b".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Node,
+            status: BrainProposalStatus::Accepted,
+            actor: actor.clone(),
+            scope: BrainScope::Project,
+            title: "Materialized wiki".into(),
+            body: "Materialized wiki is rebuilt from graph state.".into(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![source_ref.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["ev-node-b".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Materialized wiki".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: source_path.clone(),
+                    node_id: Some(node_b_id.clone()),
+                    aliases: Vec::new(),
+                    source_refs: vec![source_ref.clone()],
+                    evidence_refs: vec!["ev-node-b".into()],
+                    reason: Some("source introduced the wiki read model".into()),
+                },
+            }),
+            created_at: 110,
+        };
+        let edge = BrainUpdateProposal {
+            proposal_id: "proposal-replay-edge".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Link,
+            status: BrainProposalStatus::Accepted,
+            actor: actor.clone(),
+            scope: BrainScope::Project,
+            title: "materializes".into(),
+            body: "Agent graph loop materializes the wiki.".into(),
+            target_node_id: Some(node_b_id.clone()),
+            target_source_id: None,
+            relation_kind: Some(BrainRelationKind::Supports),
+            source_refs: vec![source_ref.clone()],
+            node_refs: vec![node_a_id.clone(), node_b_id.clone()],
+            evidence_refs: vec!["ev-edge".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                edge: AgentNewEdgePayload {
+                    source_node_id: node_a_id.clone(),
+                    target_node_id: node_b_id.clone(),
+                    kind: BrainRelationKind::Supports,
+                    label: "materializes".into(),
+                    source_path: source_path.clone(),
+                    edge_id: Some("edge-agent-loop-materializes-wiki".into()),
+                    source_refs: vec![source_ref.clone()],
+                    evidence_refs: vec!["ev-edge".into()],
+                    reason: Some("source links the loop to wiki output".into()),
+                },
+            }),
+            created_at: 120,
+        };
+        let claim = BrainUpdateProposal {
+            proposal_id: "proposal-replay-claim".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Claim,
+            status: BrainProposalStatus::Accepted,
+            actor: actor.clone(),
+            scope: BrainScope::Project,
+            title: "Events drive materialized graph state".into(),
+            body: "Events JSONL drives the materialized graph and wiki.".into(),
+            target_node_id: Some(node_a_id.clone()),
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![source_ref.clone()],
+            node_refs: vec![node_a_id.clone()],
+            evidence_refs: vec!["ev-claim".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement: "Events JSONL drives the materialized graph and wiki.".into(),
+                    source_path: source_path.clone(),
+                    claim_id: Some("claim-events-drive-materialized-state".into()),
+                    topic_refs: vec![node_a_id.clone()],
+                    source_refs: vec![source_ref.clone()],
+                    evidence_refs: vec!["ev-claim".into()],
+                    reason: Some("source states the replay contract".into()),
+                },
+            }),
+            created_at: 130,
+        };
+        let memory = BrainUpdateProposal {
+            proposal_id: "proposal-replay-memory".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Memory,
+            status: BrainProposalStatus::Accepted,
+            actor,
+            scope: BrainScope::Project,
+            title: "Replay engine contract".into(),
+            body: "Replay keeps node, edge, claim, and memory state in memory before writing read models.".into(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![source_ref.clone()],
+            node_refs: vec![node_a_id.clone()],
+            evidence_refs: vec!["ev-memory".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewMemory {
+                memory: AgentNewMemoryPayload {
+                    title: "Replay engine contract".into(),
+                    body: "Replay keeps node, edge, claim, and memory state in memory before writing read models.".into(),
+                    source_path,
+                    memory_id: Some("memory-replay-engine-contract".into()),
+                    source_refs: vec![source_ref.clone()],
+                    evidence_refs: vec!["ev-memory".into()],
+                    reason: Some("source should become durable memory".into()),
+                },
+            }),
+            created_at: 140,
+        };
+        let events = [&node_a, &node_b, &edge, &claim, &memory]
+            .into_iter()
+            .map(|proposal| brain_graph_mutation_applied_event(proposal).expect("mutation event"))
+            .collect::<Vec<_>>();
+
+        let mut replay_state = BrainReplayState::new(DEFAULT_WORKSPACE_ID);
+        for event in &events {
+            replay_state.apply_event(event).expect("apply replay event");
+        }
+        let snapshot = replay_state.into_snapshot();
+
+        assert_eq!(snapshot.nodes.len(), 2);
+        assert!(snapshot.nodes.iter().any(|node| {
+            node.node_id == node_a_id
+                && node.aliases == vec!["Autonomous graph loop".to_string()]
+                && node.source_ids == vec![source_ref.clone()]
+                && node.evidence_ids == vec!["ev-node-a".to_string()]
+        }));
+        assert!(snapshot.relations.iter().any(|relation| {
+            relation.relation_id == "edge-agent-loop-materializes-wiki"
+                && relation.source_node_id == node_a_id
+                && relation.target_node_id == node_b_id
+                && relation.kind == BrainRelationKind::Supports
+        }));
+        assert!(snapshot.claims.iter().any(|claim| {
+            claim.claim_id == "claim-events-drive-materialized-state"
+                && claim.topic_refs == vec![node_a_id.clone()]
+                && claim.status == "supported"
+        }));
+        assert!(snapshot.memories.iter().any(|memory| {
+            memory.memory_id == "memory-replay-engine-contract"
+                && memory.source_refs == vec![source_ref.clone()]
+                && memory.evidence_refs == vec!["ev-memory".to_string()]
+        }));
+    }
+
+    #[test]
+    fn reconstruct_brain_replays_persisted_events_to_timestamp_and_version() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+
+        let source = SourceRecord {
+            source_id: "source-replay".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "sources/replay.md".into(),
+            source_path: "sources/replay.md".into(),
+            markdown_path: "sources/replay.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 100,
+        };
+        let base_node = BrainNodeRecord {
+            node_id: "concept-event-ledger".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Event ledger".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-ledger".into()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(0.9),
+            updated_at: 100,
+        };
+        let base_page = WikiPage {
+            page_id: "topic-concept-event-ledger".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            path: "wiki/topics/concept-event-ledger.md".into(),
+            title: "Event ledger".into(),
+            body: "# Event ledger\n\nReplay starts from this materialized graph event.\n".into(),
+            node_refs: vec![base_node.node_id.clone()],
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec!["ev-ledger".into()],
+            updated_at: 100,
+        };
+        let extraction = StructuredExtractionArtifact {
+            artifact_id: "extraction-source-replay".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            source_id: source.source_id.clone(),
+            extractor: "agent-replay".into(),
+            extractor_model: Some("duckdocs-agent".into()),
+            source_refs: vec![source.source_id.clone()],
+            page_refs: Vec::new(),
+            entities: Vec::new(),
+            topics: Vec::new(),
+            claims: Vec::new(),
+            relations: Vec::new(),
+            memories: Vec::new(),
+            evidence_refs: Vec::new(),
+            confidence: Some(0.8),
+            provenance: "Replay fixture extraction must materialize in the existing output layout."
+                .into(),
+            created_at: 100,
+        };
+        let base_payload = materialized_graph_event_payload_json(
+            100,
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&base_node),
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&base_page),
+            &[],
+            &[],
+            std::slice::from_ref(&extraction),
+        )
+        .expect("base payload");
+        let base_event = BrainEvent {
+            event_id: "evt-base-materialized".into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some("graph_materialized".into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-engine".into(),
+            },
+            source_refs: vec![source.source_id.clone()],
+            source_markdown_refs: vec![source.markdown_path.clone()],
+            node_refs: vec![base_node.node_id.clone()],
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: vec![base_node.node_id.clone()],
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: vec!["ev-ledger".into()],
+            payload_json: base_payload,
+            causality: BrainEventCausality {
+                snapshot_id: Some("snapshot-default-100".into()),
+                materialized_version: Some(100),
+                ..Default::default()
+            },
+            confidence: None,
+            policy_result: "materialized".into(),
+            created_at: 100,
+        };
+        let proposal = BrainUpdateProposal {
+            proposal_id: "proposal-replay-node".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Node,
+            status: BrainProposalStatus::Accepted,
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            scope: BrainScope::Project,
+            title: "Replay node".into(),
+            body: "Replay node should appear only after its mutation event.".into(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec![source.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["ev-replay".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Replay node".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: source.markdown_path.clone(),
+                    node_id: Some("concept-replay-node".into()),
+                    aliases: Vec::new(),
+                    source_refs: vec![source.source_id.clone()],
+                    evidence_refs: vec!["ev-replay".into()],
+                    reason: Some("test mutation".into()),
+                },
+            }),
+            created_at: 200,
+        };
+        let mutation_event = brain_graph_mutation_applied_event(&proposal).expect("mutation event");
+        write_brain_events_jsonl(
+            &workspace_root.join("events/brain_events.jsonl"),
+            &[base_event.clone(), mutation_event.clone()],
+        )
+        .expect("write events");
+
+        let historical = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            up_to_timestamp: Some(150),
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: Some(temp.path().join("replay-150").display().to_string()),
+            write_materialized: false,
+        })
+        .expect("reconstruct timestamp");
+        assert_eq!(historical.replayed_event_count, 1);
+        assert!(historical
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-event-ledger"));
+        assert!(!historical
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-replay-node"));
+        assert!(Path::new(&historical.output_root)
+            .join("graph/nodes.json")
+            .exists());
+        assert!(Path::new(&historical.output_root)
+            .join("wiki/index.md")
+            .exists());
+        assert!(Path::new(&historical.output_root)
+            .join("artifacts/source-replay/extraction.json")
+            .exists());
+        assert!(Path::new(&historical.output_root)
+            .join("reviews/proposed-updates/.gitkeep")
+            .exists());
+        assert!(Path::new(&historical.output_root)
+            .join("reviews/lint-reports/.gitkeep")
+            .exists());
+        let historical_manifest: BrainRepoSnapshot =
+            read_json_artifact(&Path::new(&historical.output_root).join("brain-manifest.json"))
+                .expect("read replayed manifest");
+        assert_eq!(historical_manifest.extractions, vec![extraction]);
+
+        let reconstructed = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            up_to_timestamp: None,
+            up_to_materialized_version: Some(200),
+            up_to_event_id: None,
+            output_root: Some(temp.path().join("replay-200").display().to_string()),
+            write_materialized: false,
+        })
+        .expect("reconstruct version");
+        assert_eq!(reconstructed.replayed_event_count, 2);
+        assert_eq!(
+            reconstructed.selected_event_id,
+            Some(mutation_event.event_id.clone())
+        );
+        assert!(reconstructed
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-replay-node"
+                && node.source_ids == vec![source.source_id.clone()]
+                && node.evidence_ids == vec!["ev-replay".to_string()]));
+        let replayed_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&Path::new(&reconstructed.output_root).join("graph/nodes.json"))
+                .expect("read replayed nodes");
+        assert!(replayed_nodes
+            .iter()
+            .any(|node| node.node_id == "concept-replay-node"));
+
+        let invalid_target = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: Some("evt-missing-rollback-target".into()),
+            output_root: Some(
+                temp.path()
+                    .join("replay-invalid-target")
+                    .display()
+                    .to_string(),
+            ),
+            write_materialized: true,
+        })
+        .expect_err("invalid replay target should not roll back to the latest event");
+        assert!(format!("{invalid_target:#}").contains("evt-missing-rollback-target"));
+        assert!(!temp.path().join("replay-invalid-target").exists());
+        let unchanged_events =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("events remain unchanged after invalid target");
+        assert_eq!(unchanged_events, vec![base_event, mutation_event]);
+    }
+
+    #[test]
+    fn reconstruct_brain_uses_materialized_version_order_for_incremental_replay() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+
+        let older_timestamp_node = BrainNodeRecord {
+            node_id: "concept-appended-later".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Appended later".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: Vec::new(),
+            source_ids: Vec::new(),
+            confidence: None,
+            updated_at: 100,
+        };
+        let newer_timestamp_node = BrainNodeRecord {
+            node_id: "concept-appended-first".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Appended first".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: Vec::new(),
+            source_ids: Vec::new(),
+            confidence: None,
+            updated_at: 200,
+        };
+        let first_event = BrainEvent {
+            event_id: "evt-appended-first".into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some("graph_materialized".into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-engine".into(),
+            },
+            source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
+            node_refs: vec![newer_timestamp_node.node_id.clone()],
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: vec![newer_timestamp_node.node_id.clone()],
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: Vec::new(),
+            payload_json: materialized_graph_event_payload_json(
+                200,
+                &[],
+                std::slice::from_ref(&newer_timestamp_node),
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("first payload"),
+            causality: BrainEventCausality {
+                snapshot_id: Some("snapshot-default-200".into()),
+                materialized_version: Some(200),
+                ..Default::default()
+            },
+            confidence: None,
+            policy_result: "materialized".into(),
+            created_at: 200,
+        };
+        let appended_later_event = BrainEvent {
+            event_id: "evt-appended-later".into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some("graph_materialized".into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "duckdocs-engine".into(),
+            },
+            source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
+            node_refs: vec![older_timestamp_node.node_id.clone()],
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: vec![older_timestamp_node.node_id.clone()],
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: Vec::new(),
+            payload_json: materialized_graph_event_payload_json(
+                100,
+                &[],
+                std::slice::from_ref(&older_timestamp_node),
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("later payload"),
+            causality: BrainEventCausality {
+                snapshot_id: Some("snapshot-default-100".into()),
+                materialized_version: Some(100),
+                previous_snapshot_id: Some("snapshot-default-200".into()),
+                ..Default::default()
+            },
+            confidence: None,
+            policy_result: "materialized".into(),
+            created_at: 100,
+        };
+        write_brain_events_jsonl(
+            &workspace_root.join("events/brain_events.jsonl"),
+            &[first_event.clone(), appended_later_event],
+        )
+        .expect("write out-of-time-order events");
+
+        let replay = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: Some(
+                temp.path()
+                    .join("version-order-replay")
+                    .display()
+                    .to_string(),
+            ),
+            write_materialized: false,
+        })
+        .expect("replay version-ordered events");
+
+        assert_eq!(replay.replayed_event_count, 2);
+        assert_eq!(replay.selected_event_id, Some(first_event.event_id.clone()));
+        assert_eq!(replay.snapshot.nodes, vec![newer_timestamp_node]);
+        assert_eq!(
+            replay.selected_event_id.as_deref(),
+            Some("evt-appended-first")
+        );
+    }
+
+    #[test]
+    fn markdown_reingest_identical_source_preserves_unchanged_node_revisions() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("agent-maintained-graph.md"),
+            "# Agent-maintained graph\n\nEvents JSONL is the source of truth.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        let nodes_path = workspace_root.join("graph/nodes.json");
+        let mut nodes_before: Vec<BrainNodeRecord> =
+            read_json_artifact(&nodes_path).expect("read nodes before");
+        for node in &mut nodes_before {
+            node.updated_at = 123;
+        }
+        write_json_pretty(&nodes_path, &nodes_before).expect("seed stable node revisions");
+
+        let mut requeue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        requeue.records[0].status = "queued".into();
+        requeue.records[0].started_at = None;
+        requeue.records[0].completed_at = None;
+        requeue.records[0].error_message = None;
+        write_markdown_ingest_queue(&paths, &requeue).expect("requeue identical source");
+
+        let reingest_result =
+            run_markdown_ingest_worker(&paths, &requeue, &store).expect("reingest");
+        assert!(reingest_result.started);
+        assert_eq!(reingest_result.processed, 1);
+
+        let nodes_after: Vec<BrainNodeRecord> =
+            read_json_artifact(&nodes_path).expect("read nodes after");
+        assert_eq!(nodes_after, nodes_before);
+        assert_eq!(
+            nodes_after
+                .iter()
+                .filter(|node| node.node_id == "concept-agent-maintained-graph")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn markdown_reingest_identical_source_preserves_edges_without_repeated_relation_changes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("agent-maintained-graph.md"),
+            "# Agent-maintained graph\n\n## Event ledger\n\nAgent-maintained graph depends on Event ledger for replayable changes.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        let edges_path = workspace_root.join("graph/edges.json");
+        let mut edges_before: Vec<BrainRelationRecord> =
+            read_json_artifact(&edges_path).expect("read edges before");
+        assert!(edges_before.iter().any(|edge| {
+            edge.source_node_id.contains("agent-maintained-graph")
+                && edge.target_node_id.contains("event-ledger")
+                && edge.kind == BrainRelationKind::DependsOn
+                && edge.label == "Depends on"
+        }));
+        for edge in &mut edges_before {
+            edge.updated_at = 456;
+        }
+        write_json_pretty(&edges_path, &edges_before).expect("seed stable edge revisions");
+
+        let mut requeue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        requeue.records[0].status = "queued".into();
+        requeue.records[0].started_at = None;
+        requeue.records[0].completed_at = None;
+        requeue.records[0].error_message = None;
+        write_markdown_ingest_queue(&paths, &requeue).expect("requeue identical source");
+
+        let reingest_result =
+            run_markdown_ingest_worker(&paths, &requeue, &store).expect("reingest");
+        assert!(reingest_result.started);
+        assert_eq!(reingest_result.processed, 1);
+
+        let edges_after: Vec<BrainRelationRecord> =
+            read_json_artifact(&edges_path).expect("read edges after");
+        assert_eq!(edges_after, edges_before);
+        let edge_ids = edges_after
+            .iter()
+            .map(|edge| edge.relation_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(edge_ids.len(), edges_after.len());
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read events");
+        let materialized_relation_events = events
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event
+                        .relation_refs
+                        .iter()
+                        .any(|relation_id| relation_id.contains("agent-maintained-graph"))
+            })
+            .count();
+        assert_eq!(materialized_relation_events, 1);
+    }
+
+    #[test]
+    fn markdown_reingest_identical_source_reuses_existing_wiki_entry() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("agent-maintained-graph.md"),
+            "# Agent-maintained graph\n\nEvents JSONL is the source of truth.\nThe wiki entry stays stable across identical re-ingest runs.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        let snapshot_before: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read manifest before");
+        let source = snapshot_before
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("agent-maintained-graph.md"))
+            .expect("source record before")
+            .clone();
+        let source_page_path = format!("wiki/sources/{}.md", sanitize_name(&source.source_id));
+        assert_eq!(
+            snapshot_before
+                .wiki_pages
+                .iter()
+                .filter(|page| page.path == source_page_path)
+                .count(),
+            1
+        );
+        let source_page_body_before =
+            fs::read_to_string(workspace_root.join(&source_page_path)).expect("source wiki before");
+        let index_before =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("index before");
+        let source_link = format!(
+            "[{}](sources/{}.md)",
+            source.source_id,
+            sanitize_name(&source.source_id)
+        );
+        assert_eq!(index_before.matches(&source_link).count(), 1);
+
+        let mut requeue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        requeue.records[0].status = "queued".into();
+        requeue.records[0].started_at = None;
+        requeue.records[0].completed_at = None;
+        requeue.records[0].error_message = None;
+        write_markdown_ingest_queue(&paths, &requeue).expect("requeue identical source");
+
+        let reingest_result =
+            run_markdown_ingest_worker(&paths, &requeue, &store).expect("reingest");
+        assert!(reingest_result.started);
+        assert_eq!(reingest_result.processed, 1);
+
+        let snapshot_after: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read manifest after");
+        assert_eq!(
+            snapshot_after
+                .sources
+                .iter()
+                .filter(|record| record.source_id == source.source_id)
+                .count(),
+            1
+        );
+        assert_eq!(
+            snapshot_after
+                .wiki_pages
+                .iter()
+                .filter(|page| page.path == source_page_path)
+                .count(),
+            1
+        );
+        assert_eq!(
+            snapshot_after
+                .wiki_pages
+                .iter()
+                .filter(|page| {
+                    page.path.starts_with("wiki/sources/")
+                        && page.source_refs == vec![source.source_id.clone()]
+                })
+                .count(),
+            1
+        );
+        let index_after =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("index after");
+        assert_eq!(index_after.matches(&source_link).count(), 1);
+        let source_page_body_after =
+            fs::read_to_string(workspace_root.join(&source_page_path)).expect("source wiki after");
+        assert!(source_page_body_after.starts_with(source_page_body_before.trim_end()));
+        let source_page_files = fs::read_dir(workspace_root.join("wiki/sources"))
+            .expect("source wiki dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("source wiki entries");
+        assert_eq!(source_page_files.len(), 1);
+    }
+
+    #[test]
+    fn markdown_reingest_identical_source_keeps_claim_memory_and_wiki_counts_stable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("agent-maintained-graph.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth for graph replay.\nThe wiki entry stays stable across identical re-ingest runs.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        let snapshot_before: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read manifest before");
+        let source = snapshot_before
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("agent-maintained-graph.md"))
+            .expect("source record before")
+            .clone();
+        let source_page_path = format!("wiki/sources/{}.md", sanitize_name(&source.source_id));
+        let source_link = format!(
+            "[{}](sources/{}.md)",
+            source.source_id,
+            sanitize_name(&source.source_id)
+        );
+        let claim_count_before = snapshot_before.claims.len();
+        let wiki_page_count_before = snapshot_before.wiki_pages.len();
+        let memory_count_before = read_memory_records(&workspace_root)
+            .expect("read memories before")
+            .len();
+        let wiki_source_file_count_before = fs::read_dir(workspace_root.join("wiki/sources"))
+            .expect("source wiki dir before")
+            .count();
+        let index_source_link_count_before =
+            fs::read_to_string(workspace_root.join("wiki/index.md"))
+                .expect("index before")
+                .matches(&source_link)
+                .count();
+        assert!(claim_count_before > 0);
+        assert!(memory_count_before > 0);
+        assert!(wiki_page_count_before > 0);
+        assert_eq!(index_source_link_count_before, 1);
+        assert!(workspace_root.join(&source_page_path).exists());
+        let events_before =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("read events before reingest");
+        let graph_mutation_count_before = events_before
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event.policy_result == "auto_applied"
+            })
+            .count();
+        let stable_materialized_paths = [
+            "brain-manifest.json".to_string(),
+            "graph/nodes.json".to_string(),
+            "graph/edges.json".to_string(),
+            "graph/claims.json".to_string(),
+            "graph/evidence.json".to_string(),
+            "graph/entities.json".to_string(),
+            "memory/records.json".to_string(),
+            "wiki/index.md".to_string(),
+            source_page_path.clone(),
+        ];
+        let stable_materialized_before = stable_materialized_paths
+            .iter()
+            .map(|path| {
+                (
+                    path.clone(),
+                    fs::read(workspace_root.join(path)).expect("read stable materialized file"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let mut requeue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        requeue.records[0].status = "queued".into();
+        requeue.records[0].started_at = None;
+        requeue.records[0].completed_at = None;
+        requeue.records[0].error_message = None;
+        write_markdown_ingest_queue(&paths, &requeue).expect("requeue identical source");
+
+        let reingest_result =
+            run_markdown_ingest_worker(&paths, &requeue, &store).expect("reingest");
+        assert!(reingest_result.started);
+        assert_eq!(reingest_result.processed, 1);
+
+        let snapshot_after: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read manifest after");
+        let memory_count_after = read_memory_records(&workspace_root)
+            .expect("read memories after")
+            .len();
+        let wiki_source_file_count_after = fs::read_dir(workspace_root.join("wiki/sources"))
+            .expect("source wiki dir after")
+            .count();
+        let index_source_link_count_after =
+            fs::read_to_string(workspace_root.join("wiki/index.md"))
+                .expect("index after")
+                .matches(&source_link)
+                .count();
+
+        assert_eq!(snapshot_after.claims.len(), claim_count_before);
+        assert_eq!(memory_count_after, memory_count_before);
+        assert_eq!(snapshot_after.wiki_pages.len(), wiki_page_count_before);
+        assert_eq!(wiki_source_file_count_after, wiki_source_file_count_before);
+        assert_eq!(
+            index_source_link_count_after,
+            index_source_link_count_before
+        );
+        assert_eq!(
+            snapshot_after
+                .wiki_pages
+                .iter()
+                .filter(|page| page.path == source_page_path)
+                .count(),
+            1
+        );
+        let stable_materialized_after = stable_materialized_paths
+            .iter()
+            .map(|path| {
+                (
+                    path.clone(),
+                    fs::read(workspace_root.join(path)).expect("read stable materialized file"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(stable_materialized_after, stable_materialized_before);
+
+        let events_after =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("read events after reingest");
+        let graph_mutation_count_after = events_after
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event.policy_result == "auto_applied"
+            })
+            .count();
+        assert_eq!(graph_mutation_count_after, graph_mutation_count_before);
+        let noop_events = events_after
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event.operation_type.as_deref() == Some("graph_materialize_noop")
+                    && event.policy_result == "idempotent_noop"
+                    && event.source_refs == vec![source.source_id.clone()]
+                    && event.payload_json.contains("\"changedFiles\":[]")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(noop_events.len(), 1);
+    }
+
+    #[test]
+    fn markdown_ingest_worker_records_source_errors_in_queue_and_event_payload() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let source = source_dir.join("missing-after-trigger.md");
+        fs::write(&source, "# Missing after trigger\n").expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+        fs::remove_file(&source).expect("remove source");
+
+        let queue = read_markdown_ingest_queue(&paths).expect("read queue");
+        assert_eq!(queue.records[0].trigger_status, "accepted");
+        assert_eq!(queue.records[0].trigger_error_message, None);
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let result = run_markdown_ingest_worker(&paths, &queue, &store).expect("run ingest worker");
+
+        assert!(result.started);
+        assert_eq!(result.processed, 0);
+        assert_eq!(result.failed, 1);
+        let queue = read_markdown_ingest_queue(&paths).expect("read failed queue");
+        assert_eq!(queue.records[0].status, "failed");
+        assert_eq!(queue.records[0].trigger_status, "accepted");
+        let error = queue.records[0]
+            .error_message
+            .as_deref()
+            .expect("queue error");
+        assert!(error.contains("failed reading queued markdown source"));
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events");
+        let failed_event = events
+            .iter()
+            .find(|event| {
+                event.event_type == BrainEventKind::SourceCompiled
+                    && event.policy_result == "failed"
+            })
+            .expect("failed event");
+        let payload: MarkdownIngestQueueRecord =
+            serde_json::from_str(&failed_event.payload_json).expect("failed payload");
+        assert_eq!(payload.status, "failed");
+        assert_eq!(payload.trigger_status, "accepted");
+        assert!(payload
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("failed reading queued markdown source"));
+    }
+
+    #[test]
+    fn markdown_node_candidates_match_existing_materialized_graph_nodes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        fs::write(
+            source_dir.join("first.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth.\n",
+        )
+        .expect("first source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        fs::write(
+            source_dir.join("second.md"),
+            "# Agent maintained graph\n\nThe autonomous agent keeps the graph fresh.\n\n## Autonomous memory loop\n\nThe agent records durable memories from source evidence.\n",
+        )
+        .expect("second source");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        let enqueue = enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("enqueue");
+        drop(writer);
+        assert_eq!(enqueue.enqueued.len(), 1);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let matched = snapshot
+            .nodes
+            .iter()
+            .find(|node| normalize_key(&node.label) == "agent-maintained-graph")
+            .expect("matched graph node");
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| {
+                    node.kind == BrainNodeKind::Concept
+                        && node
+                            .aliases
+                            .iter()
+                            .chain(std::iter::once(&node.label))
+                            .any(|label| normalize_key(label) == "agent-maintained-graph")
+                })
+                .count(),
+            1
+        );
+        assert!(matched.source_ids.len() >= 2);
+        let second_source = snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("second.md"))
+            .expect("second source record");
+        let candidates_path = workspace_root
+            .join("artifacts")
+            .join(&second_source.source_id)
+            .join("node-candidates.json");
+        let candidates: Vec<MarkdownNodeCandidate> =
+            read_json_artifact(&candidates_path).expect("second node candidates");
+        let candidate = candidates
+            .iter()
+            .find(|candidate| candidate.label == "Agent maintained graph")
+            .expect("matched candidate");
+        assert_eq!(
+            candidate.matched_node_id.as_deref(),
+            Some(matched.node_id.as_str())
+        );
+        assert_eq!(
+            candidate.matched_node_label.as_deref(),
+            Some("Agent-maintained graph")
+        );
+        assert!(candidate.match_score.unwrap_or_default() >= 0.72);
+        let new_node = snapshot
+            .nodes
+            .iter()
+            .find(|node| normalize_key(&node.label) == "autonomous-memory-loop")
+            .expect("new graph node from unmatched candidate");
+        assert_eq!(new_node.source_ids, vec![second_source.source_id.clone()]);
+        assert!(new_node
+            .evidence_ids
+            .iter()
+            .any(|evidence_id| evidence_id.contains("autonomous-memory-loop")));
+    }
+
+    #[test]
+    fn markdown_ingest_extracts_reviewable_matching_signals() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        fs::write(
+            source_dir.join("first.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth.\n",
+        )
+        .expect("first source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        fs::write(
+            source_dir.join("signals.md"),
+            "---\ntitle: Agent maintained graph\n---\n\n# Agent-maintained graph\n\n## Event ledger\n\nAgent-maintained graph depends on [[Event ledger]] and [Replay log](./replay.md) for rollback.\nAutonomous graph memory keeps durable source evidence for agent workflows.\n",
+        )
+        .expect("signals source");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("second enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("updated snapshot");
+        let source = snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("signals.md"))
+            .expect("signals source record");
+        let signals_path = workspace_root
+            .join("artifacts")
+            .join(&source.source_id)
+            .join("markdown-signals.json");
+        let signals: MarkdownSignalArtifact =
+            read_json_artifact(&signals_path).expect("markdown signals");
+
+        assert_eq!(signals.title.as_deref(), Some("Agent maintained graph"));
+        assert!(signals
+            .headings
+            .iter()
+            .any(|heading| heading.text == "Agent-maintained graph" && heading.level == 1));
+        assert!(signals
+            .headings
+            .iter()
+            .any(|heading| heading.text == "Event ledger" && heading.level == 2));
+        assert!(signals.links.iter().any(|link| {
+            link.label == "Event ledger" && link.target == "Event ledger" && link.kind == "wiki"
+        }));
+        assert!(signals.links.iter().any(|link| {
+            link.label == "Replay log" && link.target == "./replay.md" && link.kind == "markdown"
+        }));
+        assert!(signals.entities.iter().any(|entity| {
+            entity.label == "Agent maintained graph"
+                && entity.matched_node_label.as_deref() == Some("Agent-maintained graph")
+        }));
+        assert!(signals
+            .entities
+            .iter()
+            .any(|entity| entity.label == "Event ledger"));
+        assert!(signals
+            .keywords
+            .iter()
+            .any(|keyword| keyword.term == "agent"));
+        assert!(signals
+            .keywords
+            .iter()
+            .any(|keyword| keyword.term == "graph"));
+        assert_eq!(signals.source_refs, vec![source.source_id.clone()]);
+    }
+
+    #[test]
+    fn markdown_ingest_ranks_related_wiki_pages_from_existing_page_metadata_and_content() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        fs::write(
+            source_dir.join("existing.md"),
+            "# Agent Graph Loop\n\nThe agent graph loop keeps event logs replayable and rollback-ready.\n",
+        )
+        .expect("existing source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        fs::write(
+            source_dir.join("new.md"),
+            "# Graph Replay\n\nGraph Replay depends on Agent Graph Loop event logs for rollback and replay.\n",
+        )
+        .expect("new source");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("second enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("updated snapshot");
+        let new_source = snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("new.md"))
+            .expect("new source record");
+        let signals: MarkdownSignalArtifact = read_json_artifact(
+            &workspace_root
+                .join("artifacts")
+                .join(&new_source.source_id)
+                .join("markdown-signals.json"),
+        )
+        .expect("markdown signals");
+
+        let top_related = signals.related_pages.first().expect("ranked related page");
+        assert!(top_related
+            .path
+            .starts_with("wiki/topics/concept-agent-graph-loop"));
+        assert!(top_related.score > 0);
+        assert!(top_related.matched_terms.iter().any(|term| term == "graph"));
+        assert!(top_related.matched_terms.iter().any(|term| term == "agent"));
+        assert!(top_related.reason.contains("metadata"));
+        assert!(top_related.reason.contains("content"));
+
+        let source_wiki = fs::read_to_string(
+            workspace_root
+                .join("wiki/sources")
+                .join(format!("{}.md", sanitize_name(&new_source.source_id))),
+        )
+        .expect("source wiki page");
+        assert!(source_wiki.contains("## Related Wiki Pages"));
+        assert!(source_wiki.contains("topics/concept-agent-graph-loop.md"));
+        assert!(source_wiki.contains("score:"));
+        assert!(source_wiki.contains("reason:"));
+    }
+
+    #[test]
+    fn markdown_ingest_maps_changed_entities_to_existing_wiki_sections() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        fs::write(
+            source_dir.join("existing.md"),
+            "# Agent Graph Loop\n\nAgent Graph Loop keeps event logs replayable and rollback-ready.\n",
+        )
+        .expect("existing source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        fs::write(
+            source_dir.join("new.md"),
+            "# Graph Replay\n\nGraph Replay depends on Agent Graph Loop for replayable event logs.\nAgent Graph Loop keeps graph mutations auditable.\n",
+        )
+        .expect("new source");
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("second enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("updated snapshot");
+        let new_source = snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("new.md"))
+            .expect("new source record");
+        let targets: Vec<serde_json::Value> = read_json_artifact(
+            &workspace_root
+                .join("artifacts")
+                .join(&new_source.source_id)
+                .join("wiki-update-targets.json"),
+        )
+        .expect("wiki update target map");
+
+        assert!(targets.iter().any(|target| {
+            target["entityType"] == "node"
+                && target["entityId"] == "concept-agent-graph-loop"
+                && target["path"] == "wiki/topics/concept-agent-graph-loop.md"
+                && target["targetSection"] == "## Evidence"
+        }));
+        assert!(targets.iter().any(|target| {
+            target["entityType"] == "edge"
+                && target["path"] == "wiki/topics/concept-agent-graph-loop.md"
+                && target["targetSection"] == "## Relations"
+        }));
+        assert!(targets.iter().any(|target| {
+            target["entityType"] == "claim"
+                && target["path"] == "wiki/topics/concept-agent-graph-loop.md"
+                && target["targetSection"] == "## Claims"
+        }));
+    }
+
+    #[test]
+    fn reingesting_identical_markdown_reuses_existing_graph_nodes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        let markdown = "# Agent-maintained graph\n\nEvents JSONL remains the source of truth.\n";
+
+        fs::write(source_dir.join("first.md"), markdown).expect("first source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+        let first_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("first snapshot");
+        let first_node = first_snapshot
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == BrainNodeKind::Concept
+                    && normalize_key(&node.label) == "agent-maintained-graph"
+            })
+            .expect("first graph node")
+            .clone();
+
+        fs::write(source_dir.join("second.md"), markdown).expect("second source");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &first_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        let enqueue = enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("enqueue");
+        drop(writer);
+        assert_eq!(enqueue.enqueued.len(), 1);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let second_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("second snapshot");
+        let matching_nodes = second_snapshot
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.kind == BrainNodeKind::Concept
+                    && node
+                        .aliases
+                        .iter()
+                        .chain(std::iter::once(&node.label))
+                        .any(|label| normalize_key(label) == "agent-maintained-graph")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching_nodes.len(), 1);
+        assert_eq!(matching_nodes[0].node_id, first_node.node_id);
+        assert_eq!(matching_nodes[0].source_ids.len(), 2);
+
+        let second_source = second_snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("second.md"))
+            .expect("second source record");
+        let candidates_path = workspace_root
+            .join("artifacts")
+            .join(&second_source.source_id)
+            .join("node-candidates.json");
+        let candidates: Vec<MarkdownNodeCandidate> =
+            read_json_artifact(&candidates_path).expect("second node candidates");
+        let duplicate_candidate = candidates
+            .iter()
+            .find(|candidate| candidate.label == "Agent-maintained graph")
+            .expect("duplicate candidate");
+        assert_eq!(
+            duplicate_candidate.matched_node_id.as_deref(),
+            Some(first_node.node_id.as_str())
+        );
+        assert_eq!(
+            duplicate_candidate.matched_node_label.as_deref(),
+            Some(first_node.label.as_str())
+        );
+    }
+
+    #[test]
+    fn markdown_ingest_extracts_relationship_evidence_for_node_links() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("links.md"),
+            "# Agent-maintained graph\n\n## Event ledger\n\nAgent-maintained graph depends on Event ledger for replayable changes.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let source = snapshot.sources.first().expect("source");
+        let materialized_edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json"))
+                .expect("read materialized edges");
+        let relationship_path = workspace_root
+            .join("artifacts")
+            .join(&source.source_id)
+            .join("edge-candidates.json");
+        let relationship_evidence: Vec<MarkdownRelationshipEvidence> =
+            read_json_artifact(&relationship_path).expect("edge candidates");
+        let candidate = relationship_evidence
+            .iter()
+            .find(|evidence| {
+                evidence.source_label == "Agent-maintained graph"
+                    && evidence.target_label == "Event ledger"
+                    && evidence.relation_kind == BrainRelationKind::DependsOn
+                    && evidence.snippet.contains("depends on Event ledger")
+            })
+            .expect("depends-on edge candidate");
+        assert!(candidate.candidate_id.starts_with("edge-candidate-"));
+        assert_eq!(candidate.relation_label, "Depends on");
+        assert_eq!(
+            candidate.source_id.as_deref(),
+            Some(source.source_id.as_str())
+        );
+        assert_eq!(candidate.source_refs, vec![source.source_id.clone()]);
+        assert!(snapshot.relations.iter().any(|relation| {
+            relation.source_node_id.contains("agent-maintained-graph")
+                && relation.target_node_id.contains("event-ledger")
+                && relation.kind == BrainRelationKind::DependsOn
+                && relation.label == "Depends on"
+                && relation.confidence.unwrap_or_default() >= 0.82
+        }));
+        assert!(materialized_edges.iter().any(|edge| {
+            edge.source_node_id.contains("agent-maintained-graph")
+                && edge.target_node_id.contains("event-ledger")
+                && edge.kind == BrainRelationKind::DependsOn
+                && edge.label == "Depends on"
+                && !edge.evidence_ids.is_empty()
+        }));
+        assert!(snapshot
+            .evidence
+            .iter()
+            .any(|evidence| evidence.snippet.contains("depends on Event ledger")));
+    }
+
+    #[test]
+    fn markdown_ingest_extracts_claim_candidates_from_source_lines() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("claims.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth for graph replay.\nAgent-maintained graph depends on Events JSONL for rollback.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let source = snapshot.sources.first().expect("source");
+        let claim_candidates_path = workspace_root
+            .join("artifacts")
+            .join(&source.source_id)
+            .join("claim-candidates.json");
+        let candidates: Vec<MarkdownClaimCandidate> =
+            read_json_artifact(&claim_candidates_path).expect("claim candidates");
+        let source_truth_claim = candidates
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .statement
+                    .contains("Events JSONL remains the source of truth")
+            })
+            .expect("source truth claim");
+        assert!(source_truth_claim
+            .candidate_id
+            .starts_with("claim-candidate-"));
+        assert_eq!(
+            source_truth_claim.classification,
+            MarkdownClaimClassification::Decision
+        );
+        assert!(source_truth_claim.durable);
+        assert!(source_truth_claim.memory_candidate);
+        assert_eq!(
+            source_truth_claim.source_id.as_deref(),
+            Some(source.source_id.as_str())
+        );
+        assert_eq!(
+            source_truth_claim.source_refs,
+            vec![source.source_id.clone()]
+        );
+        assert_eq!(source_truth_claim.line_start, 3);
+        assert_eq!(source_truth_claim.line_end, 3);
+        assert_eq!(source_truth_claim.char_start, 0);
+        assert!(source_truth_claim.char_end > source_truth_claim.char_start);
+        assert_eq!(source_truth_claim.evidence_span.line_start, 3);
+        assert_eq!(source_truth_claim.evidence_span.line_end, 3);
+        assert_eq!(
+            source_truth_claim.evidence_span.source_path,
+            source_truth_claim.source_path
+        );
+        assert_eq!(
+            source_truth_claim.evidence_span.source_id.as_deref(),
+            Some(source.source_id.as_str())
+        );
+        assert!(source_truth_claim
+            .evidence_span
+            .snippet
+            .contains("source of truth"));
+        assert!(source_truth_claim.confidence >= 0.64);
+        let rollback_claim = candidates
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .statement
+                    .contains("Agent-maintained graph depends on Events JSONL")
+            })
+            .expect("durable fact claim");
+        assert_eq!(
+            rollback_claim.classification,
+            MarkdownClaimClassification::DurableFact
+        );
+        assert!(rollback_claim.durable);
+        assert!(!rollback_claim.memory_candidate);
+        assert!(snapshot.claims.iter().any(|claim| {
+            claim
+                .statement
+                .contains("Events JSONL remains the source of truth")
+                && claim.status == "candidate"
+                && claim.source_refs == vec![source.source_id.clone()]
+                && claim
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence_id| evidence_id.starts_with("ev-claim-"))
+        }));
+        let extraction = snapshot.extractions.first().expect("extraction");
+        assert!(extraction.claims.iter().any(|claim| {
+            claim
+                .statement
+                .contains("Agent-maintained graph depends on Events JSONL")
+                && claim.status == "candidate"
+                && !claim.evidence_refs.is_empty()
+                && !claim.page_refs.is_empty()
+        }));
+        assert!(extraction.evidence_refs.iter().any(|evidence| {
+            evidence.id == source_truth_claim.evidence_id
+                && evidence.snippet.contains("source of truth")
+        }));
+        let memory_candidate = extraction
+            .memories
+            .iter()
+            .find(|memory| {
+                memory
+                    .body
+                    .contains("Events JSONL remains the source of truth")
+            })
+            .expect("structured memory candidate");
+        assert_eq!(memory_candidate.kind, "decision");
+        assert_eq!(memory_candidate.status, "auto_apply_candidate");
+        assert!(memory_candidate.title.starts_with("Decision:"));
+        assert_eq!(memory_candidate.source_refs, vec![source.source_id.clone()]);
+        assert_eq!(
+            memory_candidate.evidence_refs,
+            vec![source_truth_claim.evidence_id.clone()]
+        );
+        assert!(!memory_candidate.page_refs.is_empty());
+        assert!(memory_candidate
+            .provenance
+            .contains("Autonomous markdown ingest promoted"));
+        let memory_records: Vec<MemoryRecord> =
+            read_json_artifact(&workspace_root.join("memory/records.json")).expect("memories");
+        assert!(memory_records.iter().any(|memory| {
+            memory.memory_id == memory_candidate.memory_id
+                && memory.title.starts_with("Decision:")
+                && memory
+                    .body
+                    .contains("Events JSONL remains the source of truth")
+                && memory.source_refs == vec![source.source_id.clone()]
+                && memory.evidence_refs == vec![source_truth_claim.evidence_id.clone()]
+        }));
+        let memory_event = snapshot
+            .events
+            .iter()
+            .find(|event| {
+                event.event_type == BrainEventKind::MemoryAccepted
+                    && event.policy_result == "auto_applied"
+                    && event
+                        .payload_json
+                        .contains("Events JSONL remains the source of truth")
+            })
+            .expect("auto memory event");
+        assert_eq!(memory_event.actor.actor_id, "duckdocs-agent-ingest");
+    }
+
+    #[test]
+    fn markdown_ingest_merges_matching_claim_candidates_without_duplicates() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("first.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth for graph replay.\n",
+        )
+        .expect("first source");
+        fs::write(
+            source_dir.join("second.md"),
+            "# Graph replay\n\nEvents JSONL remains the source of truth for graph replay.\n",
+        )
+        .expect("second source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let matching_claims = snapshot
+            .claims
+            .iter()
+            .filter(|claim| {
+                claim.statement == "Events JSONL remains the source of truth for graph replay."
+                    && claim.status == "candidate"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching_claims.len(), 1);
+        let claim = matching_claims[0];
+        assert_eq!(claim.source_refs.len(), 2);
+        assert_eq!(claim.evidence_refs.len(), 2);
+        assert_eq!(claim.source_refs.iter().collect::<BTreeSet<_>>().len(), 2);
+        assert_eq!(claim.evidence_refs.iter().collect::<BTreeSet<_>>().len(), 2);
+    }
+
+    #[test]
+    fn markdown_ingest_updates_matching_existing_memory_candidate() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let existing_memory = MemoryRecord {
+            memory_id: "memory-existing-source-truth".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            title: "Decision: Events JSONL remains source truth".into(),
+            body: "Events JSONL remains the source of truth.".into(),
+            source_refs: vec!["source-legacy".into()],
+            evidence_refs: vec!["ev-legacy".into()],
+            created_at: 10,
+            updated_at: 10,
+        };
+        write_json_pretty(
+            &workspace_root.join("memory/records.json"),
+            &vec![existing_memory],
+        )
+        .expect("seed existing memory");
+        fs::write(
+            source_dir.join("source.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth for graph replay.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("ingest");
+
+        let memories = read_memory_records(&workspace_root).expect("memories");
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].memory_id, "memory-existing-source-truth");
+        assert!(memories[0]
+            .body
+            .contains("Events JSONL remains the source of truth for graph replay"));
+        assert!(memories[0].source_refs.contains(&"source-legacy".into()));
+        assert!(memories[0].evidence_refs.contains(&"ev-legacy".into()));
+        assert!(memories[0]
+            .source_refs
+            .iter()
+            .any(|source| source != "source-legacy"));
+        assert!(memories[0]
+            .evidence_refs
+            .iter()
+            .any(|evidence| evidence != "ev-legacy"));
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        assert!(snapshot.events.iter().any(|event| {
+            event.event_type == BrainEventKind::MemoryAccepted
+                && event.policy_result == "auto_applied"
+                && event.payload_json.contains("memory-existing-source-truth")
+                && event.source_refs.contains(&"source-legacy".into())
+                && event.evidence_refs.contains(&"ev-legacy".into())
+                && event
+                    .source_refs
+                    .iter()
+                    .any(|source| source != "source-legacy")
+                && event
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence| evidence != "ev-legacy")
+        }));
+    }
+
+    #[test]
+    fn markdown_reingest_identical_source_reuses_existing_memory_record() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        fs::write(
+            source_dir.join("source.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth for graph replay.\n",
+        )
+        .expect("source");
+
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir,
+            wiki_dir,
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &BrainRepoSnapshot {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                generated_at: 1,
+                sources: Vec::new(),
+                nodes: Vec::new(),
+                relations: Vec::new(),
+                evidence: Vec::new(),
+                memories: Vec::new(),
+                wiki_pages: Vec::new(),
+                entities: Vec::new(),
+                claims: Vec::new(),
+                extractions: Vec::new(),
+                events: Vec::new(),
+            },
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("enqueue");
+        drop(writer);
+
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let queue = read_markdown_ingest_queue(&paths).expect("queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+
+        let memory_path = workspace_root.join("memory/records.json");
+        let mut memories_before: Vec<MemoryRecord> =
+            read_json_artifact(&memory_path).expect("read memories before");
+        assert_eq!(memories_before.len(), 1);
+        memories_before[0].created_at = 11;
+        memories_before[0].updated_at = 22;
+        write_json_pretty(&memory_path, &memories_before).expect("seed stable memory revision");
+
+        let mut requeue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        requeue.records[0].status = "queued".into();
+        requeue.records[0].started_at = None;
+        requeue.records[0].completed_at = None;
+        requeue.records[0].error_message = None;
+        write_markdown_ingest_queue(&paths, &requeue).expect("requeue identical source");
+
+        let reingest_result =
+            run_markdown_ingest_worker(&paths, &requeue, &store).expect("reingest");
+        assert!(reingest_result.started);
+        assert_eq!(reingest_result.processed, 1);
+
+        let memories_after: Vec<MemoryRecord> =
+            read_json_artifact(&memory_path).expect("read memories after");
+        assert_eq!(memories_after, memories_before);
+        assert_eq!(
+            memories_after
+                .iter()
+                .map(|memory| memory.memory_id.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            memories_after.len()
+        );
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read events");
+        let memory_events = events
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::MemoryAccepted
+                    && event.target_memory_ids == vec![memories_before[0].memory_id.clone()]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(memory_events.len(), 1);
+    }
+
+    #[test]
+    fn markdown_relationship_endpoints_resolve_existing_and_new_nodes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_dir = workspace_root.join("sources");
+        let wiki_dir = workspace_root.join("wiki");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let paths = MarkdownIngestPaths {
+            workspace_root: workspace_root.clone(),
+            source_dir: source_dir.clone(),
+            wiki_dir,
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        let empty_snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        fs::write(
+            source_dir.join("first.md"),
+            "# Agent-maintained graph\n\nEvents JSONL remains the source of truth.\n",
+        )
+        .expect("first source");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &empty_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &MarkdownIngestQueueFile::default(),
+        )
+        .expect("first scan");
+        enqueue_markdown_sources(&writer, &paths, &MarkdownIngestQueueFile::default(), &scan)
+            .expect("first enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("first queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("first ingest");
+        let first_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("first snapshot");
+        let existing_node_id = first_snapshot
+            .nodes
+            .iter()
+            .find(|node| normalize_key(&node.label) == "agent-maintained-graph")
+            .expect("existing graph node")
+            .node_id
+            .clone();
+
+        fs::write(
+            source_dir.join("second.md"),
+            "# Agent maintained graph\n\n## Event ledger\n\nAgent maintained graph depends on Event ledger for replayable changes.\n",
+        )
+        .expect("second source");
+        let queue = read_markdown_ingest_queue(&paths).expect("processed queue");
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        let scan = scan_new_markdown_sources(
+            &paths,
+            &first_snapshot,
+            &MarkdownSourceStateFile::default(),
+            &queue,
+        )
+        .expect("second scan");
+        enqueue_markdown_sources(&writer, &paths, &queue, &scan).expect("second enqueue");
+        drop(writer);
+        let queue = read_markdown_ingest_queue(&paths).expect("second queue");
+        run_markdown_ingest_worker(&paths, &queue, &store).expect("second ingest");
+
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("snapshot");
+        let second_source = snapshot
+            .sources
+            .iter()
+            .find(|source| source.original_path.ends_with("second.md"))
+            .expect("second source");
+        let relationship_path = workspace_root
+            .join("artifacts")
+            .join(&second_source.source_id)
+            .join("edge-candidates.json");
+        let relationship_evidence: Vec<MarkdownRelationshipEvidence> =
+            read_json_artifact(&relationship_path).expect("edge candidates");
+        let resolved = relationship_evidence
+            .iter()
+            .find(|evidence| {
+                evidence.source_label == "Agent maintained graph"
+                    && evidence.target_label == "Event ledger"
+            })
+            .expect("resolved relationship evidence");
+        assert_eq!(
+            resolved.resolved_source_node_id.as_deref(),
+            Some(existing_node_id.as_str())
+        );
+        assert_eq!(
+            resolved.resolved_target_node_id.as_deref(),
+            Some("concept-event-ledger")
+        );
+        assert!(resolved.endpoint_resolution.contains("existing_node"));
+        assert!(resolved.endpoint_resolution.contains("proposed_node"));
+        assert!(snapshot.relations.iter().any(|relation| {
+            relation.source_node_id == existing_node_id
+                && relation.target_node_id == "concept-event-ledger"
+                && relation.kind == BrainRelationKind::DependsOn
+                && !relation.evidence_ids.is_empty()
+        }));
     }
 
     #[test]
@@ -8649,6 +19991,26 @@ mod tests {
         let index = fs::read_to_string(workspace_root.join("wiki/index.md")).expect("wiki index");
         assert!(index.contains("## Sources"));
         assert!(index.contains("## Topics"));
+        let concept_node = snapshot
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == BrainNodeKind::Concept
+                    && node.label.contains("Agent brain")
+                    && !node.evidence_ids.is_empty()
+            })
+            .expect("agent brain topic node");
+        let topic_page = fs::read_to_string(workspace_root.join(format!(
+            "wiki/topics/{}.md",
+            sanitize_name(&concept_node.node_id)
+        )))
+        .expect("read agent brain topic page");
+        assert!(topic_page.contains("## Node Description"));
+        assert!(topic_page.contains("Agent brain context stays source backed."));
+        assert!(topic_page.contains("## Claims"));
+        assert!(topic_page.contains("_Source-backed claims linked to materialized evidence._"));
+        assert!(topic_page.contains("Agent brain context stays source backed"));
+        assert!(topic_page.contains("source-test"));
     }
 
     #[test]
@@ -8674,7 +20036,8 @@ mod tests {
             manifest_path: manifest.manifest_path.clone(),
         };
         let rows = vec![(row, Some(project.clone()))];
-        let snapshot = build_brain_repo_snapshot(DEFAULT_WORKSPACE_ID, &rows, &project, &[]);
+        let snapshot =
+            build_brain_repo_snapshot(DEFAULT_WORKSPACE_ID, &rows, &project, &[], &[], &[], &[]);
 
         assert!(snapshot.claims.is_empty());
         assert!(snapshot.relations.is_empty());
@@ -8757,9 +20120,54 @@ mod tests {
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope: scope.clone(),
             limit: Some(2),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
         })
         .expect("read recent events");
         assert!(!events.events.is_empty());
+
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        write_json_pretty(
+            &workspace_root.join("memory/records.json"),
+            &vec![MemoryRecord {
+                memory_id: "mem-read-snapshot".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                scope: BrainScope::Project,
+                title: "Read snapshot memory".into(),
+                body: "Snapshot reads should expose durable memory refs.".into(),
+                source_refs: vec![manifest.source_id.clone()],
+                evidence_refs: Vec::new(),
+                created_at: 100,
+                updated_at: 100,
+            }],
+        )
+        .expect("write materialized memory");
+
+        let snapshot = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: scope.clone(),
+        })
+        .expect("read graph snapshot");
+        assert_eq!(snapshot.workspace_id, DEFAULT_WORKSPACE_ID);
+        assert!(!snapshot.snapshot_id.is_empty());
+        assert!(!snapshot.source_ingest_id.is_empty());
+        assert!(snapshot.materialized_at >= snapshot.created_at);
+        assert_eq!(snapshot.nodes.len(), project.nodes.len());
+        assert_eq!(snapshot.edges.len(), project.edges.len());
+        assert!(!snapshot.claims.is_empty());
+        assert_eq!(snapshot.memory_refs, vec!["mem-read-snapshot"]);
+        assert!(snapshot
+            .wiki_pages
+            .iter()
+            .any(|page| page.path == "wiki/index.md" && page.body.contains("Brain Index")));
+        assert!(snapshot
+            .source_paths
+            .iter()
+            .any(|path| path.ends_with("source.md")));
 
         let context_pack = handle_get_context_pack(GetContextPackRequest {
             scope,
@@ -8774,6 +20182,1088 @@ mod tests {
         assert!(!context_pack.claims.is_empty());
         assert!(!context_pack.relations.is_empty());
         assert!(!context_pack.recent_events.is_empty());
+    }
+
+    #[test]
+    fn event_history_reader_filters_graph_loop_events_by_change_refs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source = SourceRecord {
+            source_id: "source-event-history".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/event-history.md".into(),
+            source_path: "/tmp/event-history.md".into(),
+            markdown_path: "artifacts/source-event-history/event-history.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 100,
+        };
+        let node = BrainNodeRecord {
+            node_id: "concept-event-history".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Event history".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-event-history".into()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(0.9),
+            updated_at: 100,
+        };
+        let relation = BrainRelationRecord {
+            relation_id: "edge-event-history-source".into(),
+            kind: BrainRelationKind::DerivedFrom,
+            source_node_id: node.node_id.clone(),
+            target_node_id: "source:source-event-history".into(),
+            label: "Derived from source".into(),
+            evidence_ids: vec!["ev-event-history".into()],
+            confidence: Some(0.8),
+            updated_at: 100,
+        };
+        let claim = ClaimRecord {
+            claim_id: "claim-event-history-filterable".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: "Graph loop events are filterable by durable refs.".into(),
+            topic_refs: vec![node.node_id.clone()],
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec!["ev-event-history".into()],
+            status: "supported".into(),
+            updated_at: 100,
+        };
+        let memory = MemoryRecord {
+            memory_id: "mem-event-history-filterable".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            title: "Event history reader".into(),
+            body: "Display graph loop events through source-of-truth JSONL.".into(),
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec!["ev-event-history".into()],
+            created_at: 100,
+            updated_at: 100,
+        };
+        let events = vec![
+            test_brain_event(
+                "evt-run",
+                BrainEventKind::SourceIngestQueued,
+                Some("source_ingest_queued"),
+                vec![source.source_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                101,
+            ),
+            test_brain_event(
+                "evt-node",
+                BrainEventKind::GraphMaterialized,
+                Some("new_node"),
+                vec![source.source_id.clone()],
+                vec![node.node_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                102,
+            ),
+            test_brain_event(
+                "evt-edge",
+                BrainEventKind::GraphMaterialized,
+                Some("new_edge"),
+                vec![source.markdown_path.clone()],
+                Vec::new(),
+                vec![relation.relation_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                103,
+            ),
+            test_brain_event(
+                "evt-claim",
+                BrainEventKind::ClaimProposed,
+                Some("new_claim"),
+                vec![source.source_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![claim.claim_id.clone()],
+                Vec::new(),
+                104,
+            ),
+            test_brain_event(
+                "evt-memory",
+                BrainEventKind::MemoryAccepted,
+                Some("new_memory"),
+                vec![source.source_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![memory.memory_id.clone()],
+                105,
+            ),
+        ];
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 105,
+            sources: vec![source.clone()],
+            nodes: vec![node.clone()],
+            relations: vec![relation.clone()],
+            evidence: vec![EvidenceRef {
+                id: "ev-event-history".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Graph loop events are filterable.".into(),
+                source_path: Some(source.source_path.clone()),
+                source_id: Some(source.source_id.clone()),
+                markdown_path: Some(source.markdown_path.clone()),
+                image_path: None,
+                provenance: Some("test".into()),
+            }],
+            memories: vec![memory.clone()],
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: vec![claim.clone()],
+            extractions: Vec::new(),
+            events,
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write materialized brain");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.run_id =
+                Some("run-evt-run".into())),
+            vec!["evt-run".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| {
+                request.source_ref = Some(source.markdown_path.clone())
+            }),
+            vec!["evt-edge".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.node_id =
+                Some(node.node_id.clone())),
+            vec!["evt-node".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.edge_id =
+                Some(relation.relation_id)),
+            vec!["evt-edge".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.claim_id = Some(claim.claim_id)),
+            vec!["evt-claim".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.memory_id = Some(memory.memory_id)),
+            vec!["evt-memory".to_string()]
+        );
+        assert_eq!(
+            filtered_event_ids(&scope, |request| request.change_type =
+                Some("new_edge".into())),
+            vec!["evt-edge".to_string()]
+        );
+    }
+
+    #[test]
+    fn graph_history_reader_lists_materialized_states_with_audit_locations() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let mut older_event = test_brain_event(
+            "evt-graph-state-old",
+            BrainEventKind::GraphMaterialized,
+            Some("new_node"),
+            vec!["source-old".into()],
+            vec!["node-old".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100,
+        );
+        older_event.causality.snapshot_id = Some("snapshot-old".into());
+        older_event.causality.materialized_version = Some(110);
+        older_event.payload_json =
+            r#"{"nodeCount":1,"relationCount":0,"claimCount":0,"memoryCount":0,"wikiPageCount":1}"#
+                .into();
+        let mut latest_event = test_brain_event(
+            "evt-graph-state-latest",
+            BrainEventKind::GraphMaterialized,
+            Some("new_memory"),
+            vec![
+                "source-latest".into(),
+                "artifacts/source-latest/source.md".into(),
+            ],
+            vec!["node-latest".into()],
+            vec!["edge-latest".into()],
+            vec!["claim-latest".into()],
+            vec!["memory-latest".into()],
+            120,
+        );
+        latest_event.causality.snapshot_id = Some("snapshot-latest".into());
+        latest_event.causality.materialized_version = Some(130);
+        latest_event.payload_json =
+            r#"{"nodeCount":2,"relationCount":1,"claimCount":1,"memoryCount":1,"wikiPageCount":2}"#
+                .into();
+        let mut failed_event = test_brain_event(
+            "evt-graph-state-failed",
+            BrainEventKind::GraphMaterialized,
+            Some("new_claim"),
+            vec!["source-failed".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            125,
+        );
+        failed_event.causality.snapshot_id = Some("snapshot-failed".into());
+        failed_event.causality.materialized_version = Some(125);
+        failed_event.policy_result = "failed".into();
+        let mut in_progress_event = test_brain_event(
+            "evt-graph-state-in-progress",
+            BrainEventKind::GraphMaterialized,
+            Some("new_edge"),
+            vec!["source-in-progress".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            126,
+        );
+        in_progress_event.causality.snapshot_id = Some("snapshot-in-progress".into());
+        in_progress_event.causality.materialized_version = Some(126);
+        in_progress_event.policy_result = "in_progress".into();
+        let mut missing_version_event = test_brain_event(
+            "evt-graph-state-missing-version",
+            BrainEventKind::GraphMaterialized,
+            Some("new_node"),
+            vec!["source-missing-version".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            127,
+        );
+        missing_version_event.causality.snapshot_id = Some("snapshot-missing-version".into());
+        missing_version_event.policy_result = "materialized".into();
+        let non_materialized_event = test_brain_event(
+            "evt-not-a-state",
+            BrainEventKind::MemoryAccepted,
+            Some("new_memory"),
+            vec!["source-latest".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["memory-latest".into()],
+            140,
+        );
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 130,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: vec![
+                older_event,
+                latest_event,
+                failed_event,
+                in_progress_event,
+                missing_version_event,
+                non_materialized_event,
+            ],
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write materialized brain");
+        fs::create_dir_all(
+            workspace_root
+                .join("snapshots")
+                .join("snapshot-latest")
+                .join("files"),
+        )
+        .expect("snapshot files dir");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let states = handle_read_graph_history(ReadGraphHistoryRequest {
+            scope,
+            limit: Some(10),
+        })
+        .expect("read graph history")
+        .states;
+
+        assert_eq!(
+            states
+                .iter()
+                .map(|state| state.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["evt-graph-state-latest", "evt-graph-state-old"]
+        );
+        let latest = states.first().expect("latest graph state");
+        assert_eq!(latest.snapshot_id, "snapshot-latest");
+        assert_eq!(latest.materialized_at, 130);
+        assert_eq!(latest.rollback_target.snapshot_id, "snapshot-latest");
+        assert_eq!(latest.rollback_target.event_id, "evt-graph-state-latest");
+        assert_eq!(latest.rollback_target.materialized_version, 130);
+        assert_eq!(
+            latest.rollback_target.replay_selector,
+            "--event evt-graph-state-latest"
+        );
+        assert_eq!(latest.operation_type.as_deref(), Some("new_memory"));
+        assert_eq!(latest.node_count, 2);
+        assert_eq!(latest.edge_count, 1);
+        assert_eq!(latest.claim_count, 1);
+        assert_eq!(latest.memory_count, 1);
+        assert_eq!(latest.wiki_page_count, 2);
+        assert!(latest
+            .source_run_ids
+            .iter()
+            .any(|source_run_id| source_run_id == "source-latest"));
+        assert!(latest
+            .source_markdown_refs
+            .iter()
+            .any(|source_ref| source_ref == "artifacts/source-latest/source.md"));
+        assert!(latest
+            .storage_locations
+            .iter()
+            .any(|location| location == "events/brain_events.jsonl#evt-graph-state-latest"));
+        assert!(latest
+            .storage_locations
+            .iter()
+            .any(|location| location == "snapshots/snapshot-latest/files"));
+        assert!(latest
+            .storage_locations
+            .iter()
+            .any(|location| location == "graph/nodes.json"));
+        assert!(latest
+            .storage_locations
+            .iter()
+            .any(|location| location == "wiki/index.md"));
+    }
+
+    #[test]
+    fn graph_snapshot_reader_uses_latest_readable_marker_after_materialization() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let mut materialized_event = test_brain_event(
+            "evt-readable-materialized",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-readable".into()],
+            vec!["node-readable".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100,
+        );
+        materialized_event.causality.snapshot_id = Some("snapshot-readable".into());
+        materialized_event.causality.materialized_version = Some(100);
+        materialized_event.payload_json =
+            r#"{"nodeCount":1,"relationCount":0,"claimCount":0,"memoryCount":0,"wikiPageCount":1}"#
+                .into();
+        let node = BrainNodeRecord {
+            node_id: "node-readable".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Readable snapshot".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: Vec::new(),
+            source_ids: vec!["source-readable".into()],
+            confidence: None,
+            updated_at: 100,
+        };
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 100,
+            sources: Vec::new(),
+            nodes: vec![node],
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-readable".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                path: "wiki/index.md".into(),
+                title: "Readable snapshot".into(),
+                body: "# Readable snapshot\n".into(),
+                node_refs: Vec::new(),
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                updated_at: 100,
+            }],
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: vec![materialized_event.clone()],
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write readable materialized brain");
+
+        let marker_path = workspace_root.join("state/latest-readable-snapshot.json");
+        let marker: serde_json::Value =
+            read_json_artifact(&marker_path).expect("read latest readable marker");
+        assert_eq!(marker["snapshotId"], serde_json::json!("snapshot-readable"));
+        assert_eq!(
+            marker["eventId"],
+            serde_json::json!("evt-readable-materialized")
+        );
+
+        let mut unmarked_event = materialized_event.clone();
+        unmarked_event.event_id = "evt-unmarked-materialized".into();
+        unmarked_event.causality.snapshot_id = Some("snapshot-unmarked".into());
+        unmarked_event.causality.materialized_version = Some(200);
+        unmarked_event.created_at = 200;
+        let mut events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read materialized events");
+        events.push(unmarked_event);
+        write_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"), &events)
+            .expect("append unmarked event");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("read latest readable snapshot");
+
+        assert_eq!(read.snapshot_id, "snapshot-readable");
+        assert_eq!(read.materialized_at, 100);
+        assert_eq!(read.source_ingest_id, "source-readable");
+        assert_eq!(read.source_of_truth_path, "events/brain_events.jsonl");
+        assert_eq!(
+            read.latest_readable_snapshot_path,
+            "state/latest-readable-snapshot.json"
+        );
+        assert!(read
+            .materialized_paths
+            .iter()
+            .any(|path| path == "graph/nodes.json"));
+        assert!(read
+            .materialized_paths
+            .iter()
+            .any(|path| path == "wiki/index.md"));
+
+        let mut bad_marker = marker;
+        bad_marker["workspaceId"] = serde_json::json!("other-workspace");
+        bad_marker["eventId"] = serde_json::json!("evt-missing-readable");
+        write_json_pretty(&marker_path, &bad_marker).expect("write stale marker");
+
+        let fallback = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("ignore unresolved latest readable marker");
+
+        assert_eq!(fallback.snapshot_id, "snapshot-unmarked");
+        assert_eq!(fallback.materialized_at, 200);
+        assert_eq!(fallback.source_ingest_id, "source-readable");
+        assert!(fallback
+            .materialized_paths
+            .iter()
+            .any(|path| path == "graph/nodes.json"));
+    }
+
+    #[test]
+    fn graph_snapshot_reader_uses_latest_completed_snapshot_without_marker() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let mut older_event = test_brain_event(
+            "evt-completed-old",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-old".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100,
+        );
+        older_event.causality.snapshot_id = Some("snapshot-old".into());
+        older_event.causality.materialized_version = Some(100);
+        let mut latest_event = test_brain_event(
+            "evt-completed-latest",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-latest".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            150,
+        );
+        latest_event.causality.snapshot_id = Some("snapshot-latest-completed".into());
+        latest_event.causality.materialized_version = Some(150);
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 150,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-latest-completed".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                path: "wiki/index.md".into(),
+                title: "Latest completed".into(),
+                body: "# Latest completed\n".into(),
+                node_refs: Vec::new(),
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                updated_at: 150,
+            }],
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: vec![older_event, latest_event],
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write completed materialized brain");
+        fs::remove_file(workspace_root.join("state/latest-readable-snapshot.json"))
+            .expect("remove marker");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("read markerless latest completed snapshot");
+
+        assert_eq!(read.snapshot_id, "snapshot-latest-completed");
+        assert_eq!(read.materialized_at, 150);
+        assert_eq!(read.created_at, 150);
+        assert_eq!(read.source_ingest_id, "source-latest");
+    }
+
+    #[test]
+    fn graph_snapshot_reader_falls_back_when_no_completed_snapshot_exists() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 77,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-no-completed".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                path: "wiki/index.md".into(),
+                title: "No completed snapshot".into(),
+                body: "# No completed snapshot\n".into(),
+                node_refs: Vec::new(),
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                updated_at: 77,
+            }],
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write materialized brain without completed event");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("read fallback snapshot");
+
+        assert_eq!(read.snapshot_id, "snapshot-default-77");
+        assert_eq!(read.source_ingest_id, "materialized://default");
+        assert_eq!(read.created_at, 77);
+        assert_eq!(read.materialized_at, 77);
+        assert!(!workspace_root
+            .join("state/latest-readable-snapshot.json")
+            .exists());
+    }
+
+    #[test]
+    fn graph_snapshot_reader_returns_empty_state_for_fresh_workspace() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(temp.path().join(DEFAULT_WORKSPACE_ID)).expect("create workspace root");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("fresh workspace reads as empty snapshot");
+
+        assert_eq!(read.workspace_id, DEFAULT_WORKSPACE_ID);
+        assert_eq!(read.snapshot_id, "snapshot-default-0");
+        assert_eq!(read.source_ingest_id, "materialized://default");
+        assert!(read.nodes.is_empty());
+        assert!(read.edges.is_empty());
+        assert!(read.source_paths.is_empty());
+        assert!(read.wiki_pages.is_empty());
+    }
+
+    #[test]
+    fn graph_snapshot_reader_excludes_stale_and_in_progress_ingests() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let mut completed_event = test_brain_event(
+            "evt-completed-readable",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-completed".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100,
+        );
+        completed_event.causality.snapshot_id = Some("snapshot-completed-readable".into());
+        completed_event.causality.materialized_version = Some(100);
+        completed_event.policy_result = "materialized".into();
+        let mut stale_event = test_brain_event(
+            "evt-stale-graph",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-stale".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            200,
+        );
+        stale_event.causality.snapshot_id = Some("snapshot-stale".into());
+        stale_event.causality.materialized_version = Some(200);
+        stale_event.policy_result = "stale".into();
+        let mut in_progress_event = test_brain_event(
+            "evt-in-progress-graph",
+            BrainEventKind::GraphMaterialized,
+            Some("graph_materialized"),
+            vec!["source-in-progress".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            300,
+        );
+        in_progress_event.causality.snapshot_id = Some("snapshot-in-progress".into());
+        in_progress_event.causality.materialized_version = Some(300);
+        in_progress_event.policy_result = "in_progress".into();
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 100,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-completed-readable".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                path: "wiki/index.md".into(),
+                title: "Completed readable".into(),
+                body: "# Completed readable\n".into(),
+                node_refs: Vec::new(),
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                updated_at: 100,
+            }],
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: vec![completed_event, stale_event, in_progress_event],
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write materialized brain with unfinished events");
+        fs::remove_file(workspace_root.join("state/latest-readable-snapshot.json"))
+            .expect("remove marker");
+
+        let read = handle_read_graph_snapshot(ReadGraphSnapshotRequest {
+            scope: BrainReadScope {
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+        })
+        .expect("read completed snapshot only");
+
+        assert_eq!(read.snapshot_id, "snapshot-completed-readable");
+        assert_eq!(read.materialized_at, 100);
+        assert_eq!(read.source_ingest_id, "source-completed");
+    }
+
+    #[test]
+    fn replay_orders_incremental_events_and_rebuilds_from_empty_materialized_state() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+
+        let source = SourceRecord {
+            source_id: "source-replay-order".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/replay-order.md".into(),
+            source_path: "/tmp/replay-order.md".into(),
+            markdown_path: "artifacts/source-replay-order/replay-order.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 100,
+        };
+        let evidence = EvidenceRef {
+            id: "ev-replay-order".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Replay events rebuild graph, claims, memories, and wiki.".into(),
+            source_path: Some(source.source_path.clone()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(source.markdown_path.clone()),
+            image_path: None,
+            provenance: Some("test".into()),
+        };
+        let node = BrainNodeRecord {
+            node_id: "concept-replay-order".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Replay Order".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence.id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(0.9),
+            updated_at: 100,
+        };
+        let relation = BrainRelationRecord {
+            relation_id: "relation-replay-order-self".into(),
+            kind: BrainRelationKind::RelatedTo,
+            source_node_id: node.node_id.clone(),
+            target_node_id: node.node_id.clone(),
+            label: "Replays before".into(),
+            evidence_ids: vec![evidence.id.clone()],
+            confidence: Some(0.8),
+            updated_at: 300,
+        };
+        let claim = ClaimRecord {
+            claim_id: "claim-replay-order".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: "Replay ordering must rebuild the latest materialized graph.".into(),
+            topic_refs: vec![node.node_id.clone()],
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec![evidence.id.clone()],
+            status: "supported".into(),
+            updated_at: 300,
+        };
+        let memory = MemoryRecord {
+            memory_id: "memory-replay-order".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            title: "Replay ordering is deterministic".into(),
+            body:
+                "Full replay uses event materialized versions, then rebuilds current graph files."
+                    .into(),
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec![evidence.id.clone()],
+            created_at: 300,
+            updated_at: 300,
+        };
+        let node_only_page = WikiPage {
+            page_id: "topic-concept-replay-order".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            path: "wiki/topics/concept-replay-order.md".into(),
+            title: "Replay Order".into(),
+            body: "# Replay Order\n\nSource node only.\n".into(),
+            source_refs: vec![source.source_id.clone()],
+            node_refs: vec![node.node_id.clone()],
+            evidence_refs: vec![evidence.id.clone()],
+            updated_at: 100,
+        };
+        let full_page = WikiPage {
+            page_id: "topic-concept-replay-order".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            path: "wiki/topics/concept-replay-order.md".into(),
+            title: "Replay Order".into(),
+            body: "# Replay Order\n\nReplay ordering must rebuild the latest materialized graph.\n"
+                .into(),
+            source_refs: vec![source.source_id.clone()],
+            node_refs: vec![node.node_id.clone()],
+            evidence_refs: vec![evidence.id.clone()],
+            updated_at: 300,
+        };
+
+        let mut node_event = test_brain_event(
+            "evt-replay-node",
+            BrainEventKind::GraphMaterialized,
+            Some("new_node"),
+            vec![source.source_id.clone()],
+            vec![node.node_id.clone()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100,
+        );
+        node_event.causality.materialized_version = Some(100);
+        node_event.payload_json = materialized_graph_event_payload_json(
+            100,
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&node),
+            &[],
+            std::slice::from_ref(&evidence),
+            &[],
+            std::slice::from_ref(&node_only_page),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("node materialized payload");
+
+        let mut full_event = test_brain_event(
+            "evt-replay-full",
+            BrainEventKind::GraphMaterialized,
+            Some("new_memory"),
+            vec![source.source_id.clone()],
+            vec![node.node_id.clone()],
+            vec![relation.relation_id.clone()],
+            vec![claim.claim_id.clone()],
+            vec![memory.memory_id.clone()],
+            300,
+        );
+        full_event.causality.materialized_version = Some(300);
+        full_event.payload_json = materialized_graph_event_payload_json(
+            300,
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&node),
+            std::slice::from_ref(&relation),
+            std::slice::from_ref(&evidence),
+            std::slice::from_ref(&memory),
+            std::slice::from_ref(&full_page),
+            &[],
+            std::slice::from_ref(&claim),
+            &[],
+        )
+        .expect("full materialized payload");
+
+        write_brain_events_jsonl(
+            &workspace_root.join("events/brain_events.jsonl"),
+            &[full_event, node_event],
+        )
+        .expect("write intentionally unordered events");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let incremental = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: scope.clone(),
+            up_to_timestamp: None,
+            up_to_materialized_version: Some(100),
+            up_to_event_id: None,
+            output_root: Some(temp.path().join("incremental-replay").display().to_string()),
+            write_materialized: false,
+        })
+        .expect("incremental replay");
+        assert_eq!(
+            incremental.selected_event_id.as_deref(),
+            Some("evt-replay-node")
+        );
+        assert_eq!(incremental.snapshot.nodes, vec![node.clone()]);
+        assert!(incremental.snapshot.relations.is_empty());
+        assert!(incremental.snapshot.claims.is_empty());
+        assert!(incremental.snapshot.memories.is_empty());
+
+        let rebuilt = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope,
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: Some(workspace_root.display().to_string()),
+            write_materialized: false,
+        })
+        .expect("rebuild materialized state from events only");
+        assert_eq!(
+            rebuilt.selected_event_id.as_deref(),
+            Some("evt-replay-full")
+        );
+        assert_eq!(rebuilt.snapshot.relations, vec![relation]);
+        assert_eq!(rebuilt.snapshot.claims, vec![claim]);
+        assert_eq!(rebuilt.snapshot.memories, vec![memory]);
+        assert!(fs::read_to_string(workspace_root.join("graph/nodes.json"))
+            .expect("rebuilt nodes")
+            .contains("concept-replay-order"));
+        assert!(fs::read_to_string(workspace_root.join("graph/edges.json"))
+            .expect("rebuilt edges")
+            .contains("relation-replay-order-self"));
+        assert!(fs::read_to_string(workspace_root.join("graph/claims.json"))
+            .expect("rebuilt claims")
+            .contains("claim-replay-order"));
+        assert!(
+            fs::read_to_string(workspace_root.join("memory/records.json"))
+                .expect("rebuilt memories")
+                .contains("memory-replay-order")
+        );
+        assert!(fs::read_to_string(workspace_root.join("wiki/index.md"))
+            .expect("rebuilt wiki index")
+            .contains("[Replay Order](topics/concept-replay-order.md)"));
+        assert!(
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-replay-order.md"))
+                .expect("rebuilt wiki topic")
+                .contains("Replay ordering must rebuild the latest materialized graph.")
+        );
+    }
+
+    #[test]
+    fn graph_history_readers_handle_missing_and_corrupt_event_ledgers() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            generated_at: 10,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+        write_materialized_brain_repo(&workspace_root, &snapshot)
+            .expect("write materialized brain");
+        let events_path = workspace_root.join("events/brain_events.jsonl");
+        fs::remove_file(&events_path).expect("remove event ledger");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let recent_events = handle_read_recent_events(ReadRecentEventsRequest {
+            scope: scope.clone(),
+            limit: Some(10),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
+        })
+        .expect("missing event ledger reads as empty");
+        assert!(recent_events.events.is_empty());
+
+        let states = handle_read_graph_history(ReadGraphHistoryRequest {
+            scope: scope.clone(),
+            limit: Some(10),
+        })
+        .expect("missing event ledger yields no graph states");
+        assert!(states.states.is_empty());
+
+        fs::write(&events_path, "{not-json}\n").expect("write corrupt event ledger");
+        let err = handle_read_recent_events(ReadRecentEventsRequest {
+            scope,
+            limit: Some(10),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
+        })
+        .expect_err("corrupt event ledger must fail");
+        assert!(format!("{err:#}").contains("failed decoding brain event JSONL row"));
+    }
+
+    fn filtered_event_ids<F>(scope: &BrainReadScope, configure: F) -> Vec<String>
+    where
+        F: FnOnce(&mut ReadRecentEventsRequest),
+    {
+        let mut request = ReadRecentEventsRequest {
+            scope: scope.clone(),
+            limit: Some(10),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
+        };
+        configure(&mut request);
+        handle_read_recent_events(request)
+            .expect("read filtered events")
+            .events
+            .into_iter()
+            .map(|event| event.event_id)
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn test_brain_event(
+        event_id: &str,
+        event_type: BrainEventKind,
+        operation_type: Option<&str>,
+        refs: Vec<String>,
+        node_refs: Vec<String>,
+        relation_refs: Vec<String>,
+        claim_refs: Vec<String>,
+        memory_refs: Vec<String>,
+        created_at: u64,
+    ) -> BrainEvent {
+        BrainEvent {
+            event_id: event_id.into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            event_type,
+            operation_type: operation_type.map(ToOwned::to_owned),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent".into(),
+            },
+            source_refs: refs.clone(),
+            source_markdown_refs: refs
+                .iter()
+                .filter(|value| value.ends_with(".md"))
+                .cloned()
+                .collect(),
+            node_refs: node_refs.clone(),
+            relation_refs: relation_refs.clone(),
+            claim_refs: claim_refs.clone(),
+            memory_refs: memory_refs.clone(),
+            target_node_ids: node_refs,
+            target_edge_ids: relation_refs,
+            target_claim_ids: claim_refs,
+            target_memory_ids: memory_refs,
+            evidence_refs: vec!["ev-event-history".into()],
+            payload_json: format!(
+                "{{\"runId\":\"run-{event_id}\",\"changeType\":\"{}\"}}",
+                operation_type.unwrap_or("event")
+            ),
+            causality: BrainEventCausality {
+                caused_by_event_ids: vec![format!("run-{event_id}")],
+                caused_by_source_ids: refs,
+                ..Default::default()
+            },
+            confidence: None,
+            policy_result: "applied".into(),
+            created_at,
+        }
     }
 
     #[test]
@@ -8944,6 +21434,7 @@ mod tests {
                 source_refs: vec![manifest.source_id.clone()],
                 node_refs,
                 evidence_refs: Vec::new(),
+                proposal_payload: None,
             })
             .expect("propose brain update");
             if matches!(
@@ -9028,6 +21519,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         })
         .expect("propose explicit source metadata");
         let explicit_manifest: SourceArtifactManifest =
@@ -9045,7 +21537,14 @@ mod tests {
 
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope: scope.clone(),
-            limit: Some(10),
+            limit: Some(20),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
         })
         .expect("read proposal events");
         assert!(events
@@ -9144,6 +21643,1750 @@ mod tests {
     }
 
     #[test]
+    fn graph_mutation_event_schema_tracks_targets_payload_and_causality() {
+        let proposal = BrainUpdateProposal {
+            proposal_id: "proposal-schema-claim".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            kind: BrainProposalKind::Claim,
+            status: BrainProposalStatus::Accepted,
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            scope: BrainScope::Project,
+            title: "Schema claim".into(),
+            body: "Typed graph mutation events stay replayable.".into(),
+            target_node_id: Some("concept-agent-maintained-graph".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: vec!["concept-agent-maintained-graph".into()],
+            evidence_refs: vec!["ev-agent-loop-1".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement: "Events JSONL is the source of truth for graph replay.".into(),
+                    source_path: "sources/agent-loop.md".into(),
+                    claim_id: Some("claim-events-jsonl-source-of-truth".into()),
+                    topic_refs: vec!["concept-agent-maintained-graph".into()],
+                    source_refs: vec!["source-agent-loop".into()],
+                    evidence_refs: vec!["ev-agent-loop-1".into()],
+                    reason: Some("The source describes replayable graph mutations.".into()),
+                },
+            }),
+            created_at: 42,
+        };
+
+        let event =
+            brain_graph_mutation_applied_event(&proposal).expect("build graph mutation event");
+        assert_eq!(event.schema_version, BRAIN_EVENT_SCHEMA_VERSION);
+        assert_eq!(event.operation_type.as_deref(), Some("new_claim"));
+        assert_eq!(event.actor.actor_type, BrainActorType::Agent);
+        assert_eq!(event.actor.actor_id, "duckdocs-agent-ingest");
+        assert_eq!(event.created_at, 42);
+        assert_eq!(event.source_refs, vec!["source-agent-loop".to_string()]);
+        assert_eq!(
+            event.source_markdown_refs,
+            vec!["sources/agent-loop.md".to_string()]
+        );
+        assert_eq!(
+            event.target_node_ids,
+            vec!["concept-agent-maintained-graph".to_string()]
+        );
+        assert_eq!(
+            event.target_claim_ids,
+            vec!["claim-events-jsonl-source-of-truth".to_string()]
+        );
+        assert_eq!(
+            event.claim_refs,
+            vec!["claim-events-jsonl-source-of-truth".to_string()]
+        );
+        assert!(event.target_edge_ids.is_empty());
+        assert!(event.target_memory_ids.is_empty());
+        assert_eq!(
+            event.causality.caused_by_proposal_id.as_deref(),
+            Some("proposal-schema-claim")
+        );
+        assert_eq!(
+            event.causality.caused_by_source_ids,
+            vec!["source-agent-loop".to_string()]
+        );
+        assert_eq!(event.causality.schema_version, BRAIN_EVENT_SCHEMA_VERSION);
+        assert_eq!(event.causality.materialized_version, Some(42));
+
+        let encoded = serde_json::to_value(&event).expect("encode event");
+        assert_eq!(encoded["operationType"], "new_claim");
+        assert_eq!(encoded["sourceMarkdownRefs"][0], "sources/agent-loop.md");
+        assert_eq!(
+            encoded["targetClaimIds"][0],
+            "claim-events-jsonl-source-of-truth"
+        );
+        assert_eq!(
+            encoded["payloadJson"]
+                .as_str()
+                .unwrap()
+                .contains("proposal-schema-claim"),
+            true
+        );
+        assert_eq!(
+            encoded["causality"]["causedByProposalId"],
+            "proposal-schema-claim"
+        );
+    }
+
+    #[test]
+    fn queued_agent_proposal_runner_applies_valid_changes_transactionally() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Sample import\n\n## Page 1\n\nQueued agent graph changes stay source backed.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let evidence_ids = project
+            .details_by_node_id
+            .get(&concept_node_id)
+            .expect("concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+        let queued = vec![
+            BrainUpdateProposal {
+                proposal_id: "proposal-queued-node".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Node,
+                status: BrainProposalStatus::PendingReview,
+                actor: actor.clone(),
+                scope: BrainScope::Project,
+                title: "Create queued node".into(),
+                body: "Queued proposals can create graph nodes.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                    node: AgentNewNodePayload {
+                        label: "Queued Graph Runner".into(),
+                        kind: BrainNodeKind::Concept,
+                        source_path: manifest.markdown_path.clone(),
+                        node_id: Some("concept-queued-graph-runner".into()),
+                        aliases: Vec::new(),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("The queued source describes graph changes.".into()),
+                    },
+                }),
+                created_at: 10,
+            },
+            BrainUpdateProposal {
+                proposal_id: "proposal-queued-edge".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Link,
+                status: BrainProposalStatus::PendingReview,
+                actor: actor.clone(),
+                scope: BrainScope::Project,
+                title: "Connect queued graph runner".into(),
+                body: "Queued proposals can create graph edges.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                    edge: AgentNewEdgePayload {
+                        source_node_id: concept_node_id.clone(),
+                        target_node_id: "concept-queued-graph-runner".into(),
+                        kind: BrainRelationKind::RelatedTo,
+                        label: "Related queued change".into(),
+                        source_path: manifest.markdown_path.clone(),
+                        edge_id: Some("relation-queued-graph-runner".into()),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("The queued node is derived from the source.".into()),
+                    },
+                }),
+                created_at: 11,
+            },
+            BrainUpdateProposal {
+                proposal_id: "proposal-queued-claim".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Claim,
+                status: BrainProposalStatus::PendingReview,
+                actor: actor.clone(),
+                scope: BrainScope::Project,
+                title: "Attach queued claim".into(),
+                body: "Queued proposals should become source-backed claims.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                    claim: AgentNewClaimPayload {
+                        statement:
+                            "Queued agent graph changes are applied without a human gate.".into(),
+                        source_path: manifest.markdown_path.clone(),
+                        claim_id: Some("claim-queued-agent-runner".into()),
+                        topic_refs: vec!["concept-queued-graph-runner".into()],
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("The runner auto-applies valid queued changes.".into()),
+                    },
+                }),
+                created_at: 12,
+            },
+            BrainUpdateProposal {
+                proposal_id: "proposal-queued-memory".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Memory,
+                status: BrainProposalStatus::PendingReview,
+                actor,
+                scope: BrainScope::Project,
+                title: "Remember queued graph runner".into(),
+                body: "Queued graph runner changes remain auditable.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewMemory {
+                    memory: AgentNewMemoryPayload {
+                        title: "Queued graph runner is autonomous".into(),
+                        body: "Valid queued graph proposals are automatically applied with snapshot audit artifacts.".into(),
+                        source_path: manifest.markdown_path.clone(),
+                        memory_id: Some("memory-queued-graph-runner".into()),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("The runner has no human approval gate.".into()),
+                    },
+                }),
+                created_at: 13,
+            },
+        ];
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        for proposal in &queued {
+            writer
+                .write_proposal(proposal)
+                .expect("write queued proposal");
+        }
+        drop(writer);
+
+        let result = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("apply queued proposals");
+
+        assert_eq!(result.applied.len(), 4);
+        assert!(result.failed.is_empty());
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("nodes");
+        assert!(nodes
+            .iter()
+            .any(|node| node.node_id == "concept-queued-graph-runner"));
+        let edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json")).expect("edges");
+        assert!(edges
+            .iter()
+            .any(|edge| edge.relation_id == "relation-queued-graph-runner"));
+        let claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json")).expect("claims");
+        assert!(claims
+            .iter()
+            .any(|claim| claim.claim_id == "claim-queued-agent-runner"));
+        let memories = read_memory_records(&workspace_root).expect("memories");
+        assert!(memories
+            .iter()
+            .any(|memory| memory.memory_id == "memory-queued-graph-runner"));
+        assert!(workspace_root.join("snapshots").exists());
+        assert!(workspace_root.join("reviews/applied-runs").exists());
+        let topic =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-queued-graph-runner.md"))
+                .expect("topic");
+        assert!(topic.contains("## Claims"));
+        assert!(topic.contains("## Relations"));
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events");
+        assert!(events.iter().any(|event| {
+            event.event_type == BrainEventKind::ReviewResolved
+                && event.policy_result == "auto_applied"
+                && event.payload_json.contains("snapshotId")
+        }));
+        let audits_dir = workspace_root.join("reviews/applied-runs");
+        let audit_paths = fs::read_dir(&audits_dir)
+            .expect("read applied run audits")
+            .map(|entry| entry.expect("audit entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(audit_paths.len(), 4);
+        let audits = audit_paths
+            .iter()
+            .map(|path| read_json_artifact::<AgentProposalApplyAudit>(path).expect("read audit"))
+            .collect::<Vec<_>>();
+        assert!(audits.iter().all(|audit| {
+            audit.status == "applied"
+                && audit.error_code.is_none()
+                && audit.error_message.is_none()
+                && audit.rollback_hint.contains("snapshots/<snapshotId>/files")
+                && workspace_root
+                    .join("snapshots")
+                    .join(&audit.snapshot_id)
+                    .join("manifest.json")
+                    .exists()
+        }));
+        assert!(audits.iter().any(|audit| {
+            audit.proposal_id == "proposal-queued-node"
+                && audit
+                    .changed_files
+                    .iter()
+                    .any(|path| path == "graph/nodes.json")
+                && audit
+                    .changed_files
+                    .iter()
+                    .any(|path| path == "wiki/index.md")
+                && audit
+                    .changed_files
+                    .iter()
+                    .any(|path| path == "wiki/topics/concept-queued-graph-runner.md")
+        }));
+        assert!(audits.iter().any(|audit| {
+            audit.proposal_id == "proposal-queued-claim"
+                && audit
+                    .changed_files
+                    .iter()
+                    .any(|path| path == "graph/claims.json")
+                && audit
+                    .changed_files
+                    .iter()
+                    .any(|path| path == "wiki/topics/concept-queued-graph-runner.md")
+        }));
+        for proposal_id in [
+            "proposal-queued-node",
+            "proposal-queued-edge",
+            "proposal-queued-claim",
+            "proposal-queued-memory",
+        ] {
+            let proposal: BrainUpdateProposal = read_json_artifact(
+                &workspace_root
+                    .join("reviews/proposed-updates")
+                    .join(format!("{proposal_id}.json")),
+            )
+            .expect("read applied proposal");
+            assert_eq!(proposal.status, BrainProposalStatus::Accepted);
+        }
+
+        let rerun = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("rerun queued proposal worker");
+        assert!(rerun.applied.is_empty());
+        assert!(rerun.failed.is_empty());
+    }
+
+    #[test]
+    fn queued_agent_proposal_runner_reports_failures_and_continues_queue() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Queued graph failures\n\n## Page 1\n\nQueued graph failures should be audited without stopping valid changes.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let evidence_ids = project
+            .details_by_node_id
+            .get(&concept_node_id)
+            .expect("concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("writer");
+        writer
+            .write_proposal(&BrainUpdateProposal {
+                proposal_id: "proposal-invalid-node".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Node,
+                status: BrainProposalStatus::PendingReview,
+                actor: actor.clone(),
+                scope: BrainScope::Project,
+                title: "Create invalid node".into(),
+                body: "This proposal is missing evidence refs and must be rejected.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                    node: AgentNewNodePayload {
+                        label: "Invalid Queued Node".into(),
+                        kind: BrainNodeKind::Concept,
+                        source_path: manifest.markdown_path.clone(),
+                        node_id: Some("concept-invalid-queued-node".into()),
+                        aliases: Vec::new(),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: Vec::new(),
+                        reason: Some("Failure path coverage.".into()),
+                    },
+                }),
+                created_at: 10,
+            })
+            .expect("write invalid queued proposal");
+        writer
+            .write_proposal(&BrainUpdateProposal {
+                proposal_id: "proposal-valid-node-after-failure".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                kind: BrainProposalKind::Node,
+                status: BrainProposalStatus::PendingReview,
+                actor,
+                scope: BrainScope::Project,
+                title: "Create valid node after failure".into(),
+                body: "Valid proposals behind failed proposals should still apply.".into(),
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_refs: Vec::new(),
+                node_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                    node: AgentNewNodePayload {
+                        label: "Valid Queued Node".into(),
+                        kind: BrainNodeKind::Concept,
+                        source_path: manifest.markdown_path.clone(),
+                        node_id: Some("concept-valid-queued-node".into()),
+                        aliases: Vec::new(),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("The queue should continue after failures.".into()),
+                    },
+                }),
+                created_at: 11,
+            })
+            .expect("write valid queued proposal");
+        drop(writer);
+
+        let result = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("run proposal worker");
+
+        assert_eq!(result.applied, vec!["proposal-valid-node-after-failure"]);
+        assert_eq!(result.failed.len(), 1);
+        let failure = &result.failed[0];
+        assert_eq!(failure.proposal_id, "proposal-invalid-node");
+        assert_eq!(failure.error_code, "invalid_agent_graph_proposal");
+        assert!(failure
+            .validation_issues
+            .iter()
+            .any(|issue| issue.code == AgentGraphProposalValidationCode::MissingEvidenceRefs));
+        let failure_audit_path = PathBuf::from(&failure.audit_path);
+        assert!(failure_audit_path.exists());
+        let failure_audit: AgentProposalApplyAudit =
+            read_json_artifact(&failure_audit_path).expect("read failure audit");
+        assert_eq!(failure_audit.status, "failed");
+        assert_eq!(failure_audit.proposal_id, "proposal-invalid-node");
+        assert_eq!(
+            failure_audit.error_code.as_deref(),
+            Some("invalid_agent_graph_proposal")
+        );
+        assert!(failure_audit.changed_files.is_empty());
+        assert!(failure_audit
+            .rollback_hint
+            .contains("pre-apply snapshot was restored"));
+        assert!(workspace_root
+            .join("snapshots")
+            .join(&failure.snapshot_id)
+            .join("manifest.json")
+            .exists());
+
+        let invalid: BrainUpdateProposal = read_json_artifact(
+            &workspace_root.join("reviews/proposed-updates/proposal-invalid-node.json"),
+        )
+        .expect("read invalid proposal");
+        assert_eq!(invalid.status, BrainProposalStatus::Rejected);
+        let valid: BrainUpdateProposal = read_json_artifact(
+            &workspace_root.join("reviews/proposed-updates/proposal-valid-node-after-failure.json"),
+        )
+        .expect("read valid proposal");
+        assert_eq!(valid.status, BrainProposalStatus::Accepted);
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("nodes");
+        assert!(nodes
+            .iter()
+            .any(|node| node.node_id == "concept-valid-queued-node"));
+        assert!(!nodes
+            .iter()
+            .any(|node| node.node_id == "concept-invalid-queued-node"));
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("events");
+        assert!(events.iter().any(|event| {
+            event.event_type == BrainEventKind::ReviewResolved
+                && event.policy_result == "auto_rejected"
+                && event
+                    .payload_json
+                    .contains("\"errorCode\":\"invalid_agent_graph_proposal\"")
+                && event
+                    .payload_json
+                    .contains(&format!("\"snapshotId\":\"{}\"", failure.snapshot_id))
+                && event.payload_json.contains("\"validationIssues\"")
+        }));
+
+        let rerun = run_queued_agent_proposal_apply_worker(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("rerun proposal worker");
+        assert!(rerun.applied.is_empty());
+        assert!(rerun.failed.is_empty());
+        let events_after_rerun =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("events after rerun");
+        assert_eq!(events_after_rerun.len(), events.len());
+        let nodes_after_rerun: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("nodes after rerun");
+        assert_eq!(
+            nodes_after_rerun
+                .iter()
+                .filter(|node| node.node_id == "concept-valid-queued-node")
+                .count(),
+            1
+        );
+        assert!(!nodes_after_rerun
+            .iter()
+            .any(|node| node.node_id == "concept-invalid-queued-node"));
+    }
+
+    #[test]
+    fn agent_proposal_payloads_parse_and_validate_new_node_and_new_claim() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+
+        let node_payload_json = json!({
+            "changeType": "new_node",
+            "node": {
+                "label": "Agent Maintained Knowledge Graph",
+                "kind": "concept",
+                "sourcePath": "sources/agent-loop.md",
+                "sourceRefs": ["source-agent-loop"],
+                "evidenceRefs": ["ev-agent-loop-1"],
+                "aliases": ["AMKG"],
+                "reason": "Source heading introduces the concept."
+            }
+        });
+        let node_payload: AgentGraphProposalPayload =
+            serde_json::from_value(node_payload_json).expect("parse new_node payload");
+        let node_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Create graph concept".into(),
+            body: "Create a concept node from source evidence.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: Vec::new(),
+            evidence_refs: vec!["ev-agent-loop-1".into()],
+            proposal_payload: Some(node_payload),
+        })
+        .expect("propose new node payload");
+        assert_eq!(node_response.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(node_response.event.policy_result, "auto_applied");
+        assert_eq!(node_response.event.event_type, BrainEventKind::NodeProposed);
+        assert!(node_response
+            .event
+            .payload_json
+            .contains("\"changeType\":\"new_node\""));
+        assert!(node_response
+            .proposal
+            .proposal_payload
+            .as_ref()
+            .is_some_and(|payload| matches!(payload, AgentGraphProposalPayload::NewNode { .. })));
+
+        let claim_payload = AgentGraphProposalPayload::NewClaim {
+            claim: AgentNewClaimPayload {
+                statement: "Events JSONL is the source of truth for replay.".into(),
+                source_path: "sources/agent-loop.md".into(),
+                claim_id: Some("claim-events-source-truth".into()),
+                topic_refs: vec!["concept-agent-maintained-knowledge-graph".into()],
+                source_refs: vec!["source-agent-loop".into()],
+                evidence_refs: vec!["ev-agent-loop-2".into()],
+                reason: Some("The source states the replay contract directly.".into()),
+            },
+        };
+        let claim_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Create source-backed claim".into(),
+            body: "Events JSONL is the source of truth for replay.".into(),
+            actor,
+            target_node_id: Some("concept-agent-maintained-knowledge-graph".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: vec!["concept-agent-maintained-knowledge-graph".into()],
+            evidence_refs: vec!["ev-agent-loop-2".into()],
+            proposal_payload: Some(claim_payload),
+        })
+        .expect("propose new claim payload");
+        assert_eq!(
+            claim_response.event.event_type,
+            BrainEventKind::ClaimProposed
+        );
+        assert!(claim_response
+            .event
+            .payload_json
+            .contains("\"changeType\":\"new_claim\""));
+
+        let memory_payload_json = json!({
+            "changeType": "new_memory",
+            "memory": {
+                "title": "Events are replayable",
+                "body": "Append-only events are the source of truth for graph replay.",
+                "sourcePath": "sources/agent-loop.md",
+                "memoryId": "memory-events-replayable",
+                "sourceRefs": ["source-agent-loop"],
+                "evidenceRefs": ["ev-agent-loop-3"],
+                "reason": "The source defines events JSONL as the replay log."
+            }
+        });
+        let memory_payload: AgentGraphProposalPayload =
+            serde_json::from_value(memory_payload_json).expect("parse new_memory payload");
+        let memory_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Memory,
+            title: "Create replay memory".into(),
+            body: "Append-only events are the source of truth for graph replay.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: Vec::new(),
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            proposal_payload: Some(memory_payload),
+        })
+        .expect("propose new memory payload");
+        assert_eq!(
+            memory_response.proposal.status,
+            BrainProposalStatus::Accepted
+        );
+        assert_eq!(memory_response.event.policy_result, "auto_applied");
+        assert!(memory_response
+            .event
+            .payload_json
+            .contains("\"changeType\":\"new_memory\""));
+        let memories: Vec<MemoryRecord> = read_json_artifact(
+            &temp
+                .path()
+                .join(DEFAULT_WORKSPACE_ID)
+                .join("memory/records.json"),
+        )
+        .expect("read materialized memories");
+        assert!(memories.iter().any(|memory| {
+            memory.memory_id == "memory-events-replayable"
+                && memory.title == "Events are replayable"
+                && memory.source_refs == vec!["source-agent-loop".to_string()]
+                && memory.evidence_refs == vec!["ev-agent-loop-3".to_string()]
+        }));
+
+        let invalid = validate_brain_update_proposal(&ProposeBrainUpdateRequest {
+            scope,
+            kind: BrainProposalKind::Claim,
+            title: "Invalid claim".into(),
+            body: "Missing source path should fail.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: vec!["concept-agent-maintained-knowledge-graph".into()],
+            evidence_refs: vec!["ev-agent-loop-2".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement: "Events JSONL is the source of truth for replay.".into(),
+                    source_path: " ".into(),
+                    claim_id: None,
+                    topic_refs: vec!["concept-agent-maintained-knowledge-graph".into()],
+                    source_refs: vec!["source-agent-loop".into()],
+                    evidence_refs: vec!["ev-agent-loop-2".into()],
+                    reason: None,
+                },
+            }),
+        });
+        assert!(invalid
+            .expect_err("invalid payload should fail")
+            .to_string()
+            .contains("sourcePath"));
+    }
+
+    #[test]
+    fn accepted_agent_node_and_claim_proposals_materialize_graph_and_wiki() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (project, manifest) = compile_manifest_fixture_project(
+            &temp,
+            "# Agent graph loop\n\n## Page 1\n\nAutonomous graph proposals create durable source-backed graph state.\n",
+        );
+        let markdown_path = temp.path().join("sample.md");
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let concept_evidence_ids = project
+            .details_by_node_id
+            .get(&concept_node_id)
+            .expect("concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+
+        let node_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Create autonomous graph loop node".into(),
+            body: "Agent proposals should materialize graph nodes without a review gate.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Autonomous Graph Loop".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: manifest.markdown_path.clone(),
+                    node_id: Some("concept-autonomous-graph-loop".into()),
+                    aliases: vec!["Agent graph loop".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some("The source describes autonomous graph proposals.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply node proposal");
+        assert_eq!(node_response.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(node_response.event.policy_result, "auto_applied");
+
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("read nodes");
+        assert!(nodes.iter().any(|node| {
+            node.node_id == "concept-autonomous-graph-loop"
+                && node.label == "Autonomous Graph Loop"
+                && node.source_ids == vec![manifest.source_id.clone()]
+                && node.evidence_ids == concept_evidence_ids
+        }));
+        let index = fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read index");
+        assert!(index.contains("[Autonomous Graph Loop](topics/concept-autonomous-graph-loop.md)"));
+        assert!(workspace_root
+            .join("wiki/topics/concept-autonomous-graph-loop.md")
+            .exists());
+
+        let edge_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Link,
+            title: "Connect source concept to agent-maintained node".into(),
+            body: "The autonomous ingest agent can apply validated new edge changes.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                edge: AgentNewEdgePayload {
+                    source_node_id: concept_node_id.clone(),
+                    target_node_id: "concept-autonomous-graph-loop".into(),
+                    kind: BrainRelationKind::RelatedTo,
+                    label: "Related to".into(),
+                    source_path: manifest.markdown_path.clone(),
+                    edge_id: Some("relation-source-autonomous-graph-loop".into()),
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some("Both nodes are grounded in the same source evidence.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply edge proposal");
+        assert_eq!(edge_response.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(edge_response.event.policy_result, "auto_applied");
+        assert_eq!(edge_response.event.event_type, BrainEventKind::LinkProposed);
+        assert_eq!(
+            edge_response.event.relation_refs,
+            vec!["relation-source-autonomous-graph-loop".to_string()]
+        );
+        assert!(edge_response
+            .event
+            .payload_json
+            .contains("\"changeType\":\"new_edge\""));
+
+        let edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json")).expect("read edges");
+        assert!(edges.iter().any(|edge| {
+            edge.relation_id == "relation-source-autonomous-graph-loop"
+                && edge.source_node_id == concept_node_id
+                && edge.target_node_id == "concept-autonomous-graph-loop"
+                && edge.kind == BrainRelationKind::RelatedTo
+                && edge.label == "Related to"
+                && edge.evidence_ids == concept_evidence_ids
+        }));
+        let topic_after_edge =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-autonomous-graph-loop.md"))
+                .expect("read topic page after edge");
+        assert!(topic_after_edge.contains("## Relations"));
+        assert!(topic_after_edge.contains("relation-source-autonomous-graph-loop"));
+        assert!(topic_after_edge.contains("Autonomous Graph Loop"));
+        assert!(topic_after_edge.contains("sources: source-test"));
+        assert!(topic_after_edge.contains(&format!("]({}.md)", sanitize_name(&concept_node_id))));
+        let source_topic_after_edge = fs::read_to_string(workspace_root.join(format!(
+            "wiki/topics/{}.md",
+            sanitize_name(&concept_node_id)
+        )))
+        .expect("read source topic page after edge");
+        assert!(source_topic_after_edge.contains("## Relations"));
+        assert!(source_topic_after_edge
+            .contains("[Autonomous Graph Loop](concept-autonomous-graph-loop.md)"));
+
+        let claim_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Attach source-backed graph claim".into(),
+            body: "The typed claim payload should become the materialized claim.".into(),
+            actor,
+            target_node_id: Some("concept-autonomous-graph-loop".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec!["concept-autonomous-graph-loop".into()],
+            evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement:
+                        "Autonomous graph proposals create durable source-backed graph state."
+                            .into(),
+                    source_path: manifest.markdown_path.clone(),
+                    claim_id: Some("claim-autonomous-graph-loop-state".into()),
+                    topic_refs: vec!["concept-autonomous-graph-loop".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some("The source states the durable graph behavior directly.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply claim proposal");
+        assert_eq!(
+            claim_response.proposal.status,
+            BrainProposalStatus::Accepted
+        );
+        assert_eq!(claim_response.event.policy_result, "auto_applied");
+
+        let claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json")).expect("read claims");
+        assert!(claims.iter().any(|claim| {
+            claim.claim_id == "claim-autonomous-graph-loop-state"
+                && claim.statement
+                    == "Autonomous graph proposals create durable source-backed graph state."
+                && claim.topic_refs == vec!["concept-autonomous-graph-loop".to_string()]
+                && claim.source_refs == vec![manifest.source_id.clone()]
+                && claim.evidence_refs == concept_evidence_ids
+                && claim.status == "supported"
+        }));
+        let duplicate_claim_response = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Re-ingest existing source-backed graph claim".into(),
+            body: "The duplicate typed claim payload should reuse the materialized claim.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: Some("concept-autonomous-graph-loop".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec!["concept-autonomous-graph-loop".into()],
+            evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement:
+                        "Autonomous graph proposals create durable source-backed graph state."
+                            .into(),
+                    source_path: manifest.markdown_path.clone(),
+                    claim_id: Some("claim-autonomous-graph-loop-state-rerun".into()),
+                    topic_refs: vec!["concept-autonomous-graph-loop".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some("A repeated markdown ingest saw the same claim again.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply duplicate claim proposal");
+        assert_eq!(
+            duplicate_claim_response.proposal.status,
+            BrainProposalStatus::Accepted
+        );
+        let claims_after_duplicate: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read claims after duplicate");
+        let duplicate_statement_claims = claims_after_duplicate
+            .iter()
+            .filter(|claim| {
+                claim.statement
+                    == "Autonomous graph proposals create durable source-backed graph state."
+                    && claim.topic_refs == vec!["concept-autonomous-graph-loop".to_string()]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(duplicate_statement_claims.len(), 1);
+        assert_eq!(
+            duplicate_statement_claims[0].claim_id,
+            "claim-autonomous-graph-loop-state"
+        );
+        assert!(!claims_after_duplicate
+            .iter()
+            .any(|claim| claim.claim_id == "claim-autonomous-graph-loop-state-rerun"));
+        let topic =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-autonomous-graph-loop.md"))
+                .expect("read topic page");
+        assert!(topic.contains("## Claims"));
+        assert!(topic.contains("## Relations"));
+        assert!(topic.contains("relation-source-autonomous-graph-loop"));
+        assert!(
+            topic.contains("Autonomous graph proposals create durable source-backed graph state.")
+        );
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read graph mutation events");
+        let applied_graph_mutations = events
+            .iter()
+            .filter(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event.policy_result == "auto_applied"
+                    && event.actor.actor_id == "duckdocs-agent-ingest"
+            })
+            .collect::<Vec<_>>();
+        assert!(applied_graph_mutations.len() >= 3);
+        assert!(applied_graph_mutations.iter().any(|event| {
+            event.payload_json.contains("\"mutationType\":\"new_node\"")
+                && event
+                    .node_refs
+                    .contains(&"concept-autonomous-graph-loop".to_string())
+        }));
+        assert!(applied_graph_mutations.iter().any(|event| {
+            event.payload_json.contains("\"mutationType\":\"new_edge\"")
+                && event
+                    .relation_refs
+                    .contains(&"relation-source-autonomous-graph-loop".to_string())
+        }));
+        assert!(applied_graph_mutations.iter().any(|event| {
+            event
+                .payload_json
+                .contains("\"mutationType\":\"new_claim\"")
+                && event
+                    .node_refs
+                    .contains(&"concept-autonomous-graph-loop".to_string())
+        }));
+
+        store
+            .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+            .expect("replay accepted graph proposals");
+        let replayed_edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json"))
+                .expect("read replayed edges");
+        assert_eq!(
+            replayed_edges
+                .iter()
+                .filter(|edge| edge.relation_id == "relation-source-autonomous-graph-loop")
+                .count(),
+            1
+        );
+        let replayed_topic =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-autonomous-graph-loop.md"))
+                .expect("read replayed topic page");
+        assert!(replayed_topic.contains("## Relations"));
+        assert!(replayed_topic.contains("relation-source-autonomous-graph-loop"));
+        assert!(replayed_topic.contains("sources: source-test"));
+        assert!(replayed_topic.contains(&format!("]({}.md)", sanitize_name(&concept_node_id))));
+    }
+
+    #[test]
+    fn accepted_wiki_page_proposal_preserves_existing_user_authored_page() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (project, manifest) = compile_manifest_fixture_project(
+            &temp,
+            "# Agent graph loop\n\n## Page 1\n\nAgent save-back wiki pages remain recoverable.\n",
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: temp.path().join("sample.md").display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let existing_page = workspace_root.join("wiki/save-back/agent-save-back.md");
+        fs::create_dir_all(existing_page.parent().expect("save-back parent"))
+            .expect("create save-back dir");
+        fs::write(
+            &existing_page,
+            "# Agent save-back\n\nUser-authored page must stay intact.\n",
+        )
+        .expect("write user-authored page");
+        let existing_before =
+            fs::read_to_string(&existing_page).expect("read user-authored page before");
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let concept_evidence_ids = project
+            .details_by_node_id
+            .get(&concept_node_id)
+            .expect("concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+
+        let wiki = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::WikiPage,
+            title: "Agent save-back".into(),
+            body: "Agent-authored wiki page content should persist without overwriting user-authored markdown.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: Some(concept_node_id.clone()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id],
+            evidence_refs: concept_evidence_ids,
+            proposal_payload: None,
+        })
+        .expect("propose wiki page");
+
+        handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+            scope,
+            proposal_id: wiki.proposal.proposal_id.clone(),
+            decision: BrainReviewDecision::Accept,
+            actor: BrainActor {
+                actor_type: BrainActorType::User,
+                actor_id: "local-user".into(),
+            },
+            reason: Some("Accept agent save-back page.".into()),
+        })
+        .expect("accept wiki page");
+
+        assert_eq!(
+            fs::read_to_string(&existing_page).expect("read user-authored page after"),
+            existing_before
+        );
+        let manifest_snapshot: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read brain manifest");
+        let saved_page = manifest_snapshot
+            .wiki_pages
+            .iter()
+            .find(|page| {
+                page.title == "Agent save-back" && page.path != "wiki/save-back/agent-save-back.md"
+            })
+            .expect("collision-safe saved page");
+        let saved_body =
+            fs::read_to_string(workspace_root.join(&saved_page.path)).expect("read saved page");
+        assert!(saved_body.contains(
+            "Agent-authored wiki page content should persist without overwriting user-authored markdown."
+        ));
+
+        store
+            .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+            .expect("rematerialize workspace brain repo");
+        assert_eq!(
+            fs::read_to_string(&existing_page).expect("read user-authored page after replay"),
+            existing_before
+        );
+        assert!(fs::read_to_string(workspace_root.join(&saved_page.path))
+            .expect("read saved page after replay")
+            .contains(
+                "Agent-authored wiki page content should persist without overwriting user-authored markdown."
+            ));
+    }
+
+    #[test]
+    fn persisted_mutation_events_reconstruct_current_and_prior_graph_states() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (project, manifest) = compile_manifest_fixture_project(
+            &temp,
+            "# Replayable graph\n\n## Page 1\n\nReplayable graph events rebuild nodes edges claims and memories.\n",
+        );
+        let request = CompileProjectRequest {
+            source_markdown_path: temp.path().join("sample.md").display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let source_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("source concept node")
+            .id
+            .clone();
+        let evidence_ids = project
+            .details_by_node_id
+            .get(&source_node_id)
+            .expect("source concept detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Create replay node".into(),
+            body: "Replay should rebuild this node from persisted events.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Replayable Graph State".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: manifest.markdown_path.clone(),
+                    node_id: Some("concept-replayable-graph-state".into()),
+                    aliases: Vec::new(),
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: evidence_ids.clone(),
+                    reason: Some("The fixture source describes replayable graph state.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply replay node");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Link,
+            title: "Connect replay node".into(),
+            body: "Replay should rebuild this edge only after its event.".into(),
+            actor: actor.clone(),
+            target_node_id: Some("concept-replayable-graph-state".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec!["concept-replayable-graph-state".into()],
+            evidence_refs: Vec::new(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                edge: AgentNewEdgePayload {
+                    source_node_id: "concept-replayable-graph-state".into(),
+                    target_node_id: "concept-replayable-graph-state".into(),
+                    kind: BrainRelationKind::RelatedTo,
+                    label: "Replays to".into(),
+                    source_path: manifest.markdown_path.clone(),
+                    edge_id: Some("relation-replayable-graph-state".into()),
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: evidence_ids.clone(),
+                    reason: Some("Replay has to preserve relation endpoints.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply replay edge");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Attach replay claim".into(),
+            body: "Replay should rebuild this claim only after its event.".into(),
+            actor: actor.clone(),
+            target_node_id: Some("concept-replayable-graph-state".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec!["concept-replayable-graph-state".into()],
+            evidence_refs: evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement: "Persisted graph mutation events reconstruct prior graph states."
+                        .into(),
+                    source_path: manifest.markdown_path.clone(),
+                    claim_id: Some("claim-replayable-graph-state".into()),
+                    topic_refs: vec!["concept-replayable-graph-state".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: evidence_ids.clone(),
+                    reason: Some("The replay fixture proves prior-state reconstruction.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply replay claim");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Memory,
+            title: "Remember replay state".into(),
+            body: "Replayable graph events can restore materialized memories.".into(),
+            actor,
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewMemory {
+                memory: AgentNewMemoryPayload {
+                    title: "Replay state is restorable".into(),
+                    body: "Persisted mutation events restore graph memories during replay.".into(),
+                    source_path: manifest.markdown_path.clone(),
+                    memory_id: Some("memory-replayable-graph-state".into()),
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: evidence_ids.clone(),
+                    reason: Some("Memory replay is part of the materialized state.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply replay memory");
+
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read persisted events");
+        let node_materialized_event = events
+            .iter()
+            .find(|event| {
+                event.event_type == BrainEventKind::GraphMaterialized
+                    && event.operation_type.as_deref() == Some("new_node")
+                    && event
+                        .target_node_ids
+                        .contains(&"concept-replayable-graph-state".to_string())
+            })
+            .expect("node materialized event");
+        let prior_output = temp.path().join("replay-prior");
+        let prior = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: scope.clone(),
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: Some(node_materialized_event.event_id.clone()),
+            output_root: Some(prior_output.display().to_string()),
+            write_materialized: false,
+        })
+        .expect("reconstruct prior state");
+        assert_eq!(
+            prior.selected_event_id.as_deref(),
+            Some(node_materialized_event.event_id.as_str())
+        );
+        assert!(prior.snapshot.nodes.iter().any(|node| {
+            node.node_id == "concept-replayable-graph-state"
+                && node.label == "Replayable Graph State"
+        }));
+        assert!(!prior
+            .snapshot
+            .relations
+            .iter()
+            .any(|edge| edge.relation_id == "relation-replayable-graph-state"));
+        assert!(!prior
+            .snapshot
+            .claims
+            .iter()
+            .any(|claim| claim.claim_id == "claim-replayable-graph-state"));
+        assert!(!prior
+            .snapshot
+            .memories
+            .iter()
+            .any(|memory| memory.memory_id == "memory-replayable-graph-state"));
+        assert!(fs::read_to_string(prior_output.join("wiki/index.md"))
+            .expect("read prior replay wiki index")
+            .contains("[Replayable Graph State](topics/concept-replayable-graph-state.md)"));
+        assert!(!fs::read_to_string(
+            prior_output.join("wiki/topics/concept-replayable-graph-state.md")
+        )
+        .expect("read prior replay topic")
+        .contains("Persisted graph mutation events reconstruct prior graph states."));
+
+        let full_output = temp.path().join("replay-current");
+        let full = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: scope.clone(),
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: Some(full_output.display().to_string()),
+            write_materialized: false,
+        })
+        .expect("reconstruct full state");
+        let current_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("current nodes");
+        let current_edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json")).expect("current edges");
+        let current_claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json")).expect("current claims");
+        let current_memories = read_memory_records(&workspace_root).expect("current memories");
+        assert_eq!(full.snapshot.nodes, current_nodes);
+        assert_eq!(full.snapshot.relations, current_edges);
+        assert_eq!(full.snapshot.claims, current_claims);
+        assert_eq!(full.snapshot.memories, current_memories);
+        assert!(full
+            .changed_files
+            .iter()
+            .any(|path| path == "events/brain_events.jsonl"));
+        assert!(fs::read_to_string(full_output.join("graph/nodes.json"))
+            .expect("read replayed nodes")
+            .contains("concept-replayable-graph-state"));
+        assert!(fs::read_to_string(
+            full_output.join("wiki/topics/concept-replayable-graph-state.md")
+        )
+        .expect("read replayed topic")
+        .contains("Persisted graph mutation events reconstruct prior graph states."));
+        assert_eq!(
+            read_brain_events_jsonl(&full_output.join("events/brain_events.jsonl"))
+                .expect("read replayed event log")
+                .len(),
+            full.replayed_event_count
+        );
+
+        let rollback = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: scope.clone(),
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: Some(node_materialized_event.event_id.clone()),
+            output_root: Some(temp.path().join("rollback-preview").display().to_string()),
+            write_materialized: true,
+        })
+        .expect("apply rollback to prior graph state");
+        assert!(rollback
+            .changed_files
+            .iter()
+            .any(|path| path == "events/brain_events.jsonl"));
+        assert!(rollback
+            .changed_files
+            .iter()
+            .any(|path| path == "graph/edges.json"));
+        assert!(workspace_root.join("snapshots").exists());
+        let rolled_back_edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json"))
+                .expect("read rolled back edges");
+        assert!(!rolled_back_edges
+            .iter()
+            .any(|edge| edge.relation_id == "relation-replayable-graph-state"));
+        let rolled_back_claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read rolled back claims");
+        assert!(!rolled_back_claims
+            .iter()
+            .any(|claim| claim.claim_id == "claim-replayable-graph-state"));
+        let rolled_back_memories = read_memory_records(&workspace_root).expect("rolled memories");
+        assert!(!rolled_back_memories
+            .iter()
+            .any(|memory| memory.memory_id == "memory-replayable-graph-state"));
+        let rolled_events =
+            read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+                .expect("read rollback events");
+        assert_eq!(rolled_events.len(), events.len() + 1);
+        assert_eq!(&rolled_events[..events.len()], events.as_slice());
+        let rollback_event = rolled_events.last().expect("rollback event");
+        assert_eq!(rollback_event.event_type, BrainEventKind::GraphMaterialized);
+        assert_eq!(
+            rollback_event.operation_type.as_deref(),
+            Some("graph_rollback")
+        );
+        assert_eq!(rollback_event.policy_result, "rollback_applied");
+        assert!(rollback_event
+            .causality
+            .caused_by_event_ids
+            .contains(&node_materialized_event.event_id));
+        let rollback_payload: serde_json::Value =
+            serde_json::from_str(&rollback_event.payload_json).expect("rollback payload json");
+        assert_eq!(
+            rollback_payload["rollback"]["restoredSnapshotId"],
+            rollback.snapshot_id
+        );
+        assert_eq!(
+            rollback_payload["rollback"]["selectedEventId"],
+            node_materialized_event.event_id
+        );
+        assert!(rollback_payload["rollback"]["preRollbackSnapshotId"]
+            .as_str()
+            .is_some_and(|snapshot_id| snapshot_id.starts_with("snapshot-pre-rollback-")));
+        assert_eq!(
+            rollback_payload["diff"]["removedEdgeIds"],
+            serde_json::json!(["relation-replayable-graph-state"])
+        );
+        assert_eq!(
+            rollback_payload["diff"]["removedClaimIds"],
+            serde_json::json!(["claim-replayable-graph-state"])
+        );
+        assert_eq!(
+            rollback_payload["diff"]["removedMemoryIds"],
+            serde_json::json!(["memory-replayable-graph-state"])
+        );
+        assert_eq!(
+            rollback_payload["rollback"]["sourceEventCount"],
+            serde_json::json!(rollback.replayed_event_count)
+        );
+        let history = handle_read_graph_history(ReadGraphHistoryRequest {
+            scope: scope.clone(),
+            limit: Some(20),
+        })
+        .expect("read rollback history");
+        assert_eq!(
+            history
+                .states
+                .first()
+                .expect("latest rollback history entry")
+                .rollback_target
+                .event_id,
+            rollback_event.event_id
+        );
+        assert!(history.states.iter().any(|state| {
+            state.rollback_target.event_id == node_materialized_event.event_id
+                && state.source_run_ids.contains(&manifest.source_id)
+        }));
+
+        let replay_after_rollback = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope,
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: Some(
+                temp.path()
+                    .join("replay-after-rollback")
+                    .display()
+                    .to_string(),
+            ),
+            write_materialized: false,
+        })
+        .expect("replay after rollback");
+        assert!(!replay_after_rollback
+            .snapshot
+            .relations
+            .iter()
+            .any(|edge| edge.relation_id == "relation-replayable-graph-state"));
+        assert!(!replay_after_rollback
+            .snapshot
+            .claims
+            .iter()
+            .any(|claim| claim.claim_id == "claim-replayable-graph-state"));
+        assert!(!replay_after_rollback
+            .snapshot
+            .memories
+            .iter()
+            .any(|memory| memory.memory_id == "memory-replayable-graph-state"));
+    }
+
+    #[test]
+    fn invalid_agent_graph_proposal_is_rejected_before_writing_audit_artifacts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let error = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Invalid node".into(),
+            body: "Missing evidence refs should reject the proposal before writes.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Invalid Agent Node".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: "sources/agent-loop.md".into(),
+                    node_id: Some("concept-invalid-agent-node".into()),
+                    aliases: Vec::new(),
+                    source_refs: vec!["source-agent-loop".into()],
+                    evidence_refs: Vec::new(),
+                    reason: None,
+                },
+            }),
+        })
+        .expect_err("invalid node proposal should fail");
+
+        assert!(format!("{error:#}").contains("evidenceRefs"));
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        assert!(!workspace_root.join("events/brain_events.jsonl").exists());
+        assert!(!workspace_root.join("reviews/proposed-updates").exists());
+        assert!(!workspace_root.join("graph/nodes.json").exists());
+
+        let mismatch = validate_brain_update_proposal(&ProposeBrainUpdateRequest {
+            scope,
+            kind: BrainProposalKind::Claim,
+            title: "Mismatched payload".into(),
+            body: "A claim cannot carry a new node payload.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec!["source-agent-loop".into()],
+            node_refs: vec!["concept-agent-loop".into()],
+            evidence_refs: vec!["ev-agent-loop-1".into()],
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Wrong Payload".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: "sources/agent-loop.md".into(),
+                    node_id: None,
+                    aliases: Vec::new(),
+                    source_refs: vec!["source-agent-loop".into()],
+                    evidence_refs: vec!["ev-agent-loop-1".into()],
+                    reason: None,
+                },
+            }),
+        })
+        .expect_err("mismatched payload should fail");
+        assert!(format!("{mismatch:#}").contains("requires kind=node"));
+        let validation_error = mismatch
+            .downcast_ref::<AgentGraphProposalValidationError>()
+            .expect("structured validation error");
+        assert!(validation_error.issues.iter().any(|issue| {
+            issue.code == AgentGraphProposalValidationCode::KindPayloadMismatch
+                && issue.field == "proposalPayload.changeType"
+        }));
+    }
+
+    #[test]
+    fn accepted_link_proposal_validates_node_ids_before_materializing_edge() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Sample import\n\n## Page 1\n\nAgent Graph Loop links source-backed claims.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let concept_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let edges_before =
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges before");
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let proposed = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Link,
+            title: "Invalid relation edge".into(),
+            body: "This relation should not materialize because its target node is missing.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: Some("missing-target-node".into()),
+            target_source_id: None,
+            relation_kind: Some(BrainRelationKind::RelatedTo),
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![concept_node_id],
+            evidence_refs: Vec::new(),
+            proposal_payload: None,
+        })
+        .expect("write pending link proposal");
+        assert_eq!(proposed.proposal.status, BrainProposalStatus::PendingReview);
+
+        let error = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+            scope: scope.clone(),
+            proposal_id: proposed.proposal.proposal_id.clone(),
+            decision: BrainReviewDecision::Accept,
+            actor: BrainActor {
+                actor_type: BrainActorType::User,
+                actor_id: "local-user".into(),
+            },
+            reason: Some("Attempt to accept invalid edge.".into()),
+        })
+        .expect_err("invalid relation endpoint should block materialization");
+        assert!(format!("{error:#}").contains("missing-target-node"));
+
+        let persisted: BrainUpdateProposal =
+            read_json_artifact(&PathBuf::from(&proposed.proposal_path))
+                .expect("read pending proposal");
+        assert_eq!(persisted.status, BrainProposalStatus::PendingReview);
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("graph/edges.json")).expect("read edges after"),
+            edges_before
+        );
+    }
+
+    #[test]
     fn brain_review_health_lists_pending_claims_and_links_only() {
         let temp = tempfile::tempdir().expect("temp dir");
         let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
@@ -9193,6 +23436,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         })
         .expect("propose memory");
         handle_propose_brain_update(ProposeBrainUpdateRequest {
@@ -9210,6 +23454,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: vec![concept_node_id.clone()],
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         })
         .expect("propose claim");
         handle_propose_brain_update(ProposeBrainUpdateRequest {
@@ -9227,6 +23472,7 @@ mod tests {
             source_refs: vec![manifest.source_id],
             node_refs: vec!["document".into()],
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         })
         .expect("propose link");
 
@@ -9384,6 +23630,13 @@ mod tests {
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope,
             limit: Some(20),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
         })
         .expect("read maintenance events");
         assert!(events
@@ -9394,6 +23647,171 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::BrainMaintenanceRun));
+    }
+
+    #[test]
+    fn brain_maintenance_repairs_graph_and_memory_refs_to_missing_wiki_pages() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Agent Graph Loop\n\n## Page 1\n\nAgent graph loop keeps wiki pages materialized.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let snapshot: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json")).expect("snapshot");
+        let missing_wiki_path = snapshot
+            .wiki_pages
+            .iter()
+            .find(|page| page.path.starts_with("wiki/topics/"))
+            .expect("topic page")
+            .path
+            .clone();
+        let missing_wiki_file = workspace_root.join(&missing_wiki_path);
+        if missing_wiki_file.exists() {
+            fs::remove_file(&missing_wiki_file).expect("remove topic page");
+        }
+        let mut memories = read_memory_records(&workspace_root).expect("read memories");
+        memories.push(MemoryRecord {
+            memory_id: "memory-missing-wiki-ref".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            title: "Missing wiki ref".into(),
+            body: "Memory changes should not point at absent materialized wiki pages.".into(),
+            source_refs: vec![missing_wiki_path.clone()],
+            evidence_refs: Vec::new(),
+            created_at: 10,
+            updated_at: 10,
+        });
+        write_json_pretty(&workspace_root.join("memory/records.json"), &memories)
+            .expect("write memory ref");
+
+        let broken_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("read broken snapshot");
+        let missing_issues = lint_missing_materialized_wiki_refs(&workspace_root, &broken_snapshot);
+        assert!(missing_issues.iter().any(|issue| {
+            issue.kind == "missing_wiki_page" && issue.source_refs.contains(&missing_wiki_path)
+        }));
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let health = handle_get_brain_health(GetBrainHealthRequest { scope })
+            .expect("health runs maintenance");
+        assert_eq!(health.status, BrainHealthStatus::Clean);
+        let report: BrainMaintenanceReport =
+            read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
+                .expect("read lint report");
+        assert!(report.repairs.contains(&missing_wiki_path));
+        assert!(!report
+            .issues
+            .iter()
+            .any(|issue| issue.kind == "missing_wiki_page"));
+        assert!(!health
+            .review_items
+            .iter()
+            .any(|item| item.title.contains("Wiki page is not materialized")));
+        let recovered_page =
+            fs::read_to_string(workspace_root.join(&missing_wiki_path)).expect("read stub");
+        assert!(recovered_page.contains("Markdown-derived node"));
+        assert!(recovered_page.contains("wiki pages materialized"));
+        assert!(recovered_page.contains("## Origin Context"));
+        assert!(recovered_page.contains("memory-missing-wiki-ref"));
+    }
+
+    #[test]
+    fn brain_maintenance_preserves_existing_wiki_page_when_adding_missing_manifest_record() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let markdown =
+            "# Agent Graph Loop\n\n## Page 1\n\nAgent graph loop keeps wiki pages materialized.\n";
+        let markdown_path = temp.path().join("sample.md");
+        fs::write(&markdown_path, markdown).expect("write markdown");
+        let manifest = sample_manifest(&temp);
+        let request = CompileProjectRequest {
+            source_markdown_path: markdown_path.display().to_string(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        let project = compile_knowledge_project(&request, markdown, Some(&manifest));
+        let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source-backed project");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let existing_wiki_path = "wiki/save-back/manual-page.md".to_string();
+        let existing_wiki_file = workspace_root.join(&existing_wiki_path);
+        fs::create_dir_all(existing_wiki_file.parent().expect("manual wiki parent"))
+            .expect("create manual wiki parent");
+        let original_body = "# Manual Page\n\nKeep this exact user-authored body.\n";
+        fs::write(&existing_wiki_file, original_body).expect("write manual wiki page");
+        let mut memories = read_memory_records(&workspace_root).expect("read memories");
+        memories.push(MemoryRecord {
+            memory_id: "memory-existing-wiki-ref".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            title: "Existing wiki ref".into(),
+            body: "Existing user-authored pages should become readable without being replaced."
+                .into(),
+            source_refs: vec![existing_wiki_path.clone()],
+            evidence_refs: Vec::new(),
+            created_at: 10,
+            updated_at: 10,
+        });
+        write_json_pretty(&workspace_root.join("memory/records.json"), &memories)
+            .expect("write memory ref");
+        let broken_snapshot =
+            read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+                .expect("read snapshot before repair");
+        let missing_issues = lint_missing_materialized_wiki_refs(&workspace_root, &broken_snapshot);
+        assert!(missing_issues.iter().any(|issue| {
+            issue.kind == "missing_wiki_page" && issue.source_refs.contains(&existing_wiki_path)
+        }));
+
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let health = handle_get_brain_health(GetBrainHealthRequest { scope })
+            .expect("health runs maintenance");
+        assert_eq!(health.status, BrainHealthStatus::Clean);
+        let report: BrainMaintenanceReport =
+            read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
+                .expect("read lint report");
+        assert!(report.repairs.contains(&existing_wiki_path));
+        assert!(!report
+            .issues
+            .iter()
+            .any(|issue| issue.kind == "missing_wiki_page"));
+        assert_eq!(
+            fs::read_to_string(&existing_wiki_file).expect("read manual wiki page after repair"),
+            original_body
+        );
+        let repaired_snapshot: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read repaired manifest");
+        let materialized_page = repaired_snapshot
+            .wiki_pages
+            .iter()
+            .find(|page| page.path == existing_wiki_path)
+            .expect("existing page added to manifest");
+        assert_eq!(materialized_page.body, original_body);
+        assert!(materialized_page.source_refs.contains(&existing_wiki_path));
     }
 
     #[test]
@@ -9540,6 +23958,111 @@ mod tests {
             .iter()
             .map(|evidence| evidence.id.clone())
             .collect::<Vec<_>>();
+        let node_proposal = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Node,
+            title: "Create agent graph loop node".into(),
+            body: "Autonomous ingest can add validated graph nodes.".into(),
+            actor: actor.clone(),
+            target_node_id: None,
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: Vec::new(),
+            evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
+                node: AgentNewNodePayload {
+                    label: "Agent Graph Loop".into(),
+                    kind: BrainNodeKind::Concept,
+                    source_path: manifest.markdown_path.clone(),
+                    node_id: Some("concept-agent-graph-loop".into()),
+                    aliases: vec!["Autonomous graph loop".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some("The parsed source introduces autonomous graph updates.".into()),
+                },
+            }),
+        })
+        .expect("auto-apply node proposal");
+        assert_eq!(node_proposal.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(node_proposal.event.policy_result, "auto_applied");
+        let nodes_after_node: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("read nodes after node proposal");
+        assert!(nodes_after_node.iter().any(|node| {
+            node.node_id == "concept-agent-graph-loop"
+                && node.label == "Agent Graph Loop"
+                && node.source_ids == vec![manifest.source_id.clone()]
+                && node.evidence_ids == concept_evidence_ids
+        }));
+        let index_after_node =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki index");
+        assert!(index_after_node.contains("[Agent Graph Loop](topics/concept-agent-graph-loop.md)"));
+        assert!(workspace_root
+            .join("wiki/topics/concept-agent-graph-loop.md")
+            .exists());
+        let auto_claim = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::Claim,
+            title: "Attach claim to agent graph loop".into(),
+            body: "This body should not override the typed claim payload.".into(),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "duckdocs-agent-ingest".into(),
+            },
+            target_node_id: Some("concept-agent-graph-loop".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec!["concept-agent-graph-loop".into()],
+            evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                claim: AgentNewClaimPayload {
+                    statement: "Validated new claim changes attach to referenced graph nodes."
+                        .into(),
+                    source_path: manifest.markdown_path.clone(),
+                    claim_id: Some("claim-agent-graph-loop-attachment".into()),
+                    topic_refs: vec!["concept-agent-graph-loop".into()],
+                    source_refs: vec![manifest.source_id.clone()],
+                    evidence_refs: concept_evidence_ids.clone(),
+                    reason: Some(
+                        "The autonomous ingest agent validated the source-backed claim.".into(),
+                    ),
+                },
+            }),
+        })
+        .expect("auto-apply typed claim proposal");
+        assert_eq!(auto_claim.proposal.status, BrainProposalStatus::Accepted);
+        assert_eq!(auto_claim.event.policy_result, "auto_applied");
+        assert_eq!(auto_claim.event.event_type, BrainEventKind::ClaimProposed);
+        assert!(auto_claim
+            .event
+            .node_refs
+            .contains(&"concept-agent-graph-loop".into()));
+        let claims_after_auto_claim: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read claims after auto claim");
+        assert!(claims_after_auto_claim.iter().any(|claim| {
+            claim.claim_id == "claim-agent-graph-loop-attachment"
+                && claim.statement
+                    == "Validated new claim changes attach to referenced graph nodes."
+                && claim.topic_refs == vec!["concept-agent-graph-loop".to_string()]
+                && claim.source_refs == vec![manifest.source_id.clone()]
+                && claim.evidence_refs == concept_evidence_ids
+                && claim.status == "supported"
+        }));
+        let topic_after_claim =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-agent-graph-loop.md"))
+                .expect("read topic page after auto claim");
+        assert!(topic_after_claim.contains("## Claims"));
+        assert!(topic_after_claim
+            .contains("Validated new claim changes attach to referenced graph nodes."));
         let proposed = handle_propose_brain_update(ProposeBrainUpdateRequest {
             scope: scope.clone(),
             kind: BrainProposalKind::Claim,
@@ -9555,6 +24078,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: vec![concept_node_id.clone()],
             evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: None,
         })
         .expect("propose claim");
         assert_eq!(proposed.proposal.status, BrainProposalStatus::PendingReview);
@@ -9612,6 +24136,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: vec![concept_node_id.clone()],
             evidence_refs: concept_evidence_ids.clone(),
+            proposal_payload: None,
         })
         .expect("propose wiki page");
         let resolved_wiki = handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
@@ -9632,6 +24157,12 @@ mod tests {
         store
             .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
             .expect("rematerialize workspace brain repo");
+        let rematerialized_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("read rematerialized nodes");
+        assert!(rematerialized_nodes
+            .iter()
+            .any(|node| node.node_id == "concept-agent-graph-loop"));
         let rematerialized_claims: Vec<ClaimRecord> =
             read_json_artifact(&workspace_root.join("graph/claims.json"))
                 .expect("read rematerialized claims");
@@ -9639,6 +24170,9 @@ mod tests {
             claim.statement == "Accepted claim proposals become durable claim records."
         }));
         assert!(saved_page.exists());
+        assert!(workspace_root
+            .join("wiki/topics/concept-agent-graph-loop.md")
+            .exists());
 
         let health = handle_get_brain_health(GetBrainHealthRequest {
             scope: scope.clone(),
@@ -9650,6 +24184,13 @@ mod tests {
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope,
             limit: Some(20),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
         })
         .expect("read events");
         assert!(events
@@ -9712,6 +24253,7 @@ mod tests {
             source_refs: Vec::new(),
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         })
         .expect("propose memory with missing files");
         assert_eq!(response.proposal.status, BrainProposalStatus::Accepted);
@@ -9722,13 +24264,42 @@ mod tests {
         let events = handle_read_recent_events(ReadRecentEventsRequest {
             scope,
             limit: Some(10),
+            run_id: None,
+            source_ref: None,
+            node_id: None,
+            edge_id: None,
+            claim_id: None,
+            memory_id: None,
+            change_type: None,
         })
         .expect("read bootstrapped events");
         assert!(events
             .events
             .iter()
             .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
-        assert!(!workspace_root.join("brain.lock").exists());
+        assert!(events.events.iter().any(|event| {
+            event.event_type == BrainEventKind::GraphMaterialized
+                && event.operation_type.as_deref() == Some("new_memory")
+                && event.policy_result == "auto_applied"
+                && event.target_memory_ids.contains(&memories[0].memory_id)
+        }));
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
+    }
+
+    #[test]
+    fn brain_writer_uses_directory_lock_without_pid_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        fs::write(workspace_root.join("brain.lock"), "pid=999999999\n")
+            .expect("write legacy lock file");
+
+        let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("open writer");
+        assert!(workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).is_dir());
+        drop(writer);
+
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
+        assert!(workspace_root.join("brain.lock").exists());
     }
 
     #[test]
@@ -9773,6 +24344,7 @@ mod tests {
             source_refs: vec![manifest.source_id.clone()],
             node_refs: Vec::new(),
             evidence_refs: Vec::new(),
+            proposal_payload: None,
         };
 
         let handles = (0..8)
@@ -9797,7 +24369,7 @@ mod tests {
         let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
             .expect("events remain valid JSONL");
         assert!(events.len() >= 16);
-        assert!(!workspace_root.join("brain.lock").exists());
+        assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
     }
 
     #[test]
@@ -9886,8 +24458,14 @@ mod tests {
         ];
         attach_page_artifacts_to_sections(&mut sections, Some(&manifest));
 
-        let artifact =
-            build_extraction_artifact(&sections, &manifest.source_path, Some(&manifest.source_id));
+        let artifact = build_extraction_artifact(
+            &sections,
+            markdown,
+            &manifest.source_path,
+            Some(manifest.source_id.as_str()),
+            &[],
+            &[],
+        );
 
         assert!(artifact.concepts.len() >= 2);
         assert!(artifact.claims.len() >= 2);
@@ -9923,7 +24501,14 @@ mod tests {
     fn structured_extraction_uses_unique_evidence_ids_across_pages() {
         let markdown = "# Source import\n\n## Page 1\n\nAlpha Planning Notes stay local.\nShared Context Layer keeps agents grounded.\n\n## Page 2\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n";
         let sections = extract_page_sections(markdown);
-        let artifact = build_extraction_artifact(&sections, "/tmp/source.pdf", Some("source-test"));
+        let artifact = build_extraction_artifact(
+            &sections,
+            markdown,
+            "/tmp/source.pdf",
+            Some("source-test"),
+            &[],
+            &[],
+        );
         let shared = artifact
             .concepts
             .iter()
@@ -10576,11 +25161,26 @@ mod tests {
             .details_by_node_id
             .values()
             .any(|detail| detail.canonical_name == "Agent Brain Context"));
+        assert!(response
+            .project
+            .details_by_node_id
+            .contains_key("concept-agent-brain-context"));
+        assert!(!response
+            .project
+            .details_by_node_id
+            .contains_key(&aggregate_detail.node.id));
+        assert!(response.project.edges.iter().all(|edge| {
+            edge.source_node_id != aggregate_detail.node.id
+                && edge.target_node_id != aggregate_detail.node.id
+        }));
         for project_id in [&project_a.summary.project_id, &project_b.summary.project_id] {
             let source_project = store
                 .load_project(Some(project_id))
                 .expect("load source project")
                 .expect("source project");
+            assert!(source_project
+                .details_by_node_id
+                .contains_key("concept-agent-brain-context"));
             let renamed = source_project
                 .details_by_node_id
                 .values()
@@ -10605,6 +25205,55 @@ mod tests {
         let events = fs::read_to_string(events_path).expect("brain events");
         assert!(events.contains("\"eventType\":\"correction_applied\""));
         assert!(events.contains("\"policyResult\":\"applied\""));
+
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let materialized_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("read materialized nodes");
+        assert!(materialized_nodes.iter().any(|node| {
+            node.node_id == "concept-agent-brain-context"
+                && node.label == "Agent Brain Context"
+                && node.aliases.contains(&"Shared Context Layer".into())
+        }));
+        assert!(!materialized_nodes
+            .iter()
+            .any(|node| node.node_id == aggregate_detail.node.id));
+        let materialized_edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json"))
+                .expect("read materialized edges");
+        assert!(materialized_edges.iter().all(|edge| {
+            edge.source_node_id != aggregate_detail.node.id
+                && edge.target_node_id != aggregate_detail.node.id
+        }));
+        assert!(materialized_edges.iter().any(|edge| {
+            edge.source_node_id == "concept-agent-brain-context"
+                || edge.target_node_id == "concept-agent-brain-context"
+        }));
+        let materialized_claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read materialized claims");
+        assert!(materialized_claims.iter().all(|claim| {
+            !claim
+                .topic_refs
+                .iter()
+                .any(|node_id| node_id == &aggregate_detail.node.id)
+        }));
+        assert!(materialized_claims.iter().any(|claim| {
+            claim
+                .topic_refs
+                .iter()
+                .any(|node_id| node_id == "concept-agent-brain-context")
+        }));
+        let wiki_index =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki index");
+        assert!(wiki_index.contains("[Agent Brain Context](topics/concept-agent-brain-context.md)"));
+        assert!(!wiki_index.contains(&format!("topics/{}.md", aggregate_detail.node.id)));
+        let topic_page =
+            fs::read_to_string(workspace_root.join("wiki/topics/concept-agent-brain-context.md"))
+                .expect("read renamed topic page");
+        assert!(topic_page.contains("# Agent Brain Context"));
+        assert!(topic_page.contains("concept-agent-brain-context"));
+        assert_materialized_brain_has_no_dangling_refs(&workspace_root);
     }
 
     #[test]
@@ -10701,6 +25350,269 @@ mod tests {
     }
 
     #[test]
+    fn workspace_merge_remaps_and_deduplicates_preserved_agent_artifacts() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAlpha planning context keeps agents grounded.\n\n## Page 2\n\nBeta review context keeps evidence visible.\n\n## Page 3\n\nGamma release context keeps wiki links durable.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let concept_ids = project
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        assert!(concept_ids.len() >= 3);
+        rename_concept_for_test(&mut project, &concept_ids[0], "Alpha Context", &[]);
+        rename_concept_for_test(&mut project, &concept_ids[1], "Beta Context", &[]);
+        rename_concept_for_test(&mut project, &concept_ids[2], "Gamma Context", &[]);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source project");
+
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let evidence_ids = project
+            .details_by_node_id
+            .get(&concept_ids[0])
+            .expect("alpha detail")
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        let scope = BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        };
+        let actor = BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "duckdocs-agent-ingest".into(),
+        };
+
+        for (source, target, edge_id) in [
+            (
+                "concept-alpha-context",
+                "concept-gamma-context",
+                "relation-alpha-gamma-duplicate",
+            ),
+            (
+                "concept-beta-context",
+                "concept-gamma-context",
+                "relation-beta-gamma-duplicate",
+            ),
+        ] {
+            handle_propose_brain_update(ProposeBrainUpdateRequest {
+                scope: scope.clone(),
+                kind: BrainProposalKind::Link,
+                title: "Related context".into(),
+                body: "Duplicate relation should collapse after merge.".into(),
+                actor: actor.clone(),
+                target_node_id: Some(target.into()),
+                target_source_id: None,
+                relation_kind: Some(BrainRelationKind::RelatedTo),
+                source_description: None,
+                source_user_context: None,
+                source_ingest_instruction: None,
+                source_refs: vec![manifest.source_id.clone()],
+                node_refs: vec![source.into()],
+                evidence_refs: evidence_ids.clone(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+                    edge: AgentNewEdgePayload {
+                        source_node_id: source.into(),
+                        target_node_id: target.into(),
+                        kind: BrainRelationKind::RelatedTo,
+                        label: "Related context".into(),
+                        source_path: manifest.markdown_path.clone(),
+                        edge_id: Some(edge_id.into()),
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("Agent linked related contexts.".into()),
+                    },
+                }),
+            })
+            .expect("auto-apply edge proposal");
+        }
+
+        for (topic, claim_id) in [
+            ("concept-alpha-context", "claim-alpha-shared-context"),
+            ("concept-beta-context", "claim-beta-shared-context"),
+        ] {
+            handle_propose_brain_update(ProposeBrainUpdateRequest {
+                scope: scope.clone(),
+                kind: BrainProposalKind::Claim,
+                title: "Shared claim".into(),
+                body: "Shared claim should collapse after merge.".into(),
+                actor: actor.clone(),
+                target_node_id: Some(topic.into()),
+                target_source_id: None,
+                relation_kind: None,
+                source_description: None,
+                source_user_context: None,
+                source_ingest_instruction: None,
+                source_refs: vec![manifest.source_id.clone()],
+                node_refs: vec![topic.into()],
+                evidence_refs: evidence_ids.clone(),
+                proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
+                    claim: AgentNewClaimPayload {
+                        statement: "Merged context keeps source-backed evidence reviewable.".into(),
+                        source_path: manifest.markdown_path.clone(),
+                        claim_id: Some(claim_id.into()),
+                        topic_refs: vec![topic.into()],
+                        source_refs: vec![manifest.source_id.clone()],
+                        evidence_refs: evidence_ids.clone(),
+                        reason: Some("Agent extracted a duplicate claim.".into()),
+                    },
+                }),
+            })
+            .expect("auto-apply claim proposal");
+        }
+
+        let wiki = handle_propose_brain_update(ProposeBrainUpdateRequest {
+            scope: scope.clone(),
+            kind: BrainProposalKind::WikiPage,
+            title: "Merge replay page".into(),
+            body: "Saved wiki pages should preserve only surviving graph refs.".into(),
+            actor: actor.clone(),
+            target_node_id: Some("concept-alpha-context".into()),
+            target_source_id: None,
+            relation_kind: None,
+            source_description: None,
+            source_user_context: None,
+            source_ingest_instruction: None,
+            source_refs: vec![manifest.source_id.clone()],
+            node_refs: vec![
+                "concept-alpha-context".into(),
+                "concept-beta-context".into(),
+            ],
+            evidence_refs: evidence_ids.clone(),
+            proposal_payload: None,
+        })
+        .expect("propose wiki page");
+        handle_resolve_brain_review_item(ResolveBrainReviewItemRequest {
+            scope: scope.clone(),
+            proposal_id: wiki.proposal.proposal_id.clone(),
+            decision: BrainReviewDecision::Accept,
+            actor: BrainActor {
+                actor_type: BrainActorType::User,
+                actor_id: "local-user".into(),
+            },
+            reason: Some("Accept saved page before merge.".into()),
+        })
+        .expect("accept wiki page");
+
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let source_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Alpha Context")
+            .expect("workspace source concept")
+            .clone();
+        let target_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Beta Context")
+            .expect("workspace target concept")
+            .clone();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: source_detail.node.id.clone(),
+            kind: CorrectionKind::Merge,
+            target_node_id: Some(target_detail.node.id.clone()),
+            value: None,
+        })
+        .expect("apply workspace merge correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json")).expect("read nodes");
+        assert!(!nodes
+            .iter()
+            .any(|node| node.node_id == "concept-alpha-context"));
+        assert!(nodes
+            .iter()
+            .any(|node| node.node_id == "concept-beta-context"));
+
+        let edges: Vec<BrainRelationRecord> =
+            read_json_artifact(&workspace_root.join("graph/edges.json")).expect("read edges");
+        assert!(edges.iter().all(|edge| {
+            edge.source_node_id != "concept-alpha-context"
+                && edge.target_node_id != "concept-alpha-context"
+        }));
+        assert_eq!(
+            edges
+                .iter()
+                .filter(|edge| {
+                    edge.source_node_id == "concept-beta-context"
+                        && edge.target_node_id == "concept-gamma-context"
+                        && edge.label == "Related context"
+                })
+                .count(),
+            1
+        );
+
+        let claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json")).expect("read claims");
+        let matching_claims = claims
+            .iter()
+            .filter(|claim| {
+                claim.statement == "Merged context keeps source-backed evidence reviewable."
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching_claims.len(), 1);
+        assert_eq!(
+            matching_claims[0].topic_refs,
+            vec!["concept-beta-context".to_string()]
+        );
+
+        let page: WikiPage = read_json_artifact(
+            &workspace_root
+                .join("reviews/proposed-updates")
+                .join(format!("{}.json", wiki.proposal.proposal_id)),
+        )
+        .map(|proposal: BrainUpdateProposal| wiki_page_for_proposal(&proposal))
+        .expect("read accepted wiki proposal");
+        let manifest_snapshot: BrainRepoSnapshot =
+            read_json_artifact(&workspace_root.join("brain-manifest.json"))
+                .expect("read brain manifest");
+        let saved_page = manifest_snapshot
+            .wiki_pages
+            .iter()
+            .find(|candidate| candidate.path == page.path)
+            .expect("saved page in manifest");
+        assert_eq!(
+            saved_page.node_refs,
+            vec!["concept-beta-context".to_string()]
+        );
+        let saved_page_body =
+            fs::read_to_string(workspace_root.join(&saved_page.path)).expect("read saved page");
+        assert!(saved_page_body.contains("Nodes: concept-beta-context"));
+        assert!(!saved_page_body.contains("concept-alpha-context"));
+        assert_materialized_brain_has_no_dangling_refs(&workspace_root);
+    }
+
+    #[test]
     fn workspace_keep_separate_correction_replays_to_source_snapshot_and_ledger() {
         static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
@@ -10776,6 +25688,173 @@ mod tests {
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrections[0].kind, CorrectionKind::KeepSeparate);
         assert_eq!(corrections[0].source_node_ids.len(), 1);
+    }
+
+    #[test]
+    fn workspace_split_correction_materializes_replacements_claims_wiki_and_event() {
+        static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("knowledge.sqlite3");
+        let store = KnowledgeProjectStore::new(store_path.clone());
+        let (mut project, manifest) = compile_manifest_fixture_project_with_source(
+            &temp,
+            "# Source A\n\n## Page 1\n\nAgent context keeps graph changes auditable.\n\n## Page 2\n\nRuntime context keeps wiki references fresh.\n",
+            "source-a",
+            "alpha",
+            10,
+        );
+        let split_node_id = project
+            .nodes
+            .iter()
+            .find(|node| node.kind == GraphNodeKind::Concept)
+            .expect("concept node")
+            .id
+            .clone();
+        let mut evidence = project
+            .details_by_node_id
+            .get(&split_node_id)
+            .expect("split detail")
+            .evidence
+            .clone();
+        if evidence.len() == 1 {
+            let mut extra = evidence[0].clone();
+            extra.id = format!("{}-runtime", extra.id);
+            extra.snippet = "Runtime context keeps wiki references fresh.".into();
+            project
+                .details_by_node_id
+                .get_mut(&split_node_id)
+                .expect("split detail")
+                .evidence
+                .push(extra.clone());
+            evidence.push(extra);
+        }
+        rename_concept_for_test(&mut project, &split_node_id, "Agent Runtime Context", &[]);
+        let request = CompileProjectRequest {
+            source_markdown_path: manifest.markdown_path.clone(),
+            source_document_path: Some(manifest.source_path.clone()),
+            source_manifest_path: Some(manifest.manifest_path.clone()),
+            workspace_id: Some(manifest.workspace_id.clone()),
+            source_id: Some(manifest.source_id.clone()),
+        };
+        store
+            .save_project(&project, &request, Some(&manifest))
+            .expect("save source project");
+        let aggregate = store
+            .load_workspace_project(DEFAULT_WORKSPACE_ID)
+            .expect("load aggregate")
+            .expect("workspace aggregate");
+        let aggregate_detail = aggregate
+            .details_by_node_id
+            .values()
+            .find(|detail| detail.canonical_name == "Agent Runtime Context")
+            .expect("workspace split concept")
+            .clone();
+        let aggregate_evidence = aggregate_detail.evidence.clone();
+        assert!(aggregate_evidence.len() >= 2);
+        let split_value = json!([
+            {
+                "replacementNodeId": "concept-agent-context-split",
+                "replacementLabel": "Agent Context",
+                "evidenceIds": [aggregate_evidence[0].id.clone()]
+            },
+            {
+                "replacementNodeId": "concept-runtime-context-split",
+                "replacementLabel": "Runtime Context",
+                "evidenceIds": [aggregate_evidence[1].id.clone()]
+            }
+        ])
+        .to_string();
+
+        let previous_store = std::env::var_os("DUCKDOCS_PROJECT_STORE");
+        std::env::set_var("DUCKDOCS_PROJECT_STORE", &store_path);
+        handle_apply_correction(ApplyCorrectionRequest {
+            project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+            node_id: aggregate_detail.node.id.clone(),
+            kind: CorrectionKind::Split,
+            target_node_id: None,
+            value: Some(split_value.clone()),
+        })
+        .expect("apply workspace split correction");
+        match previous_store {
+            Some(value) => std::env::set_var("DUCKDOCS_PROJECT_STORE", value),
+            None => std::env::remove_var("DUCKDOCS_PROJECT_STORE"),
+        }
+
+        let source_project = store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load source project")
+            .expect("source project");
+        assert!(!source_project
+            .details_by_node_id
+            .contains_key(&aggregate_detail.node.id));
+        assert!(source_project
+            .details_by_node_id
+            .contains_key("concept-agent-context-split"));
+        assert!(source_project
+            .details_by_node_id
+            .contains_key("concept-runtime-context-split"));
+
+        let corrections = store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load workspace corrections");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].kind, CorrectionKind::Split);
+        assert_eq!(corrections[0].value, Some(split_value));
+        assert_eq!(corrections[0].source_node_ids.len(), 1);
+
+        let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+        let materialized_nodes: Vec<BrainNodeRecord> =
+            read_json_artifact(&workspace_root.join("graph/nodes.json"))
+                .expect("read materialized nodes");
+        assert!(materialized_nodes
+            .iter()
+            .any(|node| node.node_id == "concept-agent-context"));
+        assert!(materialized_nodes
+            .iter()
+            .any(|node| node.node_id == "concept-runtime-context"));
+        assert!(!materialized_nodes
+            .iter()
+            .any(|node| node.node_id == aggregate_detail.node.id));
+        let materialized_claims: Vec<ClaimRecord> =
+            read_json_artifact(&workspace_root.join("graph/claims.json"))
+                .expect("read materialized claims");
+        assert!(materialized_claims.iter().any(|claim| {
+            claim
+                .topic_refs
+                .iter()
+                .any(|node_id| node_id == "concept-agent-context")
+        }));
+        assert!(materialized_claims.iter().any(|claim| {
+            claim
+                .topic_refs
+                .iter()
+                .any(|node_id| node_id == "concept-runtime-context")
+        }));
+        assert!(materialized_claims.iter().all(|claim| {
+            !claim
+                .topic_refs
+                .iter()
+                .any(|node_id| node_id == &aggregate_detail.node.id)
+        }));
+        let wiki_index =
+            fs::read_to_string(workspace_root.join("wiki/index.md")).expect("read wiki index");
+        assert!(wiki_index.contains("[Agent Context](topics/concept-agent-context.md)"));
+        assert!(wiki_index.contains("[Runtime Context](topics/concept-runtime-context.md)"));
+        assert!(!wiki_index.contains(&format!("topics/{}.md", aggregate_detail.node.id)));
+        assert!(workspace_root
+            .join("wiki/topics/concept-agent-context.md")
+            .exists());
+        assert!(workspace_root
+            .join("wiki/topics/concept-runtime-context.md")
+            .exists());
+        let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+            .expect("read events");
+        assert!(events.iter().any(|event| {
+            event.event_type == BrainEventKind::CorrectionApplied
+                && event.payload_json.contains("\"kind\":\"split\"")
+        }));
+        assert_materialized_brain_has_no_dangling_refs(&workspace_root);
     }
 
     #[test]
@@ -11073,21 +26152,26 @@ mod tests {
         )
         .expect("apply rename correction");
 
+        let renamed_id = "concept-graph-evidence-view";
         let detail = project
             .details_by_node_id
-            .get(&concept_id)
+            .get(renamed_id)
             .expect("renamed detail");
         assert_eq!(detail.canonical_name, "Graph Evidence View");
         assert!(detail.aliases.contains(&previous_name));
+        assert!(!project.details_by_node_id.contains_key(&concept_id));
         assert_eq!(
             project
                 .nodes
                 .iter()
-                .find(|node| node.id == concept_id)
+                .find(|node| node.id == renamed_id)
                 .expect("renamed node")
                 .label,
             "Graph Evidence View"
         );
+        assert!(project.edges.iter().all(|edge| {
+            edge.source_node_id != concept_id && edge.target_node_id != concept_id
+        }));
     }
 
     #[test]
@@ -11227,6 +26311,131 @@ mod tests {
                 && edge.source_node_id == source_node_id
                 && edge.target_node_id != concept_id
         }));
+    }
+
+    #[test]
+    fn split_correction_creates_replacements_and_redistributes_edges() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (mut project, manifest) = compile_manifest_fixture_project(
+            &temp,
+            "# Sample import\n\n## Page 1\n\nPlanning Context keeps graph changes auditable.\n\n## Page 2\n\nRuntime Context keeps wiki references fresh.\n",
+        );
+        let source_node_id = source_node_id(&manifest.source_id);
+        let concept_ids = project
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        assert!(concept_ids.len() >= 2);
+        let split_node_id = concept_ids[0].clone();
+        let neighbor_node_id = concept_ids[1].clone();
+        let mut evidence = project
+            .details_by_node_id
+            .get(&split_node_id)
+            .expect("split detail")
+            .evidence
+            .clone();
+        if evidence.len() == 1 {
+            let mut extra = evidence[0].clone();
+            extra.id = format!("{}-runtime", extra.id);
+            extra.snippet = "Runtime Context keeps wiki references fresh.".into();
+            project
+                .details_by_node_id
+                .get_mut(&split_node_id)
+                .expect("split detail")
+                .evidence
+                .push(extra.clone());
+            evidence.push(extra);
+        }
+        assert!(evidence.len() >= 2);
+        let split_edge_id =
+            relation_edge_id(RelationKind::RelatedTo, &split_node_id, &neighbor_node_id);
+        let relation_evidence = vec![evidence[1].clone()];
+        project.edges.push(RelationEdgeSummary {
+            id: split_edge_id.clone(),
+            source_node_id: split_node_id.clone(),
+            target_node_id: neighbor_node_id.clone(),
+            kind: RelationKind::RelatedTo,
+            label: "Depends on".into(),
+            confidence: Some(0.77),
+            evidence_count: relation_evidence.len(),
+        });
+        project.edge_details_by_id.insert(
+            split_edge_id.clone(),
+            RelationEdgeDetail {
+                edge: project
+                    .edges
+                    .iter()
+                    .find(|edge| edge.id == split_edge_id)
+                    .expect("split edge")
+                    .clone(),
+                explanation: String::new(),
+                evidence: relation_evidence,
+            },
+        );
+        let project_id = project.summary.project_id.clone();
+
+        apply_correction(
+            &mut project,
+            &ApplyCorrectionRequest {
+                project_id,
+                node_id: split_node_id.clone(),
+                kind: CorrectionKind::Split,
+                target_node_id: None,
+                value: Some(
+                    json!([
+                        {
+                            "replacementNodeId": "concept-planning-context-split",
+                            "replacementLabel": "Planning Context",
+                            "evidenceIds": [evidence[0].id.clone()]
+                        },
+                        {
+                            "replacementNodeId": "concept-runtime-context-split",
+                            "replacementLabel": "Runtime Context",
+                            "evidenceIds": [evidence[1].id.clone()],
+                            "edgeIds": [split_edge_id.clone()]
+                        }
+                    ])
+                    .to_string(),
+                ),
+            },
+        )
+        .expect("apply split correction");
+
+        assert!(!project.details_by_node_id.contains_key(&split_node_id));
+        assert!(project
+            .details_by_node_id
+            .contains_key("concept-planning-context-split"));
+        assert!(project
+            .details_by_node_id
+            .contains_key("concept-runtime-context-split"));
+        assert!(project.edges.iter().all(|edge| {
+            edge.source_node_id != split_node_id && edge.target_node_id != split_node_id
+        }));
+        assert!(project.edges.iter().any(|edge| {
+            edge.kind == RelationKind::SourceDocument
+                && edge.source_node_id == source_node_id
+                && edge.target_node_id == "concept-planning-context-split"
+        }));
+        assert!(project.edges.iter().any(|edge| {
+            edge.kind == RelationKind::RelatedTo
+                && ((edge.source_node_id == "concept-runtime-context-split"
+                    && edge.target_node_id == neighbor_node_id)
+                    || (edge.source_node_id == neighbor_node_id
+                        && edge.target_node_id == "concept-runtime-context-split"))
+        }));
+        assert_eq!(
+            project
+                .details_by_node_id
+                .get("concept-planning-context-split")
+                .expect("planning detail")
+                .evidence
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>(),
+            vec![evidence[0].id.clone()]
+        );
     }
 
     #[test]
