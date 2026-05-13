@@ -143,6 +143,10 @@ pub fn read_source_chunks(path: &Path) -> Result<Vec<SourceChunk>> {
         .collect()
 }
 
+pub fn read_workspace_source_chunks(workspace_root: &Path) -> Result<Vec<SourceChunk>> {
+    read_source_chunks(&workspace_root.join(SOURCE_CHUNKS_PATH))
+}
+
 fn flush_chunk(
     manifest: &SourceArtifactManifest,
     chunks: &mut Vec<SourceChunk>,

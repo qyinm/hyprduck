@@ -51,12 +51,17 @@ use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
 mod brain_repo;
+mod import_context;
 mod knowledge;
 mod parse;
 mod provider;
+mod retrieval;
 mod source_index;
 
 use brain_repo::*;
+use import_context::{
+    build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
+};
 use knowledge::*;
 use parse::parse_document;
 use provider::{
@@ -509,12 +514,22 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         })?;
         let chunks = chunk_source_markdown(manifest, &markdown);
         upsert_source_chunks(&workspace_root, manifest, &chunks)?;
+        let snapshot = read_materialized_brain_snapshot(&workspace_root, &workspace_id)
+            .unwrap_or_else(|_| empty_replayed_brain_snapshot(&workspace_id));
+        let context = build_import_evidence_context(
+            &workspace_root,
+            manifest,
+            &markdown,
+            &snapshot,
+            &chunks,
+        )?;
         let report = maybe_generate_provider_graph_proposals(
             &workspace_root,
             &workspace_id,
             manifest,
             &markdown,
             &PathBuf::from(&manifest.artifact_root),
+            &context,
         )?;
         graph_generation_status = Some(report.status);
         graph_generation_skipped_reason = report.skipped_reason;
@@ -6650,6 +6665,15 @@ fn compile_queued_markdown_source(
     };
     let project = compile_agent_orchestrated_project(&request, &markdown, Some(&manifest));
     store.save_project(&project, &request, Some(&manifest))?;
+    let snapshot = read_materialized_brain_snapshot(&paths.workspace_root, &record.workspace_id)
+        .unwrap_or_else(|_| empty_replayed_brain_snapshot(&record.workspace_id));
+    let context = build_import_evidence_context(
+        &paths.workspace_root,
+        &manifest,
+        &markdown,
+        &snapshot,
+        &chunks,
+    )?;
     persist_completed_ingest_related_wiki_pages(
         &paths.workspace_root,
         &record.workspace_id,
@@ -6669,6 +6693,7 @@ fn compile_queued_markdown_source(
         &manifest,
         &markdown,
         &artifact_root,
+        &context,
     )?;
     Ok(manifest)
 }
@@ -6702,6 +6727,7 @@ fn maybe_generate_provider_graph_proposals(
     manifest: &SourceArtifactManifest,
     markdown: &str,
     artifact_root: &Path,
+    context: &ImportEvidenceContext,
 ) -> Result<ProviderGraphProposalGenerationReport> {
     let report_path = artifact_root.join("provider-graph-proposals.json");
     if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
@@ -6763,7 +6789,8 @@ fn maybe_generate_provider_graph_proposals(
 
     let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
-    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot);
+    write_json_pretty(&artifact_root.join("provider-graph-context.json"), context)?;
+    let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot, context);
     let provider_response = match parse_openai_compatible_with_timeout(
         &config,
         &prompt,
@@ -6799,6 +6826,10 @@ fn maybe_generate_provider_graph_proposals(
 
     let default_evidence_refs =
         source_evidence_refs_for_provider_proposals(&snapshot, &manifest.source_id);
+    let mut allowed_context_evidence_refs = import_evidence_context_allowed_refs(context);
+    for evidence_ref in &default_evidence_refs {
+        merge_unique_string(&mut allowed_context_evidence_refs, evidence_ref);
+    }
     for payload in &mut payloads {
         normalize_provider_graph_proposal_payload(payload, manifest, &default_evidence_refs);
     }
@@ -6837,7 +6868,10 @@ fn maybe_generate_provider_graph_proposals(
             evidence_refs: proposal.evidence_refs.clone(),
             proposal_payload: proposal.proposal_payload.clone(),
         };
-        if let Err(error) = validate_brain_update_proposal(&request) {
+        if let Err(error) =
+            validate_provider_graph_proposal_with_context(&request, &allowed_context_evidence_refs)
+                .and_then(|_| validate_brain_update_proposal(&request))
+        {
             report.failed_count += 1;
             report.failed_proposals.push(AgentProposalFailureReport {
                 proposal_id: proposal.proposal_id.clone(),
@@ -6896,6 +6930,7 @@ fn build_provider_graph_proposal_prompt(
     manifest: &SourceArtifactManifest,
     markdown: &str,
     snapshot: &BrainRepoSnapshot,
+    context: &ImportEvidenceContext,
 ) -> String {
     let existing_nodes = snapshot
         .nodes
@@ -6937,15 +6972,19 @@ fn build_provider_graph_proposal_prompt(
         .collect::<Vec<_>>()
         .join("\n");
     let evidence_refs = source_evidence_refs_for_provider_proposals(snapshot, &manifest.source_id);
+    let context_evidence_refs = import_evidence_context_allowed_refs(context);
+    let retrieval_context = provider_retrieval_context_for_prompt(context);
 
     format!(
         r#"You are HyprDuck's local brain graph maintenance agent.
 
 Goal:
 - Read the new source markdown and the existing brain graph.
+- Read the retrieved old source/wiki/memory evidence before proposing graph changes.
 - Propose only durable, evidence-backed graph updates.
 - Add new nodes, new edges, new claims, and important memories when useful.
 - Reuse existing nodeId values when the new source refers to an existing thing.
+- Improve old graph state when retrieved old evidence proves a cross-document relationship.
 - If you create a new node that an edge or claim will reference, set node.nodeId to a stable id like "node-provider-short-slug" and reuse that exact id.
 
 Hard output rule:
@@ -6964,6 +7003,10 @@ Source:
 - sourcePath: {source_path}
 - markdownPath: {markdown_path}
 - evidenceRefs you may cite: {evidence_refs}
+- retrieved context evidenceRefs you may cite: {context_evidence_refs}
+
+Retrieved context:
+{retrieval_context}
 
 Existing nodes:
 {existing_nodes}
@@ -6981,6 +7024,8 @@ New source markdown:
         source_path = manifest.source_path,
         markdown_path = manifest.markdown_path,
         evidence_refs = join_or_none(&evidence_refs),
+        context_evidence_refs = join_or_none(&context_evidence_refs),
+        retrieval_context = retrieval_context,
         existing_nodes = if existing_nodes.is_empty() {
             "(none)"
         } else {
@@ -6997,6 +7042,63 @@ New source markdown:
             &existing_claims
         },
         markdown = truncate_for_prompt(markdown, 24000)
+    )
+}
+
+fn provider_retrieval_context_for_prompt(context: &ImportEvidenceContext) -> String {
+    let new_chunks = context
+        .new_source
+        .chunks
+        .iter()
+        .take(6)
+        .map(|chunk| provider_context_chunk_line("new_source", chunk))
+        .collect::<Vec<_>>();
+    let old_chunks = context
+        .retrieved_source_evidence
+        .iter()
+        .take(20)
+        .map(|chunk| provider_context_chunk_line("retrieved_old_source", chunk))
+        .collect::<Vec<_>>();
+    let queries = context
+        .retrieval_queries
+        .iter()
+        .take(12)
+        .map(|query| {
+            format!(
+                "- query: {} terms: {}",
+                query.query,
+                join_or_none(&query.terms)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Retrieval queries:\n{queries}\n\nNew source chunks:\n{new_chunks}\n\nRetrieved old evidence chunks:\n{old_chunks}",
+        queries = if queries.is_empty() { "(none)" } else { &queries },
+        new_chunks = if new_chunks.is_empty() {
+            "(none)".into()
+        } else {
+            new_chunks.join("\n")
+        },
+        old_chunks = if old_chunks.is_empty() {
+            "(none)".into()
+        } else {
+            old_chunks.join("\n")
+        }
+    )
+}
+
+fn provider_context_chunk_line(kind: &str, chunk: &retrieval::RetrievedEvidenceChunk) -> String {
+    format!(
+        "- kind: {kind}, evidenceRef: {}, sourceId: {}, sourceTitle: {}, heading: {}, lines: {}-{}, matchedTerms: {}, text: {}",
+        chunk.evidence_ref_id,
+        chunk.source_id,
+        chunk.source_title,
+        join_or_none(&chunk.heading_path),
+        chunk.line_start,
+        chunk.line_end,
+        join_or_none(&chunk.matched_terms),
+        truncate_for_prompt(&chunk.text, 1200)
     )
 }
 
@@ -7137,6 +7239,33 @@ fn normalize_provider_payload_refs(
             merge_unique_string(evidence_refs, evidence_ref);
         }
     }
+}
+
+fn validate_provider_graph_proposal_with_context(
+    request: &ProposeBrainUpdateRequest,
+    allowed_context_evidence_refs: &[String],
+) -> Result<()> {
+    if request.evidence_refs.is_empty() {
+        bail!("provider graph proposal requires at least one evidence ref");
+    }
+    let allowed = allowed_context_evidence_refs
+        .iter()
+        .chain(request.source_refs.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unknown = request
+        .evidence_refs
+        .iter()
+        .filter(|evidence_ref| !allowed.contains(*evidence_ref))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        bail!(
+            "provider graph proposal cited evidence refs outside import context: {}",
+            unknown.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn provider_graph_payload_to_proposal(
