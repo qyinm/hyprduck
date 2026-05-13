@@ -68,6 +68,7 @@ interface UiSnapshot {
   lastWorkspaceId?: string | null;
   lastSourceId?: string | null;
   lastSourceManifestPath?: string | null;
+  workspaceRevision?: number;
 }
 
 interface ActiveJobSnapshot {
@@ -294,6 +295,7 @@ const WEB_MOCK_BASE_SNAPSHOT: UiSnapshot = {
     markdown: WEB_MOCK_MARKDOWN,
   },
   lastProjectId: "preview:sample",
+  workspaceRevision: 0,
 };
 
 const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
@@ -873,6 +875,7 @@ function createWebMockApi(): HyprDuckDesktopApi {
               ...webMockSnapshot,
               activeJob: null,
               lastProjectId: "preview:sample",
+              workspaceRevision: (webMockSnapshot.workspaceRevision ?? 0) + 1,
               lastResult: {
                 savedOutputPath: `~/Library/Application Support/HyprDuck/web-preview/${new Date()
                   .toISOString()
@@ -1013,6 +1016,7 @@ const EMPTY_SNAPSHOT: UiSnapshot = {
   progressLog: [],
   lastResult: null,
   lastProjectId: null,
+  workspaceRevision: 0,
 };
 
 class WorkspaceErrorBoundary extends Component<
@@ -2273,6 +2277,7 @@ export function App() {
   }, [
     snapshot.lastProjectId,
     snapshot.lastWorkspaceId,
+    snapshot.workspaceRevision,
     snapshot.lastResult?.savedOutputPath,
   ]);
 

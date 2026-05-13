@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  LoaderCircle,
   Plus,
   RefreshCw,
   Send,
   Share2,
+  X,
 } from "lucide-react";
 
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
@@ -868,11 +870,7 @@ function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
             {status.message ? ` · ${status.message}` : ""}
           </p>
         </div>
-        {!failed && (
-          <Badge variant="outline" className="shrink-0">
-            {progress}%
-          </Badge>
-        )}
+        <ImportStatusIndicator failed={failed} progress={progress} />
       </div>
       {!failed && (
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary">
@@ -885,6 +883,30 @@ function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
       {failed && status.failureMessage ? (
         <p className="mt-2 text-sm leading-5">{status.failureMessage}</p>
       ) : null}
+    </div>
+  );
+}
+
+function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
+  const { failed, progress } = props;
+
+  if (failed) {
+    return (
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10 text-destructive">
+        <X size={18} strokeWidth={2.4} aria-hidden="true" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex size-9 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground">
+      <LoaderCircle
+        size={34}
+        strokeWidth={1.8}
+        className="absolute animate-spin text-muted-foreground"
+        aria-hidden="true"
+      />
+      <span className="text-[10px] font-medium tabular-nums">{progress}%</span>
     </div>
   );
 }

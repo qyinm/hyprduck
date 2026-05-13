@@ -497,23 +497,32 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     let project = compile_agent_orchestrated_project(&request, &markdown, source_manifest.as_ref());
     let store = KnowledgeProjectStore::default()?;
     store.save_project(&project, &request, source_manifest.as_ref())?;
+    let mut graph_generation_status = None;
+    let mut graph_generation_skipped_reason = None;
+    let mut graph_generation_error_message = None;
     if let Some(manifest) = &source_manifest {
         let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
             workspace_id: workspace_id.clone(),
             root_dir: None,
         })?;
-        maybe_generate_provider_graph_proposals(
+        let report = maybe_generate_provider_graph_proposals(
             &workspace_root,
             &workspace_id,
             manifest,
             &markdown,
             &PathBuf::from(&manifest.artifact_root),
         )?;
+        graph_generation_status = Some(report.status);
+        graph_generation_skipped_reason = report.skipped_reason;
+        graph_generation_error_message = report.error_message;
     }
     Ok(CompileProjectResponseData {
         project_id: project.summary.project_id,
         workspace_id,
         source_id,
+        graph_generation_status,
+        graph_generation_skipped_reason,
+        graph_generation_error_message,
     })
 }
 
