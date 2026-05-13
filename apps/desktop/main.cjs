@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
-const SNAPSHOT_EVENT = "duckdocs://snapshot";
+const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const MAX_PROGRESS_LOG = 80;
 
 const snapshot = {
@@ -77,7 +77,7 @@ app.on("will-quit", () => {
 });
 
 function registerIpcHandlers() {
-  ipcMain.handle("duckdocs:invoke", async (_event, command, args = {}) => {
+  ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {
     switch (command) {
       case "app_snapshot":
         return snapshot;
@@ -415,7 +415,7 @@ class EngineRuntime {
       if (this.child !== child) {
         return;
       }
-      this.failRuntime(`failed to spawn duckdocs-engine: ${error.message}`);
+      this.failRuntime(`failed to spawn hyprduck-engine: ${error.message}`);
     });
     child.on("close", (code) => {
       if (this.child !== child) {
@@ -423,7 +423,7 @@ class EngineRuntime {
       }
       const message = this.stopping
         ? "engine runtime stopped"
-        : `duckdocs-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
+        : `hyprduck-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
       this.child = null;
       this.stdoutBuffer = "";
       this.stderrBuffer = "";
@@ -548,7 +548,7 @@ function ensureHyprduckApplicationSupportPath() {
 function engineEnvironment() {
   return {
     ...process.env,
-    DUCKDOCS_OUTPUT_DIR: ensureHyprduckApplicationSupportPath(),
+    HYPRDUCK_OUTPUT_DIR: ensureHyprduckApplicationSupportPath(),
   };
 }
 
@@ -854,11 +854,11 @@ function listOllamaVisionModels(visionPrefixes) {
 }
 
 function resolveEnginePath() {
-  if (process.env.DUCKDOCS_ENGINE_BIN) {
-    return process.env.DUCKDOCS_ENGINE_BIN;
+  if (process.env.HYPRDUCK_ENGINE_BIN) {
+    return process.env.HYPRDUCK_ENGINE_BIN;
   }
 
-  const engineName = `duckdocs-engine-${hostTriple()}`;
+  const engineName = `hyprduck-engine-${hostTriple()}`;
   const devPath = path.join(__dirname, "resources", "binaries", engineName);
   if (fs.existsSync(devPath)) {
     return devPath;
@@ -869,12 +869,12 @@ function resolveEnginePath() {
     return packagedPath;
   }
 
-  return "duckdocs-engine";
+  return "hyprduck-engine";
 }
 
 function hostTriple() {
-  if (process.env.DUCKDOCS_TARGET_TRIPLE) {
-    return process.env.DUCKDOCS_TARGET_TRIPLE;
+  if (process.env.HYPRDUCK_TARGET_TRIPLE) {
+    return process.env.HYPRDUCK_TARGET_TRIPLE;
   }
   if (process.platform === "darwin" && process.arch === "arm64") return "aarch64-apple-darwin";
   if (process.platform === "darwin" && process.arch === "x64") return "x86_64-apple-darwin";
@@ -898,10 +898,10 @@ async function maybeImportLegacySwiftConfig() {
 }
 
 function engineConfigPath() {
-  if (process.env.DUCKDOCS_CONFIG_DIR) {
-    return path.join(process.env.DUCKDOCS_CONFIG_DIR, "engine-config.json");
+  if (process.env.HYPRDUCK_CONFIG_DIR) {
+    return path.join(process.env.HYPRDUCK_CONFIG_DIR, "engine-config.json");
   }
-  return path.join(app.getPath("home"), ".duckdocs", "engine-config.json");
+  return path.join(app.getPath("home"), ".hyprduck", "engine-config.json");
 }
 
 async function readLegacySwiftPayload() {
@@ -920,8 +920,8 @@ async function readLegacySwiftPayload() {
 function legacyPreferencePaths() {
   const home = app.getPath("home");
   return [
-    path.join(home, "Library", "Preferences", "app.DuckDocs.plist"),
-    path.join(home, "Library", "Preferences", "DuckDocs.plist"),
+    path.join(home, "Library", "Preferences", "app.HyprDuck.plist"),
+    path.join(home, "Library", "Preferences", "HyprDuck.plist"),
   ];
 }
 
@@ -979,9 +979,9 @@ function plutilExtractRaw(plistPath, key) {
 async function legacyApiKeyFromKeychain(providerSlug) {
   const service =
     providerSlug === "open_router"
-      ? "com.duckdocs.openrouter"
+      ? "com.hyprduck.openrouter"
       : providerSlug === "ollama"
-        ? "com.duckdocs.ollama"
+        ? "com.hyprduck.ollama"
         : null;
   if (!service) {
     return null;

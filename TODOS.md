@@ -242,14 +242,14 @@ Current roadmap order:
 - [x] README and repository metadata aligned with agent-brain positioning
 - [x] Structured extraction artifact
   - Added `StructuredExtractionArtifact` and nested entity/topic/claim/relation/page-ref contracts.
-  - Re-exported the contract through `duckdocs-engine-types`.
+  - Re-exported the contract through `hyprduck-engine-types`.
   - Persisted per-source `artifacts/<source_id>/extraction.json`.
   - Marked the current extractor as `extractor=heuristic`.
   - Prevented evidence-free claims/relations from becoming trusted brain context.
   - Covered artifact shape and source/evidence round trip in unit tests.
 - [x] Golden corpus and eval harness
-  - Added six checked-in benchmark fixtures under `crates/duckdocs-engine/tests/fixtures/brain-corpus`.
-  - Added `duckdocs eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
+  - Added six checked-in benchmark fixtures under `crates/hyprduck-engine/tests/fixtures/brain-corpus`.
+  - Added `hyprduck eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
   - Reports entity recall, claim citation coverage, relation evidence coverage, evidence snippet coverage, contradiction detection, context-pack relevance, and latency.
   - Covered the CLI eval path with an integration test.
 - [x] Local retrieval baseline and context-pack hardening

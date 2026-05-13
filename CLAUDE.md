@@ -22,12 +22,12 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 ## When Working on This Project
 
 ### If Adding File Parsing Features
-- Look at: `apps/desktop/main.cjs`, `apps/desktop/preload.cjs`, and `crates/duckdocs-engine/`
-- Key files: `main.cjs`, `preload.cjs`, `duckdocs-engine`, `duckdocs-engine-client`
+- Look at: `apps/desktop/main.cjs`, `apps/desktop/preload.cjs`, and `crates/hyprduck-engine/`
+- Key files: `main.cjs`, `preload.cjs`, `hyprduck-engine`, `hyprduck-engine-client`
 - Must handle: engine runtime orchestration, config migration, output ownership
 
 ### If Adding AI Features
-- Look at: `crates/duckdocs-engine/src/main.rs`
+- Look at: `crates/hyprduck-engine/src/main.rs`
 - Must handle: provider routing, model configuration, multimodal prompts
 
 ### If Working on UI
@@ -39,11 +39,11 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 
 | Task | Entry Point | Notes |
 |------|-------------|-------|
-| Change AI model | `crates/duckdocs-engine/src/main.rs` | Update provider/model defaults and config payloads |
-| Change prompt behavior | `crates/duckdocs-engine/src/main.rs` | Keep prompt template IDs aligned with config options |
+| Change AI model | `crates/hyprduck-engine/src/main.rs` | Update provider/model defaults and config payloads |
+| Change prompt behavior | `crates/hyprduck-engine/src/main.rs` | Keep prompt template IDs aligned with config options |
 | Modify import logic | `apps/desktop/main.cjs` | Engine launch, parse lifecycle, window sync |
-| Add file format support | `crates/duckdocs-engine/src/main.rs` | Extend conversion/parsing pipeline |
-| Change output format | `crates/duckdocs-engine/src/main.rs` | Output folder and markdown package assembly |
+| Add file format support | `crates/hyprduck-engine/src/main.rs` | Extend conversion/parsing pipeline |
+| Change output format | `crates/hyprduck-engine/src/main.rs` | Output folder and markdown package assembly |
 | Change main UI | `apps/desktop/src/App.tsx` | File parsing surface |
 
 ---
@@ -53,9 +53,9 @@ The product surface is file parsing first. The active desktop shell is `apps/des
 ```text
 User selects file in Electron shell
     ↓
-apps/desktop backend starts duckdocs-engine runtime
+apps/desktop backend starts hyprduck-engine runtime
     ↓
-duckdocs-engine converts/parses the document
+hyprduck-engine converts/parses the document
     ↓
 Progress events stream over stderr
     ↓
@@ -73,9 +73,9 @@ The engine writes markdown + linked assets
 | `apps/desktop/main.cjs` | Electron desktop shell, window management, legacy-config migration |
 | `apps/desktop/preload.cjs` | Safe renderer bridge for Electron IPC |
 | `apps/desktop/src/App.tsx` | Main/settings/progress/result window UI |
-| `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output package assembly |
-| `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess client contract |
-| `crates/duckdocs-engine-types/src/lib.rs` | Engine request/response/event schema |
+| `crates/hyprduck-engine/src/main.rs` | Conversion, provider execution, output package assembly |
+| `crates/hyprduck-engine-client/src/lib.rs` | Shared subprocess client contract |
+| `crates/hyprduck-engine-types/src/lib.rs` | Engine request/response/event schema |
 
 ---
 

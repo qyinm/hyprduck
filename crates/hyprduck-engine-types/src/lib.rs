@@ -1,0 +1,1550 @@
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
+
+pub use hyprduck_knowledge::{
+    AgentGraphProposalPayload, AgentGraphProposalValidationCode, AgentGraphProposalValidationError,
+    AgentGraphProposalValidationIssue, AgentNewClaimPayload, AgentNewEdgePayload,
+    AgentNewMemoryPayload, AgentNewNodePayload, AnswerResponse, AnswerStatus, BrainActor,
+    BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, BrainNodeKind,
+    BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainUpdateProposal, ClaimRecord,
+    CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, ProjectOverview,
+    ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking,
+    SourceRecord, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, BRAIN_EVENT_SCHEMA_VERSION,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineCommand {
+    Parse,
+    CompileProject,
+    LoadProject,
+    ApplyCorrection,
+    AnswerProject,
+    SearchBrain,
+    ReadSource,
+    ReadWikiPage,
+    ReadNode,
+    ReadRecentEvents,
+    ReadGraphHistory,
+    ReadGraphSnapshot,
+    ReconstructBrain,
+    GetContextPack,
+    ProposeBrainUpdate,
+    ListBrainReviewItems,
+    ResolveBrainReviewItem,
+    GetBrainHealth,
+    LoadConfig,
+    SaveConfig,
+    ValidateProvider,
+    ListProviderModels,
+    CheckReadiness,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentFormat {
+    Pdf,
+    Docx,
+    Doc,
+    Image,
+    Markdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseInput {
+    pub path: String,
+    pub format: DocumentFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParseOptions {
+    pub preserve_images: bool,
+    pub emit_structured_json: bool,
+    pub emit_svg: bool,
+    pub language_hints: Vec<String>,
+    #[serde(default)]
+    pub debug_request_path: Option<String>,
+    #[serde(default)]
+    pub debug_result_path: Option<String>,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            preserve_images: true,
+            emit_structured_json: false,
+            emit_svg: false,
+            language_hints: Vec::new(),
+            debug_request_path: None,
+            debug_result_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ParseOutputTarget {
+    pub root_dir: Option<String>,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseRequest {
+    pub version: String,
+    pub input: ParseInput,
+    pub template: String,
+    pub options: ParseOptions,
+    pub output: Option<ParseOutputTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParsedPage {
+    pub index: usize,
+    pub markdown: Option<String>,
+    pub plain_text: Option<String>,
+    pub svg: Option<String>,
+    #[serde(default)]
+    pub image_asset_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputAsset {
+    pub relative_path: String,
+    pub mime_type: String,
+    pub base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseMetadata {
+    pub engine_id: String,
+    pub duration_ms: u64,
+    pub page_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseResult {
+    pub version: String,
+    pub markdown: String,
+    pub pages: Vec<ParsedPage>,
+    pub assets: Vec<OutputAsset>,
+    pub metadata: ParseMetadata,
+    #[serde(default)]
+    pub success_count: usize,
+    #[serde(default)]
+    pub failed_count: usize,
+}
+
+pub type WorkspaceId = String;
+pub type SourceId = String;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestStatus {
+    Added,
+    Rendering,
+    Ingesting,
+    Ingested,
+    NeedsReview,
+    Failed,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageArtifact {
+    pub index: usize,
+    pub label: String,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub plain_text_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceArtifactManifest {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub artifact_root: String,
+    pub manifest_path: String,
+    pub format: DocumentFormat,
+    pub output_name: String,
+    pub status: IngestStatus,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
+    pub pages: Vec<PageArtifact>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSummary {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: DocumentFormat,
+    pub status: IngestStatus,
+    pub page_count: usize,
+    pub success_count: usize,
+    pub failed_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestRun {
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub status: IngestStatus,
+    pub started_at: u64,
+    #[serde(default)]
+    pub completed_at: Option<u64>,
+    pub source_manifest_path: String,
+    pub page_count: usize,
+    pub success_count: usize,
+    pub failed_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseResponseData {
+    pub result: ParseResult,
+    #[serde(default)]
+    pub saved_output_path: Option<String>,
+    #[serde(default)]
+    pub source_manifest: Option<SourceArtifactManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileProjectRequest {
+    pub source_markdown_path: String,
+    #[serde(default)]
+    pub source_document_path: Option<String>,
+    #[serde(default)]
+    pub source_manifest_path: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileProjectResponseData {
+    pub project_id: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    #[serde(default)]
+    pub graph_generation_status: Option<String>,
+    #[serde(default)]
+    pub graph_generation_skipped_reason: Option<String>,
+    #[serde(default)]
+    pub graph_generation_error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LoadProjectRequest {
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoadProjectResponseData {
+    #[serde(default)]
+    pub project: Option<KnowledgeProject>,
+    #[serde(default)]
+    pub workspace_id: Option<WorkspaceId>,
+    #[serde(default)]
+    pub sources: Vec<SourceSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyCorrectionRequest {
+    pub project_id: String,
+    pub node_id: String,
+    pub kind: CorrectionKind,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyCorrectionResponseData {
+    pub project: KnowledgeProject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerProjectRequest {
+    pub project_id: String,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    pub question: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerProjectResponseData {
+    pub answer: AnswerResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainReadScope {
+    pub workspace_id: WorkspaceId,
+    #[serde(default)]
+    pub root_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchBrainRequest {
+    pub scope: BrainReadScope,
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainSearchResultKind {
+    Source,
+    Memory,
+    WikiPage,
+    Node,
+    Entity,
+    Claim,
+    Relation,
+    Evidence,
+    Event,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainSearchResult {
+    pub kind: BrainSearchResultKind,
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub score: usize,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchBrainResponseData {
+    pub results: Vec<BrainSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSourceRequest {
+    pub scope: BrainReadScope,
+    pub source_id: SourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSourceResponseData {
+    pub source: SourceRecord,
+    #[serde(default)]
+    pub wiki_page: Option<WikiPage>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadWikiPageRequest {
+    pub scope: BrainReadScope,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadWikiPageResponseData {
+    pub page: WikiPage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadNodeRequest {
+    pub scope: BrainReadScope,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadNodeResponseData {
+    pub node: BrainNodeRecord,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub relations: Vec<BrainRelationRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadRecentEventsRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub edge_id: Option<String>,
+    #[serde(default)]
+    pub claim_id: Option<String>,
+    #[serde(default)]
+    pub memory_id: Option<String>,
+    #[serde(default)]
+    pub change_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadRecentEventsResponseData {
+    pub events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphHistoryRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHistoryEntry {
+    pub snapshot_id: String,
+    pub materialized_at: u64,
+    pub event_id: String,
+    pub rollback_target: GraphRollbackTarget,
+    #[serde(default)]
+    pub operation_type: Option<String>,
+    #[serde(default)]
+    pub source_run_ids: Vec<String>,
+    #[serde(default)]
+    pub source_markdown_refs: Vec<String>,
+    #[serde(default)]
+    pub storage_locations: Vec<String>,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub claim_count: usize,
+    pub memory_count: usize,
+    pub wiki_page_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRollbackTarget {
+    pub snapshot_id: String,
+    pub event_id: String,
+    pub materialized_version: u64,
+    pub replay_selector: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphHistoryResponseData {
+    pub states: Vec<GraphHistoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphSnapshotRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadGraphSnapshotResponseData {
+    pub snapshot_id: String,
+    pub source_ingest_id: String,
+    pub workspace_id: WorkspaceId,
+    pub source_of_truth_path: String,
+    pub latest_readable_snapshot_path: String,
+    pub created_at: u64,
+    pub materialized_at: u64,
+    #[serde(default)]
+    pub materialized_paths: Vec<String>,
+    #[serde(default)]
+    pub source_paths: Vec<String>,
+    #[serde(default)]
+    pub nodes: Vec<BrainNodeRecord>,
+    #[serde(default, rename = "edges")]
+    pub edges: Vec<BrainRelationRecord>,
+    #[serde(default)]
+    pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub memory_refs: Vec<String>,
+    #[serde(default)]
+    pub wiki_pages: Vec<WikiPage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconstructBrainRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub up_to_timestamp: Option<u64>,
+    #[serde(default)]
+    pub up_to_materialized_version: Option<u64>,
+    #[serde(default)]
+    pub up_to_event_id: Option<String>,
+    #[serde(default)]
+    pub output_root: Option<String>,
+    #[serde(default)]
+    pub write_materialized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconstructBrainResponseData {
+    pub snapshot: BrainRepoSnapshot,
+    pub replayed_event_count: usize,
+    pub selected_event_id: Option<String>,
+    pub snapshot_id: String,
+    pub output_root: String,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetContextPackRequest {
+    pub scope: BrainReadScope,
+    pub query: String,
+    #[serde(default)]
+    pub budget: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainContextPack {
+    pub workspace_id: WorkspaceId,
+    pub query: String,
+    pub token_budget: usize,
+    pub summary: String,
+    #[serde(default)]
+    pub wiki_pages: Vec<WikiPage>,
+    #[serde(default)]
+    pub nodes: Vec<BrainNodeRecord>,
+    #[serde(default)]
+    pub sources: Vec<SourceRecord>,
+    #[serde(default)]
+    pub memories: Vec<MemoryRecord>,
+    #[serde(default)]
+    pub entities: Vec<EntityRecord>,
+    #[serde(default)]
+    pub claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub relations: Vec<BrainRelationRecord>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub recent_events: Vec<BrainEvent>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetContextPackResponseData {
+    pub context_pack: BrainContextPack,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeBrainUpdateRequest {
+    pub scope: BrainReadScope,
+    pub kind: BrainProposalKind,
+    pub title: String,
+    pub body: String,
+    pub actor: BrainActor,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub target_source_id: Option<SourceId>,
+    #[serde(default)]
+    pub relation_kind: Option<BrainRelationKind>,
+    #[serde(default)]
+    pub source_description: Option<String>,
+    #[serde(default)]
+    pub source_user_context: Option<String>,
+    #[serde(default)]
+    pub source_ingest_instruction: Option<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub proposal_payload: Option<AgentGraphProposalPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeBrainUpdateResponseData {
+    pub proposal: BrainUpdateProposal,
+    pub event: BrainEvent,
+    pub proposal_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainReviewDecision {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainHealthStatus {
+    Clean,
+    AttentionNeeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainReviewItem {
+    pub review_id: String,
+    pub proposal_id: String,
+    pub workspace_id: WorkspaceId,
+    pub kind: BrainProposalKind,
+    pub status: BrainProposalStatus,
+    pub title: String,
+    pub body: String,
+    pub proposal_path: String,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBrainReviewItemsRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBrainReviewItemsResponseData {
+    #[serde(default)]
+    pub items: Vec<BrainReviewItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveBrainReviewItemRequest {
+    pub scope: BrainReadScope,
+    pub proposal_id: String,
+    pub decision: BrainReviewDecision,
+    pub actor: BrainActor,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveBrainReviewItemResponseData {
+    pub proposal: BrainUpdateProposal,
+    pub event: BrainEvent,
+    pub proposal_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBrainHealthRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBrainHealthResponseData {
+    pub status: BrainHealthStatus,
+    pub attention_count: usize,
+    #[serde(default)]
+    pub review_items: Vec<BrainReviewItem>,
+    #[serde(default)]
+    pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderOption {
+    pub id: String,
+    pub label: String,
+    pub requires_api_key: bool,
+    pub supports_base_url: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineConfigPayload {
+    pub provider: String,
+    pub model_id: String,
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    pub prompt_template: String,
+    #[serde(default)]
+    pub provider_options: Vec<ProviderOption>,
+    #[serde(default)]
+    pub model_options: Vec<String>,
+    #[serde(default)]
+    pub prompt_template_options: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveConfigResponseData {
+    pub config: EngineConfigPayload,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidateProviderResponseData {
+    pub ready: bool,
+    #[serde(default)]
+    pub issues: Vec<ValidationIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ListProviderModelsRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderModelCatalogResponseData {
+    pub provider_models: BTreeMap<String, Vec<String>>,
+    pub ollama_vision_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CheckReadinessRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadinessCheck {
+    pub id: String,
+    pub label: String,
+    pub ready: bool,
+    #[serde(default = "default_readiness_required")]
+    pub required: bool,
+    pub message: String,
+}
+
+fn default_readiness_required() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeReadinessResponseData {
+    pub ready: bool,
+    pub provider: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub checks: Vec<ReadinessCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadConfigRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveConfigRequest {
+    pub config: EngineConfigPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidateProviderRequest {
+    #[serde(default)]
+    pub config: Option<EngineConfigPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeRequest {
+    pub id: Uuid,
+    #[serde(flatten)]
+    pub request: EngineRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineRuntimeMessageType {
+    Response,
+    Event,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeResponse<T> {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    #[serde(flatten)]
+    pub response: EngineSuccess<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeFailure {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    #[serde(flatten)]
+    pub failure: EngineFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRuntimeEvent {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub message_type: EngineRuntimeMessageType,
+    pub event: ParseEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "command", content = "payload", rename_all = "snake_case")]
+pub enum EngineRequest {
+    Parse(ParseRequest),
+    CompileProject(CompileProjectRequest),
+    LoadProject(LoadProjectRequest),
+    ApplyCorrection(ApplyCorrectionRequest),
+    AnswerProject(AnswerProjectRequest),
+    SearchBrain(SearchBrainRequest),
+    ReadSource(ReadSourceRequest),
+    ReadWikiPage(ReadWikiPageRequest),
+    ReadNode(ReadNodeRequest),
+    ReadRecentEvents(ReadRecentEventsRequest),
+    ReadGraphHistory(ReadGraphHistoryRequest),
+    ReadGraphSnapshot(ReadGraphSnapshotRequest),
+    ReconstructBrain(ReconstructBrainRequest),
+    GetContextPack(GetContextPackRequest),
+    ProposeBrainUpdate(ProposeBrainUpdateRequest),
+    ListBrainReviewItems(ListBrainReviewItemsRequest),
+    ResolveBrainReviewItem(ResolveBrainReviewItemRequest),
+    GetBrainHealth(GetBrainHealthRequest),
+    LoadConfig(LoadConfigRequest),
+    SaveConfig(SaveConfigRequest),
+    ValidateProvider(ValidateProviderRequest),
+    ListProviderModels(ListProviderModelsRequest),
+    CheckReadiness(CheckReadinessRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineError {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub details: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineSuccess<T> {
+    pub ok: bool,
+    pub command: EngineCommand,
+    pub data: T,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineFailure {
+    pub ok: bool,
+    pub command: EngineCommand,
+    pub error: EngineError,
+}
+
+impl<T> EngineSuccess<T> {
+    pub fn new(command: EngineCommand, data: T) -> Self {
+        Self {
+            ok: true,
+            command,
+            data,
+        }
+    }
+}
+
+impl<T> EngineRuntimeResponse<T> {
+    pub fn new(id: Uuid, response: EngineSuccess<T>) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Response,
+            response,
+        }
+    }
+}
+
+impl EngineRuntimeFailure {
+    pub fn new(id: Uuid, failure: EngineFailure) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Response,
+            failure,
+        }
+    }
+}
+
+impl EngineRuntimeEvent {
+    pub fn new(id: Uuid, event: ParseEvent) -> Self {
+        Self {
+            id,
+            message_type: EngineRuntimeMessageType::Event,
+            event,
+        }
+    }
+}
+
+impl EngineFailure {
+    pub fn new(
+        command: EngineCommand,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            command,
+            error: EngineError {
+                code: code.into(),
+                message: message.into(),
+                details: None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ParseEvent {
+    Queued,
+    DocumentOpened { format: DocumentFormat },
+    ConvertingPages { current: u32, total: u32 },
+    Parsing { current: u32, total: u32 },
+    Packaging,
+    Completed,
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseProgress {
+    Queued,
+    ConvertingPages { current: u32, total: u32 },
+    Parsing { current: u32, total: u32 },
+    Packaging,
+    Completed,
+    Failed { message: String },
+}
+
+impl From<ParseEvent> for ParseProgress {
+    fn from(value: ParseEvent) -> Self {
+        match value {
+            ParseEvent::Queued => Self::Queued,
+            ParseEvent::DocumentOpened { .. } => Self::Queued,
+            ParseEvent::ConvertingPages { current, total } => {
+                Self::ConvertingPages { current, total }
+            }
+            ParseEvent::Parsing { current, total } => Self::Parsing { current, total },
+            ParseEvent::Packaging => Self::Packaging,
+            ParseEvent::Completed => Self::Completed,
+            ParseEvent::Failed { message } => Self::Failed { message },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_snapshot_read_contract_schema_requires_materialized_state_fields() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/graph-snapshot-read.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", schema_path.display())),
+        )
+        .unwrap();
+
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema must define top-level required fields");
+        for field in [
+            "snapshotId",
+            "sourceIngestId",
+            "sourceOfTruthPath",
+            "latestReadableSnapshotPath",
+            "createdAt",
+            "materializedAt",
+            "materializedPaths",
+            "nodes",
+            "edges",
+            "claims",
+            "memoryRefs",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "schema must require {field}"
+            );
+        }
+
+        assert_eq!(
+            schema
+                .pointer("/properties/snapshotId/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/sourceIngestId/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/sourceOfTruthPath/const")
+                .and_then(Value::as_str),
+            Some("events/brain_events.jsonl")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/latestReadableSnapshotPath/const")
+                .and_then(Value::as_str),
+            Some("state/latest-readable-snapshot.json")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/materializedPaths/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/stringArray")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/nodes/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/node")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/edges/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/edge")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/claims/items/$ref")
+                .and_then(Value::as_str),
+            Some("#/$defs/claim")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/memoryRefs/items/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+    }
+
+    #[test]
+    fn parse_request_round_trip() {
+        let request = EngineRequest::Parse(ParseRequest {
+            version: "1".into(),
+            input: ParseInput {
+                path: "/tmp/sample.pdf".into(),
+                format: DocumentFormat::Pdf,
+            },
+            template: "General".into(),
+            options: ParseOptions::default(),
+            output: Some(ParseOutputTarget {
+                root_dir: Some("/tmp/out".into()),
+                name: Some("sample".into()),
+                workspace_id: Some("default".into()),
+                source_id: None,
+            }),
+        });
+
+        let json = serde_json::to_string(&request).unwrap();
+        let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn runtime_request_envelope_round_trip() {
+        let request = EngineRuntimeRequest {
+            id: Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap(),
+            request: EngineRequest::LoadConfig(LoadConfigRequest {}),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"command\":\"load_config\""));
+        let decoded: EngineRuntimeRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn runtime_response_envelope_round_trip() {
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let response = EngineRuntimeResponse::new(
+            id,
+            EngineSuccess::new(
+                EngineCommand::LoadConfig,
+                serde_json::json!({"ready": true}),
+            ),
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"type\":\"response\""));
+        assert!(json.contains("\"command\":\"load_config\""));
+
+        let decoded: EngineRuntimeResponse<serde_json::Value> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn runtime_event_envelope_round_trip() {
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let event = EngineRuntimeEvent::new(id, ParseEvent::Queued);
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"event\""));
+        assert!(json.contains("\"event\":{\"type\":\"queued\"}"));
+
+        let decoded: EngineRuntimeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn parse_success_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::Parse,
+            ParseResponseData {
+                result: ParseResult {
+                    version: "1".into(),
+                    markdown: "# sample".into(),
+                    pages: vec![ParsedPage {
+                        index: 0,
+                        markdown: Some("# page".into()),
+                        plain_text: Some("page".into()),
+                        svg: None,
+                        image_asset_path: Some("images/page_1.png".into()),
+                        error_message: None,
+                    }],
+                    assets: vec![OutputAsset {
+                        relative_path: "images/page_1.png".into(),
+                        mime_type: "image/png".into(),
+                        base64: "cG5n".into(),
+                    }],
+                    metadata: ParseMetadata {
+                        engine_id: "stub".into(),
+                        duration_ms: 5,
+                        page_count: 1,
+                    },
+                    success_count: 1,
+                    failed_count: 0,
+                },
+                saved_output_path: Some("/tmp/out/sample.md".into()),
+                source_manifest: None,
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<ParseResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn config_success_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::LoadConfig,
+            EngineConfigPayload {
+                provider: "open_router".into(),
+                model_id: "openai/gpt-4.1-mini".into(),
+                api_key: "key".into(),
+                base_url: None,
+                prompt_template: "General".into(),
+                provider_options: vec![ProviderOption {
+                    id: "open_router".into(),
+                    label: "OpenRouter".into(),
+                    requires_api_key: true,
+                    supports_base_url: true,
+                }],
+                model_options: vec!["openai/gpt-4.1-mini".into()],
+                prompt_template_options: vec!["General".into()],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<EngineConfigPayload> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn load_project_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::LoadProject,
+            LoadProjectResponseData {
+                project: None,
+                workspace_id: Some("default".into()),
+                sources: Vec::new(),
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<LoadProjectResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::LoadProject);
+        assert!(decoded.data.project.is_none());
+        assert_eq!(decoded.data.workspace_id.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn source_artifact_contract_round_trip() {
+        let manifest = SourceArtifactManifest {
+            workspace_id: "default".into(),
+            source_id: "source-123".into(),
+            original_path: "/tmp/input.pdf".into(),
+            source_path: "/tmp/HyprDuck/default/sources/source-123/input.pdf".into(),
+            markdown_path: "/tmp/HyprDuck/default/artifacts/source-123/input.md".into(),
+            artifact_root: "/tmp/HyprDuck/default/artifacts/source-123".into(),
+            manifest_path: "/tmp/HyprDuck/default/artifacts/source-123/source-manifest.json".into(),
+            format: DocumentFormat::Pdf,
+            output_name: "input".into(),
+            status: IngestStatus::Ingested,
+            description: "Project brief".into(),
+            user_context: "Used for planning".into(),
+            ingest_instruction: "Extract decisions".into(),
+            pages: vec![PageArtifact {
+                index: 0,
+                label: "Page 1".into(),
+                image_path: Some(
+                    "/tmp/HyprDuck/default/artifacts/source-123/images/page_1.png".into(),
+                ),
+                markdown_path: Some(
+                    "/tmp/HyprDuck/default/artifacts/source-123/pages/page_1.md".into(),
+                ),
+                plain_text_path: None,
+                error_message: None,
+            }],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert!(json.contains("\"status\":\"ingested\""));
+        assert!(json.contains("\"format\":\"pdf\""));
+        assert!(json.contains("\"description\":\"Project brief\""));
+        let decoded: SourceArtifactManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn answer_project_round_trip() {
+        let request = EngineRequest::AnswerProject(AnswerProjectRequest {
+            project_id: "project-123".into(),
+            node_id: Some("concept-a".into()),
+            question: "What does this concept cover?".into(),
+        });
+        let json = serde_json::to_string(&request).unwrap();
+        let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+
+        let response = EngineSuccess::new(
+            EngineCommand::AnswerProject,
+            AnswerProjectResponseData {
+                answer: AnswerResponse {
+                    status: AnswerStatus::Grounded,
+                    text: Some("Grounded answer".into()),
+                    explanation: "Based on visible evidence.".into(),
+                    citations: vec![],
+                    related_node_ids: vec!["concept-b".into()],
+                    suggested_actions: vec![],
+                },
+            },
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<AnswerProjectResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::AnswerProject);
+        assert_eq!(decoded.data.answer.status, AnswerStatus::Grounded);
+    }
+
+    #[test]
+    fn brain_api_requests_round_trip() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: Some("/tmp/HyprDuck".into()),
+        };
+        let requests = vec![
+            EngineRequest::SearchBrain(SearchBrainRequest {
+                scope: scope.clone(),
+                query: "agent context".into(),
+                limit: Some(5),
+            }),
+            EngineRequest::ReadSource(ReadSourceRequest {
+                scope: scope.clone(),
+                source_id: "source-123".into(),
+            }),
+            EngineRequest::ReadWikiPage(ReadWikiPageRequest {
+                scope: scope.clone(),
+                path: "wiki/index.md".into(),
+            }),
+            EngineRequest::ReadNode(ReadNodeRequest {
+                scope: scope.clone(),
+                node_id: "concept-agent-context".into(),
+            }),
+            EngineRequest::ReadRecentEvents(ReadRecentEventsRequest {
+                scope: scope.clone(),
+                limit: Some(3),
+                run_id: None,
+                source_ref: None,
+                node_id: None,
+                edge_id: None,
+                claim_id: None,
+                memory_id: None,
+                change_type: None,
+            }),
+            EngineRequest::ReadGraphHistory(ReadGraphHistoryRequest {
+                scope: scope.clone(),
+                limit: Some(3),
+            }),
+            EngineRequest::ReadGraphSnapshot(ReadGraphSnapshotRequest {
+                scope: scope.clone(),
+            }),
+            EngineRequest::GetContextPack(GetContextPackRequest {
+                scope: scope.clone(),
+                query: "agent context".into(),
+                budget: Some(8000),
+            }),
+            EngineRequest::ProposeBrainUpdate(ProposeBrainUpdateRequest {
+                scope: scope.clone(),
+                kind: BrainProposalKind::Memory,
+                title: "Remember project decision".into(),
+                body: "The agent should retain this decision for later sessions.".into(),
+                actor: BrainActor {
+                    actor_type: BrainActorType::Agent,
+                    actor_id: "hyprduck-cli".into(),
+                },
+                target_node_id: None,
+                target_source_id: None,
+                relation_kind: None,
+                source_description: None,
+                source_user_context: None,
+                source_ingest_instruction: None,
+                source_refs: vec![],
+                node_refs: vec!["project-hyprduck".into()],
+                evidence_refs: vec![],
+                proposal_payload: None,
+            }),
+            EngineRequest::ListBrainReviewItems(ListBrainReviewItemsRequest {
+                scope: scope.clone(),
+            }),
+            EngineRequest::ResolveBrainReviewItem(ResolveBrainReviewItemRequest {
+                scope: scope.clone(),
+                proposal_id: "proposal-123".into(),
+                decision: BrainReviewDecision::Accept,
+                actor: BrainActor {
+                    actor_type: BrainActorType::User,
+                    actor_id: "local-user".into(),
+                },
+                reason: Some("Looks correct".into()),
+            }),
+            EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
+        ];
+        for request in requests {
+            let json = serde_json::to_string(&request).unwrap();
+            let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, request);
+        }
+
+        let response = EngineSuccess::new(
+            EngineCommand::SearchBrain,
+            SearchBrainResponseData {
+                results: vec![BrainSearchResult {
+                    kind: BrainSearchResultKind::WikiPage,
+                    id: "wiki-index".into(),
+                    title: "Brain Index".into(),
+                    path: Some("wiki/index.md".into()),
+                    score: 2,
+                    snippet: "Agent context".into(),
+                }],
+            },
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<SearchBrainResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::SearchBrain);
+        assert_eq!(
+            decoded.data.results[0].kind,
+            BrainSearchResultKind::WikiPage
+        );
+    }
+
+    #[test]
+    fn provider_model_catalog_round_trip() {
+        let mut provider_models = BTreeMap::new();
+        provider_models.insert("open_router".into(), vec!["openai/gpt-4.1-mini".into()]);
+        provider_models.insert("ollama".into(), vec!["qwen3-vl:8b".into()]);
+
+        let response = EngineSuccess::new(
+            EngineCommand::ListProviderModels,
+            ProviderModelCatalogResponseData {
+                provider_models,
+                ollama_vision_prefixes: vec!["qwen3-vl".into()],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<ProviderModelCatalogResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::ListProviderModels);
+        assert!(decoded.data.provider_models.contains_key("open_router"));
+    }
+
+    #[test]
+    fn readiness_response_round_trip() {
+        let response = EngineSuccess::new(
+            EngineCommand::CheckReadiness,
+            RuntimeReadinessResponseData {
+                ready: true,
+                provider: "ollama".into(),
+                model_id: "qwen3-vl:8b".into(),
+                checks: vec![ReadinessCheck {
+                    id: "runtime_process".into(),
+                    label: "Runtime process".into(),
+                    ready: true,
+                    required: true,
+                    message: "Runtime process is accepting commands.".into(),
+                }],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"command\":\"check_readiness\""));
+        let decoded: EngineSuccess<RuntimeReadinessResponseData> =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::CheckReadiness);
+        assert!(decoded.data.ready);
+    }
+
+    #[test]
+    fn failure_round_trip() {
+        let failure = EngineFailure::new(
+            EngineCommand::ValidateProvider,
+            "invalid_api_key",
+            "missing key",
+        );
+        let json = serde_json::to_string(&failure).unwrap();
+        let decoded: EngineFailure = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, failure);
+    }
+
+    #[test]
+    fn event_round_trip() {
+        let event = ParseEvent::Parsing {
+            current: 1,
+            total: 3,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: ParseEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn options_decode_with_missing_fields() {
+        let decoded: ParseOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(decoded, ParseOptions::default());
+    }
+}
+
+/// Returns the list of supported model IDs for a given provider slug.
+/// Single source of truth — used by both the engine and the desktop UI.
+pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
+    match provider_slug {
+        "open_router" => vec![
+            "google/gemma-4-31b-it",
+            "z-ai/glm-5v-turbo",
+            "anthropic/claude-sonnet-4.6",
+            "anthropic/claude-opus-4.6",
+            "google/gemini-3-flash-preview",
+            "qwen/qwen3.6-plus:free",
+            "x-ai/grok-4.1-fast",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-2.5-flash",
+            "moonshotai/kimi-k2.5",
+        ],
+        "open_ai" => vec![
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ],
+        "anthropic" => vec![
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        "ollama" => vec![
+            "gemma4:latest",
+            "qwen3.5:latest",
+            "qwen3-vl:8b",
+            "qwen3-vl:72b",
+            "kimi-k2.5:latest",
+            "glm-ocr:latest",
+            "deepseek-ocr:latest",
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// Prefixes used to identify local Ollama models that can process page images.
+pub fn ollama_vision_prefixes() -> Vec<&'static str> {
+    vec![
+        "gemma4",
+        "qwen3.5",
+        "qwen3-vl",
+        "kimi-k2.5",
+        "glm-ocr",
+        "deepseek-ocr",
+    ]
+}

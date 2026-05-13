@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "duckdocs/parse-request",
+  "$id": "hyprduck/parse-request",
   "type": "object",
   "required": ["version", "input", "template", "options"],
   "properties": {

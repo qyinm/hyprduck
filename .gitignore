@@ -37,7 +37,7 @@ target/
 node_modules/
 .pnpm-store/
 apps/desktop/src-tauri/gen/
-apps/desktop/src-tauri/binaries/duckdocs-engine-*
+apps/desktop/src-tauri/binaries/hyprduck-engine-*
 apps/desktop/dist/
 .gstack/
 .vercel

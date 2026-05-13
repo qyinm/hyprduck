@@ -46,9 +46,9 @@ HyprDuck/
 | Desktop preload bridge | `apps/desktop/preload.cjs` | Safe IPC bridge for renderer calls |
 | Desktop UI | `apps/desktop/src/App.tsx` | Main/settings/progress/result windows |
 | Desktop styling | `apps/desktop/src/styles.css` | Active desktop visual surface |
-| Engine contract | `crates/duckdocs-engine-types/src/lib.rs` | Shared request/response/event schema |
-| Engine runtime | `crates/duckdocs-engine/src/main.rs` | Conversion, provider execution, output writing |
-| Engine client | `crates/duckdocs-engine-client/src/lib.rs` | Shared subprocess bridge |
+| Engine contract | `crates/hyprduck-engine-types/src/lib.rs` | Shared request/response/event schema |
+| Engine runtime | `crates/hyprduck-engine/src/main.rs` | Conversion, provider execution, output writing |
+| Engine client | `crates/hyprduck-engine-client/src/lib.rs` | Shared subprocess bridge |
 
 ---
 
@@ -137,10 +137,10 @@ When opening a pull request, follow the template at `.github/PULL_REQUEST_TEMPLA
 pnpm --dir apps/desktop build
 
 # Verify desktop shell types
-cargo check -p duckdocs-desktop
+cargo check -p hyprduck-desktop
 
 # Run core tests
-cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
+cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
 ```
 
 ---

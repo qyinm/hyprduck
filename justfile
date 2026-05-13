@@ -32,19 +32,19 @@ desktop-web-preview:
   VITE_PLATFORM=web bun run --cwd {{desktop_dir}} frontend:build
 
 core-test:
-  cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
+  cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
 
 cli-build:
-  cargo build -p duckdocs-cli --release
+  cargo build -p hyprduck-cli --release
 
 cli-dev:
-  cargo run -p duckdocs-cli
+  cargo run -p hyprduck-cli
 
 cli-check:
-  cargo check -p duckdocs-cli
+  cargo check -p hyprduck-cli
 
 cli-test:
-  cargo test -p duckdocs-cli
+  cargo test -p hyprduck-cli
 
 site-stage:
   bun run --cwd {{site_dir}} build

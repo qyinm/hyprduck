@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "crates/duckdocs-cli",
-    "crates/duckdocs-engine",
-    "crates/duckdocs-engine-client",
-    "crates/duckdocs-engine-types",
-    "crates/duckdocs-knowledge",
+    "crates/hyprduck-cli",
+    "crates/hyprduck-engine",
+    "crates/hyprduck-engine-client",
+    "crates/hyprduck-engine-types",
+    "crates/hyprduck-knowledge",
 ]
 resolver = "2"
 

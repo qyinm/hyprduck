@@ -1,5 +1,5 @@
 {
-  "name": "duckdocs-desktop",
+  "name": "hyprduck-desktop",
   "packageManager": "bun@1.2.18",
   "private": true,
   "version": "0.1.0",
@@ -17,7 +17,7 @@
     "sync:engine:release": "../../scripts/sync-electron-engine.sh release"
   },
   "build": {
-    "appId": "com.duckdocs.desktop",
+    "appId": "com.hyprduck.desktop",
     "productName": "HyprDuck",
     "directories": {
       "output": "release/electron"

@@ -658,65 +658,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "duckdocs-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "duckdocs-engine-client",
- "duckdocs-engine-types",
- "ratatui",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "duckdocs-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "dirs",
- "duckdocs-engine-types",
- "markitdown",
- "reqwest 0.12.23",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "uuid",
-]
-
-[[package]]
-name = "duckdocs-engine-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "duckdocs-engine-types",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "duckdocs-engine-types"
-version = "0.1.0"
-dependencies = [
- "duckdocs-knowledge",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "duckdocs-knowledge"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1272,6 +1213,65 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "hyprduck-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "hyprduck-engine-client",
+ "hyprduck-engine-types",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hyprduck-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "dirs",
+ "hyprduck-engine-types",
+ "markitdown",
+ "reqwest 0.12.23",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
+name = "hyprduck-engine-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hyprduck-engine-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "hyprduck-engine-types"
+version = "0.1.0"
+dependencies = [
+ "hyprduck-knowledge",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "hyprduck-knowledge"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

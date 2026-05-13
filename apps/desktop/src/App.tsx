@@ -215,7 +215,7 @@ interface HyprDuckDesktopApi {
 
 declare global {
   interface Window {
-    duckdocs?: HyprDuckDesktopApi;
+    hyprduck?: HyprDuckDesktopApi;
   }
 }
 
@@ -266,7 +266,7 @@ const WEB_MOCK_CONFIG: EngineConfigPayload = {
 };
 
 const WEB_MOCK_SAMPLE_FILE: FileSelection = {
-  path: "/tmp/duckdocs-sample.pdf",
+  path: "/tmp/hyprduck-sample.pdf",
   format: "pdf",
 };
 
@@ -974,7 +974,7 @@ function createWebMockApi(): HyprDuckDesktopApi {
       eventName: string,
       handler: (message: DesktopMessage<T>) => void | Promise<void>,
     ): DesktopUnlisten {
-      if (eventName !== "duckdocs://snapshot") {
+      if (eventName !== "hyprduck://snapshot") {
         return () => undefined;
       }
       const typedHandler = (message: DesktopMessage<UiSnapshot>) => {
@@ -1065,7 +1065,7 @@ function getDesktopApi(): HyprDuckDesktopApi {
   if (IS_WEB_PREVIEW) {
     return webPreviewApi as HyprDuckDesktopApi;
   }
-  const api = window.duckdocs;
+  const api = window.hyprduck;
   if (!api) {
     throw new Error("HyprDuck desktop UI requires Electron preload APIs.");
   }
@@ -2213,7 +2213,7 @@ export function App() {
       setLoadedWorkspaceEnvelope(initialWorkspaceLoad.envelope);
       setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad));
 
-      unlisten = desktop.listen<UiSnapshot>("duckdocs://snapshot", (message) => {
+      unlisten = desktop.listen<UiSnapshot>("hyprduck://snapshot", (message) => {
         setSnapshot(message.payload);
       });
     };

@@ -1,0 +1,14 @@
+[package]
+name = "hyprduck-engine-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hyprduck-engine-types = { path = "../hyprduck-engine-types" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

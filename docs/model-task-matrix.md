@@ -8,8 +8,8 @@ should be tracked with the golden corpus.
 ## Benchmark Command
 
 ```bash
-cargo run -p duckdocs-cli -- eval golden-corpus \
-  --fixtures crates/duckdocs-engine/tests/fixtures/brain-corpus \
+cargo run -p hyprduck-cli -- eval golden-corpus \
+  --fixtures crates/hyprduck-engine/tests/fixtures/brain-corpus \
   --mode all
 ```
 
@@ -65,8 +65,8 @@ The desktop settings surface should make the warning explicit:
 When model defaults change, update this file and verify:
 
 ```bash
-cargo run -p duckdocs-cli -- eval golden-corpus \
-  --fixtures crates/duckdocs-engine/tests/fixtures/brain-corpus \
+cargo run -p hyprduck-cli -- eval golden-corpus \
+  --fixtures crates/hyprduck-engine/tests/fixtures/brain-corpus \
   --mode all
 pnpm --dir apps/desktop build
 ```

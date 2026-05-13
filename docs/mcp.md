@@ -3,13 +3,13 @@
 HyprDuck exposes the local brain through an MCP stdio server:
 
 ```bash
-duckdocs mcp serve
+hyprduck mcp serve
 ```
 
 For local development, run the same server through Cargo:
 
 ```bash
-cargo run -p duckdocs-cli -- mcp serve
+cargo run -p hyprduck-cli -- mcp serve
 ```
 
 ## Client Configuration
@@ -20,7 +20,7 @@ Example MCP client entry:
 {
   "mcpServers": {
     "hyprduck": {
-      "command": "duckdocs",
+      "command": "hyprduck",
       "args": ["mcp", "serve"]
     }
   }

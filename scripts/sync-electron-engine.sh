@@ -16,15 +16,15 @@ mkdir -p "${BIN_DIR}"
 
 pushd "${REPO_ROOT}" >/dev/null
 if [[ "${MODE}" == "release" ]]; then
-  cargo build -p duckdocs-engine --release
-  SOURCE_BIN="${REPO_ROOT}/target/release/duckdocs-engine"
+  cargo build -p hyprduck-engine --release
+  SOURCE_BIN="${REPO_ROOT}/target/release/hyprduck-engine"
 else
-  cargo build -p duckdocs-engine
-  SOURCE_BIN="${REPO_ROOT}/target/debug/duckdocs-engine"
+  cargo build -p hyprduck-engine
+  SOURCE_BIN="${REPO_ROOT}/target/debug/hyprduck-engine"
 fi
 popd >/dev/null
 
-TARGET_BIN="${BIN_DIR}/duckdocs-engine-${HOST_TRIPLE}"
+TARGET_BIN="${BIN_DIR}/hyprduck-engine-${HOST_TRIPLE}"
 cp "${SOURCE_BIN}" "${TARGET_BIN}"
 chmod +x "${TARGET_BIN}"
 

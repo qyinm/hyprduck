@@ -153,7 +153,7 @@ bun --cwd apps/desktop run build
 Run the Rust workspace verification:
 
 ```bash
-cargo test -p duckdocs-engine-types -p duckdocs-engine-client -p duckdocs-engine -p duckdocs-cli
+cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
 ```
 
 Stage the static site artifact locally:
@@ -173,11 +173,11 @@ just site-stage
 │   ├── desktop
 │   └── site
 ├── crates
-│   ├── duckdocs-cli
-│   ├── duckdocs-engine
-│   ├── duckdocs-engine-client
-│   ├── duckdocs-engine-types
-│   └── duckdocs-knowledge
+│   ├── hyprduck-cli
+│   ├── hyprduck-engine
+│   ├── hyprduck-engine-client
+│   ├── hyprduck-engine-types
+│   └── hyprduck-knowledge
 ├── packages
 ├── scripts
 └── release
