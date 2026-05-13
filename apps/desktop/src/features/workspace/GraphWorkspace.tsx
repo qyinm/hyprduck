@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  AlertTriangle,
   Plus,
   RefreshCw,
   Send,
@@ -263,22 +262,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {project.summary.stale && (
-        <section className="mx-6 mt-14 rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-900">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
-            <div className="space-y-1">
-              <p className="font-medium">Read path stays open while write jobs run.</p>
-              <p className="leading-6">
-                You are looking at the most recent stable workspace snapshot. New
-                ingest, re-import, or correction writes can finish in the
-                background without freezing the graph.
-              </p>
-            </div>
-          </div>
-        </section>
-      )}
-
       <div
         className={cn(
           "grid min-h-0 flex-1 overflow-hidden bg-background",
