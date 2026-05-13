@@ -59,8 +59,8 @@ use brain_repo::*;
 use knowledge::*;
 use parse::parse_document;
 use provider::{
-    check_readiness, parse_openai_compatible, provider_model_catalog, provider_unavailable,
-    validate_provider, EngineConfig, EngineConfigStore,
+    check_readiness, parse_openai_compatible_with_timeout, provider_model_catalog,
+    provider_unavailable, validate_provider, EngineConfig, EngineConfigStore,
 };
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
@@ -70,6 +70,7 @@ const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
 const PROVIDER_GRAPH_AGENT_ID: &str = "duckdocs-provider-graph-agent";
 const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
+const PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS: u64 = 45;
 
 thread_local! {
     static RUNTIME_EVENT_REQUEST_ID: RefCell<Option<Uuid>> = const { RefCell::new(None) };
@@ -6762,7 +6763,14 @@ fn maybe_generate_provider_graph_proposals(
     let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
     let prompt = build_provider_graph_proposal_prompt(manifest, markdown, &snapshot);
-    let provider_response = match parse_openai_compatible(&config, &prompt, None) {
+    let provider_response = match parse_openai_compatible_with_timeout(
+        &config,
+        &prompt,
+        None,
+        Some(Duration::from_secs(
+            PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
+        )),
+    ) {
         Ok(response) => response,
         Err(error) => {
             report.status = "failed".into();

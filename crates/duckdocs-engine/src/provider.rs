@@ -492,8 +492,17 @@ pub(crate) fn parse_openai_compatible(
     prompt: &str,
     image_base64: Option<String>,
 ) -> Result<String> {
+    parse_openai_compatible_with_timeout(config, prompt, image_base64, None)
+}
+
+pub(crate) fn parse_openai_compatible_with_timeout(
+    config: &EngineConfig,
+    prompt: &str,
+    image_base64: Option<String>,
+    timeout: Option<Duration>,
+) -> Result<String> {
     let client = Client::builder()
-        .timeout(None)
+        .timeout(timeout)
         .connect_timeout(Duration::from_secs(10))
         .build()
         .context("failed to build provider HTTP client")?;
