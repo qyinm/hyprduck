@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,10 +50,12 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 use uuid::{Uuid, Version};
 
+mod brain_repo;
 mod knowledge;
 mod parse;
 mod provider;
 
+use brain_repo::*;
 use knowledge::*;
 use parse::parse_document;
 use provider::{
@@ -814,7 +815,7 @@ fn handle_read_graph_history(
                 && is_completed_graph_materialized_event(event)
         })
         .cloned()
-        .map(|event| graph_history_entry_from_event(&reader.root, event))
+        .map(|event| graph_history_entry_from_event(reader.root(), event))
         .collect::<Result<Vec<_>>>()?;
     states.sort_by(|left, right| {
         right
@@ -832,7 +833,7 @@ fn handle_read_graph_snapshot(
     request: ReadGraphSnapshotRequest,
 ) -> Result<ReadGraphSnapshotResponseData> {
     let reader = BrainReader::open(&request.scope)?;
-    let marker = read_latest_readable_graph_snapshot_marker(&reader.root)?;
+    let marker = read_latest_readable_graph_snapshot_marker(reader.root())?;
     let marker_event = marker.as_ref().and_then(|marker| {
         (marker.workspace_id == request.scope.workspace_id).then(|| {
             reader.events.iter().find(|event| {
@@ -1637,15 +1638,15 @@ fn handle_reconstruct_brain(
 
     if request.write_materialized {
         let writer = BrainWorkspaceWriter::open(root.clone())?;
-        let before_current = capture_materialized_file_snapshot(&writer.root)?;
+        let before_current = capture_materialized_file_snapshot(writer.root())?;
         let rollback_at = unix_timestamp_seconds();
         let backup_snapshot_id = format!(
             "snapshot-pre-rollback-{}-{}",
             request.scope.workspace_id, rollback_at
         );
         let previous_snapshot =
-            read_materialized_brain_snapshot(&writer.root, &request.scope.workspace_id).ok();
-        persist_materialized_snapshot(&writer.root, &backup_snapshot_id, &before_current)?;
+            read_materialized_brain_snapshot(writer.root(), &request.scope.workspace_id).ok();
+        persist_materialized_snapshot(writer.root(), &backup_snapshot_id, &before_current)?;
         let rollback_result = (|| -> Result<Vec<String>> {
             let mut restored_snapshot = replay.snapshot.clone();
             restored_snapshot.generated_at = rollback_at;
@@ -1663,19 +1664,19 @@ fn handle_reconstruct_brain(
                 .chain(std::iter::once(rollback_event))
                 .collect();
             restore_selected_materialized_brain_snapshot(
-                &writer.root,
+                writer.root(),
                 &restored_snapshot,
                 previous_snapshot.as_ref(),
             )?;
             Ok(changed_materialized_files(
                 &before_current,
-                &capture_materialized_file_snapshot(&writer.root)?,
+                &capture_materialized_file_snapshot(writer.root())?,
             ))
         })();
         match rollback_result {
             Ok(current_changed_files) => changed_files = current_changed_files,
             Err(error) => {
-                restore_materialized_file_snapshot(&writer.root, &before_current)?;
+                restore_materialized_file_snapshot(writer.root(), &before_current)?;
                 return Err(error);
             }
         }
@@ -3981,44 +3982,34 @@ fn brain_proposal_fingerprint(proposal: &BrainUpdateProposal) -> String {
 }
 
 struct BrainWorkspaceWriter {
-    root: PathBuf,
+    repo: BrainArtifactRepository,
     _lock: WorkspaceLock,
 }
 
 impl BrainWorkspaceWriter {
     fn open(root: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&root).with_context(|| format!("failed creating {}", root.display()))?;
-        let lock = WorkspaceLock::acquire(root.join(BRAIN_LOCK_DIRECTORY_NAME))?;
-        for dir in [
-            root.join("events"),
-            root.join("memory"),
-            root.join("reviews/proposed-updates"),
-        ] {
-            fs::create_dir_all(&dir)
-                .with_context(|| format!("failed creating {}", dir.display()))?;
-        }
-        Ok(Self { root, _lock: lock })
+        let (repo, lock) = BrainArtifactRepository::open(root)?;
+        Ok(Self { repo, _lock: lock })
+    }
+
+    fn root(&self) -> &Path {
+        self.repo.root()
     }
 
     fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
-        let path = self.proposal_path(&proposal.proposal_id);
-        write_json_pretty(&path, proposal)?;
-        Ok(path)
+        self.repo.write_proposal(proposal)
     }
 
     fn proposal_path(&self, proposal_id: &str) -> PathBuf {
-        self.root
-            .join("reviews/proposed-updates")
-            .join(format!("{proposal_id}.json"))
+        self.repo.proposal_path(proposal_id)
     }
 
     fn append_event(&self, event: &BrainEvent) -> Result<()> {
-        append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
+        self.repo.append_event(event)
     }
 
     fn upsert_memory_record(&self, memory: MemoryRecord) -> Result<()> {
-        let path = self.root.join("memory/records.json");
-        let mut memories = read_memory_records(&self.root)?;
+        let mut memories = self.repo.read_memory_records()?;
         if let Some(existing) = memories
             .iter_mut()
             .find(|record| record.memory_id == memory.memory_id)
@@ -4033,7 +4024,7 @@ impl BrainWorkspaceWriter {
                 .cmp(&left.updated_at)
                 .then_with(|| left.memory_id.cmp(&right.memory_id))
         });
-        write_json_pretty(&path, &memories)
+        self.repo.write_memory_records(&memories)
     }
 
     fn apply_source_note_metadata(
@@ -4047,7 +4038,8 @@ impl BrainWorkspaceWriter {
             .or_else(|| proposal.source_refs.first())
             .context("source note proposal needs a source id")?;
         let manifest_path = self
-            .root
+            .repo
+            .root()
             .join("artifacts")
             .join(source_id)
             .join("source-manifest.json");
@@ -4069,7 +4061,7 @@ impl BrainWorkspaceWriter {
         );
         manifest.updated_at = unix_timestamp_seconds();
         write_source_manifest(&manifest)?;
-        if let Some(output_root) = self.root.parent() {
+        if let Some(output_root) = self.repo.output_root() {
             let store = KnowledgeProjectStore::new(output_root.join("knowledge.sqlite3"));
             store.update_source_manifest_snapshot(&manifest)?;
         }
@@ -4081,26 +4073,26 @@ impl BrainWorkspaceWriter {
         if proposal.status != BrainProposalStatus::Accepted {
             return Ok(());
         }
-        let manifest_path = self.root.join("brain-manifest.json");
+        let manifest_path = self.repo.brain_manifest_path();
         if !manifest_path.exists() {
             return Ok(());
         }
-        let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
+        let mut snapshot = self.repo.read_brain_manifest()?;
         match proposal.kind {
             BrainProposalKind::Node => {
                 apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
-                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
+                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
             }
             BrainProposalKind::Claim | BrainProposalKind::Link => {
                 apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
                 refresh_materialized_wiki_pages(&mut snapshot);
-                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
+                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
             }
             BrainProposalKind::WikiPage => {
                 let page =
-                    resolve_persisted_wiki_page_for_proposal(&self.root, &snapshot, proposal);
+                    resolve_persisted_wiki_page_for_proposal(self.repo.root(), &snapshot, proposal);
                 apply_wiki_page_to_snapshot(&mut snapshot, page.clone());
-                persist_materialized_graph_and_wiki_state(&self.root, &snapshot)?;
+                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
             }
             BrainProposalKind::Memory
             | BrainProposalKind::Observation
@@ -4110,11 +4102,11 @@ impl BrainWorkspaceWriter {
     }
 
     fn update_brain_manifest_source(&self, manifest: &SourceArtifactManifest) -> Result<()> {
-        let path = self.root.join("brain-manifest.json");
+        let path = self.repo.brain_manifest_path();
         if !path.exists() {
             return Ok(());
         }
-        let mut snapshot: BrainRepoSnapshot = read_json_artifact(&path)?;
+        let mut snapshot = self.repo.read_brain_manifest()?;
         if let Some(source) = snapshot
             .sources
             .iter_mut()
@@ -4124,7 +4116,7 @@ impl BrainWorkspaceWriter {
             source.user_context = manifest.user_context.clone();
             source.ingest_instruction = manifest.ingest_instruction.clone();
             source.updated_at = manifest.updated_at;
-            write_json_pretty(&path, &snapshot)?;
+            self.repo.write_brain_manifest(&snapshot)?;
         }
         Ok(())
     }
@@ -4936,42 +4928,8 @@ fn wiki_slug(value: &str) -> String {
     }
 }
 
-struct WorkspaceLock {
-    path: PathBuf,
-}
-
-impl WorkspaceLock {
-    fn acquire(path: PathBuf) -> Result<Self> {
-        let started = Instant::now();
-        loop {
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    if started.elapsed() > Duration::from_secs(5) {
-                        bail!(
-                            "timed out waiting for workspace brain lock {}",
-                            path.display()
-                        );
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("failed acquiring {}", path.display()));
-                }
-            }
-        }
-    }
-}
-
-impl Drop for WorkspaceLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.path);
-    }
-}
-
 struct BrainReader {
-    root: PathBuf,
+    repo: BrainArtifactRepository,
     snapshot: BrainRepoSnapshot,
     events: Vec<BrainEvent>,
 }
@@ -4979,18 +4937,16 @@ struct BrainReader {
 impl BrainReader {
     fn open(scope: &BrainReadScope) -> Result<Self> {
         let root = resolve_brain_workspace_root(scope)?;
-        let manifest_path = root.join("brain-manifest.json");
+        let repo = BrainArtifactRepository::new(root);
+        let manifest_path = repo.brain_manifest_path();
         if !manifest_path.exists() {
             return Ok(Self {
-                root,
+                repo,
                 snapshot: empty_replayed_brain_snapshot(&scope.workspace_id),
                 events: Vec::new(),
             });
         }
-        let manifest_json = fs::read_to_string(&manifest_path)
-            .with_context(|| format!("failed reading {}", manifest_path.display()))?;
-        let mut snapshot: BrainRepoSnapshot = serde_json::from_str(&manifest_json)
-            .with_context(|| format!("failed decoding {}", manifest_path.display()))?;
+        let mut snapshot = repo.read_brain_manifest()?;
         if snapshot.workspace_id != scope.workspace_id {
             bail!(
                 "brain manifest workspace_id {} does not match requested workspace {}",
@@ -4998,23 +4954,27 @@ impl BrainReader {
                 scope.workspace_id
             );
         }
-        snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
-        snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
-        snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
-        if let Ok(entities) = read_json_artifact(&root.join("graph/entities.json")) {
+        snapshot.nodes = read_json_artifact(&repo.root().join("graph/nodes.json"))?;
+        snapshot.relations = read_json_artifact(&repo.root().join("graph/edges.json"))?;
+        snapshot.evidence = read_json_artifact(&repo.root().join("graph/evidence.json"))?;
+        if let Ok(entities) = read_json_artifact(&repo.root().join("graph/entities.json")) {
             snapshot.entities = entities;
         }
-        if let Ok(claims) = read_json_artifact(&root.join("graph/claims.json")) {
+        if let Ok(claims) = read_json_artifact(&repo.root().join("graph/claims.json")) {
             snapshot.claims = claims;
         }
-        snapshot.memories = read_memory_records(&root)?;
-        let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+        snapshot.memories = repo.read_memory_records()?;
+        let events = repo.read_brain_events()?;
         snapshot.events = events.clone();
         Ok(Self {
-            root,
+            repo,
             snapshot,
             events,
         })
+    }
+
+    fn root(&self) -> &Path {
+        self.repo.root()
     }
 
     fn search(&self, query: &str, limit: usize) -> Vec<BrainSearchResult> {
@@ -5218,7 +5178,7 @@ impl BrainReader {
     }
 
     fn read_wiki_page_body(&self, mut page: WikiPage) -> Result<WikiPage> {
-        let path = self.root.join(&page.path);
+        let path = self.repo.root().join(&page.path);
         page.body = fs::read_to_string(&path)
             .with_context(|| format!("failed reading {}", path.display()))?;
         Ok(page)
@@ -5494,7 +5454,7 @@ impl BrainReader {
         let recent_events = self.recent_events(&ReadRecentEventsRequest {
             scope: BrainReadScope {
                 workspace_id: self.snapshot.workspace_id.clone(),
-                root_dir: Some(self.root.display().to_string()),
+                root_dir: Some(self.repo.root().display().to_string()),
             },
             limit: Some(5),
             run_id: None,
@@ -6143,8 +6103,8 @@ fn apply_queued_agent_proposal_transaction(
     let run_id = format!("apply-{}", Uuid::now_v7());
     let snapshot_id = format!("snapshot-{}", Uuid::now_v7());
     let started_at = unix_timestamp_seconds();
-    let before = capture_materialized_file_snapshot(&writer.root)?;
-    persist_materialized_snapshot(&writer.root, &snapshot_id, &before)?;
+    let before = capture_materialized_file_snapshot(writer.root())?;
+    persist_materialized_snapshot(writer.root(), &snapshot_id, &before)?;
 
     let apply_result = (|| -> Result<()> {
         enrich_agent_graph_proposal_refs(&mut proposal);
@@ -6177,11 +6137,11 @@ fn apply_queued_agent_proposal_transaction(
 
     match apply_result {
         Ok(()) => {
-            let after = capture_materialized_file_snapshot(&writer.root)?;
+            let after = capture_materialized_file_snapshot(writer.root())?;
             let changed_files = changed_materialized_files(&before, &after);
             let completed_at = unix_timestamp_seconds();
             let audit_path = writer
-                .root
+                .root()
                 .join("reviews/applied-runs")
                 .join(format!("{run_id}.json"));
             let audit = AgentProposalApplyAudit {
@@ -6202,7 +6162,7 @@ fn apply_queued_agent_proposal_transaction(
             Ok(audit)
         }
         Err(error) => {
-            restore_materialized_file_snapshot(&writer.root, &before)?;
+            restore_materialized_file_snapshot(writer.root(), &before)?;
             let completed_at = unix_timestamp_seconds();
             let validation_error = error.downcast_ref::<AgentGraphProposalValidationError>();
             let error_code = validation_error
@@ -6212,7 +6172,7 @@ fn apply_queued_agent_proposal_transaction(
                 .map(|error| error.issues.clone())
                 .unwrap_or_default();
             let audit_path = writer
-                .root
+                .root()
                 .join("reviews/applied-runs")
                 .join(format!("{run_id}.json"));
             let audit = AgentProposalApplyAudit {
@@ -7847,36 +7807,6 @@ fn resolve_workspace_config_path(
     }
 }
 
-fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let json =
-        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
-    serde_json::from_str(&json).with_context(|| format!("failed decoding {}", path.display()))
-}
-
-fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    if !path.exists() {
-        return Ok(T::default());
-    }
-    read_json_artifact(path)
-}
-
-fn read_memory_records(root: &Path) -> Result<Vec<MemoryRecord>> {
-    read_optional_json_artifact(&root.join("memory/records.json"))
-}
-
-fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
-    contents
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("failed decoding brain event JSONL row"))
-        .collect()
-}
-
 fn normalize_wiki_path(path: &str) -> Result<String> {
     let mut normalized = path.trim().trim_start_matches('/').to_string();
     if !normalized.starts_with("wiki/") {
@@ -8034,71 +7964,6 @@ fn load_answerable_project(
     store
         .load_project(Some(project_id))?
         .ok_or_else(|| anyhow!("project {project_id} was not found"))
-}
-
-fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let json = serde_json::to_string_pretty(value).context("failed to encode JSON artifact")?;
-    write_file_atomic(path, json.as_bytes())
-}
-
-fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
-    let mut lines = String::new();
-    for event in events {
-        lines.push_str(
-            &serde_json::to_string(event).context("failed to encode brain event JSONL row")?,
-        );
-        lines.push('\n');
-    }
-    write_file_atomic(path, lines.as_bytes())
-}
-
-fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed creating {}", parent.display()))?;
-    }
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "artifact".into());
-    let temp_path = path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::now_v7().as_simple()));
-    {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .with_context(|| format!("failed opening {}", temp_path.display()))?;
-        file.write_all(bytes)
-            .with_context(|| format!("failed writing {}", temp_path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed syncing {}", temp_path.display()))?;
-    }
-    fs::rename(&temp_path, path).with_context(|| {
-        format!(
-            "failed renaming {} to {}",
-            temp_path.display(),
-            path.display()
-        )
-    })
-}
-
-fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
-    let line = serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed creating {}", parent.display()))?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(|| format!("failed opening {}", path.display()))?;
-    file.write_all(line.as_bytes())
-        .with_context(|| format!("failed writing {}", path.display()))?;
-    file.write_all(b"\n")
-        .with_context(|| format!("failed writing {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("failed syncing {}", path.display()))
 }
 
 fn build_project_id(request: &CompileProjectRequest) -> String {

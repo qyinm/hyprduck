@@ -2298,7 +2298,7 @@ pub(super) fn write_materialized_brain_repo(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
     let writer = BrainWorkspaceWriter::open(root.to_path_buf())?;
-    let root = writer.root.as_path();
+    let root = writer.root();
     ensure_materialized_brain_repo_dirs(root)?;
     let mut effective_snapshot = snapshot.clone();
     effective_snapshot.memories =
