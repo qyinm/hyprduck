@@ -465,13 +465,19 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
           const sourceNode = graph.getNodeAttributes(source);
           const targetNode = graph.getNodeAttributes(target);
           const selected = selectedEdgeId === edge;
+          const edgeKind = graph.getEdgeAttribute(edge, "edgeKind");
+          const isSourceDocumentEdge = edgeKind === "source_document";
           const crossCluster = sourceNode.clusterId !== targetNode.clusterId;
           const hovered =
             activeHoveredNodeId !== null &&
             (source === activeHoveredNodeId || target === activeHoveredNodeId);
           const dimmed = activeHoveredNodeId !== null && !hovered && !selected;
           const baseOpacity =
-            crossCluster && !selected ? Math.min(0.35, viewport.zoom) : 1;
+            crossCluster && !selected
+              ? isSourceDocumentEdge
+                ? Math.max(0.72, Math.min(1, viewport.zoom))
+                : Math.min(0.35, viewport.zoom)
+              : 1;
 
           return (
             <line
@@ -480,14 +486,10 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               className="cursor-pointer"
               onClick={() => selectEdge(edge)}
               opacity={dimmed ? Math.min(0.18, baseOpacity) : hovered ? 1 : baseOpacity}
-              stroke={selected || hovered ? "#111111" : "#cbd5e1"}
-              strokeDasharray={
-                graph.getEdgeAttribute(edge, "edgeKind") === "source_document"
-                  ? "1.2 1.4"
-                  : undefined
-              }
+              stroke={selected || hovered ? "#111111" : isSourceDocumentEdge ? "#94a3b8" : "#cbd5e1"}
+              strokeDasharray={isSourceDocumentEdge ? "1.2 1.4" : undefined}
               strokeLinecap="round"
-              strokeWidth={selected ? 0.62 : hovered ? 0.5 : 0.34}
+              strokeWidth={selected ? 0.62 : hovered ? 0.5 : isSourceDocumentEdge ? 0.42 : 0.34}
               vectorEffect="non-scaling-stroke"
               x1={toPercentX(nodePositions[source]?.x ?? sourceNode.x)}
               x2={toPercentX(nodePositions[target]?.x ?? targetNode.x)}

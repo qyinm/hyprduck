@@ -7,7 +7,8 @@ use async_openai::{
         ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl,
+        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl, ResponseFormat,
+        ResponseFormatJsonSchema,
     },
     Client,
 };
@@ -28,7 +29,40 @@ pub(crate) fn parse_openai_compatible_with_timeout(
     image_base64: Option<String>,
     timeout: Option<Duration>,
 ) -> Result<String> {
-    let request = build_chat_completion_request(config, prompt, image_base64)?;
+    parse_openai_compatible_with_response_format_timeout(
+        config,
+        prompt,
+        image_base64,
+        timeout,
+        None,
+    )
+}
+
+pub(crate) fn parse_openai_compatible_json_schema_with_timeout(
+    config: &EngineConfig,
+    prompt: &str,
+    schema: ResponseFormatJsonSchema,
+    timeout: Option<Duration>,
+) -> Result<String> {
+    parse_openai_compatible_with_response_format_timeout(
+        config,
+        prompt,
+        None,
+        timeout,
+        Some(ResponseFormat::JsonSchema {
+            json_schema: schema,
+        }),
+    )
+}
+
+fn parse_openai_compatible_with_response_format_timeout(
+    config: &EngineConfig,
+    prompt: &str,
+    image_base64: Option<String>,
+    timeout: Option<Duration>,
+    response_format: Option<ResponseFormat>,
+) -> Result<String> {
+    let request = build_chat_completion_request(config, prompt, image_base64, response_format)?;
     let client = openai_compatible_client(config);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -67,6 +101,7 @@ fn build_chat_completion_request(
     config: &EngineConfig,
     prompt: &str,
     image_base64: Option<String>,
+    response_format: Option<ResponseFormat>,
 ) -> Result<CreateChatCompletionRequest> {
     let mut parts = vec![ChatCompletionRequestUserMessageContentPart::Text(
         ChatCompletionRequestMessageContentPartText {
@@ -85,14 +120,20 @@ fn build_chat_completion_request(
         ));
     }
 
-    CreateChatCompletionRequestArgs::default()
+    let mut request = CreateChatCompletionRequestArgs::default();
+    request
         .model(config.model_id.clone())
         .messages(vec![ChatCompletionRequestMessage::User(
             ChatCompletionRequestUserMessage {
                 content: ChatCompletionRequestUserMessageContent::Array(parts),
                 name: None,
             },
-        )])
+        )]);
+    if let Some(response_format) = response_format {
+        request.response_format(response_format);
+    }
+
+    request
         .build()
         .context("failed to build OpenAI-compatible chat completion request")
 }
@@ -171,7 +212,7 @@ mod tests {
     fn chat_completion_request_uses_openai_content_parts_for_images() {
         let config = test_config(ProviderKind::OpenRouter, None);
         let request =
-            build_chat_completion_request(&config, "Parse this page.", Some("abc".into()))
+            build_chat_completion_request(&config, "Parse this page.", Some("abc".into()), None)
                 .expect("request");
         let encoded = serde_json::to_value(request).expect("encode request");
 
@@ -181,6 +222,39 @@ mod tests {
         assert_eq!(
             encoded["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/png;base64,abc"
+        );
+    }
+
+    #[test]
+    fn chat_completion_request_can_use_json_schema_response_format() {
+        let config = test_config(ProviderKind::OpenRouter, None);
+        let request = build_chat_completion_request(
+            &config,
+            "Return graph proposals.",
+            None,
+            Some(ResponseFormat::JsonSchema {
+                json_schema: ResponseFormatJsonSchema {
+                    name: "graph_proposals".into(),
+                    description: Some("Graph proposals".into()),
+                    schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "proposals": { "type": "array", "items": { "type": "object" } }
+                        },
+                        "required": ["proposals"],
+                        "additionalProperties": false
+                    })),
+                    strict: Some(false),
+                },
+            }),
+        )
+        .expect("request");
+        let encoded = serde_json::to_value(request).expect("encode request");
+
+        assert_eq!(encoded["response_format"]["type"], "json_schema");
+        assert_eq!(
+            encoded["response_format"]["json_schema"]["name"],
+            "graph_proposals"
         );
     }
 }

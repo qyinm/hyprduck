@@ -255,6 +255,8 @@ pub struct CompileProjectRequest {
     pub workspace_id: Option<WorkspaceId>,
     #[serde(default)]
     pub source_id: Option<SourceId>,
+    #[serde(default)]
+    pub skip_graph_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

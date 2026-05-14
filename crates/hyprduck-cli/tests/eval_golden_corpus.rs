@@ -11,7 +11,7 @@ fn golden_corpus_eval_reports_fixture_metrics() {
             "--fixtures",
             fixtures.to_str().unwrap(),
             "--mode",
-            "heuristic",
+            "source-evidence",
         ])
         .output()
         .expect("golden corpus eval should run");
@@ -23,7 +23,7 @@ fn golden_corpus_eval_reports_fixture_metrics() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("golden-corpus cases: 6"));
-    assert!(stdout.contains("mode: heuristic"));
+    assert!(stdout.contains("mode: source-evidence"));
     assert!(stdout.contains("entity recall:"));
     assert!(stdout.contains("claim citation coverage:"));
     assert!(stdout.contains("relation evidence coverage:"));

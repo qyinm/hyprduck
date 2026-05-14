@@ -306,287 +306,7 @@ pub(super) fn compile_knowledge_project(
     markdown: &str,
     source_manifest: Option<&SourceArtifactManifest>,
 ) -> KnowledgeProject {
-    let title = infer_markdown_title(&request.source_markdown_path, markdown);
-    let mut page_sections = extract_page_sections(markdown);
-    attach_page_artifacts_to_sections(&mut page_sections, source_manifest);
-    let source_path = request
-        .source_document_path
-        .clone()
-        .unwrap_or_else(|| request.source_markdown_path.clone());
-    let source_node_id = source_manifest
-        .map(|manifest| source_node_id(&manifest.source_id))
-        .unwrap_or_else(|| "document".into());
-    let source_label = source_manifest
-        .map(source_label_from_manifest)
-        .unwrap_or_else(|| title.clone());
-    let source_path_for_evidence = source_manifest
-        .map(|manifest| manifest.source_path.clone())
-        .unwrap_or_else(|| source_path.clone());
-    let source_id_for_evidence = source_manifest.map(|manifest| manifest.source_id.clone());
-    let project_id = source_manifest
-        .map(|manifest| build_source_backed_project_id(&manifest.workspace_id, &manifest.source_id))
-        .unwrap_or_else(|| build_project_id(request));
-
-    let node_candidates = source_manifest
-        .filter(|manifest| manifest.format == DocumentFormat::Markdown)
-        .map(|manifest| {
-            extract_markdown_node_candidates_for_workspace(
-                markdown,
-                &source_path_for_evidence,
-                workspace_root_from_manifest(manifest).as_path(),
-            )
-            .unwrap_or_else(|_| {
-                extract_markdown_node_candidates(markdown, &source_path_for_evidence)
-            })
-        })
-        .unwrap_or_default();
-    let claim_candidates = extract_markdown_claim_candidates(
-        markdown,
-        &source_path_for_evidence,
-        source_id_for_evidence.as_deref(),
-        &node_candidates,
-    );
-    let extraction = build_extraction_artifact(
-        &page_sections,
-        markdown,
-        &source_path_for_evidence,
-        source_id_for_evidence.as_deref(),
-        &node_candidates,
-        &claim_candidates,
-    );
-    let collected = collected_concepts_from_artifact(&extraction);
-    let concept_accumulators = collected.concepts;
-    let concept_count = concept_accumulators.len();
-    let mut document_node = GraphNodeSummary {
-        id: source_node_id.clone(),
-        label: source_label.clone(),
-        kind: source_manifest
-            .map(|_| GraphNodeKind::Source)
-            .unwrap_or(GraphNodeKind::Document),
-        confidence: Some(if concept_count > 0 { 0.78 } else { 0.42 }),
-        related_count: 0,
-        evidence_count: page_sections.len(),
-        position: GraphNodePosition { x: 50.0, y: 14.0 },
-    };
-
-    let concept_positions = layout_concept_positions(concept_count.max(1));
-    let mut concept_nodes = concept_accumulators
-        .iter()
-        .enumerate()
-        .map(|(index, concept)| GraphNodeSummary {
-            id: concept.id.clone(),
-            label: concept.label.clone(),
-            kind: GraphNodeKind::Concept,
-            confidence: Some((0.62 + (concept.evidence.len().min(3) as f32 * 0.08)).min(0.91)),
-            related_count: 0,
-            evidence_count: concept.evidence.len(),
-            position: concept_positions
-                .get(index)
-                .cloned()
-                .unwrap_or(GraphNodePosition { x: 50.0, y: 54.0 }),
-        })
-        .collect::<Vec<_>>();
-
-    let concept_by_id = concept_accumulators
-        .iter()
-        .map(|concept| (concept.id.clone(), concept.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let mut details_by_node_id = BTreeMap::new();
-    let mut edge_details_by_id = BTreeMap::new();
-    let mut answer_by_node_id = BTreeMap::new();
-    let document_evidence = page_sections
-        .iter()
-        .take(3)
-        .enumerate()
-        .map(|(index, section)| EvidenceRef {
-            id: format!("ev-document-{}", index + 1),
-            page_label: section.page_label.clone(),
-            page_index: Some(section.page_index),
-            snippet: excerpt(&section.content, 180),
-            source_path: Some(source_path_for_evidence.clone()),
-            source_id: source_id_for_evidence.clone(),
-            markdown_path: section.markdown_path.clone(),
-            image_path: section.image_path.clone(),
-            provenance: Some(format!(
-                "Document-level evidence extracted from {}.",
-                section.page_label
-            )),
-        })
-        .collect::<Vec<_>>();
-
-    let (edges, built_edge_details_by_id, related_count_by_node_id, connected_node_ids_by_node_id) =
-        build_relation_edges(
-            &document_node,
-            &concept_accumulators,
-            &collected.page_concepts,
-            &collected.relation_candidates,
-            &source_path_for_evidence,
-            source_id_for_evidence.as_deref(),
-        );
-    edge_details_by_id.extend(built_edge_details_by_id);
-    document_node.related_count = related_count_by_node_id
-        .get(document_node.id.as_str())
-        .copied()
-        .unwrap_or(0);
-    for node in &mut concept_nodes {
-        node.related_count = related_count_by_node_id
-            .get(node.id.as_str())
-            .copied()
-            .unwrap_or(0);
-    }
-
-    details_by_node_id.insert(
-        document_node.id.clone(),
-        GraphNodeDetail {
-            node: document_node.clone(),
-            canonical_name: source_label.clone(),
-            aliases: vec![if source_manifest.is_some() {
-                "Immutable source".into()
-            } else {
-                "Imported document".into()
-            }],
-            description: format!(
-                "HyprDuck compiled {} concept nodes from {} visible page sections. Every node below keeps direct evidence back to the imported document.",
-                concept_count,
-                page_sections.len()
-            ),
-            evidence: document_evidence.clone(),
-            actions: source_node_actions(),
-            source: source_manifest.map(source_backing_from_manifest),
-        },
-    );
-    answer_by_node_id.insert(
-        document_node.id.clone(),
-        AnswerResponse {
-            status: if concept_count > 0 {
-                AnswerStatus::Grounded
-            } else {
-                AnswerStatus::LowConfidence
-            },
-            text: Some(format!(
-                "HyprDuck found {} concept nodes across {} page sections in this import.",
-                concept_count,
-                page_sections.len()
-            )),
-            explanation:
-                "This document-level answer is grounded in the concept nodes and visible evidence HyprDuck compiled from the markdown package."
-                    .into(),
-            citations: document_evidence.clone(),
-            related_node_ids: connected_node_ids_by_node_id
-                .get(document_node.id.as_str())
-                .map(|related| related.iter().cloned().collect())
-                .unwrap_or_default(),
-            suggested_actions: vec![
-                SuggestedAction {
-                    kind: SuggestedActionKind::InspectEvidence,
-                    label: "Inspect evidence".into(),
-                    description:
-                        "Review the cited snippets before trusting the document-wide summary."
-                            .into(),
-                },
-                SuggestedAction {
-                    kind: SuggestedActionKind::AskDifferentQuestion,
-                    label: "Ask a narrower question".into(),
-                    description:
-                        "Grounded answers get stronger when you focus on one concept at a time."
-                            .into(),
-                },
-            ],
-        },
-    );
-
-    for node in &concept_nodes {
-        let concept = concept_by_id
-            .get(&node.id)
-            .expect("concept node should have backing accumulator");
-        let aliases = concept
-            .aliases
-            .iter()
-            .filter(|alias| alias.as_str() != concept.label)
-            .cloned()
-            .collect::<Vec<_>>();
-        let actions = correction_actions_for_detail(&concept.label, &aliases);
-        details_by_node_id.insert(
-            node.id.clone(),
-            GraphNodeDetail {
-                node: node.clone(),
-                canonical_name: concept.label.clone(),
-                aliases,
-                description: format!(
-                    "Compiled from {} evidence refs across {} page(s). HyprDuck is still conservative and only shows evidence-backed concept nodes.",
-                    concept.evidence.len(),
-                    concept.page_labels.len()
-                ),
-                evidence: concept.evidence.clone(),
-                actions,
-                source: None,
-            },
-        );
-        answer_by_node_id.insert(
-            node.id.clone(),
-            AnswerResponse {
-                status: AnswerStatus::Grounded,
-                text: Some(format!(
-                    "{} appears in {} evidence refs across {} page(s).",
-                    concept.label,
-                    concept.evidence.len(),
-                    concept.page_labels.len()
-                )),
-                explanation:
-                    "This answer is grounded in the evidence attached to the selected concept node."
-                        .into(),
-                citations: concept.evidence.iter().take(3).cloned().collect(),
-                related_node_ids: connected_node_ids_by_node_id
-                    .get(node.id.as_str())
-                    .map(|related| related.iter().cloned().collect())
-                    .unwrap_or_else(|| vec![source_node_id.clone()]),
-                suggested_actions: vec![SuggestedAction {
-                    kind: SuggestedActionKind::InspectEvidence,
-                    label: "Inspect evidence".into(),
-                    description:
-                        "Use the cited snippets to verify the concept before acting on it.".into(),
-                }],
-            },
-        );
-    }
-
-    let mut nodes = Vec::with_capacity(concept_nodes.len() + 1);
-    nodes.push(document_node.clone());
-    nodes.extend(concept_nodes.iter().cloned());
-
-    let evidence_count = concept_accumulators
-        .iter()
-        .map(|concept| concept.evidence.len())
-        .sum::<usize>()
-        + document_evidence.len()
-        + edges.iter().map(|edge| edge.evidence_count).sum::<usize>();
-
-    KnowledgeProject {
-        summary: ProjectOverview {
-            project_id,
-            title,
-            status: if concept_count > 0 {
-                ProjectStatus::Ready
-            } else {
-                ProjectStatus::Degraded
-            },
-            stale: false,
-            summary: format!(
-                "Compiled {} concept nodes from {} page sections. HyprDuck only shows nodes with visible evidence.",
-                concept_count,
-                page_sections.len()
-            ),
-            document_count: 1,
-            node_count: nodes.len(),
-            relationship_count: edges.len(),
-            evidence_count,
-        },
-        nodes,
-        edges,
-        details_by_node_id,
-        edge_details_by_id,
-        answer_by_node_id,
-    }
+    compile_agent_orchestrated_project(request, markdown, source_manifest)
 }
 
 pub(super) fn compile_agent_orchestrated_project(
@@ -631,7 +351,10 @@ pub(super) fn compile_agent_orchestrated_project(
         .take(8)
         .enumerate()
         .map(|(index, section)| EvidenceRef {
-            id: format!("ev-source-{}", index + 1),
+            id: source_id_for_evidence
+                .as_deref()
+                .map(|source_id| format!("ev-{source_id}-source-{}", index + 1))
+                .unwrap_or_else(|| format!("ev-source-{}", index + 1)),
             page_label: section.page_label.clone(),
             page_index: Some(section.page_index),
             snippet: excerpt(&section.content, 220),
@@ -658,7 +381,7 @@ pub(super) fn compile_agent_orchestrated_project(
                 "Imported document".into()
             }],
             description: format!(
-                "Source imported with {} visible evidence section(s). Derived graph nodes, claims, and relations are agent-maintained proposals, not heuristic compiler output.",
+                "Source imported with {} visible evidence section(s). Derived graph nodes, claims, and relations are agent-maintained proposals, not compiler output.",
                 page_sections.len()
             ),
             evidence: document_evidence.clone(),
@@ -1354,29 +1077,6 @@ pub(super) fn build_brain_repo_snapshot(
             evidence_by_id.insert(evidence.id.clone(), evidence.clone());
         }
     }
-    for (row, _) in rows {
-        for candidate in read_markdown_claim_candidates_for_row(row) {
-            evidence_by_id
-                .entry(candidate.evidence_id.clone())
-                .or_insert_with(|| EvidenceRef {
-                    id: candidate.evidence_id.clone(),
-                    page_label: "Imported text".into(),
-                    page_index: Some(0),
-                    snippet: candidate.evidence_snippet,
-                    source_path: Some(candidate.source_path),
-                    source_id: candidate
-                        .source_id
-                        .or_else(|| Some(row.summary.source_id.clone())),
-                    markdown_path: Some(row.summary.markdown_path.clone()),
-                    image_path: None,
-                    provenance: Some(format!(
-                        "Claim candidate extracted from markdown line {} during autonomous ingest.",
-                        candidate.line_start
-                    )),
-                });
-        }
-    }
-
     let existing_node_by_id = existing_nodes
         .iter()
         .map(|node| (node.node_id.as_str(), node))
@@ -1434,7 +1134,7 @@ pub(super) fn build_brain_repo_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let mut claims = aggregate
+    let claims = aggregate
         .details_by_node_id
         .values()
         .filter(|detail| {
@@ -1480,30 +1180,8 @@ pub(super) fn build_brain_repo_snapshot(
             }
         })
         .collect::<Vec<_>>();
-    for (row, _) in rows {
-        claims.extend(
-            read_markdown_claim_candidates_for_row(row)
-                .into_iter()
-                .map(|candidate| ClaimRecord {
-                    claim_id: format!("claim-{}", bounded_artifact_key(&candidate.statement, 80)),
-                    workspace_id: workspace_id.to_string(),
-                    statement: candidate.statement,
-                    topic_refs: candidate.subject_refs,
-                    source_refs: if candidate.source_refs.is_empty() {
-                        vec![row.summary.source_id.clone()]
-                    } else {
-                        candidate.source_refs
-                    },
-                    evidence_refs: vec![candidate.evidence_id],
-                    status: "candidate".into(),
-                    updated_at: generated_at,
-                }),
-        );
-    }
-    claims = merge_matching_claim_records(claims);
 
-    let memories =
-        build_durable_memory_records(workspace_id, rows, generated_at, existing_memories);
+    let memories = build_durable_memory_records(existing_memories);
     let existing_relation_by_id = existing_relations
         .iter()
         .map(|relation| (relation.relation_id.as_str(), relation))
@@ -1547,7 +1225,7 @@ pub(super) fn build_brain_repo_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let extractions = build_structured_extraction_artifacts(workspace_id, rows, generated_at);
+    let extractions = Vec::new();
     let wiki_pages = build_materialized_wiki_pages(workspace_id, &sources, &nodes, generated_at);
     let mut events = vec![
         BrainEvent {
@@ -1771,56 +1449,9 @@ pub(super) fn claim_status_rank(status: &str) -> u8 {
 }
 
 pub(super) fn build_durable_memory_records(
-    workspace_id: &str,
-    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
-    generated_at: u64,
     existing_memories: &[MemoryRecord],
 ) -> Vec<MemoryRecord> {
-    let mut memories = BTreeMap::<String, MemoryRecord>::new();
-    for (row, _) in rows {
-        for candidate in read_markdown_claim_candidates_for_row(row)
-            .into_iter()
-            .filter(|candidate| candidate.durable && candidate.memory_candidate)
-        {
-            let generated_memory_id = memory_id_for_claim_candidate(&candidate);
-            let memory_id =
-                matching_memory_id_for_candidate(&candidate, existing_memories, memories.values())
-                    .unwrap_or(generated_memory_id);
-            let mut memory = MemoryRecord {
-                memory_id: memory_id.clone(),
-                workspace_id: workspace_id.to_string(),
-                scope: BrainScope::Project,
-                title: durable_memory_title(&candidate),
-                body: candidate.statement,
-                source_refs: if candidate.source_refs.is_empty() {
-                    vec![row.summary.source_id.clone()]
-                } else {
-                    candidate.source_refs
-                },
-                evidence_refs: vec![candidate.evidence_id],
-                created_at: generated_at,
-                updated_at: generated_at,
-            };
-            if let Some(existing) = existing_memories
-                .iter()
-                .find(|existing| existing.memory_id == memory_id)
-            {
-                if memory_record_content_matches(existing, &memory) {
-                    memory.created_at = existing.created_at;
-                    memory.updated_at = existing.updated_at;
-                } else {
-                    merge_memory_record(&mut memory, existing.clone());
-                }
-            }
-            match memories.get_mut(&memory_id) {
-                Some(existing) => merge_memory_record(existing, memory),
-                None => {
-                    memories.insert(memory_id, memory);
-                }
-            }
-        }
-    }
-    memories.into_values().collect()
+    existing_memories.to_vec()
 }
 
 pub(super) fn matching_memory_id_for_candidate<'a>(
@@ -1996,7 +1627,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
             artifact_id: format!("extraction-{source_id}"),
             workspace_id: workspace_id.into(),
             source_id,
-            extractor: "heuristic".into(),
+            extractor: "source-evidence-packager".into(),
             extractor_model: None,
             source_refs,
             page_refs: Vec::new(),
@@ -2074,7 +1705,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
                 page_refs: page_refs_from_evidence(evidence.iter().copied()),
                 confidence: detail.node.confidence,
                 provenance: format!(
-                    "Heuristic extractor promoted concept node '{}' from source-backed evidence.",
+                    "Source evidence packager preserved concept node '{}' from accepted graph state.",
                     detail.canonical_name
                 ),
             })
@@ -2102,7 +1733,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
                 page_refs: page_refs_from_evidence(evidence.iter().copied()),
                 confidence: detail.node.confidence,
                 provenance: format!(
-                    "Heuristic extractor treated '{}' as a source-backed topic.",
+                    "Source evidence packager preserved '{}' as a source-backed topic from accepted graph state.",
                     detail.canonical_name
                 ),
             })
@@ -2140,7 +1771,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
                 confidence: detail.node.confidence,
                 status: "supported".into(),
                 provenance: format!(
-                    "Heuristic extractor created this claim only because '{}' has direct source evidence.",
+                    "Source evidence packager preserved this claim because '{}' has direct source evidence.",
                     detail.canonical_name
                 ),
             })
@@ -2230,7 +1861,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
                 page_refs: page_refs_from_evidence(evidence.iter().copied()),
                 confidence: edge.confidence,
                 provenance: format!(
-                    "Heuristic extractor kept this relation only because it has source evidence in {}.",
+                    "Source evidence packager preserved this relation because it has source evidence in {}.",
                     source_id
                 ),
             })
@@ -2241,7 +1872,7 @@ pub(super) fn build_structured_extraction_artifact_for_source(
         artifact_id: format!("extraction-{source_id}"),
         workspace_id: workspace_id.into(),
         source_id,
-        extractor: "heuristic".into(),
+        extractor: "source-evidence-packager".into(),
         extractor_model: None,
         source_refs,
         page_refs,
@@ -2256,7 +1887,9 @@ pub(super) fn build_structured_extraction_artifact_for_source(
         } else {
             0.4
         }),
-        provenance: "Structured extraction artifact generated from the current heuristic graph compiler fallback.".into(),
+        provenance:
+            "Structured extraction artifact packaged from source evidence and accepted graph state."
+                .into(),
         created_at: generated_at,
     }
 }

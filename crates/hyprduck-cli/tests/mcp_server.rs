@@ -255,14 +255,17 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
         .as_array()
         .expect("nodes")
         .iter()
-        .any(|node| node["label"] == "Agent Cache Refresh"));
+        .any(|node| node["kind"] == "source"
+            && node["label"]
+                .as_str()
+                .is_some_and(|label| label.contains("agent-cache-refresh"))));
     assert!(refreshed_snapshot["wikiPages"]
         .as_array()
         .expect("wiki pages")
         .iter()
         .any(|page| page["body"]
             .as_str()
-            .is_some_and(|body| body.contains("Agent Cache Refresh"))));
+            .is_some_and(|body| body.contains("agent-cache-refresh.md"))));
 
     write_message(
         &mut stdin,
@@ -280,7 +283,7 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
         .as_str()
         .expect("refreshed wiki text");
     assert_ne!(refreshed_wiki_text, "# MCP Snapshot\n");
-    assert!(refreshed_wiki_text.contains("Agent Cache Refresh"));
+    assert!(refreshed_wiki_text.contains("source-"));
 
     write_message(
         &mut stdin,
@@ -320,7 +323,7 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
         .iter()
         .any(|page| page["body"]
             .as_str()
-            .is_some_and(|body| body.contains("Agent Cache Refresh"))));
+            .is_some_and(|body| body.contains("source-"))));
 
     write_message(
         &mut stdin,
@@ -352,7 +355,7 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
     assert!(tool_wiki["page"]["body"]
         .as_str()
         .expect("wiki body")
-        .contains("Agent Cache Refresh"));
+        .contains("source-"));
 
     write_message(
         &mut stdin,

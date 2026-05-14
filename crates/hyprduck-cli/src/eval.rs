@@ -6,14 +6,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    CompileProjectRequest, DocumentFormat, IngestStatus, PageArtifact, SourceArtifactManifest,
-    StructuredExtractionArtifact,
+    BrainRepoSnapshot, CompileProjectRequest, DocumentFormat, IngestStatus, PageArtifact,
+    SourceArtifactManifest, StructuredExtractionArtifact,
 };
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoldenEvalMode {
-    Heuristic,
+    SourceEvidence,
     Hosted,
     Local,
     All,
@@ -22,7 +22,7 @@ pub enum GoldenEvalMode {
 impl GoldenEvalMode {
     pub fn parse(value: &str) -> Result<Self> {
         match value {
-            "heuristic" => Ok(Self::Heuristic),
+            "source-evidence" | "heuristic" => Ok(Self::SourceEvidence),
             "hosted" => Ok(Self::Hosted),
             "local" => Ok(Self::Local),
             "all" => Ok(Self::All),
@@ -32,14 +32,14 @@ impl GoldenEvalMode {
 
     fn concrete_modes(self) -> Vec<Self> {
         match self {
-            Self::All => vec![Self::Heuristic, Self::Hosted, Self::Local],
+            Self::All => vec![Self::SourceEvidence, Self::Hosted, Self::Local],
             mode => vec![mode],
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::Heuristic => "heuristic",
+            Self::SourceEvidence => "source-evidence",
             Self::Hosted => "hosted",
             Self::Local => "local",
             Self::All => "all",
@@ -249,18 +249,64 @@ fn compile_case(
         source_manifest_path: Some(manifest_path.display().to_string()),
         workspace_id: Some(workspace_id.clone()),
         source_id: Some(source_id.clone()),
+        skip_graph_generation: None,
     })?;
     let latency_ms = started.elapsed().as_millis();
 
     let extraction_path = artifact_root.join("extraction.json");
-    let mut artifact = serde_json::from_str::<StructuredExtractionArtifact>(
-        &fs::read_to_string(&extraction_path)
-            .with_context(|| format!("failed reading {}", extraction_path.display()))?,
-    )
-    .with_context(|| format!("failed decoding {}", extraction_path.display()))?;
+    let mut artifact = if extraction_path.exists() {
+        serde_json::from_str::<StructuredExtractionArtifact>(
+            &fs::read_to_string(&extraction_path)
+                .with_context(|| format!("failed reading {}", extraction_path.display()))?,
+        )
+        .with_context(|| format!("failed decoding {}", extraction_path.display()))?
+    } else {
+        let snapshot_path = eval_root.join(workspace_id).join("brain-manifest.json");
+        let snapshot = serde_json::from_str::<BrainRepoSnapshot>(
+            &fs::read_to_string(&snapshot_path)
+                .with_context(|| format!("failed reading {}", snapshot_path.display()))?,
+        )
+        .with_context(|| format!("failed decoding {}", snapshot_path.display()))?;
+        source_evidence_artifact_from_snapshot(&snapshot, source_id, case, mode)
+    };
     artifact.extractor_model = Some(format!("{}-path", mode.label()));
     artifact.created_at = latency_ms as u64;
     Ok(artifact)
+}
+
+fn source_evidence_artifact_from_snapshot(
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+    case: &GoldenCase,
+    mode: GoldenEvalMode,
+) -> StructuredExtractionArtifact {
+    let source_refs = vec![source_id.to_string()];
+    let evidence_refs = snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    StructuredExtractionArtifact {
+        artifact_id: format!("source-evidence-{source_id}"),
+        workspace_id: case.expected.workspace_id.clone(),
+        source_id: source_id.to_string(),
+        extractor: mode.label().into(),
+        extractor_model: None,
+        source_refs,
+        page_refs: Vec::new(),
+        entities: Vec::new(),
+        topics: Vec::new(),
+        claims: Vec::new(),
+        relations: Vec::new(),
+        memories: Vec::new(),
+        evidence_refs,
+        confidence: Some(1.0),
+        provenance:
+            "Golden corpus evaluation reads deterministic source evidence and accepted graph state only."
+                .into(),
+        created_at: 0,
+    }
 }
 
 fn score_case(case: &GoldenCase, artifact: &StructuredExtractionArtifact, counts: &mut EvalCounts) {

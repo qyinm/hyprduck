@@ -10,10 +10,10 @@ import {
 } from "react";
 import {
   ArrowLeft,
-  Bell,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  History as HistoryIcon,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -21,7 +21,6 @@ import {
   RefreshCw,
   Save,
   Settings,
-  ShieldCheck,
   Sparkles,
   XCircle,
 } from "lucide-react";
@@ -326,8 +325,8 @@ const WEB_MOCK_REVIEW_ITEMS: BrainReviewItem[] = [
     workspaceId: "web-preview",
     kind: "wiki_page",
     status: "pending_review",
-    title: "Wiki save-back needs review",
-    body: "Agent-authored wiki pages should show a proposed durable write before HyprDuck saves them into the local brain repo.",
+    title: "Wiki save-back is pending",
+    body: "Agent-authored wiki pages should remain visible in History before HyprDuck saves them into the local brain repo.",
     proposalPath:
       "~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/proposal-web-wiki.json",
     sourceRefs: ["preview"],
@@ -1150,6 +1149,36 @@ function workspaceLoadStateFromResult(result: WorkspaceLoadResult): WorkspaceLoa
   };
 }
 
+function WorkspaceSnapshotStatusBanner({
+  state,
+}: {
+  state: WorkspaceLoadState;
+}) {
+  if (state.status === "idle" || state.status === "ready") {
+    return null;
+  }
+
+  const title =
+    state.status === "loading"
+      ? "Refreshing latest workspace snapshot"
+      : state.status === "fallback"
+        ? "Loaded legacy workspace project read path"
+        : "Could not refresh the workspace snapshot";
+  const tone =
+    state.status === "error"
+      ? "border-destructive/30 bg-destructive/5 text-destructive"
+      : "border-border bg-background/90 text-muted-foreground";
+
+  return (
+    <div className="pointer-events-none fixed left-1/2 top-12 z-40 w-[min(36rem,calc(100vw-2rem))] -translate-x-1/2 px-2">
+      <div className={cn("rounded-md border px-3 py-2 text-xs shadow-sm", tone)}>
+        <span className="font-medium text-foreground">{title}</span>
+        {state.message ? <span className="ml-2">{state.message}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function parseSummary(snapshot: UiSnapshot): string {
   const result = snapshot.lastResult;
   if (!result) {
@@ -1763,7 +1792,7 @@ function SettingsPanel(props: {
   );
 }
 
-function TrustConsole(props: {
+function HistoryPanel(props: {
   health: BrainHealthResponseData | null;
   decisionPending: BrainReviewDecision | null;
   decisionError: string | null;
@@ -1777,25 +1806,27 @@ function TrustConsole(props: {
     onRefresh,
     onResolve,
   } = props;
+  const recentEvents = health?.recentEvents ?? [];
   const reviewItems = health?.reviewItems ?? [];
   const attentionCount = health?.attentionCount ?? 0;
+  const hasActivity = recentEvents.length > 0 || reviewItems.length > 0;
 
   return (
     <section
-      aria-label="Trust Console"
+      aria-label="History"
       className="fixed right-3 top-12 z-50 flex max-h-[min(24rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-background text-sm shadow-xl"
       data-electron-no-drag
     >
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <ShieldCheck className="shrink-0 text-muted-foreground" size={15} />
+          <HistoryIcon className="shrink-0 text-muted-foreground" size={15} />
           <h2 className="truncate text-sm font-semibold text-foreground">
-            Trust Console
+            History
           </h2>
         </div>
         <div className="flex shrink-0 items-center">
           <Button
-            aria-label="Refresh trust console"
+            aria-label="Refresh history"
             onClick={() => void onRefresh()}
             size="icon"
             title="Refresh"
@@ -1809,10 +1840,48 @@ function TrustConsole(props: {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/20 px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground">Review Queue</span>
-          <span className="text-xs text-muted-foreground">{attentionCount} pending</span>
+          <span className="text-xs font-medium text-muted-foreground">Recent activity</span>
+          <span className="text-xs text-muted-foreground">
+            {recentEvents.length} events
+          </span>
         </div>
         <div className="grid gap-1.5 p-2">
+          {recentEvents.map((event) => (
+            <div
+              className="rounded-md border border-border bg-background px-2.5 py-2"
+              key={event.eventId}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                  {formatEventType(event.eventType)}
+                </span>
+                <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {event.actor.actorType}
+                </span>
+              </div>
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                {formatTimestamp(event.createdAt)}
+                {event.policyResult ? ` · ${formatPolicyResult(event.policyResult)}` : ""}
+              </p>
+              {(event.sourceRefs.length > 0 || event.evidenceRefs.length > 0) && (
+                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                  {formatRefsSummary(event.sourceRefs.length, event.evidenceRefs.length)}
+                </p>
+              )}
+            </div>
+          ))}
+
+          {reviewItems.length > 0 && (
+            <div className="mt-1 flex items-center justify-between gap-3 px-0.5 py-1">
+              <span className="text-xs font-medium text-muted-foreground">
+                Pending changes
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {attentionCount} pending
+              </span>
+            </div>
+          )}
+
           {reviewItems.map((item) => (
             <div
               className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2"
@@ -1863,20 +1932,57 @@ function TrustConsole(props: {
               {decisionError}
             </p>
           )}
-          {health && reviewItems.length === 0 && (
+          {health && !hasActivity && (
             <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-              No pending reviews.
+              No history yet.
             </div>
           )}
           {!health && (
             <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-              Loading brain health.
+              Loading history.
             </div>
           )}
         </div>
       </div>
     </section>
   );
+}
+
+function formatEventType(eventType: string): string {
+  switch (eventType) {
+    case "review_created":
+      return "Change proposed";
+    case "review_resolved":
+      return "Change resolved";
+  }
+
+  return eventType
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatPolicyResult(policyResult: string): string {
+  if (policyResult === "needs_review") {
+    return "pending";
+  }
+
+  return policyResult
+    .split("_")
+    .filter(Boolean)
+    .join(" ");
+}
+
+function formatRefsSummary(sourceCount: number, evidenceCount: number): string {
+  const parts = [];
+  if (sourceCount > 0) {
+    parts.push(`${sourceCount} source${sourceCount === 1 ? "" : "s"}`);
+  }
+  if (evidenceCount > 0) {
+    parts.push(`${evidenceCount} evidence`);
+  }
+  return parts.join(" · ");
 }
 
 function formatProposalKind(kind: BrainProposalKind): string {
@@ -1930,7 +2036,7 @@ export function App() {
   const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
-  const [healthOpen, setHealthOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [reviewDecisionPending, setReviewDecisionPending] =
     useState<BrainReviewDecision | null>(null);
   const [reviewDecisionError, setReviewDecisionError] = useState<string | null>(
@@ -2355,7 +2461,7 @@ export function App() {
             aria-label="Back to Knowledge"
             onClick={() => {
               setActivePanel("knowledge");
-              setHealthOpen(false);
+              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -2369,7 +2475,7 @@ export function App() {
             aria-label="Collapse sidebar"
             onClick={() => {
               setSidebarCollapsed(true);
-              setHealthOpen(false);
+              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -2383,7 +2489,7 @@ export function App() {
             aria-label="Expand sidebar"
             onClick={() => {
               setSidebarCollapsed(false);
-              setHealthOpen(false);
+              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -2395,12 +2501,12 @@ export function App() {
         )}
       </div>
       <Button
-        aria-expanded={healthOpen}
-        aria-label="Brain health"
-        title="Brain health"
+        aria-expanded={historyOpen}
+        aria-label="History"
+        title="History"
         data-electron-no-drag
         onClick={() => {
-          setHealthOpen((open) => !open);
+          setHistoryOpen((open) => !open);
           void refreshBrainHealth();
         }}
         size="icon"
@@ -2417,7 +2523,7 @@ export function App() {
         }
         type="button"
       >
-        <Bell size={14} />
+        <HistoryIcon size={14} />
         {brainHealth && brainHealth.attentionCount > 0 && (
           <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
             {brainHealth.attentionCount}
@@ -2440,7 +2546,7 @@ export function App() {
           data-electron-no-drag
           onClick={() => {
             dispatchWorkspaceUi({ type: "toggle_inspector" });
-            setHealthOpen(false);
+            setHistoryOpen(false);
           }}
           size="icon"
           variant="ghost"
@@ -2454,8 +2560,8 @@ export function App() {
           )}
         </Button>
       )}
-      {healthOpen && (
-        <TrustConsole
+      {historyOpen && (
+        <HistoryPanel
           decisionError={reviewDecisionError}
           decisionPending={reviewDecisionPending}
           health={brainHealth}
@@ -2463,6 +2569,7 @@ export function App() {
           onResolve={resolveBrainReview}
         />
       )}
+      {!settingsOpen && <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">

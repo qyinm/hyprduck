@@ -22,6 +22,7 @@ const snapshot = {
 let mainWindow = null;
 let engineRuntime = null;
 let providerModelCatalogPromise = null;
+let graphRebuildQueue = Promise.resolve();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -301,31 +302,49 @@ async function startParse(request) {
       try {
         if (snapshot.activeJob) {
           snapshot.activeJob.progressPercent = 100;
-          snapshot.activeJob.lastMessage = "Building knowledge graph";
-          pushProgressEntry("compile", "Building knowledge graph");
+          snapshot.activeJob.lastMessage = "Compiling knowledge workspace";
+          pushProgressEntry("compile", "Compiling knowledge workspace");
           publishSnapshot();
         }
+        const sourceManifest = data.source_manifest ?? null;
         const project = await compileWorkspaceProject(
           data.saved_output_path,
           request.path,
-          data.source_manifest ?? null,
+          sourceManifest,
+          { skipGraphGeneration: true },
         );
         snapshot.lastProjectId = project.projectId;
         snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
         snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
-        if (isGraphGenerationBlockingFailure(project.graphGenerationStatus)) {
-          markFailed(graphGenerationFailureMessage(project));
-          return;
-        }
         snapshot.workspaceRevision += 1;
         pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
+        let graphRebuildQueued = false;
+        if (sourceManifest) {
+          graphRebuildQueued = true;
+          if (snapshot.activeJob) {
+            snapshot.activeJob.status = "running";
+            snapshot.activeJob.progressPercent = 96;
+            snapshot.activeJob.lastMessage = "Rebuilding workspace graph";
+          }
+          pushProgressEntry("graph", "Queued workspace graph rebuild");
+          enqueueWorkspaceGraphRebuild(
+            data.saved_output_path,
+            request.path,
+            sourceManifest,
+            snapshot.activeJob?.jobId ?? null,
+          );
+        }
         const graphGenerationMessage = graphGenerationNonBlockingMessage(project);
         if (graphGenerationMessage) {
           pushProgressEntry("compile", graphGenerationMessage);
         }
+        if (graphRebuildQueued) {
+          publishSnapshot();
+          return;
+        }
       } catch (error) {
         snapshot.lastProjectId = null;
-        markFailed(`Knowledge graph generation failed: ${error.message}`);
+        markFailed(`Knowledge workspace compile failed: ${error.message}`);
         return;
       }
     }
@@ -635,8 +654,13 @@ function resolveKnownWorkspacePath(candidatePath) {
   return resolvedPath;
 }
 
-async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, sourceManifest) {
-  const response = await runEngineCommand("compile_project", {
+async function compileWorkspaceProject(
+  sourceMarkdownPath,
+  sourceDocumentPath,
+  sourceManifest,
+  options = {},
+) {
+  const request = {
     command: "compile_project",
     payload: {
       source_markdown_path: sourceMarkdownPath,
@@ -644,8 +668,12 @@ async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, s
       source_manifest_path: sourceManifest?.manifest_path ?? null,
       workspace_id: sourceManifest?.workspace_id ?? null,
       source_id: sourceManifest?.source_id ?? null,
+      skip_graph_generation: options.skipGraphGeneration ? true : null,
     },
-  });
+  };
+  const response = options.useRuntime === false
+    ? await runOneShotEngineCommand("compile_project", request)
+    : await runEngineCommand("compile_project", request);
   return {
     projectId: response.data.project_id,
     workspaceId: response.data.workspace_id,
@@ -654,6 +682,96 @@ async function compileWorkspaceProject(sourceMarkdownPath, sourceDocumentPath, s
     graphGenerationSkippedReason: response.data.graph_generation_skipped_reason ?? null,
     graphGenerationErrorMessage: response.data.graph_generation_error_message ?? null,
   };
+}
+
+function enqueueWorkspaceGraphRebuild(
+  sourceMarkdownPath,
+  sourceDocumentPath,
+  sourceManifest,
+  activeJobId,
+) {
+  graphRebuildQueue = graphRebuildQueue
+    .catch(() => {})
+    .then(() =>
+      runWorkspaceGraphRebuild(sourceMarkdownPath, sourceDocumentPath, sourceManifest, activeJobId),
+    );
+}
+
+async function runWorkspaceGraphRebuild(
+  sourceMarkdownPath,
+  sourceDocumentPath,
+  sourceManifest,
+  activeJobId,
+) {
+  updateActiveGraphRebuildJob(activeJobId, {
+    status: "running",
+    progressPercent: 96,
+    lastMessage: "Rebuilding workspace graph",
+  });
+  pushProgressEntry("graph", `Rebuilding workspace graph for ${sourceManifest.output_name}`);
+  publishSnapshot();
+  try {
+    const project = await compileWorkspaceProject(
+      sourceMarkdownPath,
+      sourceDocumentPath,
+      sourceManifest,
+      { skipGraphGeneration: false, useRuntime: false },
+    );
+    snapshot.lastProjectId = project.projectId;
+    snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
+    snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
+    if (isGraphGenerationBlockingFailure(project.graphGenerationStatus)) {
+      const message = graphGenerationFailureMessage(project);
+      pushProgressEntry("graph", message);
+      updateActiveGraphRebuildJob(activeJobId, {
+        status: "failed",
+        progressPercent: 100,
+        lastMessage: message,
+      });
+      publishSnapshot();
+      clearActiveGraphRebuildJob(activeJobId);
+      return;
+    }
+    snapshot.workspaceRevision += 1;
+    pushProgressEntry(
+      "graph",
+      graphGenerationNonBlockingMessage(project) ?? "Workspace graph rebuild completed",
+    );
+    updateActiveGraphRebuildJob(activeJobId, {
+      status: "completed",
+      progressPercent: 100,
+      lastMessage: "Workspace graph rebuild completed",
+    });
+    publishSnapshot();
+    clearActiveGraphRebuildJob(activeJobId);
+  } catch (error) {
+    pushProgressEntry("graph", `Workspace graph rebuild failed: ${error.message}`);
+    updateActiveGraphRebuildJob(activeJobId, {
+      status: "failed",
+      progressPercent: 100,
+      lastMessage: `Workspace graph rebuild failed: ${error.message}`,
+    });
+    publishSnapshot();
+    clearActiveGraphRebuildJob(activeJobId);
+  }
+}
+
+function updateActiveGraphRebuildJob(activeJobId, patch) {
+  if (!activeJobId || snapshot.activeJob?.jobId !== activeJobId) {
+    return;
+  }
+  snapshot.activeJob = {
+    ...snapshot.activeJob,
+    ...patch,
+  };
+}
+
+function clearActiveGraphRebuildJob(activeJobId) {
+  if (!activeJobId || snapshot.activeJob?.jobId !== activeJobId) {
+    return;
+  }
+  snapshot.activeJob = null;
+  publishSnapshot();
 }
 
 function isGraphGenerationBlockingFailure(status) {
@@ -680,7 +798,10 @@ function graphGenerationNonBlockingMessage(project) {
       : "Knowledge graph generation skipped";
   }
   if (project.graphGenerationStatus === "empty") {
-    return "Knowledge graph generation completed with no provider proposals";
+    return "Knowledge graph generation completed with no workspace changes";
+  }
+  if (project.graphGenerationStatus === "rebuilt") {
+    return "Workspace graph rebuild completed";
   }
   if (project.graphGenerationStatus === "partially_applied") {
     return project.graphGenerationErrorMessage
@@ -695,6 +816,61 @@ function runEngineCommand(expectedCommand, request, options = {}) {
     engineRuntime = new EngineRuntime();
   }
   return engineRuntime.run(expectedCommand, request, options);
+}
+
+function runOneShotEngineCommand(expectedCommand, request) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(resolveEnginePath(), [], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: engineEnvironment(),
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      reject(new Error(`failed to spawn hyprduck-engine: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(lastNonEmptyLine(stderr) ?? `hyprduck-engine exited with status ${code}`));
+        return;
+      }
+      try {
+        const response = JSON.parse(stdout);
+        if (response.ok === false) {
+          reject(new Error(response.error?.message ?? "engine command failed"));
+          return;
+        }
+        if (response.command !== expectedCommand) {
+          reject(
+            new Error(
+              `engine response command mismatch: expected ${expectedCommand}, got ${response.command}`,
+            ),
+          );
+          return;
+        }
+        resolve(response);
+      } catch (error) {
+        reject(new Error(`failed decoding engine response: ${error.message}`));
+      }
+    });
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
+function lastNonEmptyLine(value) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
 }
 
 function uuidv7() {

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -10,11 +11,13 @@ use crate::retrieval::{
     build_retrieval_queries_from_import, retrieve_import_evidence, RetrievalQuery,
     RetrievedEvidenceChunk,
 };
-use crate::source_index::SourceChunk;
+use crate::source_index::{read_workspace_source_chunks, SourceChunk};
 
 const NEW_SOURCE_CONTEXT_CHUNK_LIMIT: usize = 6;
 const OLD_SOURCE_CONTEXT_CHUNK_LIMIT: usize = 20;
 const GRAPH_CONTEXT_LIMIT: usize = 40;
+const WORKSPACE_SOURCE_OUTLINE_CHUNK_LIMIT: usize = 120;
+const WORKSPACE_SOURCE_OUTLINE_PER_SOURCE_LIMIT: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImportEvidenceContext {
@@ -24,6 +27,7 @@ pub struct ImportEvidenceContext {
     pub new_source: NewSourceContext,
     pub retrieval_queries: Vec<RetrievalQuery>,
     pub retrieved_source_evidence: Vec<RetrievedEvidenceChunk>,
+    pub workspace_source_outline: Vec<RetrievedEvidenceChunk>,
     pub existing_graph_context: ExistingGraphContext,
 }
 
@@ -57,6 +61,13 @@ pub fn build_import_evidence_context(
         &retrieval_queries,
         OLD_SOURCE_CONTEXT_CHUNK_LIMIT,
     )?;
+    let active_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let workspace_source_outline =
+        build_workspace_source_outline(workspace_root, &manifest.source_id, &active_source_ids)?;
     Ok(ImportEvidenceContext {
         schema_version: 1,
         workspace_id: manifest.workspace_id.clone(),
@@ -74,6 +85,7 @@ pub fn build_import_evidence_context(
         },
         retrieval_queries,
         retrieved_source_evidence,
+        workspace_source_outline,
         existing_graph_context: existing_graph_context(snapshot),
     })
 }
@@ -86,7 +98,35 @@ pub fn import_evidence_context_allowed_refs(context: &ImportEvidenceContext) -> 
     for chunk in &context.retrieved_source_evidence {
         refs.push(chunk.evidence_ref_id.clone());
     }
+    for chunk in &context.workspace_source_outline {
+        refs.push(chunk.evidence_ref_id.clone());
+    }
     refs
+}
+
+fn build_workspace_source_outline(
+    workspace_root: &Path,
+    trigger_source_id: &str,
+    active_source_ids: &BTreeSet<String>,
+) -> Result<Vec<RetrievedEvidenceChunk>> {
+    let mut source_counts = BTreeMap::<String, usize>::new();
+    let mut outline = Vec::new();
+    for chunk in read_workspace_source_chunks(workspace_root)?
+        .into_iter()
+        .filter(|chunk| chunk.source_id != trigger_source_id)
+        .filter(|chunk| active_source_ids.contains(&chunk.source_id))
+    {
+        let count = source_counts.entry(chunk.source_id.clone()).or_default();
+        if *count >= WORKSPACE_SOURCE_OUTLINE_PER_SOURCE_LIMIT {
+            continue;
+        }
+        *count += 1;
+        outline.push(retrieved_chunk_from_source_chunk(&chunk));
+        if outline.len() >= WORKSPACE_SOURCE_OUTLINE_CHUNK_LIMIT {
+            break;
+        }
+    }
+    Ok(outline)
 }
 
 fn retrieved_chunk_from_source_chunk(chunk: &SourceChunk) -> RetrievedEvidenceChunk {

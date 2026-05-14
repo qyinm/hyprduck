@@ -47,7 +47,7 @@ impl Cli {
             Some("eval") => {
                 let subcommand = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck eval golden-corpus [--fixtures <path>] [--mode heuristic|hosted|local|all]"))?;
+                    .ok_or_else(|| anyhow!("usage: hyprduck eval golden-corpus [--fixtures <path>] [--mode source-evidence|hosted|local|all]"))?;
                 Some(Commands::Eval {
                     command: parse_eval_command(subcommand, args.collect())?,
                 })
@@ -71,7 +71,7 @@ fn parse_eval_command(subcommand: String, args: Vec<String>) -> Result<EvalComma
     match subcommand.as_str() {
         "golden-corpus" => {
             let mut fixtures = None;
-            let mut mode = "heuristic".to_string();
+            let mut mode = "source-evidence".to_string();
             let mut index = 0usize;
             while index < args.len() {
                 match args[index].as_str() {

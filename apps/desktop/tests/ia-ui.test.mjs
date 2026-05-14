@@ -23,7 +23,8 @@ test("app shell exposes only Knowledge and Settings as primary destinations", ()
   expect(appSource).toMatch(/label: "Knowledge"/);
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
-  expect(appSource).toMatch(/Trust Console/);
+  expect(appSource).toMatch(/History/);
+  expect(appSource).not.toMatch(/Trust Console/);
 });
 
 test("app shell exposes fixed window chrome independent of sidebar", () => {
@@ -32,18 +33,22 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
   expect(appSource).toMatch(/native titlebar area stays empty/);
   expect(appSource).toMatch(/windowChromeButtonClass/);
   expect(appSource).toMatch(/data-electron-no-drag/);
-  expect(appSource).toMatch(/setHealthOpen\(\(open\) => !open\)/);
+  expect(appSource).toMatch(/setHistoryOpen\(\(open\) => !open\)/);
   expect(appSource).toMatch(/setSidebarCollapsed\(true\)/);
   expect(appSource).toMatch(/setSidebarCollapsed\(false\)/);
   expect(stylesSource).toMatch(/\[data-electron-no-drag\]/);
   expect(appSource).not.toMatch(/className=\"size-7\"/);
 });
 
-test("Trust Console exposes reviewable brain proposals and decisions", () => {
-  expect(appSource).toMatch(/Trust Console/);
+test("History panel exposes activity and keeps pending changes secondary", () => {
+  expect(appSource).toMatch(/HistoryPanel/);
+  expect(appSource).toMatch(/aria-label="History"/);
+  expect(appSource).not.toMatch(/Trust Console/);
   expect(appSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
   expect(appSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
-  expect(appSource).toMatch(/Review Queue/);
+  expect(appSource).toMatch(/Recent activity/);
+  expect(appSource).toMatch(/Pending changes/);
+  expect(appSource).not.toMatch(/Review Queue/);
   expect(appSource).toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
   expect(appSource).toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
   expect(appSource).not.toMatch(/Needs review/);
@@ -53,6 +58,7 @@ test("Trust Console exposes reviewable brain proposals and decisions", () => {
   expect(appSource).not.toMatch(/Accept applies the durable save-back/);
   expect(appSource).not.toMatch(/Recent brain events/);
   expect(appSource).toMatch(/resolve_brain_review/);
+  expect(appSource).toMatch(/formatEventType/);
   expect(appSource).toMatch(/formatProposalKind/);
 });
 

@@ -74,7 +74,7 @@ HyprDuck Desktop
 +-- App Shell
 |   |
 |   +-- Native Titlebar / Drag Region
-|   |   +-- Health Bell / Maintenance Notifications
+|   |   +-- History / Maintenance Notifications
 |   |   +-- Right Inspector Toggle
 |   +-- Sidebar
 |   +-- Main Content
@@ -111,8 +111,8 @@ HyprDuck Desktop
 |   +-- Background Lint
 |   +-- Auto Repair / Reprocess
 |   +-- Conflict Queue
-|   +-- Health Bell Notifications
-|   +-- Maintenance Log
+|   +-- History Notifications
+|   +-- Activity Log
 |
 +-- Settings
     |
@@ -138,11 +138,11 @@ Sidebar
 Window Bar
 |
 +-- Left: Sidebar Toggle   항상 좌측에 위치한다
-+-- Right: Health Bell     자동 점검/수정 결과와 사용자 개입이 필요한 충돌만 알린다
++-- Right: History         자동 점검/수정 결과와 사용자 개입이 필요한 충돌을 기록한다
 +-- Far Right: Inspector Toggle   우측 inspector rail을 열고 닫는다
 
 Settings는 window bar에 중복 노출하지 않는다. Settings 진입점은 sidebar 하단에만 둔다.
-Health Bell은 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 bell은 window bar의 독립 status surface로 남고, inspector toggle만 우측 rail을 제어한다.
+History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 History는 window bar의 독립 activity surface로 남고, inspector toggle만 우측 rail을 제어한다.
 ```
 
 첫 MVP에서 너무 많은 탭을 만들기 부담스럽다면 최소형은 아래다.
@@ -155,7 +155,7 @@ MVP Sidebar
 +-- Settings
 ```
 
-사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Knowledge 안의 source library/graph inspector에 노출하고, 실패/충돌만 Health Bell에 올린다. Ask도 별도 navigation page가 아니라 Knowledge/Graph에서 필요할 때 여는 composer에서 수행한다. Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface다. `Health`도 sidebar page가 아니라 우측 상단 window bar의 bell/notification surface로 둔다.
+사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Knowledge 안의 source library/graph inspector와 History에 노출한다. Ask도 별도 navigation page가 아니라 Knowledge/Graph에서 필요할 때 여는 composer에서 수행한다. Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface다. `History`도 sidebar page가 아니라 우측 상단 window bar의 activity surface로 둔다.
 
 ---
 
@@ -163,7 +163,7 @@ MVP Sidebar
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                         [health bell] [inspector]  |
+| [sidebar] macOS drag region                            [history] [inspector]   |
 +----------------------+-------------------------------------------+-------------+
 | HyprDuck             | Current Screen                            | Right rail   |
 |                      |                                           | when open    |
@@ -177,7 +177,7 @@ Collapsed sidebar:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [open sidebar] macOS drag region                  [health bell] [inspector]    |
+| [open sidebar] macOS drag region                  [history] [inspector]    |
 +--------------------------------------------------------------+-----------------+
 | Current Screen                                               | Right rail      |
 |                                                              | when open       |
@@ -222,7 +222,7 @@ Rules:
 
 기본 규칙:
 
-- Source Library는 default surface가 아니다. 필요하면 `Source Index` / `All sources`로 command/search/inspector/Health에서 여는 projection이다.
+- Source Library는 default surface가 아니다. 필요하면 `Source Index` / `All sources`로 command/search/inspector/History에서 여는 projection이다.
 - 모든 `SourceSummary`는 graph에 source node로 나타나야 한다. ingest 실패, stale, 아직 link가 없는 source도 source-only graph node로 남는다.
 - source node 클릭 시 Source Detail은 오른쪽 inspector 안에서 열린다. graph context를 떠나지 않는다.
 - Source Index가 생기더라도 left nav destination이 아니라 graph/search/bulk workflow 보조 surface다.
@@ -244,7 +244,7 @@ Knowledge / Source Library
 |   +-- Source rows
 |       +-- filename
 |       +-- type
-|       +-- status: added | rendering | ingesting | ingested | needs review | failed | stale
+|       +-- status: added | rendering | ingesting | ingested | pending | failed | stale
 |       +-- page count
 |       +-- extracted entities/topics/claims count
 |       +-- last ingested time
@@ -298,7 +298,7 @@ Wireframe:
 
 ## 7. Automatic Ingest IA
 
-목표: 별도 Compile 페이지나 수동 승인 단계를 만들지 않는다. 사용자가 source를 추가하면 HyprDuck이 자동으로 render -> extract -> link -> write wiki/graph까지 진행한다. safe update는 자동 승인하고, 사용자 판단이 필요한 충돌만 Health Bell로 올린다.
+목표: 별도 Compile 페이지나 수동 승인 단계를 만들지 않는다. 사용자가 source를 추가하면 HyprDuck이 자동으로 render -> extract -> link -> write wiki/graph까지 진행한다. safe update는 자동 승인하고, 사용자 판단이 필요한 충돌은 History에 남긴다.
 
 Automatic ingest는 Karpathy LLM Wiki의 `ingest`와 GBrain의 self-wiring graph를 제품 내부 작업으로 만든 것이다.
 
@@ -327,9 +327,9 @@ Automatic Ingest
 |   +-- low confidence or conflicting updates are not silently merged
 |
 +-- User-visible surfaces
-    +-- Knowledge source-library row status: ingesting | ingested | needs review | failed
+    +-- Knowledge source-library row status: ingesting | ingested | pending | failed
     +-- Knowledge recent updates
-    +-- Health Bell for conflicts/failures/risky merges
+    +-- History for conflicts/failures/risky merges
 ```
 
 Knowledge source-library ingest state wireframe:
@@ -345,7 +345,7 @@ Knowledge source-library ingest state wireframe:
 | +----------------------+--------------+-------+----------+--------------------+ |
 | | yc-memo.pdf          | ingested     | 18    | 42 items | 10:42              | |
 | | notes.docx           | ingesting 46%| 7     | 13 items | extracting claims  | |
-| | contract.doc         | needs review | 3     | 8 items  | conflict detected  | |
+| | contract.doc         | pending      | 3     | 8 items  | conflict detected  | |
 | +----------------------+--------------+-------+----------+--------------------+ |
 |                                                                                |
 | Selected source: notes.docx                                                     |
@@ -353,12 +353,12 @@ Knowledge source-library ingest state wireframe:
 | | Pipeline             | Derived artifacts                                   | |
 | | render pages     done| raw.md, pages/*.png, evidence.json                  | |
 | | extract claims   now | wiki updates are applied automatically when safe    | |
-| | link graph       next| risky changes appear in the Health Bell            | |
+| | link graph       next| risky changes appear in History                    | |
 | +----------------------+-----------------------------------------------------+ |
 +--------------------------------------------------------------------------------+
 ```
 
-Conflict review is not a page. It opens from the Health Bell only when needed:
+Conflict handling is not a page. It opens from History only when needed:
 
 ```text
 +--------------------------------------------------------------------------------+
@@ -421,7 +421,7 @@ Default Knowledge graph wireframe:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                         [health bell] [inspector]  |
+| [sidebar] macOS drag region                         [history] [inspector]  |
 +----------------------+------------------------------------------+--------------+
 | Sidebar              | Graph canvas                             | Right rail   |
 |                      |                                          |              |
@@ -438,7 +438,7 @@ Collapsed right inspector:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                         [health bell] [inspector]  |
+| [sidebar] macOS drag region                         [history] [inspector]  |
 +----------------------+---------------------------------------------------------+
 | Sidebar              | Graph canvas                                            |
 |                      |                                                         |
@@ -459,8 +459,8 @@ Graph canvas rules:
 +-- Default graph view should show only the graph and minimal app chrome.
 +-- Title, mode tabs, counts, and status summaries are hidden from the default canvas.
 +-- Inspector opens as a right rail with a clear border-left, matching the left sidebar separation.
-+-- Health Bell stays in the window bar outside the right inspector rail.
-+-- Source Library, Wiki, Claims, and Conflicts are opened from graph selection, inspector actions, search, command palette, or health review.
++-- History stays in the window bar outside the right inspector rail.
++-- Source Library, Wiki, Claims, and Conflicts are opened from graph selection, inspector actions, search, command palette, or History.
 ```
 
 Graph source behavior:
@@ -557,7 +557,7 @@ Wireframe:
 
 ```text
 +--------------------------------------------------------------------------------+
-| [sidebar] macOS drag region                         [health bell] [inspector]  |
+| [sidebar] macOS drag region                         [history] [inspector]  |
 +----------------------+---------------------------------------------------------+
 | Sidebar              | Graph canvas                                            |
 |                      |                                                         |
@@ -592,9 +592,9 @@ Wireframe:
 
 ---
 
-## 10. Health Bell & Maintenance Agent IA
+## 10. History & Maintenance Agent IA
 
-목표: Health를 사용자가 매번 들어가야 하는 페이지로 만들지 않는다. 지식베이스 품질 관리는 HyprDuck이 백그라운드에서 자동으로 수행하고, 사용자 판단이 필요한 경우에만 우측 상단 custom window bar의 bell로 알린다.
+목표: History를 사용자가 매번 들어가야 하는 페이지로 만들지 않는다. 지식베이스 품질 관리는 HyprDuck이 백그라운드에서 자동으로 수행하고, 사용자는 우측 상단 custom window bar에서 변경 기록과 pending change만 확인한다.
 
 원칙:
 
@@ -613,7 +613,7 @@ Wireframe:
    자동 수정은 maintenance log와 diff/provenance를 남긴다.
 ```
 
-Health는 navigation destination이 아니라 app shell의 persistent status surface다.
+History는 navigation destination이 아니라 app shell의 persistent activity surface다.
 
 ```text
 Custom Window Bar
@@ -622,41 +622,40 @@ Custom Window Bar
 |   +-- expanded: collapse sidebar icon
 |   +-- collapsed: open sidebar icon
 |
-+-- Right: Health Bell
++-- Right: History
 +-- Far Right: Inspector Toggle
 
-Health Bell
+History
 |
-+-- status: clean | working | attention_needed | failed
-+-- badge count: user action required count
++-- badge count: pending change count
 +-- popover
     |
-    +-- Auto-fixed summary
-    +-- Needs review
-    +-- Failed maintenance jobs
-    +-- Open maintenance log
+    +-- Recent activity
+    +-- Pending changes
+    +-- Failed jobs
+    +-- Open activity log
 ```
 
-Health Bell은 right inspector rail 안에 배치하지 않는다. Inspector가 열려 있을 때도 Health Bell은 window bar의 독립 버튼이고, 필요하면 inspector rail 너비만큼 좌측으로 밀려 rail 밖에 남는다.
+History는 right inspector rail 안에 배치하지 않는다. Inspector가 열려 있을 때도 History는 window bar의 독립 버튼이고, 필요하면 inspector rail 너비만큼 좌측으로 밀려 rail 밖에 남는다.
 
-Bell states:
+History states:
 
 ```text
 clean
 +-- no badge
-+-- tooltip: Knowledge base healthy
++-- tooltip: History
 
 working
 +-- subtle spinner/dot
-+-- tooltip: Maintaining knowledge base...
++-- tooltip: Updating history...
 
 attention_needed
 +-- badge with count
-+-- tooltip: 3 items need review
++-- tooltip: 3 pending changes
 
 failed
 +-- warning badge
-+-- tooltip: Maintenance failed; click for details
++-- tooltip: History has failed jobs
 ```
 
 Popover wireframe:
@@ -668,28 +667,28 @@ Popover wireframe:
                                            |
                                            v
                             +-----------------------------------+
-                            | Knowledge maintenance             |
+                            | History                           |
                             |                                   |
-                            | Auto-fixed                        |
+                            | Recent activity                   |
                             | + index.md refreshed              |
                             | + 6 backlinks added               |
                             | + 2 stale artifacts reprocessed   |
                             |                                   |
-                            | Needs review                      |
+                            | Pending changes                   |
                             | ! Conflict: pricing fixed/varies  |
                             | ! Merge? Paul G. / Paul Graham    |
                             | ! Claim missing citation          |
                             |                                   |
-                            | [Review now] [Dismiss]            |
-                            | [Open maintenance log]            |
+                            | [✓] [x]                           |
+                            | [Open activity log]               |
                             +-----------------------------------+
 ```
 
-Review drawer/modal:
+Pending change detail:
 
 ```text
 +--------------------------------------------------------------------------------+
-| Review maintenance item                                                         |
+| Pending maintenance change                                                      |
 |                                                                                |
 | Conflict: pricing fixed vs pricing variable                                     |
 |                                                                                |
@@ -719,7 +718,7 @@ Safe auto-fix
 +-- re-run failed low-risk extraction
 +-- normalize aliases when exact match is obvious
 +
-Needs user review
+Needs user decision
 +-- conflicting claims with comparable evidence
 +-- duplicate entities that could be different people/companies
 +-- missing citation for an important answer/claim
@@ -755,13 +754,13 @@ Settings
 |   +-- typed links: mentions, source_of, related_to, founded, works_at, advises,
 |       invested_in, contradicts, supersedes, supports
 |   +-- citation format
-|   +-- acceptance policy: auto-accept high confidence or require review
+|   +-- acceptance policy: auto-accept high confidence or require explicit decision
 |
 +-- Maintenance Policy
 |   +-- safe auto-fix enabled
 |   +-- notify only on judgment-required items
 |   +-- maintenance log retention
-|   +-- require review before destructive rewrites
+|   +-- require explicit decision before destructive rewrites
 |
 +-- Storage
     +-- raw sources path
@@ -847,7 +846,7 @@ Knowledge
 +-- graph node/edge ids
 
 Maintenance
-+-- health bell status
++-- history status
 +-- maintenance log recent entries
 +-- proposed updates
 +-- auto-fixed summary
@@ -879,7 +878,7 @@ HyprDuck automatically extracts entities/topics/claims/evidence
 Safe wiki/graph updates are written automatically
   |
   v
-Only conflicts/failures appear in Health Bell
+Conflicts/failures are recorded in History
   |
   v
 Knowledge base now has wiki pages + graph + evidence
@@ -904,7 +903,7 @@ HyprDuck automatically ingests against existing index/wiki/graph
   |
   +-- safe changes -> write automatically and append log.md
   |
-  +-- judgment needed -> Health Bell review item
+  +-- judgment needed -> History pending change
 ```
 
 ### 13.3 Ask and save answer
@@ -926,7 +925,7 @@ Answer with citations and gaps
 Saved answer becomes part of future knowledge
 ```
 
-### 13.4 Background maintenance and health notifications
+### 13.4 Background maintenance and History
 
 ```text
 Knowledge base changes
@@ -941,7 +940,7 @@ HyprDuck runs background maintenance
   |
   +-- safe fix possible -> apply automatically -> log diff -> no user interruption
   |
-  +-- judgment needed -> health bell badge -> user reviews only that item
+  +-- judgment needed -> history badge -> user handles only that item
   |
   v
 Knowledge base stays coherent without becoming a sidebar chore
@@ -957,7 +956,7 @@ Global
 +-- startup_error
 +-- sidebar_collapsed
 +-- active_destination: knowledge | settings
-+-- health_bell: clean | working | attention_needed | failed
++-- history: clean | working | attention_needed | failed
 +-- workspace_status: empty | ready | ingesting | degraded | stale
 +
 Source Library
@@ -976,7 +975,7 @@ Ingest
 +-- ingest_running
 +-- source_ingested
 +-- auto_updates_written
-+-- review_needed
++-- decision_needed
 +-- ingest_partial_failure
 +-- ingest_failed
 +
@@ -1011,8 +1010,8 @@ Maintenance
 +-- maintenance_idle
 +-- maintenance_running
 +-- auto_fix_applied
-+-- review_queue_ready
-+-- review_item_selected
++-- pending_changes_ready
++-- pending_change_selected
 +-- maintenance_failed
 +
 Settings
@@ -1045,7 +1044,7 @@ Automatic Ingest
 - Auto-ingest
 - Ingesting
 - Ingested
-- Needs review
+- Pending changes
 - Reprocess
 - New wiki page
 - Updated wiki page
@@ -1078,14 +1077,13 @@ Graph Prompt Composer
 - Save as wiki page
 - Append to page
 
-Health Bell / Maintenance
-- Knowledge maintenance
-- Auto-fixed
-- Needs review
-- Conflict needs review
+History / Maintenance
+- History
+- Recent activity
+- Pending changes
+- Conflict pending
 - Missing citation
-- Maintenance log
-- Review now
+- Activity log
 ```
 
 피해야 할 라벨:
@@ -1112,15 +1110,15 @@ apps/desktop/src/App.tsx
 +-- ActivePanel
 |   current: import | graph
 |   target: knowledge | settings
-|   note: health is not a panel; it is a top-right bell/popover
+|   note: history is not a panel; it is a top-right activity popover
 |   note: sidebar toggle is not right-aligned; it stays on the left side of the custom window bar
 |   note: right inspector toggle lives at the far right of the custom window bar
-|   note: health bell stays outside the right inspector rail
+|   note: history stays outside the right inspector rail
 |
 +-- MAIN_NAV_ITEMS
 |   current labels likely Import / Graph
 |   target labels Knowledge
-|   top-right window bar has HealthBell and InspectorToggle
+|   top-right window bar has History and InspectorToggle
 |
 +-- ImportPanel
 |   current role: file selection + latest markdown
@@ -1163,11 +1161,11 @@ P0: Reposition UI without backend expansion
 +-- Keep existing parse pipeline, but present output as source-derived artifacts
 +
 P1: Add automatic ingest mental model
-+-- Show source row status: ingesting / ingested / needs review / failed
++-- Show source row status: ingesting / ingested / pending / failed
 +-- Show extracted nodes/edges/evidence as knowledge items, not graph demo
 +-- Make source-file graph nodes clickable and route them to Source Detail / uploaded file preview
 +-- Add command-opened graph prompt composer for Ask, file attachment, attachment intent, and source metadata prompts
-+-- Auto-approve safe updates; route only conflicts/failures to Health Bell
++-- Auto-approve safe updates; record conflicts/failures in History
 +
 P2: Add real knowledge artifacts
 +-- Persist wiki/index/log style markdown outputs
@@ -1176,10 +1174,10 @@ P2: Add real knowledge artifacts
 +-- Add typed link kinds beyond current relation labels
 +
 P3: Add background maintenance loop
-+-- Health bell in custom window bar
++-- History in custom window bar
 +-- auto-fix safe index/backlink/stale artifact issues
 +-- notify only for conflicts, missing evidence, risky merges, failed jobs
-+-- maintenance log and review modal/popover
++-- activity log and pending-change popover
 ```
 
 ---
@@ -1201,11 +1199,11 @@ A redesigned HyprDuck UI is acceptable only if:
 [ ] The graph prompt composer supports file attachments plus an optional file-description prompt before automatic ingest.
 [ ] Default Knowledge view does not show persistent mode tabs, overview counts, or page-title chrome above the graph.
 [ ] Default graph canvas is not wrapped in a large rounded card.
-[ ] The right inspector is a separate rail with a clear left border, and Health Bell remains outside that rail.
+[ ] The right inspector is a separate rail with a clear left border, and History remains outside that rail.
 [ ] File attachment distinguishes Add to knowledge base from Ask only this time, with Add to knowledge base as the default for supported docs.
 [ ] File description prompts are saved as source metadata, not consumed as disposable prompts.
 [ ] Ask answers can be saved back into the knowledge base.
-[ ] Health is not a sidebar chore: safe maintenance runs automatically and only judgment-required issues notify via the top-right bell.
+[ ] History is not a sidebar chore: safe maintenance runs automatically and judgment-required issues appear as top-right pending changes.
 [ ] Provider errors remain specific and actionable.
 [ ] PDF/DOCX/DOC import remains permission-free.
 ```
@@ -1219,7 +1217,7 @@ IA를 바꾸는 경우:
 ```text
 1. 먼저 이 문서의 ASCII 구조를 수정한다.
 2. 변경이 Knowledge / Source Library / Graph Prompt Composer / Automatic Ingest / Maintenance 중 어디에 속하는지 명시한다.
-3. source/file attachment -> auto-ingest -> knowledge/graph -> answer -> health 루프가 깨지지 않는지 확인한다.
+3. source/file attachment -> auto-ingest -> knowledge/graph -> answer -> history 루프가 깨지지 않는지 확인한다.
 4. 구현 파일 경로를 Implementation Mapping에 반영한다.
 5. 구현 후 `pnpm --dir apps/desktop build`로 desktop UI 빌드를 확인한다.
 ```
