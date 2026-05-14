@@ -14,11 +14,11 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  FileText,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  RefreshCw,
   Save,
   Settings,
   ShieldCheck,
@@ -36,7 +36,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
 import { materializedGraphSnapshotToWorkspaceEnvelope } from "@/features/workspace/materializedGraphSnapshot";
@@ -1766,279 +1765,117 @@ function SettingsPanel(props: {
 
 function TrustConsole(props: {
   health: BrainHealthResponseData | null;
-  selectedItem: BrainReviewItem | null;
-  selectedReviewId: string | null;
-  reviewReason: string;
   decisionPending: BrainReviewDecision | null;
   decisionError: string | null;
-  onOpenProposal: (path: string) => Promise<void>;
-  onReasonChange: (value: string) => void;
   onRefresh: () => Promise<void>;
   onResolve: (item: BrainReviewItem, decision: BrainReviewDecision) => Promise<void>;
-  onSelectReview: (reviewId: string) => void;
 }) {
   const {
     health,
-    selectedItem,
-    selectedReviewId,
-    reviewReason,
     decisionPending,
     decisionError,
-    onOpenProposal,
-    onReasonChange,
     onRefresh,
     onResolve,
-    onSelectReview,
   } = props;
   const reviewItems = health?.reviewItems ?? [];
-  const recentEvents = health?.recentEvents ?? [];
   const attentionCount = health?.attentionCount ?? 0;
-  const statusLabel = health?.status === "attention_needed" ? "Needs review" : "Clean";
 
   return (
     <section
       aria-label="Trust Console"
-      className="fixed bottom-4 right-3 top-12 z-50 flex w-[min(58rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-border bg-background text-sm shadow-xl"
+      className="fixed right-3 top-12 z-50 flex max-h-[min(24rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-background text-sm shadow-xl"
       data-electron-no-drag
     >
-      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-4">
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-secondary text-foreground">
-            <ShieldCheck size={16} />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold text-foreground">Trust Console</h2>
-            <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
-              Review agent-written memory, claim, link, and wiki proposals before
-              they become trusted brain state.
-            </p>
-          </div>
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <ShieldCheck className="shrink-0 text-muted-foreground" size={15} />
+          <h2 className="truncate text-sm font-semibold text-foreground">
+            Trust Console
+          </h2>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Badge variant={attentionCount > 0 ? "default" : "secondary"}>
-            {statusLabel}
-          </Badge>
+        <div className="flex shrink-0 items-center">
           <Button
+            aria-label="Refresh trust console"
             onClick={() => void onRefresh()}
-            size="sm"
+            size="icon"
+            title="Refresh"
             type="button"
-            variant="outline"
+            variant="ghost"
           >
-            Refresh
+            <RefreshCw size={14} />
           </Button>
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-b border-border bg-secondary/25 md:border-b-0 md:border-r">
-          <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Review Queue
-            </span>
-            <span className="text-xs text-muted-foreground">{attentionCount} pending</span>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {reviewItems.map((item) => {
-              const active = item.reviewId === selectedReviewId;
-              return (
-                <button
-                  className={cn(
-                    "mb-2 w-full rounded-lg border px-3 py-3 text-left transition-colors",
-                    active
-                      ? "border-foreground bg-background text-foreground"
-                      : "border-border bg-background/70 text-foreground hover:bg-background",
-                  )}
-                  key={item.reviewId}
-                  onClick={() => onSelectReview(item.reviewId)}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="truncate text-sm font-medium">{item.title}</span>
-                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                      {formatProposalKind(item.kind)}
-                    </span>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                    {item.body}
-                  </p>
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    {formatTimestamp(item.createdAt)}
-                  </p>
-                </button>
-              );
-            })}
-
-            {health && reviewItems.length === 0 && (
-              <div className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
-                No pending reviews. Proposed writes that passed policy are already
-                evented, and risky writes will appear here.
-              </div>
-            )}
-            {!health && (
-              <div className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
-                Loading brain health.
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <div className="flex min-h-0 flex-col overflow-y-auto">
-          {selectedItem ? (
-            <div className="grid gap-5 p-4">
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline">{formatProposalKind(selectedItem.kind)}</Badge>
-                  <Badge variant="secondary">{formatProposalStatus(selectedItem.status)}</Badge>
-                  <Badge variant="secondary">{selectedItem.workspaceId}</Badge>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/20 px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">Review Queue</span>
+          <span className="text-xs text-muted-foreground">{attentionCount} pending</span>
+        </div>
+        <div className="grid gap-1.5 p-2">
+          {reviewItems.map((item) => (
+            <div
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2"
+              key={item.reviewId}
+            >
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                    {item.title}
+                  </span>
+                  <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {formatProposalKind(item.kind)}
+                  </span>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold tracking-tight text-foreground">
-                    {selectedItem.title}
-                  </h3>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
-                    {selectedItem.body}
-                  </p>
-                </div>
-              </section>
-
-              <section className="grid gap-3 rounded-xl border border-border bg-secondary/30 p-3">
-                <div className="flex items-center gap-2">
-                  <FileText size={14} />
-                  <h4 className="text-sm font-semibold">Provenance</h4>
-                </div>
-                <ReferenceRow label="Sources" refs={selectedItem.sourceRefs} />
-                <ReferenceRow label="Nodes" refs={selectedItem.nodeRefs} />
-                <ReferenceRow label="Evidence" refs={selectedItem.evidenceRefs} />
-                <div className="grid gap-1 border-t border-border pt-3 text-xs">
-                  <span className="font-medium text-foreground">Proposal file</span>
-                  <button
-                    className="truncate text-left text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                    onClick={() => void onOpenProposal(selectedItem.proposalPath)}
-                    type="button"
-                  >
-                    {selectedItem.proposalPath}
-                  </button>
-                </div>
-              </section>
-
-              <section className="grid gap-3 rounded-xl border border-border p-3">
-                <div>
-                  <h4 className="text-sm font-semibold">Review decision</h4>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Accept applies the durable save-back. Reject preserves the
-                    proposal record and logs the decision without mutating trusted state.
-                  </p>
-                </div>
-                <Textarea
-                  className="min-h-20"
-                  onChange={(event) => onReasonChange(event.target.value)}
-                  placeholder="Optional review note..."
-                  value={reviewReason}
-                />
-                {decisionError && (
-                  <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                    {decisionError}
-                  </p>
-                )}
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Button
-                    disabled={decisionPending !== null}
-                    onClick={() => void onResolve(selectedItem, "reject")}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    <XCircle size={14} />
-                    {decisionPending === "reject" ? "Rejecting..." : "Reject"}
-                  </Button>
-                  <Button
-                    disabled={decisionPending !== null}
-                    onClick={() => void onResolve(selectedItem, "accept")}
-                    size="sm"
-                    type="button"
-                  >
-                    <CheckCircle2 size={14} />
-                    {decisionPending === "accept" ? "Accepting..." : "Accept"}
-                  </Button>
-                </div>
-              </section>
-            </div>
-          ) : (
-            <div className="grid min-h-[18rem] place-items-center p-6 text-center">
-              <div>
-                <ShieldCheck className="mx-auto text-muted-foreground" size={24} />
-                <h3 className="mt-3 text-sm font-semibold text-foreground">
-                  No proposal selected
-                </h3>
-                <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-                  Agent write proposals and maintenance findings appear here when
-                  they need human approval.
+                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                  {formatTimestamp(item.createdAt)}
                 </p>
               </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  aria-label={`Reject ${item.title}`}
+                  disabled={decisionPending !== null}
+                  onClick={() => void onResolve(item, "reject")}
+                  size="icon"
+                  title="Reject"
+                  type="button"
+                  variant="ghost"
+                >
+                  <XCircle size={14} />
+                </Button>
+                <Button
+                  aria-label={`Accept ${item.title}`}
+                  disabled={decisionPending !== null}
+                  onClick={() => void onResolve(item, "accept")}
+                  size="icon"
+                  title="Accept"
+                  type="button"
+                  variant="ghost"
+                >
+                  <CheckCircle2 size={14} />
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {decisionError && (
+            <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
+              {decisionError}
+            </p>
+          )}
+          {health && reviewItems.length === 0 && (
+            <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
+              No pending reviews.
             </div>
           )}
-
-          <section className="border-t border-border p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold">Recent brain events</h3>
-              <span className="text-xs text-muted-foreground">
-                {recentEvents.length} shown
-              </span>
+          {!health && (
+            <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
+              Loading brain health.
             </div>
-            <div className="grid gap-2">
-              {recentEvents.map((event) => (
-                <div
-                  className="rounded-lg border border-border bg-secondary/30 px-3 py-2 text-xs leading-5"
-                  key={event.eventId}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium text-foreground">
-                      {formatEventType(event.eventType)}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {event.actor.actorType}:{event.actor.actorId} · {event.policyResult}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                    <span>{formatTimestamp(event.createdAt)}</span>
-                    <span>{event.sourceRefs.length} sources</span>
-                    <span>{event.evidenceRefs.length} evidence</span>
-                  </div>
-                </div>
-              ))}
-              {recentEvents.length === 0 && (
-                <div className="rounded-lg border border-border bg-secondary/30 px-3 py-3 text-xs text-muted-foreground">
-                  No recent brain events yet.
-                </div>
-              )}
-            </div>
-          </section>
+          )}
         </div>
       </div>
     </section>
-  );
-}
-
-function ReferenceRow(props: { label: string; refs: string[] }) {
-  return (
-    <div className="grid gap-2 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
-      <span className="font-medium text-muted-foreground">{props.label}</span>
-      <div className="flex min-w-0 flex-wrap gap-1.5">
-        {props.refs.length > 0 ? (
-          props.refs.map((ref) => (
-            <span
-              className="max-w-full truncate rounded-full border border-border bg-background px-2 py-0.5 text-foreground"
-              key={ref}
-              title={ref}
-            >
-              {ref}
-            </span>
-          ))
-        ) : (
-          <span className="text-muted-foreground">No refs attached</span>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -2059,25 +1896,6 @@ function formatProposalKind(kind: BrainProposalKind): string {
     case "wiki_page":
       return "Wiki page";
   }
-}
-
-function formatProposalStatus(status: BrainProposalStatus): string {
-  switch (status) {
-    case "accepted":
-      return "Accepted";
-    case "pending_review":
-      return "Pending review";
-    case "rejected":
-      return "Rejected";
-  }
-}
-
-function formatEventType(eventType: string): string {
-  return eventType
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function formatTimestamp(seconds: number): string {
@@ -2113,8 +1931,6 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [healthOpen, setHealthOpen] = useState(false);
-  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
-  const [reviewReason, setReviewReason] = useState("");
   const [reviewDecisionPending, setReviewDecisionPending] =
     useState<BrainReviewDecision | null>(null);
   const [reviewDecisionError, setReviewDecisionError] = useState<string | null>(
@@ -2180,16 +1996,6 @@ export function App() {
     null,
     createInitialWorkspaceUiState,
   );
-  const selectedReviewItem = useMemo(() => {
-    const items = brainHealth?.reviewItems ?? [];
-    if (items.length === 0) {
-      return null;
-    }
-    return (
-      items.find((item) => item.reviewId === selectedReviewId) ?? items[0]
-    );
-  }, [brainHealth?.reviewItems, selectedReviewId]);
-
   useEffect(() => {
     let unlisten: DesktopUnlisten | null = null;
 
@@ -2299,19 +2105,6 @@ export function App() {
       project: workspaceProject,
     });
   }, [workspaceProject]);
-
-  useEffect(() => {
-    const items = brainHealth?.reviewItems ?? [];
-    if (items.length === 0) {
-      if (selectedReviewId !== null) {
-        setSelectedReviewId(null);
-      }
-      return;
-    }
-    if (!selectedReviewId || !items.some((item) => item.reviewId === selectedReviewId)) {
-      setSelectedReviewId(items[0].reviewId);
-    }
-  }, [brainHealth?.reviewItems, selectedReviewId]);
 
   const chooseFile = async () => {
     const selection = await invoke<FileSelection | null>("pick_import_file");
@@ -2495,9 +2288,8 @@ export function App() {
         workspace_id: workspaceId,
         proposal_id: item.proposalId,
         decision,
-        reason: reviewReason.trim() || null,
+        reason: null,
       });
-      setReviewReason("");
       setWorkspaceLoadState({
         status: "loading",
         message: "Refreshing graph/wiki after review decision.",
@@ -2514,7 +2306,6 @@ export function App() {
       setBrainHealth(nextHealth);
       setLoadedWorkspaceEnvelope(nextLoad.envelope);
       setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
-      setSelectedReviewId(nextHealth.reviewItems[0]?.reviewId ?? null);
     } catch (error) {
       setReviewDecisionError(String(error));
     } finally {
@@ -2668,17 +2459,8 @@ export function App() {
           decisionError={reviewDecisionError}
           decisionPending={reviewDecisionPending}
           health={brainHealth}
-          onOpenProposal={(path) => openLocalArtifact(path, false)}
-          onReasonChange={setReviewReason}
           onRefresh={refreshBrainHealth}
           onResolve={resolveBrainReview}
-          onSelectReview={(reviewId) => {
-            setSelectedReviewId(reviewId);
-            setReviewDecisionError(null);
-          }}
-          reviewReason={reviewReason}
-          selectedItem={selectedReviewItem}
-          selectedReviewId={selectedReviewId}
         />
       )}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}

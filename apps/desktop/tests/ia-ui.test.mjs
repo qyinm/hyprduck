@@ -41,11 +41,17 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
 
 test("Trust Console exposes reviewable brain proposals and decisions", () => {
   expect(appSource).toMatch(/Trust Console/);
+  expect(appSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
+  expect(appSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
   expect(appSource).toMatch(/Review Queue/);
-  expect(appSource).toMatch(/Provenance/);
-  expect(appSource).toMatch(/Review decision/);
-  expect(appSource).toMatch(/Accept applies the durable save-back/);
-  expect(appSource).toMatch(/Recent brain events/);
+  expect(appSource).toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
+  expect(appSource).toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
+  expect(appSource).not.toMatch(/Needs review/);
+  expect(appSource).not.toMatch(/Provenance/);
+  expect(appSource).not.toMatch(/Optional review note/);
+  expect(appSource).not.toMatch(/Review decision/);
+  expect(appSource).not.toMatch(/Accept applies the durable save-back/);
+  expect(appSource).not.toMatch(/Recent brain events/);
   expect(appSource).toMatch(/resolve_brain_review/);
   expect(appSource).toMatch(/formatProposalKind/);
 });
