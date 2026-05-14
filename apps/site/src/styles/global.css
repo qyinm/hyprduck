@@ -200,9 +200,127 @@
   transform: none;
 }
 
-@media (max-width: 768px) {
-  .container,
-  .reading-container {
-    width: min(calc(100% - 32px), 1120px);
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.graph-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+  background: #fff;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  overflow: hidden;
+}
+
+.graph-root .import-banner {
+  position: absolute;
+  top: 42px;
+  left: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  background: var(--color-canvas);
+}
+
+.graph-root .banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.graph-root .banner-path {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-body);
+}
+
+.graph-root .banner-spinner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.graph-root .spinner-ring {
+  position: absolute;
+  color: var(--color-mute);
+  animation: spin 1.2s linear infinite;
+}
+
+.graph-root .spinner-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.graph-root .graph-mode-toggle {
+  position: absolute;
+  top: 42px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  background: var(--color-canvas);
+}
+
+.graph-root .mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--color-body);
+  cursor: default;
+}
+
+.graph-root .mode-btn-active {
+  background: var(--color-ink);
+  color: var(--color-canvas);
+}
+
+.graph-root .graph-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  flex: 1;
+  padding: 74px 0 0;
+  touch-action: none;
+  outline: none;
+}
+
+.graph-root .graph-edge-line {
+  stroke-linecap: round;
+  transition: opacity 0.12s;
+}
+
+@media (max-width: 960px) {
+  .graph-root {
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  }
+
+  .graph-root .graph-svg {
+    padding-top: 74px;
+  }
+}
+
+@media (max-width: 720px) {
+  .graph-root .graph-svg {
+    padding-top: 74px;
   }
 }
