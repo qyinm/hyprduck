@@ -112,7 +112,7 @@ use import_context::{
 };
 pub(crate) use infra::process::resolve_binary;
 use knowledge::*;
-use parse::{parse_document, EventSink};
+use parse::{parse_document, EventSink, ProcessLocator};
 #[cfg(test)]
 use provider::EngineConfig;
 use provider::EngineConfigStore;
@@ -161,12 +161,14 @@ fn handle_parse(
         format: request.input.format.clone(),
     })?;
 
+    let process_locator = RuntimeProcessLocator;
     let parse = parse_document(
         &request.input,
         &request.template,
         &request.options,
         &config,
         &mut event_sink,
+        &process_locator,
     )?;
     let markdown = build_markdown(
         request
@@ -214,6 +216,14 @@ struct RuntimeParseEventSink;
 impl EventSink for RuntimeParseEventSink {
     fn emit(&mut self, event: ParseEvent) -> Result<()> {
         emit_event(&event)
+    }
+}
+
+struct RuntimeProcessLocator;
+
+impl ProcessLocator for RuntimeProcessLocator {
+    fn resolve_binary(&self, name: &str, common_paths: &[&str]) -> PathBuf {
+        resolve_binary(name, common_paths)
     }
 }
 
