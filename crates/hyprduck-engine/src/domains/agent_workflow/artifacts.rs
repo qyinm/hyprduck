@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use super::super::*;
+use crate::*;
 
-pub(super) fn write_provider_graph_run_artifacts(
+pub(crate) fn write_provider_graph_run_artifacts(
     workspace_root: &Path,
     run_id: &str,
     workspace_id: &str,
@@ -30,7 +30,7 @@ pub(super) fn write_provider_graph_run_artifacts(
     )
 }
 
-pub(super) fn write_provider_graph_run_validation_report(
+pub(crate) fn write_provider_graph_run_validation_report(
     workspace_root: &Path,
     run_id: &str,
     workspace_id: &str,
@@ -56,7 +56,7 @@ pub(super) fn write_provider_graph_run_validation_report(
     )
 }
 
-pub(super) fn provider_workspace_rebuild_response_schema(
+pub(crate) fn provider_workspace_rebuild_response_schema(
 ) -> async_openai::types::chat::ResponseFormatJsonSchema {
     async_openai::types::chat::ResponseFormatJsonSchema {
         name: "workspace_graph_rebuild".into(),

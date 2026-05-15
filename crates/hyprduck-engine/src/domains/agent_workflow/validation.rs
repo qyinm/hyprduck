@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::super::*;
+use crate::*;
 
 pub(crate) fn validate_provider_workspace_rebuild_snapshot(
     snapshot: &BrainRepoSnapshot,

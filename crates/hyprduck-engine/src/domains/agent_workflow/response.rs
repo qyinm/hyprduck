@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::super::*;
+use crate::*;
 
 pub(crate) fn parse_provider_workspace_rebuild_snapshot(raw: &str) -> Result<BrainRepoSnapshot> {
     let value = extract_provider_json_value(raw)?;

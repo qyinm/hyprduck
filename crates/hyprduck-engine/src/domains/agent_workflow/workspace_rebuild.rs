@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::time::Duration;
 
-use super::super::*;
 use super::artifacts::{
     provider_workspace_rebuild_response_schema, write_provider_graph_run_artifacts,
     write_provider_graph_run_validation_report,
@@ -11,6 +10,7 @@ use super::response::{
     normalize_provider_workspace_rebuild_snapshot, parse_provider_workspace_rebuild_snapshot,
 };
 use super::validation::validate_provider_workspace_rebuild_snapshot;
+use crate::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

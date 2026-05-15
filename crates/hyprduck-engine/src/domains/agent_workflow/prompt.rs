@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::super::*;
+use crate::*;
 
 pub(crate) fn build_full_workspace_graph_rebuild_prompt(
     workspace_root: &Path,
