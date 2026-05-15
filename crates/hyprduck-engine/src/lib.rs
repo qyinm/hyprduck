@@ -110,7 +110,7 @@ use domains::ingest::output_package::{
 use import_context::{
     build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
 };
-pub(crate) use infra::process::resolve_binary;
+use infra::process::resolve_binary;
 use knowledge::*;
 use parse::{parse_document, EventSink, ProcessLocator};
 #[cfg(test)]

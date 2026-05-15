@@ -1,5 +1,5 @@
 use super::*;
-use crate::resolve_binary;
+use crate::infra::process::resolve_binary;
 
 pub(crate) fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {
     let mut issues = Vec::new();
