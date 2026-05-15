@@ -1031,7 +1031,10 @@ pub(crate) fn write_materialized_brain_repo(
         snapshot.events.clone(),
         &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
     );
+    replay_preserved_materialized_graph_events(&mut effective_snapshot)?;
     apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
+    refresh_materialized_wiki_pages(&mut effective_snapshot);
+    refresh_current_materialized_events(&mut effective_snapshot)?;
 
     persist_materialized_graph_and_wiki_state(root, &effective_snapshot)?;
     write_json_pretty(
@@ -1279,7 +1282,10 @@ pub(crate) fn merge_preserved_brain_events(
         .map(|event| event.event_id.clone())
         .collect::<BTreeSet<_>>();
     for event in existing_events {
-        if is_preserved_brain_event(event.event_type) && seen.insert(event.event_id.clone()) {
+        if (is_preserved_brain_event(event.event_type)
+            || is_replayable_materialized_graph_event(event))
+            && seen.insert(event.event_id.clone())
+        {
             materialized_events.push(event.clone());
         }
     }
@@ -1289,6 +1295,12 @@ pub(crate) fn merge_preserved_brain_events(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     materialized_events
+}
+
+fn is_replayable_materialized_graph_event(event: &BrainEvent) -> bool {
+    event.event_type == BrainEventKind::GraphMaterialized
+        && event.operation_type.as_deref() == Some("full_workspace_rebuild")
+        && event.policy_result == "materialized"
 }
 
 pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
@@ -1308,6 +1320,529 @@ pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
             | BrainEventKind::ReviewResolved
             | BrainEventKind::BrainMaintenanceRun
     )
+}
+
+fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
+    let mut events = snapshot
+        .events
+        .iter()
+        .filter(|event| is_replayable_materialized_graph_event(event))
+        .cloned()
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.causality
+            .materialized_version
+            .unwrap_or(left.created_at)
+            .cmp(
+                &right
+                    .causality
+                    .materialized_version
+                    .unwrap_or(right.created_at),
+            )
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    for event in events {
+        let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
+            .with_context(|| {
+                format!(
+                    "failed decoding materialized graph event {}",
+                    event.event_id
+                )
+            })?;
+        if let Some(materialized_graph) = payload.materialized_graph {
+            apply_filtered_materialized_graph_overlay(snapshot, materialized_graph, &event);
+        }
+    }
+    Ok(())
+}
+
+fn apply_filtered_materialized_graph_overlay(
+    snapshot: &mut BrainRepoSnapshot,
+    materialized_graph: MaterializedGraphPayload,
+    event: &BrainEvent,
+) {
+    let valid_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    if valid_source_ids.is_empty() {
+        return;
+    }
+
+    merge_filtered_evidence(snapshot, materialized_graph.evidence, &valid_source_ids);
+    let valid_evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    merge_filtered_nodes(
+        snapshot,
+        materialized_graph.nodes,
+        &valid_source_ids,
+        &valid_evidence_ids,
+    );
+    let valid_node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    merge_filtered_relations(
+        snapshot,
+        materialized_graph.relations,
+        &valid_node_ids,
+        &valid_evidence_ids,
+    );
+    merge_filtered_claims(
+        snapshot,
+        materialized_graph.claims,
+        &valid_source_ids,
+        &valid_evidence_ids,
+        &valid_node_ids,
+    );
+    merge_filtered_memories(
+        snapshot,
+        materialized_graph.memories,
+        &valid_source_ids,
+        &valid_evidence_ids,
+    );
+    merge_filtered_entities(
+        snapshot,
+        materialized_graph.entities,
+        &valid_source_ids,
+        &valid_evidence_ids,
+    );
+    merge_filtered_extractions(snapshot, materialized_graph.extractions, &valid_source_ids);
+    merge_filtered_wiki_pages(
+        snapshot,
+        materialized_graph.wiki_pages,
+        &valid_source_ids,
+        &valid_evidence_ids,
+        &valid_node_ids,
+    );
+    snapshot.generated_at = snapshot.generated_at.max(
+        materialized_graph
+            .generated_at
+            .or(event.causality.materialized_version)
+            .unwrap_or(event.created_at),
+    );
+}
+
+fn merge_filtered_evidence(
+    snapshot: &mut BrainRepoSnapshot,
+    evidence: Vec<EvidenceRef>,
+    valid_source_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .evidence
+        .iter()
+        .cloned()
+        .map(|evidence| (evidence.id.clone(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    for evidence in evidence {
+        if evidence
+            .source_id
+            .as_ref()
+            .is_none_or(|source_id| valid_source_ids.contains(source_id))
+        {
+            by_id.insert(evidence.id.clone(), evidence);
+        }
+    }
+    snapshot.evidence = by_id.into_values().collect();
+}
+
+fn merge_filtered_nodes(
+    snapshot: &mut BrainRepoSnapshot,
+    nodes: Vec<BrainNodeRecord>,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .nodes
+        .iter()
+        .cloned()
+        .map(|node| (node.node_id.clone(), node))
+        .collect::<BTreeMap<_, _>>();
+    for mut node in nodes {
+        node.source_ids
+            .retain(|source_id| valid_source_ids.contains(source_id));
+        node.evidence_ids
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        if node.kind == BrainNodeKind::Source {
+            let source_id_from_node = node.node_id.strip_prefix("source:");
+            if node.source_ids.is_empty()
+                && source_id_from_node.is_some_and(|source_id| valid_source_ids.contains(source_id))
+            {
+                node.source_ids
+                    .push(source_id_from_node.unwrap().to_string());
+            }
+            if node.source_ids.is_empty() {
+                continue;
+            }
+        } else if node.source_ids.is_empty() && node.evidence_ids.is_empty() {
+            continue;
+        }
+        by_id.insert(node.node_id.clone(), node);
+    }
+    snapshot.nodes = by_id.into_values().collect();
+}
+
+fn merge_filtered_relations(
+    snapshot: &mut BrainRepoSnapshot,
+    relations: Vec<BrainRelationRecord>,
+    valid_node_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .relations
+        .iter()
+        .cloned()
+        .map(|relation| (relation.relation_id.clone(), relation))
+        .collect::<BTreeMap<_, _>>();
+    for mut relation in relations {
+        if !valid_node_ids.contains(&relation.source_node_id)
+            || !valid_node_ids.contains(&relation.target_node_id)
+        {
+            continue;
+        }
+        relation
+            .evidence_ids
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        if relation.evidence_ids.is_empty() {
+            continue;
+        }
+        by_id.insert(relation.relation_id.clone(), relation);
+    }
+    snapshot.relations = by_id.into_values().collect();
+}
+
+fn merge_filtered_claims(
+    snapshot: &mut BrainRepoSnapshot,
+    claims: Vec<ClaimRecord>,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .claims
+        .iter()
+        .cloned()
+        .map(|claim| (claim.claim_id.clone(), claim))
+        .collect::<BTreeMap<_, _>>();
+    for mut claim in claims {
+        claim
+            .source_refs
+            .retain(|source_id| valid_source_ids.contains(source_id));
+        claim
+            .evidence_refs
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        claim
+            .topic_refs
+            .retain(|node_id| valid_node_ids.contains(node_id));
+        if claim.source_refs.is_empty() && claim.evidence_refs.is_empty() {
+            continue;
+        }
+        if claim.topic_refs.is_empty() {
+            continue;
+        }
+        by_id.insert(claim.claim_id.clone(), claim);
+    }
+    snapshot.claims = by_id.into_values().collect();
+}
+
+fn merge_filtered_memories(
+    snapshot: &mut BrainRepoSnapshot,
+    memories: Vec<MemoryRecord>,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .memories
+        .iter()
+        .cloned()
+        .map(|memory| (memory.memory_id.clone(), memory))
+        .collect::<BTreeMap<_, _>>();
+    for mut memory in memories {
+        memory
+            .source_refs
+            .retain(|source_id| valid_source_ids.contains(source_id));
+        memory
+            .evidence_refs
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        if memory.source_refs.is_empty() && memory.evidence_refs.is_empty() {
+            continue;
+        }
+        by_id.insert(memory.memory_id.clone(), memory);
+    }
+    snapshot.memories = by_id.into_values().collect();
+}
+
+fn merge_filtered_entities(
+    snapshot: &mut BrainRepoSnapshot,
+    entities: Vec<EntityRecord>,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .entities
+        .iter()
+        .cloned()
+        .map(|entity| (entity.entity_id.clone(), entity))
+        .collect::<BTreeMap<_, _>>();
+    for mut entity in entities {
+        entity
+            .source_refs
+            .retain(|source_id| valid_source_ids.contains(source_id));
+        entity
+            .evidence_refs
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        if entity.source_refs.is_empty() && entity.evidence_refs.is_empty() {
+            continue;
+        }
+        by_id.insert(entity.entity_id.clone(), entity);
+    }
+    snapshot.entities = by_id.into_values().collect();
+}
+
+fn merge_filtered_extractions(
+    snapshot: &mut BrainRepoSnapshot,
+    extractions: Vec<StructuredExtractionArtifact>,
+    valid_source_ids: &BTreeSet<String>,
+) {
+    let mut by_id = snapshot
+        .extractions
+        .iter()
+        .cloned()
+        .map(|extraction| (extraction.artifact_id.clone(), extraction))
+        .collect::<BTreeMap<_, _>>();
+    for extraction in extractions {
+        if valid_source_ids.contains(&extraction.source_id) {
+            by_id.insert(extraction.artifact_id.clone(), extraction);
+        }
+    }
+    snapshot.extractions = by_id.into_values().collect();
+}
+
+fn merge_filtered_wiki_pages(
+    snapshot: &mut BrainRepoSnapshot,
+    pages: Vec<WikiPage>,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+) {
+    let mut by_path = snapshot
+        .wiki_pages
+        .iter()
+        .cloned()
+        .map(|page| (page.path.clone(), page))
+        .collect::<BTreeMap<_, _>>();
+    for mut page in pages {
+        page.source_refs
+            .retain(|source_id| valid_source_ids.contains(source_id));
+        page.evidence_refs
+            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+        page.node_refs
+            .retain(|node_id| valid_node_ids.contains(node_id));
+        if page.path.starts_with("wiki/sources/")
+            && !page
+                .source_refs
+                .iter()
+                .any(|source_id| valid_source_ids.contains(source_id))
+        {
+            continue;
+        }
+        if page.path.starts_with("wiki/topics/") && page.node_refs.is_empty() {
+            continue;
+        }
+        by_path.insert(page.path.clone(), page);
+    }
+    snapshot.wiki_pages = by_path.into_values().collect();
+}
+
+fn refresh_current_materialized_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
+    let generated_at = unix_timestamp_seconds().max(snapshot.generated_at);
+    snapshot.generated_at = generated_at;
+    let graph_event_id = format!(
+        "evt-{}-graph-materialized-{generated_at}",
+        snapshot.workspace_id
+    );
+    let wiki_event_id = format!(
+        "evt-{}-wiki-materialized-{generated_at}",
+        snapshot.workspace_id
+    );
+    snapshot.events.retain(|event| {
+        !(event.event_type == BrainEventKind::GraphMaterialized
+            && event.operation_type.as_deref() == Some("graph_materialized"))
+            && !(event.event_type == BrainEventKind::WikiMaterialized
+                && event.operation_type.as_deref() == Some("wiki_materialized"))
+    });
+    snapshot.events.push(final_graph_materialized_event(
+        snapshot,
+        &graph_event_id,
+        generated_at,
+    )?);
+    snapshot.events.push(final_wiki_materialized_event(
+        snapshot,
+        &wiki_event_id,
+        generated_at,
+    )?);
+    snapshot.events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    Ok(())
+}
+
+fn final_graph_materialized_event(
+    snapshot: &BrainRepoSnapshot,
+    event_id: &str,
+    generated_at: u64,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: event_id.to_string(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: snapshot.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_materialized".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::System,
+            actor_id: "hyprduck-engine".into(),
+        },
+        source_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: snapshot
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        target_node_ids: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        target_memory_ids: snapshot
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect(),
+        evidence_refs: snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: materialized_graph_event_payload_json(
+            generated_at,
+            &snapshot.sources,
+            &snapshot.nodes,
+            &snapshot.relations,
+            &snapshot.evidence,
+            &snapshot.memories,
+            &snapshot.wiki_pages,
+            &snapshot.entities,
+            &snapshot.claims,
+            &snapshot.extractions,
+        )?,
+        causality: BrainEventCausality {
+            caused_by_source_ids: snapshot
+                .sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            snapshot_id: Some(format!("snapshot-{}-{generated_at}", snapshot.workspace_id)),
+            materialized_version: Some(generated_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "materialized".into(),
+        created_at: generated_at,
+    })
+}
+
+fn final_wiki_materialized_event(
+    snapshot: &BrainRepoSnapshot,
+    event_id: &str,
+    generated_at: u64,
+) -> Result<BrainEvent> {
+    Ok(BrainEvent {
+        event_id: event_id.to_string(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: snapshot.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::WikiMaterialized,
+        operation_type: Some("wiki_materialized".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::System,
+            actor_id: "hyprduck-engine".into(),
+        },
+        source_refs: Vec::new(),
+        source_markdown_refs: Vec::new(),
+        node_refs: snapshot
+            .wiki_pages
+            .iter()
+            .flat_map(|page| page.node_refs.clone())
+            .collect(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: snapshot
+            .wiki_pages
+            .iter()
+            .flat_map(|page| page.node_refs.clone())
+            .collect(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: snapshot
+            .wiki_pages
+            .iter()
+            .flat_map(|page| page.evidence_refs.clone())
+            .collect(),
+        payload_json: format!("{{\"pageCount\":{}}}", snapshot.wiki_pages.len()),
+        causality: BrainEventCausality {
+            snapshot_id: Some(format!("snapshot-{}-{generated_at}", snapshot.workspace_id)),
+            materialized_version: Some(generated_at),
+            ..Default::default()
+        },
+        confidence: None,
+        policy_result: "materialized".into(),
+        created_at: generated_at,
+    })
 }
 
 pub(crate) fn materialized_wiki_page_body(page: &WikiPage, snapshot: &BrainRepoSnapshot) -> String {

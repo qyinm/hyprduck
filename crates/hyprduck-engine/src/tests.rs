@@ -1162,6 +1162,234 @@ fn workspace_delete_materialized_node_without_source_rows_returns_empty_project(
 }
 
 #[test]
+fn deleting_source_replays_provider_graph_for_remaining_sources() {
+    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_path = temp.path().join("knowledge.sqlite3");
+    let store = KnowledgeProjectStore::new(store_path.clone());
+    let (project_a, manifest_a) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source A\n\n## Page 1\n\nThis source should keep its provider graph overlay.\n",
+        "source-a",
+        "alpha",
+        10,
+    );
+    let (project_b, manifest_b) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# Source B\n\n## Page 1\n\nThis source will be deleted.\n",
+        "source-b",
+        "beta",
+        11,
+    );
+    let request_a = CompileProjectRequest {
+        source_markdown_path: manifest_a.markdown_path.clone(),
+        source_document_path: Some(manifest_a.source_path.clone()),
+        source_manifest_path: Some(manifest_a.manifest_path.clone()),
+        workspace_id: Some(manifest_a.workspace_id.clone()),
+        source_id: Some(manifest_a.source_id.clone()),
+        skip_graph_generation: None,
+    };
+    let request_b = CompileProjectRequest {
+        source_markdown_path: manifest_b.markdown_path.clone(),
+        source_document_path: Some(manifest_b.source_path.clone()),
+        source_manifest_path: Some(manifest_b.manifest_path.clone()),
+        workspace_id: Some(manifest_b.workspace_id.clone()),
+        source_id: Some(manifest_b.source_id.clone()),
+        skip_graph_generation: None,
+    };
+    store
+        .save_project(&project_a, &request_a, Some(&manifest_a))
+        .expect("save source a");
+    store
+        .save_project(&project_b, &request_b, Some(&manifest_b))
+        .expect("save source b");
+
+    let rows = store
+        .load_projects_for_workspace(DEFAULT_WORKSPACE_ID)
+        .expect("load workspace rows");
+    let workspace_root = workspace_root_for_rows(&rows).expect("workspace root");
+    let mut provider_snapshot =
+        read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+            .expect("read base snapshot");
+    provider_snapshot.generated_at = 100;
+    provider_snapshot.evidence.push(EvidenceRef {
+        id: "ev-provider-source-a".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Provider-only graph evidence for source A.".into(),
+        source_path: Some(manifest_a.source_path.clone()),
+        source_id: Some(manifest_a.source_id.clone()),
+        markdown_path: Some(manifest_a.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test provider overlay".into()),
+    });
+    provider_snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-provider-only-source-a".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Provider Only Source A".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec!["ev-provider-source-a".into()],
+        source_ids: vec![manifest_a.source_id.clone()],
+        confidence: Some(0.91),
+        updated_at: 100,
+    });
+    provider_snapshot.relations.push(BrainRelationRecord {
+        relation_id: "edge-provider-source-a".into(),
+        kind: BrainRelationKind::SourceOf,
+        source_node_id: format!("source:{}", manifest_a.source_id),
+        target_node_id: "concept-provider-only-source-a".into(),
+        label: "Provider overlay".into(),
+        evidence_ids: vec!["ev-provider-source-a".into()],
+        confidence: Some(0.91),
+        updated_at: 100,
+    });
+    provider_snapshot.claims.push(ClaimRecord {
+        claim_id: "claim-provider-source-a".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        statement: "Provider graph added a durable source A concept.".into(),
+        topic_refs: vec!["concept-provider-only-source-a".into()],
+        source_refs: vec![manifest_a.source_id.clone()],
+        evidence_refs: vec!["ev-provider-source-a".into()],
+        status: "supported".into(),
+        updated_at: 100,
+    });
+    let provider_event = BrainEvent {
+        event_id: "evt-provider-source-a-overlay".into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("full_workspace_rebuild".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "hyprduck-provider-graph-agent:full-workspace-rebuild".into(),
+        },
+        source_refs: provider_snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: provider_snapshot
+            .sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: provider_snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: provider_snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: provider_snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: Vec::new(),
+        target_node_ids: provider_snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: provider_snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: provider_snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: provider_snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: materialized_graph_event_payload_json(
+            provider_snapshot.generated_at,
+            &provider_snapshot.sources,
+            &provider_snapshot.nodes,
+            &provider_snapshot.relations,
+            &provider_snapshot.evidence,
+            &provider_snapshot.memories,
+            &provider_snapshot.wiki_pages,
+            &provider_snapshot.entities,
+            &provider_snapshot.claims,
+            &provider_snapshot.extractions,
+        )
+        .expect("provider graph payload"),
+        causality: BrainEventCausality {
+            caused_by_source_ids: vec![manifest_a.source_id.clone(), manifest_b.source_id.clone()],
+            snapshot_id: Some("snapshot-provider-source-a-overlay".into()),
+            materialized_version: Some(100),
+            ..Default::default()
+        },
+        confidence: Some("provider_full_workspace_rebuild".into()),
+        policy_result: "materialized".into(),
+        created_at: 100,
+    };
+    let mut events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
+        .expect("read events");
+    events.push(provider_event);
+    write_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"), &events)
+        .expect("write provider event");
+
+    store
+        .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+        .expect("replay provider overlay");
+    let before_delete = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read overlay snapshot");
+    assert!(before_delete
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-provider-only-source-a"));
+
+    let previous_store = std::env::var_os("HYPRDUCK_PROJECT_STORE");
+    let previous_output = std::env::var_os("HYPRDUCK_OUTPUT_DIR");
+    std::env::set_var("HYPRDUCK_PROJECT_STORE", &store_path);
+    std::env::set_var("HYPRDUCK_OUTPUT_DIR", temp.path());
+    handle_apply_correction(ApplyCorrectionRequest {
+        project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+        node_id: format!("source:{}", manifest_b.source_id),
+        kind: CorrectionKind::Delete,
+        target_node_id: None,
+        value: None,
+    })
+    .expect("delete source b");
+    match previous_store {
+        Some(value) => std::env::set_var("HYPRDUCK_PROJECT_STORE", value),
+        None => std::env::remove_var("HYPRDUCK_PROJECT_STORE"),
+    }
+    match previous_output {
+        Some(value) => std::env::set_var("HYPRDUCK_OUTPUT_DIR", value),
+        None => std::env::remove_var("HYPRDUCK_OUTPUT_DIR"),
+    }
+
+    let after_delete = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read after delete");
+    assert!(after_delete
+        .sources
+        .iter()
+        .all(|source| source.source_id != manifest_b.source_id));
+    assert!(after_delete
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-provider-only-source-a"));
+    assert!(after_delete.nodes.iter().all(|node| {
+        !node.source_ids.contains(&manifest_b.source_id)
+            && node.node_id != format!("source:{}", manifest_b.source_id)
+    }));
+}
+
+#[test]
 fn exact_project_load_uses_project_workspace_sources() {
     static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
