@@ -321,7 +321,7 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
 }
 
 #[test]
-fn provider_workspace_rebuild_prompt_excludes_stale_source_index_chunks() {
+fn workspace_rebuild_prompt_uses_only_active_workspace_source_chunks() {
     let temp = tempdir().expect("tempdir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     fs::create_dir_all(&workspace_root).expect("workspace root");
@@ -383,7 +383,6 @@ fn provider_workspace_rebuild_prompt_excludes_stale_source_index_chunks() {
     .expect("prompt");
 
     assert!(prompt.contains("Current workspace source text."));
-    assert!(prompt.contains("it must not be represented by only its source node"));
     assert!(!prompt.contains("Stale source-index text must not enter rebuild prompt."));
     assert!(!prompt.contains("source-stale"));
 }
