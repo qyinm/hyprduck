@@ -16,6 +16,30 @@ use super::validation::{
 use crate::provider::EngineConfig;
 use crate::*;
 
+const PROVIDER_GRAPH_PROMPT_VERSION: u32 = 2;
+const PROVIDER_SOURCE_GRAPH_SCHEMA_VERSION: u32 = 1;
+const PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderGraphMaterializationInputFingerprint {
+    pub(crate) workspace_id: String,
+    pub(crate) source_id: String,
+    pub(crate) manifest_updated_at: u64,
+    pub(crate) markdown_hash: String,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) source_graph_schema_version: u32,
+    pub(crate) workspace_linking_schema_version: u32,
+    pub(crate) prompt_version: u32,
+    #[serde(default)]
+    pub(crate) baseline_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub(crate) baseline_event_id: Option<String>,
+    #[serde(default)]
+    pub(crate) baseline_materialized_at: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderGraphMaterializationReport {
@@ -23,6 +47,8 @@ pub(crate) struct ProviderGraphMaterializationReport {
     pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) source_id: String,
+    #[serde(default)]
+    pub(crate) input_fingerprint: Option<ProviderGraphMaterializationInputFingerprint>,
     #[serde(default)]
     pub(crate) source_graph_node_count: usize,
     #[serde(default)]
@@ -64,14 +90,6 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
 ) -> Result<ProviderGraphMaterializationReport> {
     let report_path = artifact_root.join("provider-graph-materialization.json");
     let legacy_report_path = artifact_root.join("provider-graph-proposals.json");
-    if let Ok(existing) = read_json_artifact::<ProviderGraphMaterializationReport>(&report_path)
-        .or_else(|_| read_json_artifact::<ProviderGraphMaterializationReport>(&legacy_report_path))
-    {
-        if existing.status == "linked" && existing.source_id == manifest.source_id {
-            return Ok(existing);
-        }
-    }
-
     let config = match EngineConfigStore::default().and_then(|store| store.load()) {
         Ok(config) => config,
         Err(error) => {
@@ -80,6 +98,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
                 provider: "unknown".into(),
                 model: "unknown".into(),
                 source_id: manifest.source_id.clone(),
+                input_fingerprint: None,
                 source_graph_node_count: 0,
                 source_graph_relation_count: 0,
                 workspace_link_count: 0,
@@ -100,11 +119,24 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
             return Ok(report);
         }
     };
+    let input_fingerprint =
+        provider_graph_input_fingerprint(workspace_root, workspace_id, manifest, markdown, &config);
+    if let Ok(existing) = read_json_artifact::<ProviderGraphMaterializationReport>(&report_path)
+        .or_else(|_| read_json_artifact::<ProviderGraphMaterializationReport>(&legacy_report_path))
+    {
+        if provider_graph_report_is_reusable(&existing, manifest, &input_fingerprint) {
+            if !report_path.exists() {
+                write_json_pretty(&report_path, &existing)?;
+            }
+            return Ok(existing);
+        }
+    }
     let mut report = ProviderGraphMaterializationReport {
         status: "skipped".into(),
         provider: config.provider.id_slug().into(),
         model: config.model_id.clone(),
         source_id: manifest.source_id.clone(),
+        input_fingerprint: Some(input_fingerprint),
         source_graph_node_count: 0,
         source_graph_relation_count: 0,
         workspace_link_count: 0,
@@ -358,6 +390,61 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     Ok(report)
 }
 
+fn provider_graph_report_is_reusable(
+    report: &ProviderGraphMaterializationReport,
+    manifest: &SourceArtifactManifest,
+    input_fingerprint: &ProviderGraphMaterializationInputFingerprint,
+) -> bool {
+    report.status == "linked"
+        && report.source_id == manifest.source_id
+        && report.input_fingerprint.as_ref() == Some(input_fingerprint)
+}
+
+fn provider_graph_input_fingerprint(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    config: &EngineConfig,
+) -> ProviderGraphMaterializationInputFingerprint {
+    let baseline_marker = read_latest_readable_graph_snapshot_marker(workspace_root)
+        .ok()
+        .flatten();
+    ProviderGraphMaterializationInputFingerprint {
+        workspace_id: workspace_id.into(),
+        source_id: manifest.source_id.clone(),
+        manifest_updated_at: manifest.updated_at,
+        markdown_hash: stable_text_hash(markdown),
+        provider: config.provider.id_slug().into(),
+        model: config.model_id.clone(),
+        source_graph_schema_version: PROVIDER_SOURCE_GRAPH_SCHEMA_VERSION,
+        workspace_linking_schema_version: PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION,
+        prompt_version: PROVIDER_GRAPH_PROMPT_VERSION,
+        baseline_snapshot_id: baseline_marker
+            .as_ref()
+            .map(|marker| marker.snapshot_id.clone()),
+        baseline_event_id: baseline_marker
+            .as_ref()
+            .map(|marker| marker.event_id.clone()),
+        baseline_materialized_at: baseline_marker
+            .as_ref()
+            .map(|marker| marker.materialized_at),
+    }
+}
+
+fn stable_text_hash(value: &str) -> String {
+    format!("{:016x}", fnv1a_hash(value.as_bytes()))
+}
+
+fn fnv1a_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn mark_workspace_linking_failed(
     report: &mut ProviderGraphMaterializationReport,
     error: &anyhow::Error,
@@ -585,6 +672,102 @@ fn provider_graph_generation_disabled_for_process() -> bool {
 mod tests {
     use super::*;
 
+    fn test_fingerprint(
+        source_id: &str,
+        markdown_hash: &str,
+    ) -> ProviderGraphMaterializationInputFingerprint {
+        ProviderGraphMaterializationInputFingerprint {
+            workspace_id: "default".into(),
+            source_id: source_id.into(),
+            manifest_updated_at: 1,
+            markdown_hash: markdown_hash.into(),
+            provider: "open_router".into(),
+            model: "openai/gpt-4.1-mini".into(),
+            source_graph_schema_version: PROVIDER_SOURCE_GRAPH_SCHEMA_VERSION,
+            workspace_linking_schema_version: PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION,
+            prompt_version: PROVIDER_GRAPH_PROMPT_VERSION,
+            baseline_snapshot_id: Some("snapshot-a".into()),
+            baseline_event_id: Some("evt-a".into()),
+            baseline_materialized_at: Some(1),
+        }
+    }
+
+    fn test_manifest(source_id: &str) -> SourceArtifactManifest {
+        SourceArtifactManifest {
+            workspace_id: "default".into(),
+            source_id: source_id.into(),
+            original_path: "/tmp/source.pdf".into(),
+            source_path: "/tmp/source.pdf".into(),
+            markdown_path: "/tmp/source.md".into(),
+            artifact_root: "/tmp/artifacts/source".into(),
+            manifest_path: "/tmp/artifacts/source/source-manifest.json".into(),
+            format: DocumentFormat::Pdf,
+            output_name: "source".into(),
+            status: IngestStatus::Ingested,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            pages: Vec::new(),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn test_report(
+        source_id: &str,
+        fingerprint: Option<ProviderGraphMaterializationInputFingerprint>,
+    ) -> ProviderGraphMaterializationReport {
+        ProviderGraphMaterializationReport {
+            status: "linked".into(),
+            provider: "open_router".into(),
+            model: "openai/gpt-4.1-mini".into(),
+            source_id: source_id.into(),
+            input_fingerprint: fingerprint,
+            source_graph_node_count: 0,
+            source_graph_relation_count: 0,
+            workspace_link_count: 0,
+            materialized_node_count: 0,
+            materialized_relation_count: 0,
+            materialized_claim_count: 0,
+            materialized_memory_count: 0,
+            skipped_reason: None,
+            error_message: None,
+            provider_run_id: None,
+            source_graph_run_id: None,
+            workspace_linking_run_id: None,
+            source_graph_materialized: true,
+            workspace_linking_materialized: true,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn linked_report_reuse_requires_matching_input_fingerprint() {
+        let manifest = test_manifest("source-alpha");
+        let fingerprint = test_fingerprint("source-alpha", "hash-a");
+        let matching_report = test_report("source-alpha", Some(fingerprint.clone()));
+
+        assert!(provider_graph_report_is_reusable(
+            &matching_report,
+            &manifest,
+            &fingerprint
+        ));
+
+        let legacy_report_without_fingerprint = test_report("source-alpha", None);
+        assert!(!provider_graph_report_is_reusable(
+            &legacy_report_without_fingerprint,
+            &manifest,
+            &fingerprint
+        ));
+
+        let changed_markdown = test_fingerprint("source-alpha", "hash-b");
+        assert!(!provider_graph_report_is_reusable(
+            &matching_report,
+            &manifest,
+            &changed_markdown
+        ));
+    }
+
     #[test]
     fn linking_failure_after_source_materialization_is_reported_as_partial_commit() {
         let mut report = ProviderGraphMaterializationReport {
@@ -592,6 +775,7 @@ mod tests {
             provider: "openai".into(),
             model: "test-model".into(),
             source_id: "source-alpha".into(),
+            input_fingerprint: None,
             source_graph_node_count: 1,
             source_graph_relation_count: 1,
             workspace_link_count: 0,
