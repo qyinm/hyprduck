@@ -1795,16 +1795,79 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         confidence: Some(1.0),
         updated_at: 100,
     };
-    let old_event = provider_test_event(
+    let old_provider_evidence = EvidenceRef {
+        id: "ev-provider-old".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Stale provider evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("provider_test".into()),
+    };
+    let old_entity = EntityRecord {
+        entity_id: "entity-provider-old".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        kind: BrainNodeKind::Concept,
+        name: "Old Entity".into(),
+        aliases: Vec::new(),
+        source_refs: vec![source.source_id.clone()],
+        evidence_refs: vec![old_provider_evidence.id.clone()],
+        updated_at: 100,
+    };
+    let old_wiki_page = WikiPage {
+        page_id: "wiki-provider-old".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        path: "wiki/provider-old.md".into(),
+        title: "Old Provider Wiki".into(),
+        body: "Stale provider wiki.".into(),
+        node_refs: vec![concept_y.node_id.clone()],
+        source_refs: vec![source.source_id.clone()],
+        evidence_refs: vec![old_provider_evidence.id.clone()],
+        updated_at: 100,
+    };
+    let old_extraction = StructuredExtractionArtifact {
+        artifact_id: "extraction-provider-old".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        source_id: source.source_id.clone(),
+        extractor: "provider_test".into(),
+        extractor_model: Some("test-model".into()),
+        source_refs: vec![source.source_id.clone()],
+        page_refs: Vec::new(),
+        entities: Vec::new(),
+        topics: Vec::new(),
+        claims: Vec::new(),
+        relations: Vec::new(),
+        memories: Vec::new(),
+        evidence_refs: vec![old_provider_evidence.clone()],
+        confidence: Some(0.8),
+        provenance: "provider_test".into(),
+        created_at: 100,
+    };
+    let mut old_event = provider_test_event(
         "evt-provider-old",
         "source_graph_build",
         100,
         &[source.clone()],
         &[source_node.clone(), concept_x.clone(), concept_y.clone()],
         &[edge_x.clone(), edge_y],
-        &[evidence.clone()],
+        &[evidence.clone(), old_provider_evidence.clone()],
         &[],
     );
+    old_event.payload_json = materialized_graph_event_payload_json(
+        100,
+        &[source.clone()],
+        &[source_node.clone(), concept_x.clone(), concept_y.clone()],
+        &[edge_x.clone()],
+        &[evidence.clone(), old_provider_evidence.clone()],
+        &[],
+        std::slice::from_ref(&old_wiki_page),
+        std::slice::from_ref(&old_entity),
+        &[],
+        std::slice::from_ref(&old_extraction),
+    )
+    .expect("provider graph payload with stale artifacts");
     let new_event = provider_test_event(
         "evt-provider-new",
         "source_graph_build",
@@ -1818,8 +1881,11 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
     snapshot.sources = vec![source];
-    snapshot.evidence = vec![evidence];
+    snapshot.evidence = vec![evidence, old_provider_evidence];
     snapshot.nodes = vec![source_node];
+    snapshot.entities = vec![old_entity];
+    snapshot.wiki_pages = vec![old_wiki_page];
+    snapshot.extractions = vec![old_extraction];
     snapshot.events = vec![old_event, new_event];
 
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write replayed graph");
@@ -1838,6 +1904,26 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         .relations
         .iter()
         .any(|relation| relation.relation_id == "edge-source-y"));
+    assert!(replayed
+        .evidence
+        .iter()
+        .any(|evidence| evidence.id == "ev-source-a"));
+    assert!(!replayed
+        .evidence
+        .iter()
+        .any(|evidence| evidence.id == "ev-provider-old"));
+    assert!(!replayed
+        .entities
+        .iter()
+        .any(|entity| entity.entity_id == "entity-provider-old"));
+    assert!(!replayed
+        .wiki_pages
+        .iter()
+        .any(|page| page.page_id == "wiki-provider-old"));
+    assert!(!replayed
+        .extractions
+        .iter()
+        .any(|extraction| extraction.artifact_id == "extraction-provider-old"));
 }
 
 #[test]

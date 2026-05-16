@@ -1431,6 +1431,18 @@ fn clear_replayable_provider_overlay_records(
         .iter()
         .flat_map(|event| event.target_memory_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
+    let provider_overlay_refs = replayable_events
+        .iter()
+        .fold(ProviderOverlayRefs::default(), |mut refs, event| {
+            refs.extend_from_event(event);
+            refs
+        });
+    let deterministic_source_evidence_ids = snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.kind == BrainNodeKind::Source)
+        .flat_map(|node| node.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
 
     snapshot.nodes.retain(|node| {
         node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
@@ -1444,6 +1456,66 @@ fn clear_replayable_provider_overlay_records(
     snapshot
         .memories
         .retain(|memory| !target_memory_ids.contains(&memory.memory_id));
+    snapshot.evidence.retain(|evidence| {
+        !provider_overlay_refs.evidence_ids.contains(&evidence.id)
+            || deterministic_source_evidence_ids.contains(&evidence.id)
+    });
+    snapshot
+        .entities
+        .retain(|entity| !provider_overlay_refs.entity_ids.contains(&entity.entity_id));
+    snapshot.wiki_pages.retain(|page| {
+        !provider_overlay_refs.wiki_page_ids.contains(&page.page_id)
+            && !provider_overlay_refs.wiki_paths.contains(&page.path)
+    });
+    snapshot.extractions.retain(|extraction| {
+        !provider_overlay_refs
+            .extraction_artifact_ids
+            .contains(&extraction.artifact_id)
+    });
+}
+
+#[derive(Debug, Default)]
+struct ProviderOverlayRefs {
+    evidence_ids: BTreeSet<String>,
+    entity_ids: BTreeSet<String>,
+    wiki_page_ids: BTreeSet<String>,
+    wiki_paths: BTreeSet<String>,
+    extraction_artifact_ids: BTreeSet<String>,
+}
+
+impl ProviderOverlayRefs {
+    fn extend_from_event(&mut self, event: &BrainEvent) {
+        self.evidence_ids.extend(event.evidence_refs.iter().cloned());
+        let Ok(payload) = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
+        else {
+            return;
+        };
+        let Some(materialized_graph) = payload.materialized_graph else {
+            return;
+        };
+        self.evidence_ids.extend(
+            materialized_graph
+                .evidence
+                .into_iter()
+                .map(|evidence| evidence.id),
+        );
+        self.entity_ids.extend(
+            materialized_graph
+                .entities
+                .into_iter()
+                .map(|entity| entity.entity_id),
+        );
+        for page in materialized_graph.wiki_pages {
+            self.wiki_page_ids.insert(page.page_id);
+            self.wiki_paths.insert(page.path);
+        }
+        self.extraction_artifact_ids.extend(
+            materialized_graph
+                .extractions
+                .into_iter()
+                .map(|extraction| extraction.artifact_id),
+        );
+    }
 }
 
 fn apply_filtered_materialized_graph_overlay(
