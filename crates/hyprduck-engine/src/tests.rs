@@ -1777,6 +1777,129 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
 }
 
 #[test]
+fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let source = SourceRecord {
+        source_id: "source-a".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/source-a.pdf".into(),
+        source_path: "/tmp/source-a.pdf".into(),
+        markdown_path: "/tmp/source-a.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let evidence = EvidenceRef {
+        id: "ev-source-a".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Source A evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let source_node = BrainNodeRecord {
+        node_id: "source:source-a".into(),
+        kind: BrainNodeKind::Source,
+        label: "source-a.pdf".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence.id.clone()],
+        source_ids: vec![source.source_id.clone()],
+        confidence: Some(1.0),
+        updated_at: 1,
+    };
+    let concept = BrainNodeRecord {
+        node_id: "concept-source-a".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Source A Concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence.id.clone()],
+        source_ids: vec![source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
+    let edge = BrainRelationRecord {
+        relation_id: "edge-source-a-concept".into(),
+        kind: BrainRelationKind::SourceOf,
+        source_node_id: source_node.node_id.clone(),
+        target_node_id: concept.node_id.clone(),
+        label: "source_of".into(),
+        evidence_ids: vec![evidence.id.clone()],
+        confidence: Some(1.0),
+        updated_at: 100,
+    };
+    let source_event = provider_test_event(
+        "evt-provider-source-a",
+        "source_graph_build",
+        100,
+        &[source.clone()],
+        &[source_node.clone(), concept.clone()],
+        &[edge],
+        &[evidence.clone()],
+        &[],
+    );
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![source.clone()];
+    snapshot.evidence = vec![evidence];
+    snapshot.nodes = vec![source_node];
+    snapshot.events = vec![source_event];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write source graph");
+    let artifact_root = workspace_root.join("artifacts").join(&source.source_id);
+    write_json_pretty(
+        &artifact_root.join("provider-graph-materialization.json"),
+        &json!({
+            "status": "source_graph_materialized_linking_failed",
+            "provider": "openai",
+            "model": "test-model",
+            "sourceId": source.source_id,
+            "sourceGraphNodeCount": 2,
+            "sourceGraphRelationCount": 1,
+            "workspaceLinkCount": 0,
+            "materializedNodeCount": 0,
+            "materializedRelationCount": 0,
+            "materializedClaimCount": 0,
+            "materializedMemoryCount": 0,
+            "sourceGraphRunId": "provider-source-graph-test",
+            "workspaceLinkingRunId": "provider-workspace-linking-test",
+            "sourceGraphMaterialized": true,
+            "workspaceLinkingMaterialized": false,
+            "errorMessage": "workspace linking validation failed",
+            "updatedAt": 101
+        }),
+    )
+    .expect("write report");
+
+    let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read source graph");
+    let report: Value =
+        read_json_artifact(&artifact_root.join("provider-graph-materialization.json"))
+            .expect("read materialization report");
+
+    assert!(replayed
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-source-a"));
+    assert!(!replayed.events.iter().any(|event| {
+        event.operation_type.as_deref() == Some("workspace_linking")
+            && event.policy_result == "materialized"
+    }));
+    assert_eq!(report["status"], "source_graph_materialized_linking_failed");
+    assert_eq!(report["sourceGraphMaterialized"], true);
+    assert_eq!(report["workspaceLinkingMaterialized"], false);
+}
+
+#[test]
 fn provider_overlay_drops_null_source_evidence_after_source_deletion() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
