@@ -2,12 +2,21 @@
   "name": "hyprduck-desktop",
   "packageManager": "bun@1.2.18",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.1.1",
+  "description": "Local document parsing for agent-ready knowledge.",
+  "author": "hippoo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qyinm/hyprduck.git"
+  },
   "type": "module",
   "main": "main.cjs",
   "scripts": {
     "dev": "bun run sync:engine:debug && node scripts/dev-electron.cjs",
     "build": "bun run frontend:build && bun run sync:engine:release && electron-builder --mac dir",
+    "release:prepare:mac": "bun run frontend:build && bun run sync:engine:release",
+    "release:pack:mac": "../../scripts/release_pack_mac.sh",
+    "release:dir:mac": "../../scripts/release_dir_mac.sh",
     "electron:dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",
@@ -19,15 +28,48 @@
   "build": {
     "appId": "com.hyprduck.desktop",
     "productName": "HyprDuck",
+    "asar": true,
+    "npmRebuild": false,
     "directories": {
+      "buildResources": "build/macos",
       "output": "release/electron"
     },
     "mac": {
-      "target": "dir",
       "category": "public.app-category.productivity",
       "icon": "resources/icons/icon.icns",
-      "identity": null
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "darkModeSupport": true,
+      "electronLanguages": [
+        "en",
+        "ko"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/macos/entitlements.mac.plist",
+      "entitlementsInherit": "build/macos/entitlements.mac.inherit.plist",
+      "binaries": [
+        "Contents/Resources/binaries/hyprduck-engine-aarch64-apple-darwin"
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "HyprDuck imports documents you select and writes local markdown packages.",
+        "NSDownloadsFolderUsageDescription": "HyprDuck can import documents you select from Downloads."
+      }
     },
+    "afterSign": "scripts/notarize.cjs",
     "files": [
       "dist/**/*",
       "main.cjs",

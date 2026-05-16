@@ -26,6 +26,9 @@ build/
 release/
 exports/
 !exports/.gitkeep
+!apps/desktop/build/
+!apps/desktop/build/macos/
+!apps/desktop/build/macos/*.plist
 *.app
 target/
 
@@ -41,3 +44,4 @@ apps/desktop/src-tauri/binaries/hyprduck-engine-*
 apps/desktop/dist/
 .gstack/
 .vercel
+.env.release.local
