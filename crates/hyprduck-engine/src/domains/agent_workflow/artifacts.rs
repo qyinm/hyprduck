@@ -49,7 +49,7 @@ pub(crate) fn write_provider_graph_run_validation_report(
             "workspaceId": workspace_id,
             "sourceId": source_id,
             "status": status,
-            "parsedProposalCount": parsed_count,
+            "parsedRecordCount": parsed_count,
             "errorMessage": error_message,
             "createdAt": unix_timestamp_seconds(),
         }),
@@ -509,5 +509,26 @@ mod tests {
         assert!(properties.get("evidence").is_none());
         assert!(properties.get("entities").is_none());
         assert!(properties.get("extractions").is_none());
+    }
+
+    #[test]
+    fn validation_report_uses_record_count_name() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_provider_graph_run_validation_report(
+            temp.path(),
+            "run-a",
+            "default",
+            "source-a",
+            "materialized",
+            3,
+            None,
+        )
+        .expect("write validation report");
+
+        let report: serde_json::Value =
+            read_json_artifact(&temp.path().join("runs/run-a/validation-report.json"))
+                .expect("read validation report");
+        assert_eq!(report["parsedRecordCount"], 3);
+        assert!(report.get("parsedProposalCount").is_none());
     }
 }

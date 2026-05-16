@@ -68,7 +68,7 @@ pub(crate) struct ProviderGraphMaterializationReport {
     #[serde(default)]
     pub(crate) error_message: Option<String>,
     #[serde(default)]
-    pub(crate) provider_run_id: Option<String>,
+    pub(crate) provider_run_ids: Vec<String>,
     #[serde(default)]
     pub(crate) source_graph_run_id: Option<String>,
     #[serde(default)]
@@ -108,7 +108,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
                 materialized_memory_count: 0,
                 skipped_reason: None,
                 error_message: Some(format!("{error:#}")),
-                provider_run_id: None,
+                provider_run_ids: Vec::new(),
                 source_graph_run_id: None,
                 workspace_linking_run_id: None,
                 source_graph_materialized: false,
@@ -146,7 +146,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
         materialized_memory_count: 0,
         skipped_reason: None,
         error_message: None,
-        provider_run_id: None,
+        provider_run_ids: Vec::new(),
         source_graph_run_id: None,
         workspace_linking_run_id: None,
         source_graph_materialized: false,
@@ -170,7 +170,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
     write_json_pretty(&artifact_root.join("provider-graph-context.json"), context)?;
     let source_graph_run_id = format!("provider-source-graph-{}", Uuid::now_v7());
-    report.provider_run_id = Some(source_graph_run_id.clone());
+    report.provider_run_ids.push(source_graph_run_id.clone());
     report.source_graph_run_id = Some(source_graph_run_id.clone());
     let source_graph_prompt =
         build_source_local_graph_prompt(workspace_id, manifest, markdown, &snapshot, context)?;
@@ -273,8 +273,9 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
 
     let linked_baseline = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| source_materialization_input.clone());
+    update_materialized_counts(&mut report, &linked_baseline);
     let workspace_linking_run_id = format!("provider-workspace-linking-{}", Uuid::now_v7());
-    report.provider_run_id = Some(workspace_linking_run_id.clone());
+    report.provider_run_ids.push(workspace_linking_run_id.clone());
     report.workspace_linking_run_id = Some(workspace_linking_run_id.clone());
     let workspace_linking_prompt = build_workspace_linking_prompt(
         workspace_root,
@@ -381,13 +382,20 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     )?;
 
     report.status = "linked".into();
-    report.materialized_node_count = final_snapshot.nodes.len();
-    report.materialized_relation_count = final_snapshot.relations.len();
-    report.materialized_claim_count = final_snapshot.claims.len();
-    report.materialized_memory_count = final_snapshot.memories.len();
+    update_materialized_counts(&mut report, &final_snapshot);
     report.updated_at = unix_timestamp_seconds();
     write_json_pretty(&report_path, &report)?;
     Ok(report)
+}
+
+fn update_materialized_counts(
+    report: &mut ProviderGraphMaterializationReport,
+    snapshot: &BrainRepoSnapshot,
+) {
+    report.materialized_node_count = snapshot.nodes.len();
+    report.materialized_relation_count = snapshot.relations.len();
+    report.materialized_claim_count = snapshot.claims.len();
+    report.materialized_memory_count = snapshot.memories.len();
 }
 
 fn provider_graph_report_is_reusable(
@@ -732,7 +740,7 @@ mod tests {
             materialized_memory_count: 0,
             skipped_reason: None,
             error_message: None,
-            provider_run_id: None,
+            provider_run_ids: Vec::new(),
             source_graph_run_id: None,
             workspace_linking_run_id: None,
             source_graph_materialized: true,
@@ -820,7 +828,10 @@ mod tests {
             materialized_memory_count: 0,
             skipped_reason: None,
             error_message: None,
-            provider_run_id: Some("provider-workspace-linking-test".into()),
+            provider_run_ids: vec![
+                "provider-source-graph-test".into(),
+                "provider-workspace-linking-test".into(),
+            ],
             source_graph_run_id: Some("provider-source-graph-test".into()),
             workspace_linking_run_id: Some("provider-workspace-linking-test".into()),
             source_graph_materialized: true,
@@ -840,7 +851,65 @@ mod tests {
         let encoded = serde_json::to_value(&report).expect("encode report");
         assert!(encoded.get("sourceGraphNodeCount").is_some());
         assert!(encoded.get("materializedNodeCount").is_some());
+        assert_eq!(
+            encoded["providerRunIds"],
+            json!(["provider-source-graph-test", "provider-workspace-linking-test"])
+        );
+        assert!(encoded.get("providerRunId").is_none());
         assert!(encoded.get("proposalCount").is_none());
         assert!(encoded.get("appliedCount").is_none());
+    }
+
+    #[test]
+    fn legacy_provider_run_id_report_still_decodes() {
+        let report: ProviderGraphMaterializationReport = serde_json::from_value(json!({
+            "status": "linked",
+            "provider": "openai",
+            "model": "test-model",
+            "sourceId": "source-alpha",
+            "providerRunId": "legacy-single-run",
+            "updatedAt": 1
+        }))
+        .expect("legacy report decodes");
+
+        assert!(report.provider_run_ids.is_empty());
+        let encoded = serde_json::to_value(&report).expect("encode report");
+        assert!(encoded.get("providerRunId").is_none());
+        assert!(encoded.get("providerRunIds").is_some());
+    }
+
+    #[test]
+    fn materialized_report_counts_reflect_current_snapshot() {
+        let mut report = test_report("source-alpha", None);
+        let mut snapshot = empty_replayed_brain_snapshot("default");
+        snapshot.nodes.push(BrainNodeRecord {
+            node_id: "concept-a".into(),
+            kind: BrainNodeKind::Concept,
+            label: "A".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: Vec::new(),
+            source_ids: Vec::new(),
+            confidence: None,
+            updated_at: 1,
+        });
+        snapshot.memories.push(MemoryRecord {
+            memory_id: "memory-a".into(),
+            workspace_id: "default".into(),
+            scope: BrainScope::Project,
+            title: "A".into(),
+            body: "A".into(),
+            source_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            created_at: 1,
+            updated_at: 1,
+        });
+
+        update_materialized_counts(&mut report, &snapshot);
+
+        assert_eq!(report.materialized_node_count, 1);
+        assert_eq!(report.materialized_relation_count, 0);
+        assert_eq!(report.materialized_claim_count, 0);
+        assert_eq!(report.materialized_memory_count, 1);
     }
 }
