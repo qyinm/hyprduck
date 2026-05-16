@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::*;
 
@@ -183,7 +183,13 @@ pub(crate) fn validate_provider_source_local_graph_snapshot(
             );
         }
     }
-    validate_common_refs(snapshot, &source_ids, &evidence_ids)?;
+    let evidence_source_by_id = evidence_source_map(snapshot);
+    validate_common_refs(
+        snapshot,
+        &source_ids,
+        &evidence_ids,
+        &evidence_source_by_id,
+    )?;
     let report = lint_brain_snapshot(snapshot);
     if report.issue_count > 0 {
         bail!(
@@ -224,7 +230,13 @@ pub(crate) fn validate_provider_workspace_linking_snapshot(
         .iter()
         .map(|evidence| evidence.id.clone())
         .collect::<BTreeSet<_>>();
-    validate_common_refs(snapshot, &source_ids, &evidence_ids)?;
+    let evidence_source_by_id = evidence_source_map(snapshot);
+    validate_common_refs(
+        snapshot,
+        &source_ids,
+        &evidence_ids,
+        &evidence_source_by_id,
+    )?;
 
     let node_sources = snapshot
         .nodes
@@ -252,6 +264,14 @@ pub(crate) fn validate_provider_workspace_linking_snapshot(
                 relation.relation_id
             );
         }
+        if !evidence_covers_any_source(&relation.evidence_ids, left, &evidence_source_by_id)
+            || !evidence_covers_any_source(&relation.evidence_ids, right, &evidence_source_by_id)
+        {
+            bail!(
+                "workspace linking relation {} evidence does not cover both endpoint source sides",
+                relation.relation_id
+            );
+        }
     }
     let report = lint_brain_snapshot(snapshot);
     if report.issue_count > 0 {
@@ -274,6 +294,7 @@ fn validate_common_refs(
     snapshot: &BrainRepoSnapshot,
     source_ids: &BTreeSet<String>,
     evidence_ids: &BTreeSet<String>,
+    evidence_source_by_id: &BTreeMap<String, String>,
 ) -> Result<()> {
     let node_ids = snapshot
         .nodes
@@ -310,6 +331,16 @@ fn validate_common_refs(
                 join_or_none(&missing_evidence)
             );
         }
+        if !evidence_covers_all_sources(
+            &claim.evidence_refs,
+            &claim.source_refs,
+            evidence_source_by_id,
+        ) {
+            bail!(
+                "claim {} evidence does not cover all source refs",
+                claim.claim_id
+            );
+        }
     }
     for memory in &snapshot.memories {
         let missing_sources = missing_refs(&memory.source_refs, source_ids);
@@ -320,6 +351,16 @@ fn validate_common_refs(
                 memory.memory_id,
                 join_or_none(&missing_sources),
                 join_or_none(&missing_evidence)
+            );
+        }
+        if !evidence_covers_all_sources(
+            &memory.evidence_refs,
+            &memory.source_refs,
+            evidence_source_by_id,
+        ) {
+            bail!(
+                "memory {} evidence does not cover all source refs",
+                memory.memory_id
             );
         }
     }
@@ -337,6 +378,55 @@ fn validate_common_refs(
                 join_or_none(&missing_evidence)
             );
         }
+        if !evidence_covers_all_sources(
+            &page.evidence_refs,
+            &page.source_refs,
+            evidence_source_by_id,
+        ) {
+            bail!(
+                "wiki page {} evidence does not cover all source refs",
+                page.path
+            );
+        }
     }
     Ok(())
+}
+
+fn evidence_source_map(snapshot: &BrainRepoSnapshot) -> BTreeMap<String, String> {
+    snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (evidence.id.clone(), source_id.clone()))
+        })
+        .collect()
+}
+
+fn evidence_covers_any_source(
+    evidence_refs: &[String],
+    source_refs: &[String],
+    evidence_source_by_id: &BTreeMap<String, String>,
+) -> bool {
+    source_refs.iter().any(|source_id| {
+        evidence_refs
+            .iter()
+            .any(|evidence_id| evidence_source_by_id.get(evidence_id) == Some(source_id))
+    })
+}
+
+fn evidence_covers_all_sources(
+    evidence_refs: &[String],
+    source_refs: &[String],
+    evidence_source_by_id: &BTreeMap<String, String>,
+) -> bool {
+    source_refs.iter().all(|source_id| {
+        evidence_covers_any_source(
+            evidence_refs,
+            std::slice::from_ref(source_id),
+            evidence_source_by_id,
+        )
+    })
 }
