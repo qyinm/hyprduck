@@ -1332,6 +1332,13 @@ fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) 
         .filter(|event| is_replayable_materialized_graph_event(event))
         .cloned()
         .collect::<Vec<_>>();
+    replay_materialized_graph_overlay_events(snapshot, &replayable_events)
+}
+
+pub(crate) fn replay_materialized_graph_overlay_events(
+    snapshot: &mut BrainRepoSnapshot,
+    replayable_events: &[BrainEvent],
+) -> Result<()> {
     let mut events = latest_replayable_materialized_graph_events(&replayable_events);
     events.sort_by(|left, right| {
         left.causality

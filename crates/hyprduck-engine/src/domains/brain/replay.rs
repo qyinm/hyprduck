@@ -189,6 +189,7 @@ pub(crate) fn reconstruct_brain_snapshot_from_events(
         }
     }
 
+    replay_state.replay_provider_overlays()?;
     let mut snapshot = replay_state.into_snapshot();
     snapshot.events = included;
     if let Some(target_event_id) = up_to_event_id {
@@ -210,6 +211,7 @@ pub(crate) fn reconstruct_brain_snapshot_from_events(
 struct BrainReplayState {
     snapshot: BrainRepoSnapshot,
     pending_proposals: BTreeMap<String, BrainUpdateProposal>,
+    provider_overlay_events: Vec<BrainEvent>,
 }
 
 impl BrainReplayState {
@@ -217,11 +219,24 @@ impl BrainReplayState {
         Self {
             snapshot: empty_replayed_brain_snapshot(workspace_id),
             pending_proposals: BTreeMap::new(),
+            provider_overlay_events: Vec::new(),
         }
     }
 
     fn apply_event(&mut self, event: &BrainEvent) -> Result<()> {
-        apply_replayed_brain_event(event, &mut self.snapshot, &mut self.pending_proposals)
+        apply_replayed_brain_event(
+            event,
+            &mut self.snapshot,
+            &mut self.pending_proposals,
+            &mut self.provider_overlay_events,
+        )
+    }
+
+    fn replay_provider_overlays(&mut self) -> Result<()> {
+        crate::domains::knowledge::replay_materialized_graph_overlay_events(
+            &mut self.snapshot,
+            &self.provider_overlay_events,
+        )
     }
 
     fn into_snapshot(self) -> BrainRepoSnapshot {
@@ -233,9 +248,14 @@ fn apply_replayed_brain_event(
     event: &BrainEvent,
     snapshot: &mut BrainRepoSnapshot,
     pending_proposals: &mut BTreeMap<String, BrainUpdateProposal>,
+    provider_overlay_events: &mut Vec<BrainEvent>,
 ) -> Result<()> {
     match event.event_type {
         BrainEventKind::GraphMaterialized => {
+            if is_provider_graph_overlay_event(event) {
+                provider_overlay_events.push(event.clone());
+                return Ok(());
+            }
             let payload =
                 serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
                     .unwrap_or(MaterializedGraphEventPayload {
@@ -288,6 +308,15 @@ fn apply_replayed_brain_event(
         _ => {}
     }
     Ok(())
+}
+
+fn is_provider_graph_overlay_event(event: &BrainEvent) -> bool {
+    event.event_type == BrainEventKind::GraphMaterialized
+        && matches!(
+            event.operation_type.as_deref(),
+            Some("full_workspace_rebuild" | "source_graph_build" | "workspace_linking")
+        )
+        && event.policy_result == "materialized"
 }
 
 fn apply_replayed_accepted_proposal(
@@ -648,4 +677,205 @@ fn sorted_set_difference(left: &BTreeSet<&str>, right: &BTreeSet<&str>) -> Vec<S
     left.difference(right)
         .map(|value| (*value).to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconstruct_replays_provider_graph_events_as_latest_overlays() {
+        let workspace_id = "default";
+        let source = SourceRecord {
+            source_id: "source-a".into(),
+            workspace_id: workspace_id.into(),
+            original_path: "/tmp/source-a.pdf".into(),
+            source_path: "/tmp/source-a.pdf".into(),
+            markdown_path: "/tmp/source-a.md".into(),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        };
+        let evidence = EvidenceRef {
+            id: "ev-source-a".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Source A evidence.".into(),
+            source_path: Some(source.source_path.clone()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(source.markdown_path.clone()),
+            image_path: None,
+            provenance: Some("test".into()),
+        };
+        let source_node = BrainNodeRecord {
+            node_id: "source:source-a".into(),
+            kind: BrainNodeKind::Source,
+            label: "source-a.pdf".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence.id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(1.0),
+            updated_at: 1,
+        };
+        let concept_x = provider_test_concept("concept-x", &source, &evidence, 200);
+        let concept_y = provider_test_concept("concept-y", &source, &evidence, 100);
+        let base_event = test_graph_event(
+            workspace_id,
+            "evt-base",
+            "graph_materialized",
+            1,
+            &[source.clone()],
+            std::slice::from_ref(&source_node),
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+        let old_provider_event = test_graph_event(
+            workspace_id,
+            "evt-provider-old",
+            "source_graph_build",
+            100,
+            std::slice::from_ref(&source),
+            &[source_node.clone(), concept_y],
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+        let new_provider_event = test_graph_event(
+            workspace_id,
+            "evt-provider-new",
+            "source_graph_build",
+            200,
+            std::slice::from_ref(&source),
+            &[source_node, concept_x],
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+
+        let replay = reconstruct_brain_snapshot_from_events(
+            workspace_id,
+            &[base_event, old_provider_event, new_provider_event],
+            None,
+            None,
+            None,
+        )
+        .expect("reconstruct graph");
+
+        assert!(replay
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "source:source-a"));
+        assert!(replay
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-x"));
+        assert!(!replay
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-y"));
+    }
+
+    fn provider_test_concept(
+        node_id: &str,
+        source: &SourceRecord,
+        evidence: &EvidenceRef,
+        updated_at: u64,
+    ) -> BrainNodeRecord {
+        BrainNodeRecord {
+            node_id: node_id.into(),
+            kind: BrainNodeKind::Concept,
+            label: node_id.into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence.id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(0.9),
+            updated_at,
+        }
+    }
+
+    fn test_graph_event(
+        workspace_id: &str,
+        event_id: &str,
+        operation_type: &str,
+        generated_at: u64,
+        sources: &[SourceRecord],
+        nodes: &[BrainNodeRecord],
+        relations: &[BrainRelationRecord],
+        evidence: &[EvidenceRef],
+    ) -> BrainEvent {
+        BrainEvent {
+            event_id: event_id.into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: workspace_id.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some(operation_type.into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "hyprduck-provider-graph-agent:test".into(),
+            },
+            source_refs: sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            source_markdown_refs: sources
+                .iter()
+                .map(|source| source.markdown_path.clone())
+                .collect(),
+            node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
+            relation_refs: relations
+                .iter()
+                .map(|relation| relation.relation_id.clone())
+                .collect(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: nodes
+                .iter()
+                .filter(|node| node.kind != BrainNodeKind::Source)
+                .map(|node| node.node_id.clone())
+                .collect(),
+            target_edge_ids: relations
+                .iter()
+                .map(|relation| relation.relation_id.clone())
+                .collect(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: evidence
+                .iter()
+                .map(|evidence| evidence.id.clone())
+                .collect(),
+            payload_json: materialized_graph_event_payload_json(
+                generated_at,
+                sources,
+                nodes,
+                relations,
+                evidence,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("graph payload"),
+            causality: BrainEventCausality {
+                caused_by_source_ids: sources
+                    .iter()
+                    .map(|source| source.source_id.clone())
+                    .collect(),
+                snapshot_id: Some(format!("snapshot-{event_id}")),
+                materialized_version: Some(generated_at),
+                ..Default::default()
+            },
+            confidence: Some("test".into()),
+            policy_result: "materialized".into(),
+            created_at: generated_at,
+        }
+    }
 }
