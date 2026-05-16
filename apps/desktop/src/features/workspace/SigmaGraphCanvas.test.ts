@@ -7,21 +7,75 @@ import {
   pointerDeltaToViewBox,
   zoomGraphViewportAtPoint,
 } from "./graphViewport";
-import { sigmaGraphSelectionFromUiState } from "./SigmaGraphCanvas";
+import {
+  sigmaGraphScopeFromUiState,
+  sigmaGraphSelectionFromUiState,
+  sigmaGraphTopologySelectionFromUiState,
+} from "./SigmaGraphCanvas";
+import type { WorkspaceUiState } from "./state";
+
+const baseUiState: WorkspaceUiState = {
+  selectedNodeId: null,
+  selectedEdgeId: null,
+  inspectorOpen: true,
+  answerDockOpen: false,
+  answerInput: "",
+};
 
 describe("graph viewport controls", () => {
-  test("passes workspace node and edge selection into the sigma graph builder", () => {
+  test("passes workspace node and edge selection into graph presentation", () => {
     expect(
       sigmaGraphSelectionFromUiState({
+        ...baseUiState,
         selectedNodeId: "node-a",
         selectedEdgeId: "edge-a",
-        inspectorOpen: true,
-        answerDockOpen: false,
-        answerInput: "",
       }),
     ).toEqual({
       selectedNodeId: "node-a",
       selectedEdgeId: "edge-a",
+    });
+  });
+
+  test("keeps selected ids out of global topology inputs", () => {
+    const first = {
+      ...baseUiState,
+      selectedNodeId: "node-a",
+      selectedEdgeId: "edge-a",
+    };
+    const second = {
+      ...baseUiState,
+      selectedNodeId: "node-b",
+      selectedEdgeId: "edge-b",
+    };
+
+    expect(sigmaGraphScopeFromUiState("global", first)).toEqual(
+      sigmaGraphScopeFromUiState("global", second),
+    );
+    expect(sigmaGraphTopologySelectionFromUiState(first)).toEqual({
+      selectedNodeId: null,
+      selectedEdgeId: null,
+    });
+    expect(sigmaGraphTopologySelectionFromUiState(second)).toEqual({
+      selectedNodeId: null,
+      selectedEdgeId: null,
+    });
+  });
+
+  test("keeps local topology scoped around the selected node", () => {
+    expect(
+      sigmaGraphScopeFromUiState("local", {
+        ...baseUiState,
+        selectedNodeId: "node-a",
+      }),
+    ).toEqual({
+      mode: "local",
+      centerNodeId: "node-a",
+      depth: 1,
+    });
+    expect(sigmaGraphScopeFromUiState("local", baseUiState)).toEqual({
+      mode: "local",
+      centerNodeId: null,
+      depth: 1,
     });
   });
 

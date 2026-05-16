@@ -36,7 +36,7 @@ export interface SigmaEdgeAttributes {
   type?: string;
 }
 
-interface BuildSigmaGraphSelection {
+export interface BuildSigmaGraphSelection {
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
 }

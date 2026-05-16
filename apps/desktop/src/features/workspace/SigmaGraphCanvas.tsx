@@ -24,6 +24,7 @@ import { Focus, Network } from "lucide-react";
 
 import {
   buildSigmaGraph,
+  type BuildSigmaGraphSelection,
   type BuildSigmaGraphScope,
   type SigmaNodeAttributes,
   type SigmaWorkspaceGraph,
@@ -49,23 +50,18 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
   const { project, uiState, dispatch, className } = props;
   const [graphMode, setGraphMode] =
     useState<BuildSigmaGraphScope["mode"]>("global");
-  const localCenterNodeId =
-    graphMode === "local" ? uiState.selectedNodeId : null;
   const graphScope = useMemo<BuildSigmaGraphScope>(
-    () => ({
-      mode: graphMode,
-      centerNodeId: localCenterNodeId,
-      depth: 1,
-    }),
-    [graphMode, localCenterNodeId],
+    () => sigmaGraphScopeFromUiState(graphMode, uiState),
+    [graphMode, uiState.selectedNodeId],
   );
-  const graphSelection = useMemo(
+  const graphTopologySelection = sigmaGraphTopologySelectionFromUiState(uiState);
+  const graphPresentationSelection = useMemo(
     () => sigmaGraphSelectionFromUiState(uiState),
     [uiState.selectedEdgeId, uiState.selectedNodeId],
   );
   const graph = useMemo(
-    () => buildSigmaGraph(project, graphSelection, graphScope),
-    [graphScope, graphSelection, project],
+    () => buildSigmaGraph(project, graphTopologySelection, graphScope),
+    [graphScope, graphTopologySelection, project],
   );
   const localModeDisabled = !uiState.selectedNodeId;
 
@@ -107,14 +103,38 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
           project.summary.projectId,
           graphScope,
         )}
-        selectedEdgeId={uiState.selectedEdgeId}
-        selectedNodeId={uiState.selectedNodeId}
+        selectedEdgeId={graphPresentationSelection.selectedEdgeId}
+        selectedNodeId={graphPresentationSelection.selectedNodeId}
       />
     </div>
   );
 }
 
-export function sigmaGraphSelectionFromUiState(uiState: WorkspaceUiState) {
+const EMPTY_SIGMA_GRAPH_SELECTION: BuildSigmaGraphSelection = Object.freeze({
+  selectedNodeId: null,
+  selectedEdgeId: null,
+});
+
+export function sigmaGraphScopeFromUiState(
+  graphMode: BuildSigmaGraphScope["mode"],
+  uiState: WorkspaceUiState,
+): BuildSigmaGraphScope {
+  return {
+    mode: graphMode,
+    centerNodeId: graphMode === "local" ? uiState.selectedNodeId : null,
+    depth: 1,
+  };
+}
+
+export function sigmaGraphTopologySelectionFromUiState(
+  _uiState: WorkspaceUiState,
+): BuildSigmaGraphSelection {
+  return EMPTY_SIGMA_GRAPH_SELECTION;
+}
+
+export function sigmaGraphSelectionFromUiState(
+  uiState: WorkspaceUiState,
+): BuildSigmaGraphSelection {
   return {
     selectedNodeId: uiState.selectedNodeId,
     selectedEdgeId: uiState.selectedEdgeId,
