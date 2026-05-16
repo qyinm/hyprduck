@@ -956,6 +956,8 @@ mod tests {
         assert!(event.target_node_ids.is_empty());
         assert_eq!(event.target_edge_ids, vec!["edge-alpha-beta"]);
         assert_eq!(event.node_refs, vec!["concept-alpha", "concept-beta"]);
+        assert_eq!(event.source_refs, vec!["source-alpha", "source-beta"]);
+        assert_eq!(event.causality.caused_by_source_ids, vec!["source-alpha"]);
         assert_eq!(payload["materializedGraph"]["sources"], json!([]));
         assert_eq!(payload["materializedGraph"]["nodes"], json!([]));
         assert_eq!(payload["materializedGraph"]["evidence"], json!([]));
