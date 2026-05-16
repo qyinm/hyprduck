@@ -1544,7 +1544,14 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .workspace_linking_relations
                 .get(&relation.relation_id)
-                .is_some_and(|payload_relation| payload_relation == relation)
+                .is_some_and(|payload_relations| {
+                    payload_relations.iter().any(|payload_relation| {
+                        workspace_linking_relation_matches_payload_projection(
+                            relation,
+                            payload_relation,
+                        )
+                    })
+                })
     });
     snapshot.claims.retain(|claim| {
         !target_claim_ids.contains(&claim.claim_id)
@@ -1552,7 +1559,11 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .workspace_linking_claims
                 .get(&claim.claim_id)
-                .is_some_and(|payload_claim| payload_claim == claim)
+                .is_some_and(|payload_claims| {
+                    payload_claims.iter().any(|payload_claim| {
+                        workspace_linking_claim_matches_payload_projection(claim, payload_claim)
+                    })
+                })
     });
     snapshot.memories.retain(|memory| {
         !target_memory_ids.contains(&memory.memory_id)
@@ -1560,7 +1571,11 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .workspace_linking_memories
                 .get(&memory.memory_id)
-                .is_some_and(|payload_memory| payload_memory == memory)
+                .is_some_and(|payload_memories| {
+                    payload_memories.iter().any(|payload_memory| {
+                        workspace_linking_memory_matches_payload_projection(memory, payload_memory)
+                    })
+                })
     });
     snapshot.evidence.retain(|evidence| {
         !provider_overlay_refs.evidence_ids.contains(&evidence.id)
@@ -1575,11 +1590,19 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .workspace_linking_wiki_pages_by_id
                 .get(&page.page_id)
-                .is_some_and(|payload_page| payload_page == page)
+                .is_some_and(|payload_pages| {
+                    payload_pages.iter().any(|payload_page| {
+                        workspace_linking_wiki_page_matches_payload_projection(page, payload_page)
+                    })
+                })
             && !provider_overlay_refs
                 .workspace_linking_wiki_pages_by_path
                 .get(&page.path)
-                .is_some_and(|payload_page| payload_page == page)
+                .is_some_and(|payload_pages| {
+                    payload_pages.iter().any(|payload_page| {
+                        workspace_linking_wiki_page_matches_payload_projection(page, payload_page)
+                    })
+                })
     });
     snapshot.extractions.retain(|extraction| {
         !provider_overlay_refs
@@ -1594,11 +1617,11 @@ struct ProviderOverlayRefs {
     relation_ids: BTreeSet<String>,
     claim_ids: BTreeSet<String>,
     memory_ids: BTreeSet<String>,
-    workspace_linking_relations: BTreeMap<String, BrainRelationRecord>,
-    workspace_linking_claims: BTreeMap<String, ClaimRecord>,
-    workspace_linking_memories: BTreeMap<String, MemoryRecord>,
-    workspace_linking_wiki_pages_by_id: BTreeMap<String, WikiPage>,
-    workspace_linking_wiki_pages_by_path: BTreeMap<String, WikiPage>,
+    workspace_linking_relations: BTreeMap<String, Vec<BrainRelationRecord>>,
+    workspace_linking_claims: BTreeMap<String, Vec<ClaimRecord>>,
+    workspace_linking_memories: BTreeMap<String, Vec<MemoryRecord>>,
+    workspace_linking_wiki_pages_by_id: BTreeMap<String, Vec<WikiPage>>,
+    workspace_linking_wiki_pages_by_path: BTreeMap<String, Vec<WikiPage>>,
     entity_ids: BTreeSet<String>,
     wiki_page_ids: BTreeSet<String>,
     wiki_paths: BTreeSet<String>,
@@ -1625,24 +1648,24 @@ impl ProviderOverlayRefs {
             );
         }
         if is_workspace_linking {
-            self.workspace_linking_relations.extend(
-                materialized_graph
-                    .relations
-                    .into_iter()
-                    .map(|relation| (relation.relation_id.clone(), relation)),
-            );
-            self.workspace_linking_claims.extend(
-                materialized_graph
-                    .claims
-                    .into_iter()
-                    .map(|claim| (claim.claim_id.clone(), claim)),
-            );
-            self.workspace_linking_memories.extend(
-                materialized_graph
-                    .memories
-                    .into_iter()
-                    .map(|memory| (memory.memory_id.clone(), memory)),
-            );
+            for relation in materialized_graph.relations {
+                self.workspace_linking_relations
+                    .entry(relation.relation_id.clone())
+                    .or_default()
+                    .push(relation);
+            }
+            for claim in materialized_graph.claims {
+                self.workspace_linking_claims
+                    .entry(claim.claim_id.clone())
+                    .or_default()
+                    .push(claim);
+            }
+            for memory in materialized_graph.memories {
+                self.workspace_linking_memories
+                    .entry(memory.memory_id.clone())
+                    .or_default()
+                    .push(memory);
+            }
         } else {
             self.relation_ids.extend(
                 materialized_graph
@@ -1674,9 +1697,13 @@ impl ProviderOverlayRefs {
         for page in materialized_graph.wiki_pages {
             if is_workspace_linking {
                 self.workspace_linking_wiki_pages_by_id
-                    .insert(page.page_id.clone(), page.clone());
+                    .entry(page.page_id.clone())
+                    .or_default()
+                    .push(page.clone());
                 self.workspace_linking_wiki_pages_by_path
-                    .insert(page.path.clone(), page);
+                    .entry(page.path.clone())
+                    .or_default()
+                    .push(page);
             } else {
                 self.wiki_page_ids.insert(page.page_id);
                 self.wiki_paths.insert(page.path);
@@ -1972,6 +1999,9 @@ fn merge_filtered_relations(
         {
             continue;
         }
+        if require_cross_source && by_id.contains_key(&relation.relation_id) {
+            continue;
+        }
         by_id.insert(relation.relation_id.clone(), relation);
     }
     snapshot.relations = by_id.into_values().collect();
@@ -2014,6 +2044,9 @@ fn merge_filtered_claims(
         {
             continue;
         }
+        if require_cross_source && by_id.contains_key(&claim.claim_id) {
+            continue;
+        }
         by_id.insert(claim.claim_id.clone(), claim);
     }
     snapshot.claims = by_id.into_values().collect();
@@ -2047,6 +2080,9 @@ fn merge_filtered_memories(
             && (!has_cross_source_refs(&memory.source_refs)
                 || !has_cross_source_evidence_refs(&memory.evidence_refs, evidence_source_ids))
         {
+            continue;
+        }
+        if require_cross_source && by_id.contains_key(&memory.memory_id) {
             continue;
         }
         by_id.insert(memory.memory_id.clone(), memory);
@@ -2139,6 +2175,14 @@ fn merge_filtered_wiki_pages(
         {
             continue;
         }
+        if require_cross_source
+            && (by_path.contains_key(&page.path)
+                || by_path
+                    .values()
+                    .any(|existing| existing.page_id == page.page_id))
+        {
+            continue;
+        }
         by_path.insert(page.path.clone(), page);
     }
     snapshot.wiki_pages = by_path.into_values().collect();
@@ -2152,6 +2196,64 @@ fn has_cross_source_refs(source_refs: &[String]) -> bool {
         .collect::<BTreeSet<_>>()
         .len()
         >= 2
+}
+
+fn workspace_linking_relation_matches_payload_projection(
+    current: &BrainRelationRecord,
+    payload: &BrainRelationRecord,
+) -> bool {
+    current.relation_id == payload.relation_id
+        && current.kind == payload.kind
+        && current.source_node_id == payload.source_node_id
+        && current.target_node_id == payload.target_node_id
+        && current.label == payload.label
+        && current.confidence == payload.confidence
+        && string_refs_subset_of(&current.evidence_ids, &payload.evidence_ids)
+}
+
+fn workspace_linking_claim_matches_payload_projection(
+    current: &ClaimRecord,
+    payload: &ClaimRecord,
+) -> bool {
+    current.claim_id == payload.claim_id
+        && current.workspace_id == payload.workspace_id
+        && current.statement == payload.statement
+        && current.status == payload.status
+        && string_refs_subset_of(&current.topic_refs, &payload.topic_refs)
+        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
+        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
+}
+
+fn workspace_linking_memory_matches_payload_projection(
+    current: &MemoryRecord,
+    payload: &MemoryRecord,
+) -> bool {
+    current.memory_id == payload.memory_id
+        && current.workspace_id == payload.workspace_id
+        && current.scope == payload.scope
+        && current.title == payload.title
+        && current.body == payload.body
+        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
+        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
+}
+
+fn workspace_linking_wiki_page_matches_payload_projection(
+    current: &WikiPage,
+    payload: &WikiPage,
+) -> bool {
+    current.page_id == payload.page_id
+        && current.workspace_id == payload.workspace_id
+        && current.path == payload.path
+        && current.title == payload.title
+        && current.body == payload.body
+        && string_refs_subset_of(&current.node_refs, &payload.node_refs)
+        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
+        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
+}
+
+fn string_refs_subset_of(current: &[String], payload: &[String]) -> bool {
+    let payload_refs = payload.iter().collect::<BTreeSet<_>>();
+    current.iter().all(|value| payload_refs.contains(value))
 }
 
 fn has_cross_source_evidence_refs(

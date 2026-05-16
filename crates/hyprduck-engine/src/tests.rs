@@ -2480,6 +2480,24 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     stale_payload_memory_collision.evidence_refs =
         vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
     stale_payload_memory_collision.updated_at = 100;
+    let filtered_stale_memory = MemoryRecord {
+        memory_id: "memory-filtered-stale".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        title: "filtered stale workspace memory".into(),
+        body: "filtered stale workspace memory".into(),
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        created_at: 100,
+        updated_at: 100,
+    };
+    let mut raw_payload_filtered_stale_memory = filtered_stale_memory.clone();
+    raw_payload_filtered_stale_memory.source_refs = vec![
+        active_source.source_id.clone(),
+        deleted_source.source_id.clone(),
+    ];
+    raw_payload_filtered_stale_memory.evidence_refs =
+        vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
     let current_wiki_collision = WikiPage {
         page_id: "wiki-collision".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
@@ -2575,7 +2593,11 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
             ],
             &[linking_relation.clone(), stale_payload_relation_collision],
             &[active_evidence.clone(), deleted_evidence],
-            &[linking_memory.clone(), stale_payload_memory_collision],
+            &[
+                linking_memory.clone(),
+                stale_payload_memory_collision,
+                raw_payload_filtered_stale_memory,
+            ],
             &[linking_wiki_page.clone(), stale_payload_wiki_collision],
             std::slice::from_ref(&stale_payload_entity),
             &[linking_claim.clone(), stale_payload_claim_collision],
@@ -2599,7 +2621,11 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     snapshot.nodes = vec![active_node, active_peer_node];
     snapshot.relations = vec![linking_relation, current_relation_collision];
     snapshot.claims = vec![linking_claim, current_claim_collision];
-    snapshot.memories = vec![linking_memory, current_memory_collision];
+    snapshot.memories = vec![
+        linking_memory,
+        current_memory_collision,
+        filtered_stale_memory,
+    ];
     snapshot.entities = vec![current_entity];
     snapshot.wiki_pages = vec![linking_wiki_page.clone(), current_wiki_collision];
     snapshot.events = vec![linking_event];
@@ -2678,6 +2704,10 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
             .map(|memory| memory.body.as_str()),
         Some("current source memory")
     );
+    assert!(!replayed
+        .memories
+        .iter()
+        .any(|memory| memory.memory_id == "memory-filtered-stale"));
     assert_eq!(
         replayed
             .wiki_pages
