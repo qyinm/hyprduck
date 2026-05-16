@@ -2202,58 +2202,28 @@ fn workspace_linking_relation_matches_payload_projection(
     current: &BrainRelationRecord,
     payload: &BrainRelationRecord,
 ) -> bool {
-    current.relation_id == payload.relation_id
-        && current.kind == payload.kind
-        && current.source_node_id == payload.source_node_id
-        && current.target_node_id == payload.target_node_id
-        && current.label == payload.label
-        && current.confidence == payload.confidence
-        && string_refs_subset_of(&current.evidence_ids, &payload.evidence_ids)
+    current == payload
 }
 
 fn workspace_linking_claim_matches_payload_projection(
     current: &ClaimRecord,
     payload: &ClaimRecord,
 ) -> bool {
-    current.claim_id == payload.claim_id
-        && current.workspace_id == payload.workspace_id
-        && current.statement == payload.statement
-        && current.status == payload.status
-        && string_refs_subset_of(&current.topic_refs, &payload.topic_refs)
-        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
-        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
+    current == payload
 }
 
 fn workspace_linking_memory_matches_payload_projection(
     current: &MemoryRecord,
     payload: &MemoryRecord,
 ) -> bool {
-    current.memory_id == payload.memory_id
-        && current.workspace_id == payload.workspace_id
-        && current.scope == payload.scope
-        && current.title == payload.title
-        && current.body == payload.body
-        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
-        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
+    current == payload
 }
 
 fn workspace_linking_wiki_page_matches_payload_projection(
     current: &WikiPage,
     payload: &WikiPage,
 ) -> bool {
-    current.page_id == payload.page_id
-        && current.workspace_id == payload.workspace_id
-        && current.path == payload.path
-        && current.title == payload.title
-        && current.body == payload.body
-        && string_refs_subset_of(&current.node_refs, &payload.node_refs)
-        && string_refs_subset_of(&current.source_refs, &payload.source_refs)
-        && string_refs_subset_of(&current.evidence_refs, &payload.evidence_refs)
-}
-
-fn string_refs_subset_of(current: &[String], payload: &[String]) -> bool {
-    let payload_refs = payload.iter().collect::<BTreeSet<_>>();
-    current.iter().all(|value| payload_refs.contains(value))
+    current == payload
 }
 
 fn has_cross_source_evidence_refs(
