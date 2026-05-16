@@ -24,6 +24,7 @@ import { Focus, Network } from "lucide-react";
 
 import {
   buildSigmaGraph,
+  type BuildSigmaGraphSelection,
   type BuildSigmaGraphScope,
   type SigmaNodeAttributes,
   type SigmaWorkspaceGraph,
@@ -49,27 +50,18 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
   const { project, uiState, dispatch, className } = props;
   const [graphMode, setGraphMode] =
     useState<BuildSigmaGraphScope["mode"]>("global");
-  const localCenterNodeId =
-    graphMode === "local" ? uiState.selectedNodeId : null;
   const graphScope = useMemo<BuildSigmaGraphScope>(
-    () => ({
-      mode: graphMode,
-      centerNodeId: localCenterNodeId,
-      depth: 1,
-    }),
-    [graphMode, localCenterNodeId],
+    () => sigmaGraphScopeFromUiState(graphMode, uiState),
+    [graphMode, uiState.selectedNodeId],
+  );
+  const graphTopologySelection = sigmaGraphTopologySelectionFromUiState(uiState);
+  const graphPresentationSelection = useMemo(
+    () => sigmaGraphSelectionFromUiState(uiState),
+    [uiState.selectedEdgeId, uiState.selectedNodeId],
   );
   const graph = useMemo(
-    () =>
-      buildSigmaGraph(
-        project,
-        {
-          selectedNodeId: null,
-          selectedEdgeId: null,
-        },
-        graphScope,
-      ),
-    [graphScope, project],
+    () => buildSigmaGraph(project, graphTopologySelection, graphScope),
+    [graphScope, graphTopologySelection, project],
   );
   const localModeDisabled = !uiState.selectedNodeId;
 
@@ -111,11 +103,42 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
           project.summary.projectId,
           graphScope,
         )}
-        selectedEdgeId={uiState.selectedEdgeId}
-        selectedNodeId={uiState.selectedNodeId}
+        selectedEdgeId={graphPresentationSelection.selectedEdgeId}
+        selectedNodeId={graphPresentationSelection.selectedNodeId}
       />
     </div>
   );
+}
+
+const EMPTY_SIGMA_GRAPH_SELECTION: BuildSigmaGraphSelection = Object.freeze({
+  selectedNodeId: null,
+  selectedEdgeId: null,
+});
+
+export function sigmaGraphScopeFromUiState(
+  graphMode: BuildSigmaGraphScope["mode"],
+  uiState: WorkspaceUiState,
+): BuildSigmaGraphScope {
+  return {
+    mode: graphMode,
+    centerNodeId: graphMode === "local" ? uiState.selectedNodeId : null,
+    depth: 1,
+  };
+}
+
+export function sigmaGraphTopologySelectionFromUiState(
+  _uiState: WorkspaceUiState,
+): BuildSigmaGraphSelection {
+  return EMPTY_SIGMA_GRAPH_SELECTION;
+}
+
+export function sigmaGraphSelectionFromUiState(
+  uiState: WorkspaceUiState,
+): BuildSigmaGraphSelection {
+  return {
+    selectedNodeId: uiState.selectedNodeId,
+    selectedEdgeId: uiState.selectedEdgeId,
+  };
 }
 
 interface SvgGraphLayerProps {
@@ -476,8 +499,18 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
             crossCluster && !selected
               ? isSourceDocumentEdge
                 ? Math.max(0.72, Math.min(1, viewport.zoom))
-                : Math.min(0.35, viewport.zoom)
+                : Math.max(0.68, Math.min(0.88, viewport.zoom))
               : 1;
+          const baseStroke = isSourceDocumentEdge
+            ? "#94a3b8"
+            : crossCluster
+              ? "#64748b"
+              : "#cbd5e1";
+          const baseStrokeWidth = isSourceDocumentEdge
+            ? 0.42
+            : crossCluster
+              ? 0.46
+              : 0.34;
 
           return (
             <line
@@ -486,10 +519,10 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               className="cursor-pointer"
               onClick={() => selectEdge(edge)}
               opacity={dimmed ? Math.min(0.18, baseOpacity) : hovered ? 1 : baseOpacity}
-              stroke={selected || hovered ? "#111111" : isSourceDocumentEdge ? "#94a3b8" : "#cbd5e1"}
+              stroke={selected || hovered ? "#111111" : baseStroke}
               strokeDasharray={isSourceDocumentEdge ? "1.2 1.4" : undefined}
               strokeLinecap="round"
-              strokeWidth={selected ? 0.62 : hovered ? 0.5 : isSourceDocumentEdge ? 0.42 : 0.34}
+              strokeWidth={selected ? 0.62 : hovered ? 0.5 : baseStrokeWidth}
               vectorEffect="non-scaling-stroke"
               x1={toPercentX(nodePositions[source]?.x ?? sourceNode.x)}
               x2={toPercentX(nodePositions[target]?.x ?? targetNode.x)}

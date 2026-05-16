@@ -1,12 +1,12 @@
-use super::*;
+use crate::*;
 use std::fs::OpenOptions;
 
-pub(super) struct BrainArtifactRepository {
+pub(crate) struct BrainArtifactRepository {
     root: PathBuf,
 }
 
 impl BrainArtifactRepository {
-    pub(super) fn open(root: PathBuf) -> Result<(Self, WorkspaceLock)> {
+    pub(crate) fn open(root: PathBuf) -> Result<(Self, WorkspaceLock)> {
         fs::create_dir_all(&root).with_context(|| format!("failed creating {}", root.display()))?;
         let lock = WorkspaceLock::acquire(root.join(BRAIN_LOCK_DIRECTORY_NAME))?;
         let repo = Self { root };
@@ -14,19 +14,19 @@ impl BrainArtifactRepository {
         Ok((repo, lock))
     }
 
-    pub(super) fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub(super) fn output_root(&self) -> Option<&Path> {
+    pub(crate) fn output_root(&self) -> Option<&Path> {
         self.root.parent()
     }
 
-    pub(super) fn ensure_workspace_dirs(&self) -> Result<()> {
+    pub(crate) fn ensure_workspace_dirs(&self) -> Result<()> {
         for dir in [
             self.root.join("events"),
             self.root.join("memory"),
@@ -38,48 +38,48 @@ impl BrainArtifactRepository {
         Ok(())
     }
 
-    pub(super) fn proposal_path(&self, proposal_id: &str) -> PathBuf {
+    pub(crate) fn proposal_path(&self, proposal_id: &str) -> PathBuf {
         self.root
             .join("reviews/proposed-updates")
             .join(format!("{proposal_id}.json"))
     }
 
-    pub(super) fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
+    pub(crate) fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
         let path = self.proposal_path(&proposal.proposal_id);
         write_json_pretty(&path, proposal)?;
         Ok(path)
     }
 
-    pub(super) fn append_event(&self, event: &BrainEvent) -> Result<()> {
+    pub(crate) fn append_event(&self, event: &BrainEvent) -> Result<()> {
         append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
     }
 
-    pub(super) fn read_memory_records(&self) -> Result<Vec<MemoryRecord>> {
+    pub(crate) fn read_memory_records(&self) -> Result<Vec<MemoryRecord>> {
         read_memory_records(&self.root)
     }
 
-    pub(super) fn write_memory_records(&self, memories: &[MemoryRecord]) -> Result<()> {
+    pub(crate) fn write_memory_records(&self, memories: &[MemoryRecord]) -> Result<()> {
         write_json_pretty(&self.root.join("memory/records.json"), &memories)
     }
 
-    pub(super) fn brain_manifest_path(&self) -> PathBuf {
+    pub(crate) fn brain_manifest_path(&self) -> PathBuf {
         self.root.join("brain-manifest.json")
     }
 
-    pub(super) fn read_brain_manifest(&self) -> Result<BrainRepoSnapshot> {
+    pub(crate) fn read_brain_manifest(&self) -> Result<BrainRepoSnapshot> {
         read_json_artifact(&self.brain_manifest_path())
     }
 
-    pub(super) fn write_brain_manifest(&self, snapshot: &BrainRepoSnapshot) -> Result<()> {
+    pub(crate) fn write_brain_manifest(&self, snapshot: &BrainRepoSnapshot) -> Result<()> {
         write_json_pretty(&self.brain_manifest_path(), snapshot)
     }
 
-    pub(super) fn read_brain_events(&self) -> Result<Vec<BrainEvent>> {
+    pub(crate) fn read_brain_events(&self) -> Result<Vec<BrainEvent>> {
         read_brain_events_jsonl(&self.root.join("events/brain_events.jsonl"))
     }
 }
 
-pub(super) struct WorkspaceLock {
+pub(crate) struct WorkspaceLock {
     path: PathBuf,
 }
 
@@ -113,13 +113,13 @@ impl Drop for WorkspaceLock {
     }
 }
 
-pub(super) fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let json =
         fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
     serde_json::from_str(&json).with_context(|| format!("failed decoding {}", path.display()))
 }
 
-pub(super) fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Default>(
+pub(crate) fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Default>(
     path: &Path,
 ) -> Result<T> {
     if !path.exists() {
@@ -128,11 +128,11 @@ pub(super) fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Defau
     read_json_artifact(path)
 }
 
-pub(super) fn read_memory_records(root: &Path) -> Result<Vec<MemoryRecord>> {
+pub(crate) fn read_memory_records(root: &Path) -> Result<Vec<MemoryRecord>> {
     read_optional_json_artifact(&root.join("memory/records.json"))
 }
 
-pub(super) fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
+pub(crate) fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -145,12 +145,12 @@ pub(super) fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
         .collect()
 }
 
-pub(super) fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(value).context("failed to encode JSON artifact")?;
     write_file_atomic(path, json.as_bytes())
 }
 
-pub(super) fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
+pub(crate) fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Result<()> {
     let mut lines = String::new();
     for event in events {
         lines.push_str(
@@ -161,7 +161,7 @@ pub(super) fn write_brain_events_jsonl(path: &Path, events: &[BrainEvent]) -> Re
     write_file_atomic(path, lines.as_bytes())
 }
 
-pub(super) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed creating {}", parent.display()))?;
@@ -191,7 +191,7 @@ pub(super) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-pub(super) fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
+pub(crate) fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
     let line = serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)

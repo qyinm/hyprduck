@@ -11,7 +11,6 @@ use markitdown::{model::ConversionOptions, MarkItDown};
 use tempfile::tempdir;
 
 use crate::provider::{parse_image_with_provider, parse_text_with_provider, EngineConfig};
-use crate::{emit_event, resolve_binary};
 
 #[derive(Debug)]
 pub(crate) struct ParsedDocument {
@@ -22,30 +21,46 @@ pub(crate) struct ParsedDocument {
     pub(crate) failed_count: usize,
 }
 
+pub(crate) trait EventSink {
+    fn emit(&mut self, event: ParseEvent) -> Result<()>;
+}
+
+pub(crate) trait ProcessLocator {
+    fn resolve_binary(&self, name: &str, common_paths: &[&str]) -> PathBuf;
+}
+
 pub(crate) fn parse_document(
     input: &ParseInput,
     template: &str,
     _options: &ParseOptions,
     config: &EngineConfig,
+    event_sink: &mut impl EventSink,
+    process_locator: &impl ProcessLocator,
 ) -> Result<ParsedDocument> {
     match input.format {
-        DocumentFormat::Pdf => parse_markitdown_document(input)
-            .or_else(|_| parse_visual_document(input, template, config)),
-        DocumentFormat::Image => parse_visual_document(input, template, config),
-        DocumentFormat::Docx => parse_markitdown_document(input)
-            .or_else(|_| parse_text_document(input, template, config)),
+        DocumentFormat::Pdf => parse_markitdown_document(input, event_sink).or_else(|_| {
+            parse_visual_document(input, template, config, event_sink, process_locator)
+        }),
+        DocumentFormat::Image => {
+            parse_visual_document(input, template, config, event_sink, process_locator)
+        }
+        DocumentFormat::Docx => parse_markitdown_document(input, event_sink)
+            .or_else(|_| parse_text_document(input, template, config, event_sink, process_locator)),
         DocumentFormat::Doc | DocumentFormat::Markdown => {
-            parse_text_document(input, template, config)
+            parse_text_document(input, template, config, event_sink, process_locator)
         }
     }
 }
 
-fn parse_markitdown_document(input: &ParseInput) -> Result<ParsedDocument> {
-    emit_event(&ParseEvent::ConvertingPages {
+fn parse_markitdown_document(
+    input: &ParseInput,
+    event_sink: &mut impl EventSink,
+) -> Result<ParsedDocument> {
+    event_sink.emit(ParseEvent::ConvertingPages {
         current: 1,
         total: 1,
     })?;
-    emit_event(&ParseEvent::Parsing {
+    event_sink.emit(ParseEvent::Parsing {
         current: 1,
         total: 1,
     })?;
@@ -106,10 +121,12 @@ fn parse_visual_document(
     input: &ParseInput,
     template: &str,
     config: &EngineConfig,
+    event_sink: &mut impl EventSink,
+    process_locator: &impl ProcessLocator,
 ) -> Result<ParsedDocument> {
     let page_images = match input.format {
         DocumentFormat::Image => vec![PathBuf::from(&input.path)],
-        DocumentFormat::Pdf => convert_pdf_to_pngs(Path::new(&input.path))?,
+        DocumentFormat::Pdf => convert_pdf_to_pngs(Path::new(&input.path), process_locator)?,
         _ => unreachable!(),
     };
 
@@ -120,7 +137,7 @@ fn parse_visual_document(
     let mut failed_count = 0usize;
 
     for (idx, image_path) in page_images.iter().enumerate() {
-        emit_event(&ParseEvent::ConvertingPages {
+        event_sink.emit(ParseEvent::ConvertingPages {
             current: (idx + 1) as u32,
             total,
         })?;
@@ -134,7 +151,7 @@ fn parse_visual_document(
             base64: base64::engine::general_purpose::STANDARD.encode(&image_bytes),
         });
 
-        emit_event(&ParseEvent::Parsing {
+        event_sink.emit(ParseEvent::Parsing {
             current: (idx + 1) as u32,
             total,
         })?;
@@ -178,18 +195,20 @@ fn parse_text_document(
     input: &ParseInput,
     template: &str,
     config: &EngineConfig,
+    event_sink: &mut impl EventSink,
+    process_locator: &impl ProcessLocator,
 ) -> Result<ParsedDocument> {
     let text = if input.format == DocumentFormat::Markdown {
         fs::read_to_string(&input.path)
             .with_context(|| format!("failed reading markdown {}", input.path))?
     } else {
-        extract_text_via_textutil(Path::new(&input.path))?
+        extract_text_via_textutil(Path::new(&input.path), process_locator)?
     };
-    emit_event(&ParseEvent::ConvertingPages {
+    event_sink.emit(ParseEvent::ConvertingPages {
         current: 1,
         total: 1,
     })?;
-    emit_event(&ParseEvent::Parsing {
+    event_sink.emit(ParseEvent::Parsing {
         current: 1,
         total: 1,
     })?;
@@ -223,10 +242,10 @@ fn parse_text_document(
     })
 }
 
-fn convert_pdf_to_pngs(path: &Path) -> Result<Vec<PathBuf>> {
+fn convert_pdf_to_pngs(path: &Path, process_locator: &impl ProcessLocator) -> Result<Vec<PathBuf>> {
     let temp = tempdir().context("failed to create temp directory for pdf conversion")?;
     let prefix = temp.path().join("page");
-    let status = Command::new(resolve_binary(
+    let status = Command::new(process_locator.resolve_binary(
         "pdftoppm",
         &["/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm"],
     ))
@@ -263,8 +282,8 @@ fn convert_pdf_to_pngs(path: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-fn extract_text_via_textutil(path: &Path) -> Result<String> {
-    let output = Command::new(resolve_binary("textutil", &["/usr/bin/textutil"]))
+fn extract_text_via_textutil(path: &Path, process_locator: &impl ProcessLocator) -> Result<String> {
+    let output = Command::new(process_locator.resolve_binary("textutil", &["/usr/bin/textutil"]))
         .arg("-convert")
         .arg("txt")
         .arg("-stdout")
