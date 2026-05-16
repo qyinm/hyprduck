@@ -303,6 +303,7 @@ pub(crate) struct WorkspaceConceptAccumulator {
 
 mod aggregate;
 mod answer;
+mod cleanup;
 mod compiler;
 mod corrections;
 mod markdown_extract;
