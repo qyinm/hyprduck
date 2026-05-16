@@ -18,20 +18,25 @@ use crate::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderGraphProposalGenerationReport {
+pub(crate) struct ProviderGraphMaterializationReport {
     pub(crate) status: String,
     pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) source_id: String,
-    pub(crate) proposal_count: usize,
-    pub(crate) applied_count: usize,
-    pub(crate) failed_count: usize,
     #[serde(default)]
-    pub(crate) proposal_ids: Vec<String>,
+    pub(crate) source_graph_node_count: usize,
     #[serde(default)]
-    pub(crate) applied_proposal_ids: Vec<String>,
+    pub(crate) source_graph_relation_count: usize,
     #[serde(default)]
-    pub(crate) failed_proposals: Vec<AgentProposalFailureReport>,
+    pub(crate) workspace_link_count: usize,
+    #[serde(default)]
+    pub(crate) materialized_node_count: usize,
+    #[serde(default)]
+    pub(crate) materialized_relation_count: usize,
+    #[serde(default)]
+    pub(crate) materialized_claim_count: usize,
+    #[serde(default)]
+    pub(crate) materialized_memory_count: usize,
     #[serde(default)]
     pub(crate) skipped_reason: Option<String>,
     #[serde(default)]
@@ -49,16 +54,18 @@ pub(crate) struct ProviderGraphProposalGenerationReport {
     pub(crate) updated_at: u64,
 }
 
-pub(crate) fn maybe_generate_provider_graph_proposals(
+pub(crate) fn maybe_generate_provider_graph_materialization(
     workspace_root: &Path,
     workspace_id: &str,
     manifest: &SourceArtifactManifest,
     markdown: &str,
     artifact_root: &Path,
     context: &ImportEvidenceContext,
-) -> Result<ProviderGraphProposalGenerationReport> {
-    let report_path = artifact_root.join("provider-graph-proposals.json");
-    if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
+) -> Result<ProviderGraphMaterializationReport> {
+    let report_path = artifact_root.join("provider-graph-materialization.json");
+    let legacy_report_path = artifact_root.join("provider-graph-proposals.json");
+    if let Ok(existing) = read_json_artifact::<ProviderGraphMaterializationReport>(&report_path)
+        .or_else(|_| read_json_artifact::<ProviderGraphMaterializationReport>(&legacy_report_path))
     {
         if existing.status == "linked" && existing.source_id == manifest.source_id {
             return Ok(existing);
@@ -68,17 +75,18 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     let config = match EngineConfigStore::default().and_then(|store| store.load()) {
         Ok(config) => config,
         Err(error) => {
-            let report = ProviderGraphProposalGenerationReport {
+            let report = ProviderGraphMaterializationReport {
                 status: "failed".into(),
                 provider: "unknown".into(),
                 model: "unknown".into(),
                 source_id: manifest.source_id.clone(),
-                proposal_count: 0,
-                applied_count: 0,
-                failed_count: 0,
-                proposal_ids: Vec::new(),
-                applied_proposal_ids: Vec::new(),
-                failed_proposals: Vec::new(),
+                source_graph_node_count: 0,
+                source_graph_relation_count: 0,
+                workspace_link_count: 0,
+                materialized_node_count: 0,
+                materialized_relation_count: 0,
+                materialized_claim_count: 0,
+                materialized_memory_count: 0,
                 skipped_reason: None,
                 error_message: Some(format!("{error:#}")),
                 provider_run_id: None,
@@ -92,17 +100,18 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
             return Ok(report);
         }
     };
-    let mut report = ProviderGraphProposalGenerationReport {
+    let mut report = ProviderGraphMaterializationReport {
         status: "skipped".into(),
         provider: config.provider.id_slug().into(),
         model: config.model_id.clone(),
         source_id: manifest.source_id.clone(),
-        proposal_count: 0,
-        applied_count: 0,
-        failed_count: 0,
-        proposal_ids: Vec::new(),
-        applied_proposal_ids: Vec::new(),
-        failed_proposals: Vec::new(),
+        source_graph_node_count: 0,
+        source_graph_relation_count: 0,
+        workspace_link_count: 0,
+        materialized_node_count: 0,
+        materialized_relation_count: 0,
+        materialized_claim_count: 0,
+        materialized_memory_count: 0,
         skipped_reason: None,
         error_message: None,
         provider_run_id: None,
@@ -175,6 +184,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         &manifest.source_id,
         unix_timestamp_seconds(),
     );
+    report.source_graph_node_count = source_graph_snapshot.nodes.len();
+    report.source_graph_relation_count = source_graph_snapshot.relations.len();
     if let Err(error) =
         validate_provider_source_local_graph_snapshot(&source_graph_snapshot, &manifest.source_id)
     {
@@ -280,6 +291,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         &manifest.source_id,
         unix_timestamp_seconds(),
     );
+    report.workspace_link_count = linking_snapshot.relations.len();
     if let Err(error) = validate_provider_workspace_linking_snapshot(
         &linking_snapshot,
         &linked_baseline,
@@ -335,15 +347,17 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     )?;
 
     report.status = "linked".into();
-    report.proposal_count = 0;
-    report.applied_count = final_snapshot.nodes.len();
+    report.materialized_node_count = final_snapshot.nodes.len();
+    report.materialized_relation_count = final_snapshot.relations.len();
+    report.materialized_claim_count = final_snapshot.claims.len();
+    report.materialized_memory_count = final_snapshot.memories.len();
     report.updated_at = unix_timestamp_seconds();
     write_json_pretty(&report_path, &report)?;
     Ok(report)
 }
 
 fn mark_workspace_linking_failed(
-    report: &mut ProviderGraphProposalGenerationReport,
+    report: &mut ProviderGraphMaterializationReport,
     error: &anyhow::Error,
 ) {
     report.status = if report.source_graph_materialized {
@@ -570,17 +584,18 @@ mod tests {
 
     #[test]
     fn linking_failure_after_source_materialization_is_reported_as_partial_commit() {
-        let mut report = ProviderGraphProposalGenerationReport {
+        let mut report = ProviderGraphMaterializationReport {
             status: "source_graph_materialized".into(),
             provider: "openai".into(),
             model: "test-model".into(),
             source_id: "source-alpha".into(),
-            proposal_count: 0,
-            applied_count: 0,
-            failed_count: 0,
-            proposal_ids: Vec::new(),
-            applied_proposal_ids: Vec::new(),
-            failed_proposals: Vec::new(),
+            source_graph_node_count: 1,
+            source_graph_relation_count: 1,
+            workspace_link_count: 0,
+            materialized_node_count: 0,
+            materialized_relation_count: 0,
+            materialized_claim_count: 0,
+            materialized_memory_count: 0,
             skipped_reason: None,
             error_message: None,
             provider_run_id: Some("provider-workspace-linking-test".into()),
@@ -600,5 +615,10 @@ mod tests {
             .error_message
             .as_deref()
             .is_some_and(|message| message.contains("link validation failed")));
+        let encoded = serde_json::to_value(&report).expect("encode report");
+        assert!(encoded.get("sourceGraphNodeCount").is_some());
+        assert!(encoded.get("materializedNodeCount").is_some());
+        assert!(encoded.get("proposalCount").is_none());
+        assert!(encoded.get("appliedCount").is_none());
     }
 }

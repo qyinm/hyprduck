@@ -16,4 +16,4 @@ pub(crate) use validation::{
     validate_provider_source_local_graph_snapshot, validate_provider_workspace_linking_snapshot,
     validate_provider_workspace_rebuild_snapshot,
 };
-pub(crate) use workspace_rebuild::maybe_generate_provider_graph_proposals;
+pub(crate) use workspace_rebuild::maybe_generate_provider_graph_materialization;

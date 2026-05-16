@@ -710,7 +710,7 @@ fn compile_queued_markdown_source(
         &snapshot,
         &chunks,
     )?;
-    maybe_generate_provider_graph_proposals(
+    maybe_generate_provider_graph_materialization(
         &paths.workspace_root,
         &record.workspace_id,
         &manifest,

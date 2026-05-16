@@ -90,7 +90,7 @@ mod source_index {
     pub(crate) use crate::domains::retrieval::source_index::*;
 }
 
-use agent_workflow::maybe_generate_provider_graph_proposals;
+use agent_workflow::maybe_generate_provider_graph_materialization;
 #[cfg(test)]
 use agent_workflow::{
     build_workspace_linking_prompt, normalize_provider_source_local_graph_snapshot,
@@ -270,7 +270,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
             &snapshot,
             &chunks,
         )?;
-        let report = maybe_generate_provider_graph_proposals(
+        let report = maybe_generate_provider_graph_materialization(
             &workspace_root,
             &workspace_id,
             manifest,
