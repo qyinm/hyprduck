@@ -1380,11 +1380,39 @@ fn apply_filtered_materialized_graph_overlay(
         .iter()
         .map(|evidence| evidence.id.clone())
         .collect::<BTreeSet<_>>();
+    let source_labels = snapshot
+        .sources
+        .iter()
+        .map(|source| {
+            (
+                source.source_id.clone(),
+                source_label_from_source_record(source),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let evidence_by_source = snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (source_id.clone(), evidence.id.clone()))
+        })
+        .fold(
+            BTreeMap::<String, Vec<String>>::new(),
+            |mut by_source, (source_id, evidence_id)| {
+                by_source.entry(source_id).or_default().push(evidence_id);
+                by_source
+            },
+        );
     merge_filtered_nodes(
         snapshot,
         materialized_graph.nodes,
         &valid_source_ids,
         &valid_evidence_ids,
+        &source_labels,
+        &evidence_by_source,
     );
     let valid_node_ids = snapshot
         .nodes
@@ -1460,6 +1488,8 @@ fn merge_filtered_nodes(
     nodes: Vec<BrainNodeRecord>,
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
+    source_labels: &BTreeMap<String, String>,
+    evidence_by_source: &BTreeMap<String, Vec<String>>,
 ) {
     let mut by_id = snapshot
         .nodes
@@ -1483,12 +1513,73 @@ fn merge_filtered_nodes(
             if node.source_ids.is_empty() {
                 continue;
             }
+            let source_id = node.source_ids[0].clone();
+            if let Some(label) = source_labels.get(&source_id) {
+                node.label = label.clone();
+            }
+            if let Some(evidence_ids) = evidence_by_source.get(&source_id) {
+                node.evidence_ids = evidence_ids.clone();
+            }
         } else if node.source_ids.is_empty() && node.evidence_ids.is_empty() {
             continue;
         }
+        node.scope = BrainScope::Project;
+        normalize_materialized_node_label(&mut node);
         by_id.insert(node.node_id.clone(), node);
     }
     snapshot.nodes = by_id.into_values().collect();
+}
+
+fn normalize_materialized_node_label(node: &mut BrainNodeRecord) {
+    if !is_machine_materialized_label(&node.label, &node.node_id) {
+        return;
+    }
+    if let Some(alias) = node
+        .aliases
+        .iter()
+        .map(|alias| alias.trim().to_string())
+        .find(|alias| !alias.is_empty() && !is_machine_materialized_label(alias, &node.node_id))
+    {
+        node.label = alias;
+    } else {
+        node.label = readable_label_from_node_id(&node.node_id);
+    }
+}
+
+fn is_machine_materialized_label(label: &str, node_id: &str) -> bool {
+    let label = label.trim();
+    label.is_empty()
+        || label == node_id
+        || label.starts_with("source-")
+        || label.starts_with("concept:")
+        || label.starts_with("source:")
+}
+
+fn readable_label_from_node_id(node_id: &str) -> String {
+    let suffix = node_id
+        .rsplit_once(':')
+        .map(|(_, suffix)| suffix)
+        .unwrap_or(node_id);
+    suffix
+        .split(['-', '_'])
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn source_label_from_source_record(source: &SourceRecord) -> String {
+    Path::new(&source.original_path)
+        .file_name()
+        .or_else(|| Path::new(&source.source_path).file_name())
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.source_id.clone())
 }
 
 fn merge_filtered_relations(

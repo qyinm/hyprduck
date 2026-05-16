@@ -51,6 +51,7 @@ pub(crate) fn normalize_provider_workspace_rebuild_snapshot(
     for node in &mut snapshot.nodes {
         retain_existing_refs(&mut node.source_ids, &source_ids);
         retain_existing_refs(&mut node.evidence_ids, &evidence_ids);
+        normalize_provider_node_presentation(node, baseline, generated_at);
         if node.updated_at == 0 {
             node.updated_at = generated_at;
         }
@@ -200,6 +201,9 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
     snapshot.sources = baseline.sources.clone();
     snapshot.evidence = baseline.evidence.clone();
     snapshot.nodes = baseline.nodes.clone();
+    for node in &mut snapshot.nodes {
+        normalize_provider_node_presentation(node, baseline, generated_at);
+    }
     snapshot.events.clear();
 
     let source_ids = snapshot
@@ -326,6 +330,85 @@ fn ensure_source_local_source_node(
             updated_at: generated_at,
         });
     }
+}
+
+fn normalize_provider_node_presentation(
+    node: &mut BrainNodeRecord,
+    baseline: &BrainRepoSnapshot,
+    generated_at: u64,
+) {
+    node.scope = BrainScope::Project;
+    if node.kind == BrainNodeKind::Source {
+        let source_id = node
+            .node_id
+            .strip_prefix("source:")
+            .map(str::to_string)
+            .or_else(|| node.source_ids.first().cloned());
+        if let Some(source_id) = source_id {
+            if let Some(source) = baseline
+                .sources
+                .iter()
+                .find(|source| source.source_id == source_id)
+            {
+                node.label = source_label_from_record(source);
+                node.source_ids = vec![source.source_id.clone()];
+                node.evidence_ids = baseline
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.source_id.as_deref() == Some(source_id.as_str()))
+                    .map(|evidence| evidence.id.clone())
+                    .collect();
+                if node.aliases.is_empty() {
+                    node.aliases.push("Workspace source".into());
+                }
+                if node.updated_at == 0 {
+                    node.updated_at = generated_at;
+                }
+            }
+        }
+        return;
+    }
+
+    if is_machine_label(&node.label, &node.node_id) {
+        if let Some(alias) = node
+            .aliases
+            .iter()
+            .map(|alias| alias.trim())
+            .find(|alias| !alias.is_empty() && !is_machine_label(alias, &node.node_id))
+        {
+            node.label = alias.to_string();
+        } else {
+            node.label = readable_label_from_node_id(&node.node_id);
+        }
+    }
+}
+
+fn is_machine_label(label: &str, node_id: &str) -> bool {
+    let label = label.trim();
+    label.is_empty()
+        || label == node_id
+        || label.starts_with("source-")
+        || label.starts_with("concept:")
+        || label.starts_with("source:")
+}
+
+fn readable_label_from_node_id(node_id: &str) -> String {
+    let suffix = node_id
+        .rsplit_once(':')
+        .map(|(_, suffix)| suffix)
+        .unwrap_or(node_id);
+    suffix
+        .split(['-', '_'])
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn ensure_source_local_node_edges(
