@@ -1715,6 +1715,7 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         &[source_node.clone(), concept_x.clone(), concept_y.clone()],
         &[edge_x.clone(), edge_y],
         &[evidence.clone()],
+        &[],
     );
     let new_event = provider_test_event(
         "evt-provider-new",
@@ -1724,6 +1725,7 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         &[source_node.clone(), concept_x.clone()],
         &[edge_x],
         &[evidence.clone()],
+        &[],
     );
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
@@ -1750,6 +1752,103 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         .any(|relation| relation.relation_id == "edge-source-y"));
 }
 
+#[test]
+fn provider_overlay_drops_null_source_evidence_after_source_deletion() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let active_source = SourceRecord {
+        source_id: "source-active".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/active.pdf".into(),
+        source_path: "/tmp/active.pdf".into(),
+        markdown_path: "/tmp/active.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let deleted_source = SourceRecord {
+        source_id: "source-deleted".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/deleted.pdf".into(),
+        source_path: "/tmp/deleted.pdf".into(),
+        markdown_path: "/tmp/deleted.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let null_source_evidence = EvidenceRef {
+        id: "ev-null-source".into(),
+        page_label: "Provider evidence".into(),
+        page_index: None,
+        snippet: "This evidence is not tied to an active source.".into(),
+        source_path: None,
+        source_id: None,
+        markdown_path: None,
+        image_path: None,
+        provenance: Some("provider".into()),
+    };
+    let deleted_node = BrainNodeRecord {
+        node_id: "concept-deleted-source".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Deleted source concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![null_source_evidence.id.clone()],
+        source_ids: vec![deleted_source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
+    let deleted_claim = ClaimRecord {
+        claim_id: "claim-deleted-source".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        statement: "A deleted source claim should not survive through null evidence.".into(),
+        topic_refs: vec![deleted_node.node_id.clone()],
+        source_refs: vec![deleted_source.source_id.clone()],
+        evidence_refs: vec![null_source_evidence.id.clone()],
+        status: "supported".into(),
+        updated_at: 100,
+    };
+    let deleted_event = provider_test_event(
+        "evt-provider-deleted-source",
+        "source_graph_build",
+        100,
+        &[deleted_source],
+        &[deleted_node],
+        &[],
+        &[null_source_evidence],
+        &[deleted_claim],
+    );
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![active_source];
+    snapshot.events = vec![deleted_event];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write replayed graph");
+    let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read replayed graph");
+
+    assert!(replayed
+        .evidence
+        .iter()
+        .all(|evidence| evidence.source_id.is_some()));
+    assert!(!replayed
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-deleted-source"));
+    assert!(!replayed
+        .claims
+        .iter()
+        .any(|claim| claim.claim_id == "claim-deleted-source"));
+}
+
 fn provider_test_event(
     event_id: &str,
     operation_type: &str,
@@ -1758,6 +1857,7 @@ fn provider_test_event(
     nodes: &[BrainNodeRecord],
     relations: &[BrainRelationRecord],
     evidence: &[EvidenceRef],
+    claims: &[ClaimRecord],
 ) -> BrainEvent {
     BrainEvent {
         event_id: event_id.into(),
@@ -1783,7 +1883,7 @@ fn provider_test_event(
             .iter()
             .map(|relation| relation.relation_id.clone())
             .collect(),
-        claim_refs: Vec::new(),
+        claim_refs: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
         memory_refs: Vec::new(),
         target_node_ids: nodes
             .iter()
@@ -1794,7 +1894,7 @@ fn provider_test_event(
             .iter()
             .map(|relation| relation.relation_id.clone())
             .collect(),
-        target_claim_ids: Vec::new(),
+        target_claim_ids: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
         target_memory_ids: Vec::new(),
         evidence_refs: evidence
             .iter()
@@ -1809,7 +1909,7 @@ fn provider_test_event(
             &[],
             &[],
             &[],
-            &[],
+            claims,
             &[],
         )
         .expect("provider graph payload"),

@@ -1561,7 +1561,7 @@ fn merge_filtered_evidence(
         if evidence
             .source_id
             .as_ref()
-            .is_none_or(|source_id| valid_source_ids.contains(source_id))
+            .is_some_and(|source_id| valid_source_ids.contains(source_id))
         {
             by_id.insert(evidence.id.clone(), evidence);
         }
