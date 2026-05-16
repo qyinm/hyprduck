@@ -228,6 +228,130 @@ test("matches source artifact paths by segment instead of substring", () => {
   ]);
 });
 
+test("matches source paths from exact sourceIds before falling back to source-* artifacts", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json", "wiki/index.md"],
+    sourcePaths: [
+      "/brain/default/sources/import-alpha/product-plan.pdf",
+      "/brain/default/artifacts/import-alpha/product-plan.md",
+      "/brain/default/sources/source-backup/old-plan.pdf",
+    ],
+    nodes: [
+      {
+        nodeId: "source-product-plan",
+        kind: "source",
+        label: "product-plan.pdf",
+        aliases: [],
+        evidenceIds: ["ev-plan"],
+        sourceIds: ["import-alpha"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "concept-plan",
+        kind: "concept",
+        label: "Product Plan",
+        aliases: [],
+        evidenceIds: ["ev-plan"],
+        sourceIds: ["import-alpha"],
+        confidence: 0.8,
+        updatedAt: 2,
+      },
+    ],
+    edges: [],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+
+  expect(envelope.sources.map((source) => source.source_id)).toEqual([
+    "import-alpha",
+    "source-backup",
+  ]);
+  expect(envelope.project.detailsByNodeId["source-product-plan"]?.source?.sourceId).toBe(
+    "import-alpha",
+  );
+  expect(envelope.project.detailsByNodeId["source-product-plan"]?.source?.sourcePath).toBe(
+    "/brain/default/sources/import-alpha/product-plan.pdf",
+  );
+  expect(envelope.project.detailsByNodeId["source-product-plan"]?.source?.markdownPath).toBe(
+    "/brain/default/artifacts/import-alpha/product-plan.md",
+  );
+  expect(envelope.project.detailsByNodeId["concept-plan"]?.evidence[0]?.sourceId).toBe(
+    "import-alpha",
+  );
+  expect(envelope.project.detailsByNodeId["concept-plan"]?.evidence[0]?.sourcePath).toBe(
+    "/brain/default/sources/import-alpha/product-plan.pdf",
+  );
+});
+
+test("hydrates wiki page evidence with the page body and source refs available in the snapshot", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json", "wiki/index.md"],
+    sourcePaths: [
+      "/brain/default/sources/import-alpha/product-plan.pdf",
+      "/brain/default/artifacts/import-alpha/product-plan.md",
+    ],
+    nodes: [
+      {
+        nodeId: "concept-plan",
+        kind: "concept",
+        label: "Product Plan",
+        aliases: [],
+        evidenceIds: ["ev-plan"],
+        sourceIds: ["import-alpha"],
+        confidence: 0.8,
+        updatedAt: 2,
+      },
+    ],
+    edges: [],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [
+      {
+        pageId: "page-plan",
+        workspaceId: "default",
+        path: "wiki/product-plan.md",
+        title: "Product Plan",
+        body: "The product plan prioritizes local parsing and grounded evidence.",
+        nodeRefs: ["concept-plan"],
+        sourceRefs: ["import-alpha"],
+        evidenceRefs: ["ev-plan"],
+        updatedAt: 2,
+      },
+    ],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+  const evidence = envelope.project.detailsByNodeId["concept-plan"]?.evidence[0];
+
+  expect(evidence?.snippet).toBe(
+    "The product plan prioritizes local parsing and grounded evidence.",
+  );
+  expect(evidence?.sourceId).toBe("import-alpha");
+  expect(evidence?.sourcePath).toBe("/brain/default/sources/import-alpha/product-plan.pdf");
+  expect(evidence?.markdownPath).toBe(
+    "/brain/default/artifacts/import-alpha/product-plan.md",
+  );
+  expect(evidence?.provenance).toBe("wiki/product-plan.md");
+});
+
 test("hydrates delete correction actions for materialized graph nodes", () => {
   const snapshot: MaterializedGraphSnapshot = {
     snapshotId: "snapshot-1",

@@ -7,8 +7,24 @@ import {
   pointerDeltaToViewBox,
   zoomGraphViewportAtPoint,
 } from "./graphViewport";
+import { sigmaGraphSelectionFromUiState } from "./SigmaGraphCanvas";
 
 describe("graph viewport controls", () => {
+  test("passes workspace node and edge selection into the sigma graph builder", () => {
+    expect(
+      sigmaGraphSelectionFromUiState({
+        selectedNodeId: "node-a",
+        selectedEdgeId: "edge-a",
+        inspectorOpen: true,
+        answerDockOpen: false,
+        answerInput: "",
+      }),
+    ).toEqual({
+      selectedNodeId: "node-a",
+      selectedEdgeId: "edge-a",
+    });
+  });
+
   test("zooms in and out from wheel deltas while staying within bounds", () => {
     const zoomedIn = nextGraphZoom(1, -100);
     expect(zoomedIn).toBeCloseTo(Math.exp(0.25));

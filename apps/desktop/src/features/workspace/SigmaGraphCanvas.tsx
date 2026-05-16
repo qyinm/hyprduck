@@ -59,17 +59,13 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
     }),
     [graphMode, localCenterNodeId],
   );
+  const graphSelection = useMemo(
+    () => sigmaGraphSelectionFromUiState(uiState),
+    [uiState.selectedEdgeId, uiState.selectedNodeId],
+  );
   const graph = useMemo(
-    () =>
-      buildSigmaGraph(
-        project,
-        {
-          selectedNodeId: null,
-          selectedEdgeId: null,
-        },
-        graphScope,
-      ),
-    [graphScope, project],
+    () => buildSigmaGraph(project, graphSelection, graphScope),
+    [graphScope, graphSelection, project],
   );
   const localModeDisabled = !uiState.selectedNodeId;
 
@@ -116,6 +112,13 @@ export function SigmaGraphCanvas(props: SigmaGraphCanvasProps) {
       />
     </div>
   );
+}
+
+export function sigmaGraphSelectionFromUiState(uiState: WorkspaceUiState) {
+  return {
+    selectedNodeId: uiState.selectedNodeId,
+    selectedEdgeId: uiState.selectedEdgeId,
+  };
 }
 
 interface SvgGraphLayerProps {

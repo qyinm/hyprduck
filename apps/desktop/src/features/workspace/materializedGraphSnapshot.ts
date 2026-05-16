@@ -27,7 +27,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       visibleNodeIds.has(edge.sourceNodeId) &&
       visibleNodeIds.has(edge.targetNodeId),
   );
-  const visibleSourcePaths = visibleGraphSourcePaths(snapshot.sourcePaths);
+  const visibleSourcePaths = visibleGraphSourcePaths(snapshot);
   const nodePositions = layoutNodePositions(visibleMaterializedNodes.length);
   const nodes = visibleMaterializedNodes.map((node, index) =>
     materializedNodeToWorkspaceNode(node, nodePositions[index] ?? { x: 50, y: 50 }),
@@ -214,8 +214,12 @@ function buildEvidenceById(snapshot: MaterializedGraphSnapshot) {
         id: evidenceId,
         pageLabel: page.title,
         snippet: excerpt(page.body),
+        sourceId: page.sourceRefs[0] ?? null,
         sourcePath: page.sourceRefs
           .map((sourceId) => sourcePathForSourceId(snapshot, sourceId))
+          .find(Boolean),
+        markdownPath: page.sourceRefs
+          .map((sourceId) => markdownPathForSourceId(snapshot, sourceId))
           .find(Boolean),
         provenance: page.path,
       };
@@ -315,7 +319,7 @@ function sourceSummaryFromPath(
 }
 
 function sourceIdForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: string) {
-  const artifactKey = sourceArtifactKey(sourcePath);
+  const artifactKey = sourceKeyForPath(snapshot, sourcePath);
   if (artifactKey) {
     return artifactKey;
   }
@@ -327,8 +331,10 @@ function sourceIdForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: 
   return sourceNode?.sourceIds[0] ?? null;
 }
 
-function visibleGraphSourcePaths(sourcePaths: string[]) {
-  return sourcePaths.filter((sourcePath) => !isDerivedMarkdownPath(sourcePath, sourcePaths));
+function visibleGraphSourcePaths(snapshot: MaterializedGraphSnapshot) {
+  return snapshot.sourcePaths.filter(
+    (sourcePath) => !isDerivedMarkdownPath(snapshot, sourcePath),
+  );
 }
 
 function isDerivedMarkdownSourceNode(
@@ -347,7 +353,7 @@ function isDerivedMarkdownSourceNode(
 }
 
 function markdownPathForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: string) {
-  const sourceKey = sourceArtifactKey(sourcePath);
+  const sourceKey = sourceKeyForPath(snapshot, sourcePath);
   if (!sourceKey) {
     return null;
   }
@@ -356,27 +362,34 @@ function markdownPathForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePa
       (candidate) =>
         candidate !== sourcePath &&
         isMarkdownPath(candidate) &&
-        sourceArtifactKey(candidate) === sourceKey,
+        sourceKeyForPath(snapshot, candidate) === sourceKey,
     ) ?? null
   );
 }
 
-function isDerivedMarkdownPath(path: string, allPaths: string[]) {
+function isDerivedMarkdownPath(snapshot: MaterializedGraphSnapshot, path: string) {
   if (!isMarkdownPath(path)) {
     return false;
   }
-  const sourceKey = sourceArtifactKey(path);
+  const sourceKey = sourceKeyForPath(snapshot, path);
   return (
     path.includes("/artifacts/") ||
     (sourceKey
-      ? allPaths.some(
+      ? snapshot.sourcePaths.some(
           (candidate) =>
             candidate !== path &&
             !isMarkdownPath(candidate) &&
-            sourceArtifactKey(candidate) === sourceKey,
+            sourceKeyForPath(snapshot, candidate) === sourceKey,
         )
       : false)
   );
+}
+
+function sourceKeyForPath(snapshot: MaterializedGraphSnapshot, path: string) {
+  const exactSourceId = sourceIdsForSnapshot(snapshot).find((sourceId) =>
+    pathHasSegment(path, sourceId),
+  );
+  return exactSourceId ?? sourceArtifactKey(path);
 }
 
 function sourceArtifactKey(path: string) {
@@ -384,7 +397,17 @@ function sourceArtifactKey(path: string) {
 }
 
 function sourcePathMatchesSourceId(path: string, sourceId: string) {
-  return sourceArtifactKey(path) === sourceId;
+  return pathHasSegment(path, sourceId) || sourceArtifactKey(path) === sourceId;
+}
+
+function sourceIdsForSnapshot(snapshot: MaterializedGraphSnapshot) {
+  return [...new Set(snapshot.nodes.flatMap((node) => node.sourceIds))].sort(
+    (left, right) => right.length - left.length || left.localeCompare(right),
+  );
+}
+
+function pathHasSegment(path: string, segment: string) {
+  return path.split(/[\\/]/).includes(segment);
 }
 
 function fileNameFromPath(path: string) {
