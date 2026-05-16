@@ -2810,6 +2810,20 @@ fn apply_accepted_proposals_to_snapshot(
     root: &Path,
     snapshot: &mut BrainRepoSnapshot,
 ) -> Result<()> {
+    let accepted = read_brain_update_proposals(root)?
+        .into_iter()
+        .map(|(proposal, _)| proposal)
+        .filter(|proposal| proposal.workspace_id == snapshot.workspace_id)
+        .filter(|proposal| proposal.status == BrainProposalStatus::Accepted)
+        .collect::<Vec<_>>();
+    reduce_accepted_proposals_into_snapshot(root, snapshot, accepted)
+}
+
+fn reduce_accepted_proposals_into_snapshot(
+    root: &Path,
+    snapshot: &mut BrainRepoSnapshot,
+    proposals: Vec<BrainUpdateProposal>,
+) -> Result<()> {
     let node_redirects = merge_correction_node_redirects(snapshot);
     let deleted_node_ids = delete_correction_node_ids(snapshot);
     let valid_source_ids = snapshot
@@ -2823,9 +2837,8 @@ fn apply_accepted_proposals_to_snapshot(
         .map(|evidence| evidence.id.clone())
         .collect::<BTreeSet<_>>();
     let evidence_ids_by_source = snapshot_evidence_ids_by_source(snapshot);
-    let mut accepted = read_brain_update_proposals(root)?
+    let mut accepted = proposals
         .into_iter()
-        .map(|(proposal, _)| proposal)
         .filter(|proposal| proposal.workspace_id == snapshot.workspace_id)
         .filter(|proposal| proposal.status == BrainProposalStatus::Accepted)
         .filter_map(|mut proposal| {

@@ -1938,7 +1938,7 @@ fn merge_filtered_wiki_pages(
     snapshot.wiki_pages = by_path.into_values().collect();
 }
 
-fn refresh_current_materialized_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
+pub(crate) fn refresh_current_materialized_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
     let generated_at = unix_timestamp_seconds().max(snapshot.generated_at);
     snapshot.generated_at = generated_at;
     let graph_event_id = format!(

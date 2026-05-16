@@ -96,27 +96,25 @@ impl BrainWorkspaceWriter {
         if !manifest_path.exists() {
             return Ok(());
         }
-        let mut snapshot = self.repo.read_brain_manifest()?;
-        match proposal.kind {
-            BrainProposalKind::Node => {
-                apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
-                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
-            }
-            BrainProposalKind::Claim | BrainProposalKind::Link => {
-                apply_accepted_proposal_to_snapshot(proposal, &mut snapshot)?;
-                refresh_materialized_wiki_pages(&mut snapshot);
-                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
-            }
-            BrainProposalKind::WikiPage => {
-                let page =
-                    resolve_persisted_wiki_page_for_proposal(self.repo.root(), &snapshot, proposal);
-                apply_wiki_page_to_snapshot(&mut snapshot, page.clone());
-                persist_materialized_graph_and_wiki_state(self.repo.root(), &snapshot)?;
-            }
+        if matches!(
+            proposal.kind,
             BrainProposalKind::Memory
-            | BrainProposalKind::Observation
-            | BrainProposalKind::SourceNote => {}
+                | BrainProposalKind::Observation
+                | BrainProposalKind::SourceNote
+        ) {
+            return Ok(());
         }
+        let mut snapshot =
+            read_materialized_brain_snapshot(self.repo.root(), &proposal.workspace_id)
+                .or_else(|_| self.repo.read_brain_manifest())?;
+        reduce_accepted_proposals_into_snapshot(
+            self.repo.root(),
+            &mut snapshot,
+            vec![proposal.clone()],
+        )?;
+        refresh_materialized_wiki_pages(&mut snapshot);
+        refresh_current_materialized_events(&mut snapshot)?;
+        persist_effective_brain_snapshot(self.repo.root(), &snapshot)?;
         Ok(())
     }
 
