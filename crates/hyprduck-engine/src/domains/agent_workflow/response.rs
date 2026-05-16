@@ -26,6 +26,7 @@ pub(crate) fn parse_provider_workspace_rebuild_snapshot(raw: &str) -> Result<Bra
     serde_json::from_value(value).context("failed to decode provider workspace rebuild snapshot")
 }
 
+#[cfg(test)]
 pub(crate) fn normalize_provider_workspace_rebuild_snapshot(
     snapshot: &mut BrainRepoSnapshot,
     workspace_id: &str,
@@ -117,6 +118,166 @@ pub(crate) fn normalize_provider_workspace_rebuild_snapshot(
     });
 }
 
+pub(crate) fn normalize_provider_source_local_graph_snapshot(
+    snapshot: &mut BrainRepoSnapshot,
+    workspace_id: &str,
+    baseline: &BrainRepoSnapshot,
+    source_id: &str,
+    generated_at: u64,
+) {
+    snapshot.workspace_id = workspace_id.to_string();
+    snapshot.generated_at = generated_at;
+    snapshot.sources = baseline
+        .sources
+        .iter()
+        .filter(|source| source.source_id == source_id)
+        .cloned()
+        .collect();
+    snapshot.evidence = baseline
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+        .cloned()
+        .collect();
+    snapshot.events.clear();
+
+    let source_ids = [source_id.to_string()].into_iter().collect::<BTreeSet<_>>();
+    let evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    for node in &mut snapshot.nodes {
+        retain_existing_refs(&mut node.source_ids, &source_ids);
+        retain_existing_refs(&mut node.evidence_ids, &evidence_ids);
+        if node.updated_at == 0 {
+            node.updated_at = generated_at;
+        }
+    }
+    snapshot.nodes.retain(|node| {
+        node.node_id == format!("source:{source_id}")
+            || (!node.node_id.starts_with("source:")
+                && (!node.source_ids.is_empty() || !node.evidence_ids.is_empty()))
+    });
+    ensure_source_local_source_node(snapshot, baseline, source_id, generated_at);
+
+    let node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    for relation in &mut snapshot.relations {
+        retain_existing_refs(&mut relation.evidence_ids, &evidence_ids);
+        if relation.updated_at == 0 {
+            relation.updated_at = generated_at;
+        }
+    }
+    snapshot.relations.retain(|relation| {
+        node_ids.contains(&relation.source_node_id)
+            && node_ids.contains(&relation.target_node_id)
+            && !relation.evidence_ids.is_empty()
+    });
+    ensure_source_local_node_edges(snapshot, source_id, generated_at);
+
+    normalize_supported_records(
+        snapshot,
+        workspace_id,
+        &source_ids,
+        &evidence_ids,
+        generated_at,
+    );
+}
+
+pub(crate) fn normalize_provider_workspace_linking_snapshot(
+    snapshot: &mut BrainRepoSnapshot,
+    workspace_id: &str,
+    baseline: &BrainRepoSnapshot,
+    source_id: &str,
+    generated_at: u64,
+) {
+    snapshot.workspace_id = workspace_id.to_string();
+    snapshot.generated_at = generated_at;
+    snapshot.sources = baseline.sources.clone();
+    snapshot.evidence = baseline.evidence.clone();
+    snapshot.nodes = baseline.nodes.clone();
+    snapshot.events.clear();
+
+    let source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    let node_source_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.clone(), node.source_ids.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let node_ids = node_source_ids.keys().cloned().collect::<BTreeSet<_>>();
+    for relation in &mut snapshot.relations {
+        retain_existing_refs(&mut relation.evidence_ids, &evidence_ids);
+        if relation.updated_at == 0 {
+            relation.updated_at = generated_at;
+        }
+    }
+    snapshot.relations.retain(|relation| {
+        node_ids.contains(&relation.source_node_id)
+            && node_ids.contains(&relation.target_node_id)
+            && !relation.evidence_ids.is_empty()
+            && is_cross_source_relation(relation, &node_source_ids, source_id)
+    });
+    normalize_supported_records(
+        snapshot,
+        workspace_id,
+        &source_ids,
+        &evidence_ids,
+        generated_at,
+    );
+    let node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    snapshot.claims.retain(|claim| {
+        !claim.topic_refs.is_empty()
+            && claim
+                .topic_refs
+                .iter()
+                .all(|node_id| node_ids.contains(node_id))
+            && claim
+                .source_refs
+                .iter()
+                .any(|candidate| candidate == source_id)
+            && claim
+                .source_refs
+                .iter()
+                .any(|candidate| candidate != source_id)
+    });
+    snapshot.memories.retain(|memory| {
+        memory
+            .source_refs
+            .iter()
+            .any(|candidate| candidate == source_id)
+            && memory
+                .source_refs
+                .iter()
+                .any(|candidate| candidate != source_id)
+    });
+    snapshot.wiki_pages.retain(|page| {
+        page.source_refs
+            .iter()
+            .any(|candidate| candidate == source_id)
+            && page
+                .source_refs
+                .iter()
+                .any(|candidate| candidate != source_id)
+    });
+}
+
 fn retain_existing_refs(refs: &mut Vec<String>, valid_refs: &BTreeSet<String>) {
     *refs = refs
         .iter()
@@ -128,6 +289,173 @@ fn retain_existing_refs(refs: &mut Vec<String>, valid_refs: &BTreeSet<String>) {
         .collect();
 }
 
+fn ensure_source_local_source_node(
+    snapshot: &mut BrainRepoSnapshot,
+    baseline: &BrainRepoSnapshot,
+    source_id: &str,
+    generated_at: u64,
+) {
+    let node_id = format!("source:{source_id}");
+    if snapshot.nodes.iter().any(|node| node.node_id == node_id) {
+        return;
+    }
+    if let Some(existing) = baseline.nodes.iter().find(|node| node.node_id == node_id) {
+        snapshot.nodes.push(existing.clone());
+        return;
+    }
+    if let Some(source) = baseline
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+    {
+        let evidence_ids = baseline
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
+            .map(|evidence| evidence.id.clone())
+            .collect::<Vec<_>>();
+        snapshot.nodes.push(BrainNodeRecord {
+            node_id,
+            kind: BrainNodeKind::Source,
+            label: source_label_from_record(source),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids,
+            source_ids: vec![source_id.to_string()],
+            confidence: Some(1.0),
+            updated_at: generated_at,
+        });
+    }
+}
+
+fn ensure_source_local_node_edges(
+    snapshot: &mut BrainRepoSnapshot,
+    source_id: &str,
+    generated_at: u64,
+) {
+    let source_node_id = format!("source:{source_id}");
+    let mut existing_targets = snapshot
+        .relations
+        .iter()
+        .filter(|relation| relation.source_node_id == source_node_id)
+        .map(|relation| relation.target_node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let fallback_evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    let mut relations = Vec::new();
+    for node in &snapshot.nodes {
+        if node.node_id == source_node_id || existing_targets.contains(&node.node_id) {
+            continue;
+        }
+        let evidence_ids = if node.evidence_ids.is_empty() {
+            fallback_evidence_ids.clone()
+        } else {
+            node.evidence_ids.clone()
+        };
+        if evidence_ids.is_empty() {
+            continue;
+        }
+        let relation_id = format!(
+            "rel-source_of-{}-{}",
+            sanitize_name(source_id),
+            sanitize_name(&node.node_id)
+        );
+        relations.push(BrainRelationRecord {
+            relation_id,
+            kind: BrainRelationKind::SourceOf,
+            source_node_id: source_node_id.clone(),
+            target_node_id: node.node_id.clone(),
+            label: "source_of".into(),
+            evidence_ids,
+            confidence: Some(1.0),
+            updated_at: generated_at,
+        });
+        existing_targets.insert(node.node_id.clone());
+    }
+    snapshot.relations.extend(relations);
+}
+
+fn normalize_supported_records(
+    snapshot: &mut BrainRepoSnapshot,
+    workspace_id: &str,
+    source_ids: &BTreeSet<String>,
+    evidence_ids: &BTreeSet<String>,
+    generated_at: u64,
+) {
+    let node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    for claim in &mut snapshot.claims {
+        claim.workspace_id = workspace_id.to_string();
+        retain_existing_refs(&mut claim.topic_refs, &node_ids);
+        retain_existing_refs(&mut claim.source_refs, source_ids);
+        retain_existing_refs(&mut claim.evidence_refs, evidence_ids);
+        if claim.updated_at == 0 {
+            claim.updated_at = generated_at;
+        }
+    }
+    snapshot.claims.retain(|claim| {
+        !claim.topic_refs.is_empty()
+            && (!claim.source_refs.is_empty() || !claim.evidence_refs.is_empty())
+    });
+    for memory in &mut snapshot.memories {
+        memory.workspace_id = workspace_id.to_string();
+        retain_existing_refs(&mut memory.source_refs, source_ids);
+        retain_existing_refs(&mut memory.evidence_refs, evidence_ids);
+        if memory.created_at == 0 {
+            memory.created_at = generated_at;
+        }
+        if memory.updated_at == 0 {
+            memory.updated_at = generated_at;
+        }
+    }
+    snapshot
+        .memories
+        .retain(|memory| !memory.source_refs.is_empty() || !memory.evidence_refs.is_empty());
+    for page in &mut snapshot.wiki_pages {
+        page.workspace_id = workspace_id.to_string();
+        retain_existing_refs(&mut page.node_refs, &node_ids);
+        retain_existing_refs(&mut page.source_refs, source_ids);
+        retain_existing_refs(&mut page.evidence_refs, evidence_ids);
+        if page.updated_at == 0 {
+            page.updated_at = generated_at;
+        }
+    }
+    snapshot.wiki_pages.retain(|page| {
+        !page.node_refs.is_empty() || !page.source_refs.is_empty() || !page.evidence_refs.is_empty()
+    });
+}
+
+fn is_cross_source_relation(
+    relation: &BrainRelationRecord,
+    node_source_ids: &BTreeMap<String, Vec<String>>,
+    imported_source_id: &str,
+) -> bool {
+    let left = node_source_ids
+        .get(&relation.source_node_id)
+        .cloned()
+        .unwrap_or_default();
+    let right = node_source_ids
+        .get(&relation.target_node_id)
+        .cloned()
+        .unwrap_or_default();
+    let left_has_import = left.iter().any(|source_id| source_id == imported_source_id);
+    let right_has_import = right
+        .iter()
+        .any(|source_id| source_id == imported_source_id);
+    let left_has_other = left.iter().any(|source_id| source_id != imported_source_id);
+    let right_has_other = right
+        .iter()
+        .any(|source_id| source_id != imported_source_id);
+    (left_has_import && right_has_other) || (right_has_import && left_has_other)
+}
+
+#[cfg(test)]
 fn ensure_provider_rebuild_source_nodes(
     snapshot: &mut BrainRepoSnapshot,
     baseline: &BrainRepoSnapshot,

@@ -5,11 +5,15 @@ use super::artifacts::{
     provider_workspace_rebuild_response_schema, write_provider_graph_run_artifacts,
     write_provider_graph_run_validation_report,
 };
-use super::prompt::build_full_workspace_graph_rebuild_prompt;
+use super::prompt::{build_source_local_graph_prompt, build_workspace_linking_prompt};
 use super::response::{
-    normalize_provider_workspace_rebuild_snapshot, parse_provider_workspace_rebuild_snapshot,
+    normalize_provider_source_local_graph_snapshot, normalize_provider_workspace_linking_snapshot,
+    parse_provider_workspace_rebuild_snapshot,
 };
-use super::validation::validate_provider_workspace_rebuild_snapshot;
+use super::validation::{
+    validate_provider_source_local_graph_snapshot, validate_provider_workspace_linking_snapshot,
+};
+use crate::provider::EngineConfig;
 use crate::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +38,10 @@ pub(crate) struct ProviderGraphProposalGenerationReport {
     pub(crate) error_message: Option<String>,
     #[serde(default)]
     pub(crate) provider_run_id: Option<String>,
+    #[serde(default)]
+    pub(crate) source_graph_run_id: Option<String>,
+    #[serde(default)]
+    pub(crate) workspace_linking_run_id: Option<String>,
     pub(crate) updated_at: u64,
 }
 
@@ -48,7 +56,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     let report_path = artifact_root.join("provider-graph-proposals.json");
     if let Ok(existing) = read_json_artifact::<ProviderGraphProposalGenerationReport>(&report_path)
     {
-        if !existing.proposal_ids.is_empty() && existing.source_id == manifest.source_id {
+        if existing.status == "linked" && existing.source_id == manifest.source_id {
             return Ok(existing);
         }
     }
@@ -70,6 +78,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
                 skipped_reason: None,
                 error_message: Some(format!("{error:#}")),
                 provider_run_id: None,
+                source_graph_run_id: None,
+                workspace_linking_run_id: None,
                 updated_at: unix_timestamp_seconds(),
             };
             write_json_pretty(&report_path, &report)?;
@@ -90,6 +100,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         skipped_reason: None,
         error_message: None,
         provider_run_id: None,
+        source_graph_run_id: None,
+        workspace_linking_run_id: None,
         updated_at: unix_timestamp_seconds(),
     };
 
@@ -108,19 +120,231 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     let snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
         .unwrap_or_else(|_| empty_replayed_brain_snapshot(workspace_id));
     write_json_pretty(&artifact_root.join("provider-graph-context.json"), context)?;
-    let prompt = build_full_workspace_graph_rebuild_prompt(
+    let source_graph_run_id = format!("provider-source-graph-{}", Uuid::now_v7());
+    report.provider_run_id = Some(source_graph_run_id.clone());
+    report.source_graph_run_id = Some(source_graph_run_id.clone());
+    let source_graph_prompt =
+        build_source_local_graph_prompt(workspace_id, manifest, markdown, &snapshot, context)?;
+    let source_graph_response = match run_provider_graph_stage(
+        workspace_root,
+        workspace_id,
+        manifest,
+        &config,
+        &source_graph_run_id,
+        &source_graph_prompt,
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+    let mut source_graph_snapshot =
+        match parse_provider_workspace_rebuild_snapshot(&source_graph_response) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                report.status = "failed".into();
+                report.error_message = Some(format!("{error:#}"));
+                write_provider_graph_run_validation_report(
+                    workspace_root,
+                    &source_graph_run_id,
+                    workspace_id,
+                    &manifest.source_id,
+                    "failed",
+                    0,
+                    Some(format!("{error:#}")),
+                )?;
+                write_json_pretty(&report_path, &report)?;
+                return Ok(report);
+            }
+        };
+    normalize_provider_source_local_graph_snapshot(
+        &mut source_graph_snapshot,
+        workspace_id,
+        &snapshot,
+        &manifest.source_id,
+        unix_timestamp_seconds(),
+    );
+    if let Err(error) =
+        validate_provider_source_local_graph_snapshot(&source_graph_snapshot, &manifest.source_id)
+    {
+        report.status = "failed".into();
+        report.error_message = Some(format!("{error:#}"));
+        write_provider_graph_run_validation_report(
+            workspace_root,
+            &source_graph_run_id,
+            workspace_id,
+            &manifest.source_id,
+            "failed",
+            source_graph_snapshot.nodes.len(),
+            Some(format!("{error:#}")),
+        )?;
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let before_source_graph = capture_materialized_file_snapshot(workspace_root)?;
+    let source_graph_event = source_graph_build_materialized_event(
+        workspace_id,
+        &source_graph_run_id,
+        manifest,
+        &source_graph_snapshot,
+    )?;
+    let mut source_materialization_input = snapshot.clone();
+    source_materialization_input.events =
+        merge_preserved_brain_events(vec![source_graph_event], &snapshot.events);
+    write_materialized_brain_repo(workspace_root, &source_materialization_input)?;
+    let after_source_graph = capture_materialized_file_snapshot(workspace_root)?;
+    let source_graph_changed_files =
+        changed_materialized_files(&before_source_graph, &after_source_graph);
+    write_provider_graph_run_validation_report(
+        workspace_root,
+        &source_graph_run_id,
+        workspace_id,
+        &manifest.source_id,
+        "materialized",
+        source_graph_snapshot.nodes.len(),
+        None,
+    )?;
+    write_graph_diff_artifact(
+        workspace_root,
+        &source_graph_run_id,
+        workspace_id,
+        &manifest.source_id,
+        &source_graph_changed_files,
+        &source_graph_snapshot,
+    )?;
+
+    let linked_baseline = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or_else(|_| source_materialization_input.clone());
+    let workspace_linking_run_id = format!("provider-workspace-linking-{}", Uuid::now_v7());
+    report.provider_run_id = Some(workspace_linking_run_id.clone());
+    report.workspace_linking_run_id = Some(workspace_linking_run_id.clone());
+    let workspace_linking_prompt = build_workspace_linking_prompt(
         workspace_root,
         workspace_id,
         manifest,
         markdown,
-        &snapshot,
+        &linked_baseline,
         context,
     )?;
-    let provider_run_id = format!("provider-workspace-rebuild-{}", Uuid::now_v7());
-    report.provider_run_id = Some(provider_run_id.clone());
-    let provider_response = match parse_openai_compatible_json_schema_with_timeout(
+    let workspace_linking_response = match run_provider_graph_stage(
+        workspace_root,
+        workspace_id,
+        manifest,
         &config,
-        &prompt,
+        &workspace_linking_run_id,
+        &workspace_linking_prompt,
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            report.status = "failed".into();
+            report.error_message = Some(format!("{error:#}"));
+            write_json_pretty(&report_path, &report)?;
+            return Ok(report);
+        }
+    };
+    let mut linking_snapshot =
+        match parse_provider_workspace_rebuild_snapshot(&workspace_linking_response) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                report.status = "failed".into();
+                report.error_message = Some(format!("{error:#}"));
+                write_provider_graph_run_validation_report(
+                    workspace_root,
+                    &workspace_linking_run_id,
+                    workspace_id,
+                    &manifest.source_id,
+                    "failed",
+                    0,
+                    Some(format!("{error:#}")),
+                )?;
+                write_json_pretty(&report_path, &report)?;
+                return Ok(report);
+            }
+        };
+    normalize_provider_workspace_linking_snapshot(
+        &mut linking_snapshot,
+        workspace_id,
+        &linked_baseline,
+        &manifest.source_id,
+        unix_timestamp_seconds(),
+    );
+    if let Err(error) = validate_provider_workspace_linking_snapshot(
+        &linking_snapshot,
+        &linked_baseline,
+        &manifest.source_id,
+    ) {
+        report.status = "failed".into();
+        report.error_message = Some(format!("{error:#}"));
+        write_provider_graph_run_validation_report(
+            workspace_root,
+            &workspace_linking_run_id,
+            workspace_id,
+            &manifest.source_id,
+            "failed",
+            linking_snapshot.nodes.len(),
+            Some(format!("{error:#}")),
+        )?;
+        write_json_pretty(&report_path, &report)?;
+        return Ok(report);
+    }
+
+    let before_linking = capture_materialized_file_snapshot(workspace_root)?;
+    let workspace_linking_event = workspace_linking_materialized_event(
+        workspace_id,
+        &workspace_linking_run_id,
+        manifest,
+        &linking_snapshot,
+    )?;
+    let mut linking_materialization_input = linked_baseline.clone();
+    linking_materialization_input.events =
+        merge_preserved_brain_events(vec![workspace_linking_event], &linked_baseline.events);
+    write_materialized_brain_repo(workspace_root, &linking_materialization_input)?;
+    let after_linking = capture_materialized_file_snapshot(workspace_root)?;
+    let workspace_linking_changed_files =
+        changed_materialized_files(&before_linking, &after_linking);
+    let final_snapshot = read_materialized_brain_snapshot(workspace_root, workspace_id)
+        .unwrap_or(linking_materialization_input);
+    write_provider_graph_run_validation_report(
+        workspace_root,
+        &workspace_linking_run_id,
+        workspace_id,
+        &manifest.source_id,
+        "materialized",
+        linking_snapshot.relations.len(),
+        None,
+    )?;
+    write_graph_diff_artifact(
+        workspace_root,
+        &workspace_linking_run_id,
+        workspace_id,
+        &manifest.source_id,
+        &workspace_linking_changed_files,
+        &linking_snapshot,
+    )?;
+
+    report.status = "linked".into();
+    report.proposal_count = 0;
+    report.applied_count = final_snapshot.nodes.len();
+    report.updated_at = unix_timestamp_seconds();
+    write_json_pretty(&report_path, &report)?;
+    Ok(report)
+}
+
+fn run_provider_graph_stage(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    config: &EngineConfig,
+    run_id: &str,
+    prompt: &str,
+) -> Result<String> {
+    let response = match parse_openai_compatible_json_schema_with_timeout(
+        config,
+        prompt,
         provider_workspace_rebuild_response_schema(),
         Some(Duration::from_secs(
             PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
@@ -128,127 +352,101 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     ) {
         Ok(response) => response,
         Err(error) => {
-            report.status = "failed".into();
-            report.error_message = Some(format!("{error:#}"));
             write_provider_graph_run_artifacts(
                 workspace_root,
-                &provider_run_id,
+                run_id,
                 workspace_id,
                 manifest,
                 "failed",
-                Some(&prompt),
+                Some(prompt),
                 None,
                 Some(format!("{error:#}")),
             )?;
-            write_json_pretty(&report_path, &report)?;
-            return Ok(report);
+            return Err(error);
         }
     };
     write_provider_graph_run_artifacts(
         workspace_root,
-        &provider_run_id,
+        run_id,
         workspace_id,
         manifest,
         "received",
-        Some(&prompt),
-        Some(&provider_response),
+        Some(prompt),
+        Some(&response),
         None,
     )?;
+    Ok(response)
+}
 
-    let mut rebuilt_snapshot = match parse_provider_workspace_rebuild_snapshot(&provider_response) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            report.status = "failed".into();
-            report.error_message = Some(format!("{error:#}"));
-            write_provider_graph_run_validation_report(
-                workspace_root,
-                &provider_run_id,
-                workspace_id,
-                &manifest.source_id,
-                "failed",
-                0,
-                Some(format!("{error:#}")),
-            )?;
-            write_json_pretty(&report_path, &report)?;
-            return Ok(report);
-        }
-    };
-
-    normalize_provider_workspace_rebuild_snapshot(
-        &mut rebuilt_snapshot,
-        workspace_id,
-        &snapshot,
-        unix_timestamp_seconds(),
-    );
-    if let Err(error) = validate_provider_workspace_rebuild_snapshot(&rebuilt_snapshot, &snapshot) {
-        report.status = "failed".into();
-        report.error_message = Some(format!("{error:#}"));
-        write_provider_graph_run_validation_report(
-            workspace_root,
-            &provider_run_id,
-            workspace_id,
-            &manifest.source_id,
-            "failed",
-            rebuilt_snapshot.nodes.len(),
-            Some(format!("{error:#}")),
-        )?;
-        write_json_pretty(&report_path, &report)?;
-        return Ok(report);
-    }
-
-    let before = capture_materialized_file_snapshot(workspace_root)?;
-    let event = full_workspace_rebuild_materialized_event(
-        workspace_id,
-        &provider_run_id,
-        manifest,
-        &rebuilt_snapshot,
-    )?;
-    rebuilt_snapshot.events = merge_preserved_brain_events(vec![event], &snapshot.events);
-    refresh_materialized_wiki_pages(&mut rebuilt_snapshot);
-    persist_reconstructed_brain_snapshot(workspace_root, &rebuilt_snapshot)?;
-    let after = capture_materialized_file_snapshot(workspace_root)?;
-    let changed_files = changed_materialized_files(&before, &after);
-
-    write_provider_graph_run_validation_report(
-        workspace_root,
-        &provider_run_id,
-        workspace_id,
-        &manifest.source_id,
-        "materialized",
-        rebuilt_snapshot.nodes.len(),
-        None,
-    )?;
+fn write_graph_diff_artifact(
+    workspace_root: &Path,
+    run_id: &str,
+    workspace_id: &str,
+    source_id: &str,
+    changed_files: &[String],
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
     write_json_pretty(
         &workspace_root
             .join("runs")
-            .join(&provider_run_id)
+            .join(run_id)
             .join("graph-diff.json"),
         &json!({
-            "runId": provider_run_id,
+            "runId": run_id,
             "workspaceId": workspace_id,
-            "sourceId": manifest.source_id,
+            "sourceId": source_id,
             "changedFiles": changed_files,
-            "nodeCount": rebuilt_snapshot.nodes.len(),
-            "relationCount": rebuilt_snapshot.relations.len(),
-            "claimCount": rebuilt_snapshot.claims.len(),
-            "memoryCount": rebuilt_snapshot.memories.len(),
-            "updatedAt": rebuilt_snapshot.generated_at,
+            "nodeCount": snapshot.nodes.len(),
+            "relationCount": snapshot.relations.len(),
+            "claimCount": snapshot.claims.len(),
+            "memoryCount": snapshot.memories.len(),
+            "updatedAt": snapshot.generated_at,
         }),
-    )?;
-
-    report.status = "rebuilt".into();
-    report.proposal_count = 0;
-    report.applied_count = rebuilt_snapshot.nodes.len();
-    report.updated_at = unix_timestamp_seconds();
-    write_json_pretty(&report_path, &report)?;
-    Ok(report)
+    )
 }
 
-fn full_workspace_rebuild_materialized_event(
+fn source_graph_build_materialized_event(
     workspace_id: &str,
     run_id: &str,
     manifest: &SourceArtifactManifest,
     snapshot: &BrainRepoSnapshot,
+) -> Result<BrainEvent> {
+    provider_graph_materialized_event(
+        workspace_id,
+        run_id,
+        manifest,
+        snapshot,
+        "source_graph_build",
+        "source-graph-build",
+        "provider_source_graph_build",
+    )
+}
+
+fn workspace_linking_materialized_event(
+    workspace_id: &str,
+    run_id: &str,
+    manifest: &SourceArtifactManifest,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<BrainEvent> {
+    provider_graph_materialized_event(
+        workspace_id,
+        run_id,
+        manifest,
+        snapshot,
+        "workspace_linking",
+        "workspace-linking",
+        "provider_workspace_linking",
+    )
+}
+
+fn provider_graph_materialized_event(
+    workspace_id: &str,
+    run_id: &str,
+    manifest: &SourceArtifactManifest,
+    snapshot: &BrainRepoSnapshot,
+    operation_type: &str,
+    actor_suffix: &str,
+    confidence: &str,
 ) -> Result<BrainEvent> {
     Ok(BrainEvent {
         event_id: format!("evt-{run_id}"),
@@ -256,10 +454,10 @@ fn full_workspace_rebuild_materialized_event(
         workspace_id: workspace_id.to_string(),
         scope: BrainScope::Project,
         event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some("full_workspace_rebuild".into()),
+        operation_type: Some(operation_type.into()),
         actor: BrainActor {
             actor_type: BrainActorType::Agent,
-            actor_id: format!("{PROVIDER_GRAPH_AGENT_ID}:full-workspace-rebuild"),
+            actor_id: format!("{PROVIDER_GRAPH_AGENT_ID}:{actor_suffix}"),
         },
         source_refs: snapshot
             .sources
@@ -333,7 +531,7 @@ fn full_workspace_rebuild_materialized_event(
             materialized_version: Some(snapshot.generated_at),
             schema_version: 1,
         },
-        confidence: Some("provider_full_workspace_rebuild".into()),
+        confidence: Some(confidence.into()),
         policy_result: "materialized".into(),
         created_at: snapshot.generated_at,
     })

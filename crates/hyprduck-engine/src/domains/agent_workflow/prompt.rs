@@ -3,7 +3,92 @@ use std::path::Path;
 
 use crate::*;
 
-pub(crate) fn build_full_workspace_graph_rebuild_prompt(
+pub(crate) fn build_source_local_graph_prompt(
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    markdown: &str,
+    snapshot: &BrainRepoSnapshot,
+    context: &ImportEvidenceContext,
+) -> Result<String> {
+    let source = snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == manifest.source_id)
+        .cloned()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let evidence = snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.source_id.as_deref() == Some(manifest.source_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let sources_json =
+        serde_json::to_string_pretty(&source).context("failed to encode imported source")?;
+    let evidence_json =
+        serde_json::to_string_pretty(&evidence).context("failed to encode imported evidence")?;
+    let context_refs = import_evidence_context_allowed_refs(context);
+
+    Ok(format!(
+        r#"You are HyprDuck's source-local graph construction agent.
+
+Task:
+- Build a graph only for the newly imported sourceId {source_id}.
+- Do not rebuild, rewrite, or summarize the rest of the workspace.
+- Return materialized graph records that are grounded only in the provided source and evidence.
+- Include one source node using nodeId "source:{source_id}".
+- If the imported source has meaningful domain text, create durable non-source concept/topic nodes.
+- Every non-source node must cite sourceId {source_id} or evidence from that source.
+- Every non-source node must be connected from "source:{source_id}" with a source_of edge, or otherwise be connected to a source-grounded node.
+- Every edge, claim, memory, and wiki page must cite existing evidenceIds from the imported source.
+- Preserve source and evidence records exactly as provided. Do not invent sourceIds or evidenceIds.
+- Use stable nodeIds/relationIds/claimIds/memoryIds so repeated imports remain readable.
+- Return JSON only. No markdown fence, no prose.
+
+Output shape:
+{{
+  "materializedGraph": {{
+    "generatedAt": <unix seconds or null>,
+    "sources": [...copy exactly from Imported source],
+    "evidence": [...copy exactly from Imported evidence],
+    "nodes": [BrainNodeRecord...],
+    "edges": [BrainRelationRecord...],
+    "claims": [ClaimRecord...],
+    "memories": [MemoryRecord...],
+    "wikiPages": [WikiPage...],
+    "entities": [],
+    "extractions": []
+  }}
+}}
+
+Workspace:
+- workspaceId: {workspace_id}
+- imported sourceId: {source_id}
+- imported sourcePath: {source_path}
+- imported markdownPath: {markdown_path}
+- allowed context evidence refs from retrieval: {context_refs}
+
+Imported source:
+{sources_json}
+
+Imported evidence:
+{evidence_json}
+
+Imported markdown:
+{markdown}
+"#,
+        workspace_id = workspace_id,
+        source_id = manifest.source_id,
+        source_path = manifest.source_path,
+        markdown_path = manifest.markdown_path,
+        context_refs = join_or_none(&context_refs),
+        sources_json = sources_json,
+        evidence_json = evidence_json,
+        markdown = truncate_for_prompt(markdown, 24000)
+    ))
+}
+
+pub(crate) fn build_workspace_linking_prompt(
     workspace_root: &Path,
     workspace_id: &str,
     manifest: &SourceArtifactManifest,
@@ -20,10 +105,6 @@ pub(crate) fn build_full_workspace_graph_rebuild_prompt(
         .into_iter()
         .filter(|chunk| valid_source_ids.contains(chunk.source_id.as_str()))
         .collect::<Vec<_>>();
-    let sources_json =
-        serde_json::to_string_pretty(&snapshot.sources).context("failed to encode sources")?;
-    let evidence_json =
-        serde_json::to_string_pretty(&snapshot.evidence).context("failed to encode evidence")?;
     let current_graph_json = serde_json::to_string_pretty(&json!({
         "nodes": snapshot.nodes,
         "edges": snapshot.relations,
@@ -49,26 +130,24 @@ pub(crate) fn build_full_workspace_graph_rebuild_prompt(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let sources_json =
+        serde_json::to_string_pretty(&snapshot.sources).context("failed to encode sources")?;
+    let evidence_json =
+        serde_json::to_string_pretty(&snapshot.evidence).context("failed to encode evidence")?;
     let context_refs = import_evidence_context_allowed_refs(context);
 
     Ok(format!(
-        r#"You are HyprDuck's autonomous workspace graph rebuild agent.
+        r#"You are HyprDuck's workspace linking agent.
 
 Task:
-- Rebuild the entire workspace graph after importing sourceId {source_id}.
-- Use every workspace source chunk below, not only the latest import.
-- Prioritize the latest imported markdown and make sure its domain content is represented.
-- Return the complete materialized graph state, not proposals.
-- Decide all durable nodes, edges, claims, memories, and wiki pages yourself from the source evidence.
-- Reconnect or restructure the workspace graph when the full source set proves better relationships.
-- Treat the current materialized graph as a hint only. Do not simply copy it when source chunks support new nodes.
-- Preserve all source and evidence records exactly as provided. Do not invent sourceIds or evidenceIds.
-- Every non-source node must have sourceIds or evidenceIds.
-- Every edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
-- Include one source node for every source record, using nodeId "source:<sourceId>".
-- If the imported source has meaningful domain text, it must not be represented by only its source node.
-- For the imported source, create durable non-source concept/topic nodes and source_of/related_to edges grounded to its provided evidence.
-- Use stable nodeIds/relationIds/claimIds/memoryIds so repeated rebuilds remain readable.
+- The imported sourceId {source_id} already has its own source-local graph.
+- Add only meaningful cross-source links between the imported source graph and the existing workspace graph.
+- Do not rebuild, replace, or delete existing nodes, edges, claims, memories, wiki pages, sources, or evidence.
+- Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
+- Return only records needed for cross-source linking. It is acceptable to return no new edges if no grounded relationship exists.
+- Every returned edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
+- Preserve source and evidence records exactly as provided. Do not invent sourceIds or evidenceIds.
+- Use stable ids so repeated linking runs remain readable.
 - Return JSON only. No markdown fence, no prose.
 
 Output shape:
@@ -77,11 +156,11 @@ Output shape:
     "generatedAt": <unix seconds or null>,
     "sources": [...copy exactly from Provided sources],
     "evidence": [...copy exactly from Provided evidence],
-    "nodes": [BrainNodeRecord...],
-    "edges": [BrainRelationRecord...],
-    "claims": [ClaimRecord...],
-    "memories": [MemoryRecord...],
-    "wikiPages": [WikiPage...],
+    "nodes": [existing endpoint BrainNodeRecord copies only when needed],
+    "edges": [cross-source BrainRelationRecord...],
+    "claims": [cross-source ClaimRecord...],
+    "memories": [cross-source MemoryRecord...],
+    "wikiPages": [cross-source WikiPage...],
     "entities": [],
     "extractions": []
   }}
@@ -100,7 +179,7 @@ Provided sources:
 Provided evidence:
 {evidence_json}
 
-Current materialized graph before rebuild:
+Current materialized graph after source-local graph:
 {current_graph_json}
 
 All workspace source chunks:
@@ -122,7 +201,7 @@ Latest imported markdown:
         } else {
             all_chunks
         },
-        markdown = truncate_for_prompt(markdown, 24000)
+        markdown = truncate_for_prompt(markdown, 16000)
     ))
 }
 

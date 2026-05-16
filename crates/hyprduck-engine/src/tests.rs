@@ -321,7 +321,243 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
 }
 
 #[test]
-fn workspace_rebuild_prompt_uses_only_active_workspace_source_chunks() {
+fn provider_source_local_graph_adds_source_edges_for_imported_concepts() {
+    let generated_at = 42;
+    let baseline = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at,
+        sources: vec![SourceRecord {
+            source_id: "source-alpha".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/alpha.md".into(),
+            source_path: "/tmp/alpha.md".into(),
+            markdown_path: "/tmp/alpha.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        }],
+        evidence: vec![EvidenceRef {
+            id: "ev-alpha".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Alpha source describes graph traversal.".into(),
+            source_path: Some("/tmp/alpha.md".into()),
+            source_id: Some("source-alpha".into()),
+            markdown_path: Some("/tmp/alpha.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        }],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    let raw = serde_json::json!({
+        "materializedGraph": {
+            "sources": [],
+            "evidence": [],
+            "nodes": [
+                {
+                    "nodeId": "concept-traversal",
+                    "kind": "concept",
+                    "label": "Graph traversal",
+                    "scope": "project",
+                    "evidenceIds": ["ev-alpha"],
+                    "sourceIds": ["source-alpha"],
+                    "updatedAt": generated_at
+                }
+            ],
+            "edges": [],
+            "claims": [],
+            "memories": [],
+            "wikiPages": [],
+            "entities": [],
+            "extractions": []
+        }
+    })
+    .to_string();
+
+    let mut snapshot = parse_provider_workspace_rebuild_snapshot(&raw).expect("parse source graph");
+    normalize_provider_source_local_graph_snapshot(
+        &mut snapshot,
+        DEFAULT_WORKSPACE_ID,
+        &baseline,
+        "source-alpha",
+        generated_at,
+    );
+
+    validate_provider_source_local_graph_snapshot(&snapshot, "source-alpha")
+        .expect("source-local graph is valid");
+    assert!(snapshot
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "source:source-alpha"));
+    assert!(snapshot.relations.iter().any(|relation| {
+        relation.kind == BrainRelationKind::SourceOf
+            && relation.source_node_id == "source:source-alpha"
+            && relation.target_node_id == "concept-traversal"
+    }));
+}
+
+#[test]
+fn provider_workspace_linking_keeps_only_cross_source_relations() {
+    let generated_at = 42;
+    let mut baseline = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at,
+        sources: vec![
+            SourceRecord {
+                source_id: "source-alpha".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: "/tmp/alpha.md".into(),
+                source_path: "/tmp/alpha.md".into(),
+                markdown_path: "/tmp/alpha.md".into(),
+                format: "markdown".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: generated_at,
+            },
+            SourceRecord {
+                source_id: "source-beta".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: "/tmp/beta.md".into(),
+                source_path: "/tmp/beta.md".into(),
+                markdown_path: "/tmp/beta.md".into(),
+                format: "markdown".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: generated_at,
+            },
+        ],
+        evidence: vec![
+            EvidenceRef {
+                id: "ev-alpha".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Alpha source describes traversal.".into(),
+                source_path: Some("/tmp/alpha.md".into()),
+                source_id: Some("source-alpha".into()),
+                markdown_path: Some("/tmp/alpha.md".into()),
+                image_path: None,
+                provenance: Some("test".into()),
+            },
+            EvidenceRef {
+                id: "ev-beta".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Beta source describes workspace graphs.".into(),
+                source_path: Some("/tmp/beta.md".into()),
+                source_id: Some("source-beta".into()),
+                markdown_path: Some("/tmp/beta.md".into()),
+                image_path: None,
+                provenance: Some("test".into()),
+            },
+        ],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    baseline.nodes = vec![
+        BrainNodeRecord {
+            node_id: "concept-alpha".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Traversal".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-alpha".into()],
+            source_ids: vec!["source-alpha".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+        },
+        BrainNodeRecord {
+            node_id: "concept-beta".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Workspace graph".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-beta".into()],
+            source_ids: vec!["source-beta".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+        },
+    ];
+    let raw = serde_json::json!({
+        "materializedGraph": {
+            "sources": [],
+            "evidence": [],
+            "nodes": [],
+            "edges": [
+                {
+                    "relationId": "edge-cross",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-alpha",
+                    "targetNodeId": "concept-beta",
+                    "label": "connects to",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "updatedAt": generated_at
+                },
+                {
+                    "relationId": "edge-local",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-alpha",
+                    "targetNodeId": "concept-alpha",
+                    "label": "local only",
+                    "evidenceIds": ["ev-alpha"],
+                    "updatedAt": generated_at
+                }
+            ],
+            "claims": [],
+            "memories": [],
+            "wikiPages": [],
+            "entities": [],
+            "extractions": []
+        }
+    })
+    .to_string();
+
+    let mut snapshot =
+        parse_provider_workspace_rebuild_snapshot(&raw).expect("parse workspace linking");
+    normalize_provider_workspace_linking_snapshot(
+        &mut snapshot,
+        DEFAULT_WORKSPACE_ID,
+        &baseline,
+        "source-alpha",
+        generated_at,
+    );
+
+    validate_provider_workspace_linking_snapshot(&snapshot, &baseline, "source-alpha")
+        .expect("workspace linking graph is valid");
+    assert!(snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-cross"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-local"));
+}
+
+#[test]
+fn workspace_linking_prompt_uses_only_active_workspace_source_chunks() {
     let temp = tempdir().expect("tempdir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     fs::create_dir_all(&workspace_root).expect("workspace root");
@@ -372,7 +608,7 @@ fn workspace_rebuild_prompt_uses_only_active_workspace_source_chunks() {
     )
     .expect("context");
 
-    let prompt = build_full_workspace_graph_rebuild_prompt(
+    let prompt = build_workspace_linking_prompt(
         &workspace_root,
         DEFAULT_WORKSPACE_ID,
         &valid_manifest,

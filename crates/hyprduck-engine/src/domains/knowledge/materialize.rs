@@ -1299,7 +1299,10 @@ pub(crate) fn merge_preserved_brain_events(
 
 fn is_replayable_materialized_graph_event(event: &BrainEvent) -> bool {
     event.event_type == BrainEventKind::GraphMaterialized
-        && event.operation_type.as_deref() == Some("full_workspace_rebuild")
+        && matches!(
+            event.operation_type.as_deref(),
+            Some("full_workspace_rebuild" | "source_graph_build" | "workspace_linking")
+        )
         && event.policy_result == "materialized"
 }
 

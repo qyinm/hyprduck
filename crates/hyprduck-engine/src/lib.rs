@@ -93,8 +93,10 @@ mod source_index {
 use agent_workflow::maybe_generate_provider_graph_proposals;
 #[cfg(test)]
 use agent_workflow::{
-    build_full_workspace_graph_rebuild_prompt, normalize_provider_workspace_rebuild_snapshot,
-    parse_provider_workspace_rebuild_snapshot, validate_provider_workspace_rebuild_snapshot,
+    build_workspace_linking_prompt, normalize_provider_source_local_graph_snapshot,
+    normalize_provider_workspace_linking_snapshot, normalize_provider_workspace_rebuild_snapshot,
+    parse_provider_workspace_rebuild_snapshot, validate_provider_source_local_graph_snapshot,
+    validate_provider_workspace_linking_snapshot, validate_provider_workspace_rebuild_snapshot,
 };
 use brain_repo::*;
 use chat_openai_compatible_client::{
