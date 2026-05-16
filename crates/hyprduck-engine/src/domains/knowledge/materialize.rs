@@ -1501,18 +1501,22 @@ fn clear_replayable_provider_overlay_records(
     }
     let target_node_ids = replayable_events
         .iter()
+        .filter(|event| event.operation_type.as_deref() != Some("workspace_linking"))
         .flat_map(|event| event.target_node_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
     let target_edge_ids = replayable_events
         .iter()
+        .filter(|event| event.operation_type.as_deref() != Some("workspace_linking"))
         .flat_map(|event| event.target_edge_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
     let target_claim_ids = replayable_events
         .iter()
+        .filter(|event| event.operation_type.as_deref() != Some("workspace_linking"))
         .flat_map(|event| event.target_claim_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
     let target_memory_ids = replayable_events
         .iter()
+        .filter(|event| event.operation_type.as_deref() != Some("workspace_linking"))
         .flat_map(|event| event.target_memory_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
     let provider_overlay_refs =
@@ -1725,6 +1729,7 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_source_ids,
         &valid_evidence_ids,
         &valid_node_ids,
+        &evidence_source_ids,
         require_cross_source_artifacts,
     );
     merge_filtered_memories(
@@ -1732,21 +1737,25 @@ fn apply_filtered_materialized_graph_overlay(
         materialized_graph.memories,
         &valid_source_ids,
         &valid_evidence_ids,
+        &evidence_source_ids,
         require_cross_source_artifacts,
     );
-    merge_filtered_entities(
-        snapshot,
-        materialized_graph.entities,
-        &valid_source_ids,
-        &valid_evidence_ids,
-    );
-    merge_filtered_extractions(snapshot, materialized_graph.extractions, &valid_source_ids);
+    if !require_cross_source_artifacts {
+        merge_filtered_entities(
+            snapshot,
+            materialized_graph.entities,
+            &valid_source_ids,
+            &valid_evidence_ids,
+        );
+        merge_filtered_extractions(snapshot, materialized_graph.extractions, &valid_source_ids);
+    }
     merge_filtered_wiki_pages(
         snapshot,
         materialized_graph.wiki_pages,
         &valid_source_ids,
         &valid_evidence_ids,
         &valid_node_ids,
+        &evidence_source_ids,
         require_cross_source_artifacts,
     );
     snapshot.generated_at = snapshot.generated_at.max(
@@ -1921,6 +1930,7 @@ fn merge_filtered_claims(
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
     valid_node_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
 ) {
     let mut by_id = snapshot
@@ -1945,7 +1955,10 @@ fn merge_filtered_claims(
         if claim.topic_refs.is_empty() {
             continue;
         }
-        if require_cross_source && !has_cross_source_refs(&claim.source_refs) {
+        if require_cross_source
+            && (!has_cross_source_refs(&claim.source_refs)
+                || !has_cross_source_evidence_refs(&claim.evidence_refs, evidence_source_ids))
+        {
             continue;
         }
         by_id.insert(claim.claim_id.clone(), claim);
@@ -1958,6 +1971,7 @@ fn merge_filtered_memories(
     memories: Vec<MemoryRecord>,
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
 ) {
     let mut by_id = snapshot
@@ -1976,7 +1990,10 @@ fn merge_filtered_memories(
         if memory.source_refs.is_empty() && memory.evidence_refs.is_empty() {
             continue;
         }
-        if require_cross_source && !has_cross_source_refs(&memory.source_refs) {
+        if require_cross_source
+            && (!has_cross_source_refs(&memory.source_refs)
+                || !has_cross_source_evidence_refs(&memory.evidence_refs, evidence_source_ids))
+        {
             continue;
         }
         by_id.insert(memory.memory_id.clone(), memory);
@@ -2036,6 +2053,7 @@ fn merge_filtered_wiki_pages(
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
     valid_node_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
 ) {
     let mut by_path = snapshot
@@ -2062,7 +2080,10 @@ fn merge_filtered_wiki_pages(
         if page.path.starts_with("wiki/topics/") && page.node_refs.is_empty() {
             continue;
         }
-        if require_cross_source && !has_cross_source_refs(&page.source_refs) {
+        if require_cross_source
+            && (!has_cross_source_refs(&page.source_refs)
+                || !has_cross_source_evidence_refs(&page.evidence_refs, evidence_source_ids))
+        {
             continue;
         }
         by_path.insert(page.path.clone(), page);

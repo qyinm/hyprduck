@@ -2425,6 +2425,29 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         confidence: Some(0.9),
         updated_at: 100,
     };
+    let current_entity = EntityRecord {
+        entity_id: "entity-active".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        kind: BrainNodeKind::Concept,
+        name: "Current active entity".into(),
+        aliases: Vec::new(),
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        updated_at: 1,
+    };
+    let stale_payload_entity = EntityRecord {
+        entity_id: "entity-active".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        kind: BrainNodeKind::Concept,
+        name: "Stale payload active entity".into(),
+        aliases: Vec::new(),
+        source_refs: vec![
+            active_source.source_id.clone(),
+            deleted_source.source_id.clone(),
+        ],
+        evidence_refs: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
+        updated_at: 100,
+    };
     let linking_event = BrainEvent {
         event_id: "evt-workspace-linking-cross-source".into(),
         schema_version: BRAIN_EVENT_SCHEMA_VERSION,
@@ -2452,10 +2475,10 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         relation_refs: vec![linking_relation.relation_id.clone()],
         claim_refs: vec![linking_claim.claim_id.clone()],
         memory_refs: vec![linking_memory.memory_id.clone()],
-        target_node_ids: Vec::new(),
-        target_edge_ids: Vec::new(),
-        target_claim_ids: Vec::new(),
-        target_memory_ids: Vec::new(),
+        target_node_ids: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
+        target_edge_ids: vec![linking_relation.relation_id.clone()],
+        target_claim_ids: vec![linking_claim.claim_id.clone()],
+        target_memory_ids: vec![linking_memory.memory_id.clone()],
         evidence_refs: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
         payload_json: materialized_graph_event_payload_json(
             100,
@@ -2469,7 +2492,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
             &[active_evidence.clone(), deleted_evidence],
             std::slice::from_ref(&linking_memory),
             std::slice::from_ref(&linking_wiki_page),
-            &[],
+            std::slice::from_ref(&stale_payload_entity),
             std::slice::from_ref(&linking_claim),
             &[],
         )
@@ -2492,6 +2515,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     snapshot.relations = vec![linking_relation];
     snapshot.claims = vec![linking_claim];
     snapshot.memories = vec![linking_memory];
+    snapshot.entities = vec![current_entity];
     snapshot.wiki_pages = vec![linking_wiki_page.clone()];
     snapshot.events = vec![linking_event];
     ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure workspace dirs");
@@ -2533,6 +2557,14 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .evidence
         .iter()
         .any(|evidence| evidence.id == "ev-active"));
+    assert_eq!(
+        replayed
+            .entities
+            .iter()
+            .find(|entity| entity.entity_id == "entity-active")
+            .map(|entity| entity.name.as_str()),
+        Some("Current active entity")
+    );
     assert!(!replayed
         .wiki_pages
         .iter()
@@ -2646,10 +2678,10 @@ fn workspace_linking_legacy_top_level_refs_do_not_delete_current_records() {
         relation_refs: vec![relation.relation_id.clone()],
         claim_refs: vec![claim.claim_id.clone()],
         memory_refs: vec![memory.memory_id.clone()],
-        target_node_ids: Vec::new(),
-        target_edge_ids: Vec::new(),
-        target_claim_ids: Vec::new(),
-        target_memory_ids: Vec::new(),
+        target_node_ids: vec![node_a.node_id.clone(), node_b.node_id.clone()],
+        target_edge_ids: vec![relation.relation_id.clone()],
+        target_claim_ids: vec![claim.claim_id.clone()],
+        target_memory_ids: vec![memory.memory_id.clone()],
         evidence_refs: vec![evidence.id.clone()],
         payload_json: "{}".into(),
         causality: BrainEventCausality {
