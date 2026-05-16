@@ -1530,9 +1530,7 @@ fn clear_replayable_provider_overlay_records(
         .collect::<BTreeSet<_>>();
 
     snapshot.nodes.retain(|node| {
-        node.kind == BrainNodeKind::Source
-            || (!target_node_ids.contains(&node.node_id)
-                && !provider_overlay_refs.node_ids.contains(&node.node_id))
+        node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
     });
     snapshot.relations.retain(|relation| {
         !target_edge_ids.contains(&relation.relation_id)
@@ -1568,7 +1566,6 @@ fn clear_replayable_provider_overlay_records(
 
 #[derive(Debug, Default)]
 struct ProviderOverlayRefs {
-    node_ids: BTreeSet<String>,
     evidence_ids: BTreeSet<String>,
     relation_ids: BTreeSet<String>,
     claim_ids: BTreeSet<String>,
@@ -1581,12 +1578,7 @@ struct ProviderOverlayRefs {
 
 impl ProviderOverlayRefs {
     fn extend_from_event(&mut self, event: &BrainEvent) {
-        self.evidence_ids
-            .extend(event.evidence_refs.iter().cloned());
-        self.relation_ids
-            .extend(event.relation_refs.iter().cloned());
-        self.claim_ids.extend(event.claim_refs.iter().cloned());
-        self.memory_ids.extend(event.memory_refs.iter().cloned());
+        let is_workspace_linking = event.operation_type.as_deref() == Some("workspace_linking");
         let Ok(payload) =
             serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
         else {
@@ -1595,18 +1587,14 @@ impl ProviderOverlayRefs {
         let Some(materialized_graph) = payload.materialized_graph else {
             return;
         };
-        self.evidence_ids.extend(
-            materialized_graph
-                .evidence
-                .into_iter()
-                .map(|evidence| evidence.id),
-        );
-        self.node_ids.extend(
-            materialized_graph
-                .nodes
-                .into_iter()
-                .map(|node| node.node_id),
-        );
+        if !is_workspace_linking {
+            self.evidence_ids.extend(
+                materialized_graph
+                    .evidence
+                    .into_iter()
+                    .map(|evidence| evidence.id),
+            );
+        }
         self.relation_ids.extend(
             materialized_graph
                 .relations
@@ -1625,22 +1613,26 @@ impl ProviderOverlayRefs {
                 .into_iter()
                 .map(|memory| memory.memory_id),
         );
-        self.entity_ids.extend(
-            materialized_graph
-                .entities
-                .into_iter()
-                .map(|entity| entity.entity_id),
-        );
+        if !is_workspace_linking {
+            self.entity_ids.extend(
+                materialized_graph
+                    .entities
+                    .into_iter()
+                    .map(|entity| entity.entity_id),
+            );
+        }
         for page in materialized_graph.wiki_pages {
             self.wiki_page_ids.insert(page.page_id);
             self.wiki_paths.insert(page.path);
         }
-        self.extraction_artifact_ids.extend(
-            materialized_graph
-                .extractions
-                .into_iter()
-                .map(|extraction| extraction.artifact_id),
-        );
+        if !is_workspace_linking {
+            self.extraction_artifact_ids.extend(
+                materialized_graph
+                    .extractions
+                    .into_iter()
+                    .map(|extraction| extraction.artifact_id),
+            );
+        }
     }
 }
 
@@ -1658,7 +1650,11 @@ fn apply_filtered_materialized_graph_overlay(
         return;
     }
 
-    merge_filtered_evidence(snapshot, materialized_graph.evidence, &valid_source_ids);
+    let require_cross_source_artifacts =
+        event.operation_type.as_deref() == Some("workspace_linking");
+    if !require_cross_source_artifacts {
+        merge_filtered_evidence(snapshot, materialized_graph.evidence, &valid_source_ids);
+    }
     let valid_evidence_ids = snapshot
         .evidence
         .iter()
@@ -1690,14 +1686,16 @@ fn apply_filtered_materialized_graph_overlay(
                 by_source
             },
         );
-    merge_filtered_nodes(
-        snapshot,
-        materialized_graph.nodes,
-        &valid_source_ids,
-        &valid_evidence_ids,
-        &source_labels,
-        &evidence_by_source,
-    );
+    if !require_cross_source_artifacts {
+        merge_filtered_nodes(
+            snapshot,
+            materialized_graph.nodes,
+            &valid_source_ids,
+            &valid_evidence_ids,
+            &source_labels,
+            &evidence_by_source,
+        );
+    }
     let valid_node_ids = snapshot
         .nodes
         .iter()
@@ -1713,8 +1711,6 @@ fn apply_filtered_materialized_graph_overlay(
                 .map(|source_id| (evidence.id.clone(), source_id.clone()))
         })
         .collect::<BTreeMap<_, _>>();
-    let require_cross_source_artifacts =
-        event.operation_type.as_deref() == Some("workspace_linking");
     merge_filtered_relations(
         snapshot,
         materialized_graph.relations,

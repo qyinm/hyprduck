@@ -2345,7 +2345,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     let active_node = BrainNodeRecord {
         node_id: "concept-active".into(),
         kind: BrainNodeKind::Concept,
-        label: "Active concept".into(),
+        label: "Current active concept".into(),
         scope: BrainScope::Project,
         aliases: Vec::new(),
         evidence_ids: vec![active_evidence.id.clone()],
@@ -2353,6 +2353,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         confidence: Some(0.9),
         updated_at: 1,
     };
+    let mut stale_payload_active_node = active_node.clone();
+    stale_payload_active_node.label = "Stale payload active concept".into();
+    stale_payload_active_node.updated_at = 100;
     let active_peer_node = BrainNodeRecord {
         node_id: "concept-active-peer".into(),
         kind: BrainNodeKind::Concept,
@@ -2458,7 +2461,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
             100,
             &[],
             &[
-                active_node.clone(),
+                stale_payload_active_node,
                 active_peer_node.clone(),
                 deleted_node.clone(),
             ],
@@ -2485,7 +2488,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     snapshot.generated_at = 1;
     snapshot.sources = vec![active_source];
     snapshot.evidence = vec![active_evidence];
-    snapshot.nodes = vec![active_node, active_peer_node, deleted_node.clone()];
+    snapshot.nodes = vec![active_node, active_peer_node];
     snapshot.relations = vec![linking_relation];
     snapshot.claims = vec![linking_claim];
     snapshot.memories = vec![linking_memory];
@@ -2518,10 +2521,18 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .relations
         .iter()
         .any(|relation| relation.relation_id == "relation-cross-source"));
-    assert!(!replayed
-        .nodes
+    assert_eq!(
+        replayed
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "concept-active")
+            .map(|node| node.label.as_str()),
+        Some("Current active concept")
+    );
+    assert!(replayed
+        .evidence
         .iter()
-        .any(|node| node.node_id == "concept-deleted"));
+        .any(|evidence| evidence.id == "ev-active"));
     assert!(!replayed
         .wiki_pages
         .iter()
@@ -2537,7 +2548,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
 }
 
 #[test]
-fn workspace_linking_cleanup_uses_top_level_refs_without_materialized_payload() {
+fn workspace_linking_legacy_top_level_refs_do_not_delete_current_records() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     let source = SourceRecord {
@@ -2666,9 +2677,22 @@ fn workspace_linking_cleanup_uses_top_level_refs_without_materialized_payload() 
     let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
         .expect("read replayed workspace graph");
 
-    assert!(replayed.relations.is_empty());
-    assert!(replayed.claims.is_empty());
-    assert!(replayed.memories.is_empty());
+    assert!(replayed
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "relation-stale"));
+    assert!(replayed
+        .claims
+        .iter()
+        .any(|claim| claim.claim_id == "claim-stale"));
+    assert!(replayed
+        .memories
+        .iter()
+        .any(|memory| memory.memory_id == "memory-stale"));
+    assert!(replayed
+        .evidence
+        .iter()
+        .any(|existing| existing.id == "ev-active"));
     assert_eq!(replayed.nodes.len(), 2);
 }
 
