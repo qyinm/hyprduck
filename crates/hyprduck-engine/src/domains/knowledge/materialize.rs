@@ -1215,10 +1215,15 @@ fn compute_effective_brain_state(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<EffectiveBrainState> {
     let mut effective_snapshot = snapshot.clone();
+    let disk_origins = read_materialized_record_origins(root)?;
+    let protected_current_records = ProtectedMaterializedRecordKeys::from_snapshot(snapshot);
+    let existing_memories = discard_stale_workspace_linking_memory_collisions(
+        read_memory_records(root)?,
+        snapshot,
+        &disk_origins,
+    );
     effective_snapshot.memories =
-        merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
-    let protected_current_records =
-        ProtectedMaterializedRecordKeys::from_snapshot(&effective_snapshot);
+        merge_materialized_memory_records(snapshot.memories.clone(), existing_memories);
     let events_path = root.join("events/brain_events.jsonl");
     let existing_events = if events_path.exists() {
         read_brain_events_jsonl(&events_path)
@@ -1229,7 +1234,7 @@ fn compute_effective_brain_state(
     effective_snapshot.events =
         merge_preserved_brain_events(snapshot.events.clone(), &existing_events);
     let previous_origins =
-        read_or_bootstrap_materialized_record_origins(root, &effective_snapshot)?;
+        merge_bootstrapped_materialized_record_origins(disk_origins, &effective_snapshot);
     let origins = replay_preserved_materialized_graph_events(
         &mut effective_snapshot,
         &previous_origins,
@@ -1422,15 +1427,27 @@ fn read_materialized_record_origins(root: &Path) -> Result<MaterializedRecordOri
     Ok(origins)
 }
 
-fn read_or_bootstrap_materialized_record_origins(
-    root: &Path,
+fn merge_bootstrapped_materialized_record_origins(
+    mut origins: MaterializedRecordOrigins,
     snapshot: &BrainRepoSnapshot,
-) -> Result<MaterializedRecordOrigins> {
-    let path = root.join(MATERIALIZED_RECORD_ORIGINS_PATH);
-    if path.exists() {
-        return read_materialized_record_origins(root);
+) -> MaterializedRecordOrigins {
+    let bootstrapped = bootstrap_legacy_workspace_linking_origins(snapshot);
+    for (id, origin) in bootstrapped.relations {
+        origins.relations.entry(id).or_insert(origin);
     }
-    Ok(bootstrap_legacy_workspace_linking_origins(snapshot))
+    for (id, origin) in bootstrapped.claims {
+        origins.claims.entry(id).or_insert(origin);
+    }
+    for (id, origin) in bootstrapped.memories {
+        origins.memories.entry(id).or_insert(origin);
+    }
+    for (id, origin) in bootstrapped.wiki_pages_by_id {
+        origins.wiki_pages_by_id.entry(id).or_insert(origin);
+    }
+    for (path, origin) in bootstrapped.wiki_pages_by_path {
+        origins.wiki_pages_by_path.entry(path).or_insert(origin);
+    }
+    origins
 }
 
 fn write_materialized_record_origins(
@@ -1440,6 +1457,25 @@ fn write_materialized_record_origins(
     let mut origins = origins.clone();
     origins.schema_version = BRAIN_EVENT_SCHEMA_VERSION;
     write_json_pretty(&root.join(MATERIALIZED_RECORD_ORIGINS_PATH), &origins)
+}
+
+fn discard_stale_workspace_linking_memory_collisions(
+    existing_memories: Vec<MemoryRecord>,
+    generated_snapshot: &BrainRepoSnapshot,
+    origins: &MaterializedRecordOrigins,
+) -> Vec<MemoryRecord> {
+    let generated_memory_ids = generated_snapshot
+        .memories
+        .iter()
+        .map(|memory| memory.memory_id.as_str())
+        .collect::<BTreeSet<_>>();
+    existing_memories
+        .into_iter()
+        .filter(|memory| {
+            !(generated_memory_ids.contains(memory.memory_id.as_str())
+                && record_has_workspace_linking_origin(&origins.memories, &memory.memory_id))
+        })
+        .collect()
 }
 
 fn bootstrap_legacy_workspace_linking_origins(
@@ -1969,6 +2005,7 @@ pub(crate) fn replay_materialized_graph_overlay_events(
             );
         }
     }
+    carry_forward_valid_workspace_linking_origins(snapshot, previous_origins, &mut origins);
     Ok(origins)
 }
 
@@ -2138,6 +2175,121 @@ fn record_has_workspace_linking_origin(
     origins
         .get(record_id)
         .is_some_and(MaterializedRecordOrigin::is_workspace_linking)
+}
+
+fn carry_forward_valid_workspace_linking_origins(
+    snapshot: &BrainRepoSnapshot,
+    previous_origins: &MaterializedRecordOrigins,
+    origins: &mut MaterializedRecordOrigins,
+) {
+    let valid_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    let evidence_source_ids = snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (evidence.id.clone(), source_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for relation in &snapshot.relations {
+        let Some(origin) = previous_origins.relations.get(&relation.relation_id) else {
+            continue;
+        };
+        if origin.is_workspace_linking()
+            && relation_refs_are_current(relation, &valid_node_ids, &valid_evidence_ids)
+            && has_cross_source_evidence_refs(&relation.evidence_ids, &evidence_source_ids)
+        {
+            origins
+                .relations
+                .entry(relation.relation_id.clone())
+                .or_insert_with(|| origin.clone());
+        }
+    }
+    for claim in &snapshot.claims {
+        let Some(origin) = previous_origins.claims.get(&claim.claim_id) else {
+            continue;
+        };
+        if origin.is_workspace_linking()
+            && claim_refs_are_current(
+                claim,
+                &valid_source_ids,
+                &valid_evidence_ids,
+                &valid_node_ids,
+            )
+            && has_cross_source_refs(&claim.source_refs)
+            && has_cross_source_evidence_refs(&claim.evidence_refs, &evidence_source_ids)
+        {
+            origins
+                .claims
+                .entry(claim.claim_id.clone())
+                .or_insert_with(|| origin.clone());
+        }
+    }
+    for memory in &snapshot.memories {
+        let Some(origin) = previous_origins.memories.get(&memory.memory_id) else {
+            continue;
+        };
+        if origin.is_workspace_linking()
+            && source_and_evidence_refs_are_current(
+                &memory.source_refs,
+                &memory.evidence_refs,
+                &valid_source_ids,
+                &valid_evidence_ids,
+            )
+            && has_cross_source_refs(&memory.source_refs)
+            && has_cross_source_evidence_refs(&memory.evidence_refs, &evidence_source_ids)
+        {
+            origins
+                .memories
+                .entry(memory.memory_id.clone())
+                .or_insert_with(|| origin.clone());
+        }
+    }
+    for page in &snapshot.wiki_pages {
+        let origin = previous_origins
+            .wiki_pages_by_id
+            .get(&page.page_id)
+            .or_else(|| previous_origins.wiki_pages_by_path.get(&page.path));
+        let Some(origin) = origin else {
+            continue;
+        };
+        if origin.is_workspace_linking()
+            && wiki_page_refs_are_current(
+                page,
+                &valid_source_ids,
+                &valid_evidence_ids,
+                &valid_node_ids,
+            )
+            && has_cross_source_refs(&page.source_refs)
+            && has_cross_source_evidence_refs(&page.evidence_refs, &evidence_source_ids)
+        {
+            origins
+                .wiki_pages_by_id
+                .entry(page.page_id.clone())
+                .or_insert_with(|| origin.clone());
+            origins
+                .wiki_pages_by_path
+                .entry(page.path.clone())
+                .or_insert_with(|| origin.clone());
+        }
+    }
 }
 
 #[derive(Debug, Default)]
