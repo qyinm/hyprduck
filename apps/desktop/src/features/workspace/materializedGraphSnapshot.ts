@@ -22,7 +22,10 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
   );
   const visibleNodeIds = new Set(visibleMaterializedNodes.map((node) => node.nodeId));
   const visibleEdges = snapshot.edges.filter(
-    (edge) => visibleNodeIds.has(edge.sourceNodeId) && visibleNodeIds.has(edge.targetNodeId),
+    (edge) =>
+      edge.kind !== "derived_from" &&
+      visibleNodeIds.has(edge.sourceNodeId) &&
+      visibleNodeIds.has(edge.targetNodeId),
   );
   const visibleSourcePaths = visibleGraphSourcePaths(snapshot.sourcePaths);
   const nodePositions = layoutNodePositions(visibleMaterializedNodes.length);

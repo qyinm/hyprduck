@@ -97,6 +97,65 @@ test("keeps derived markdown as a source artifact instead of a graph node", () =
   );
 });
 
+test("hides derived_from plumbing edges even when both endpoints are visible", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json"],
+    sourcePaths: ["/brain/default/sources/source-1/report.pdf"],
+    nodes: [
+      {
+        nodeId: "source-pdf",
+        kind: "source",
+        label: "report.pdf",
+        aliases: [],
+        evidenceIds: [],
+        sourceIds: ["source-1"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "concept-a",
+        kind: "concept",
+        label: "Project Alpha",
+        aliases: [],
+        evidenceIds: [],
+        sourceIds: ["source-1"],
+        confidence: 0.8,
+        updatedAt: 2,
+      },
+    ],
+    edges: [
+      {
+        relationId: "edge-derived-visible-endpoints",
+        kind: "derived_from",
+        sourceNodeId: "source-pdf",
+        targetNodeId: "concept-a",
+        label: "derived from",
+        evidenceIds: [],
+        confidence: 1,
+        updatedAt: 2,
+      },
+    ],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+
+  expect(envelope.project.nodes.map((node) => node.id)).toEqual([
+    "source-pdf",
+    "concept-a",
+  ]);
+  expect(envelope.project.edges).toEqual([]);
+});
+
 test("matches source artifact paths by segment instead of substring", () => {
   const snapshot: MaterializedGraphSnapshot = {
     snapshotId: "snapshot-1",

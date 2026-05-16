@@ -499,6 +499,17 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
             confidence: Some(0.9),
             updated_at: generated_at,
         },
+        BrainNodeRecord {
+            node_id: "concept-shared".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Already shared graph".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-alpha".into(), "ev-beta".into()],
+            source_ids: vec!["source-alpha".into(), "source-beta".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+        },
     ];
     let raw = serde_json::json!({
         "materializedGraph": {
@@ -522,6 +533,15 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
                     "targetNodeId": "concept-alpha",
                     "label": "local only",
                     "evidenceIds": ["ev-alpha"],
+                    "updatedAt": generated_at
+                },
+                {
+                    "relationId": "edge-multisource",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-alpha",
+                    "targetNodeId": "concept-shared",
+                    "label": "already shared endpoint",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
                     "updatedAt": generated_at
                 }
             ],
@@ -554,6 +574,10 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         .relations
         .iter()
         .any(|relation| relation.relation_id == "edge-local"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-multisource"));
 }
 
 #[test]

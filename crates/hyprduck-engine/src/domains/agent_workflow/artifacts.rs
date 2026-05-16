@@ -106,6 +106,42 @@ pub(crate) fn provider_workspace_rebuild_response_schema(
     }
 }
 
+pub(crate) fn provider_workspace_linking_response_schema(
+) -> async_openai::types::chat::ResponseFormatJsonSchema {
+    async_openai::types::chat::ResponseFormatJsonSchema {
+        name: "workspace_graph_linking".into(),
+        description: Some(
+            "Cross-source relation records for a HyprDuck workspace linking run.".into(),
+        ),
+        schema: Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["materializedGraph"],
+            "properties": {
+                "materializedGraph": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "generatedAt",
+                        "edges",
+                        "claims",
+                        "memories",
+                        "wikiPages"
+                    ],
+                    "properties": {
+                        "generatedAt": { "type": ["integer", "null"] },
+                        "edges": { "type": "array", "items": brain_relation_record_schema() },
+                        "claims": { "type": "array", "items": claim_record_schema() },
+                        "memories": { "type": "array", "items": memory_record_schema() },
+                        "wikiPages": { "type": "array", "items": wiki_page_schema() }
+                    }
+                }
+            }
+        })),
+        strict: Some(true),
+    }
+}
+
 fn string_array_schema() -> Value {
     json!({ "type": "array", "items": { "type": "string" } })
 }
@@ -455,5 +491,23 @@ mod tests {
                 ["items"]
                 .is_object()
         );
+    }
+
+    #[test]
+    fn provider_workspace_linking_schema_is_relation_only() {
+        let schema = provider_workspace_linking_response_schema();
+        let encoded = serde_json::to_value(schema).expect("encode schema");
+        let properties = &encoded["schema"]["properties"]["materializedGraph"]["properties"];
+
+        assert_eq!(encoded["strict"], true);
+        assert!(properties.get("edges").is_some());
+        assert!(properties.get("claims").is_some());
+        assert!(properties.get("memories").is_some());
+        assert!(properties.get("wikiPages").is_some());
+        assert!(properties.get("nodes").is_none());
+        assert!(properties.get("sources").is_none());
+        assert!(properties.get("evidence").is_none());
+        assert!(properties.get("entities").is_none());
+        assert!(properties.get("extractions").is_none());
     }
 }

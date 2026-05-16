@@ -146,7 +146,8 @@ Task:
 - Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
 - Return only records needed for cross-source linking. It is acceptable to return no new edges if no grounded relationship exists.
 - Every returned edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
-- Preserve source and evidence records exactly as provided. Do not invent sourceIds or evidenceIds.
+- Do not return sources, evidence, nodes, entities, or extractions. Endpoint nodes must already exist in the current graph.
+- Do not invent sourceIds, evidenceIds, or nodeIds.
 - Use stable ids so repeated linking runs remain readable.
 - Return JSON only. No markdown fence, no prose.
 
@@ -154,15 +155,10 @@ Output shape:
 {{
   "materializedGraph": {{
     "generatedAt": <unix seconds or null>,
-    "sources": [...copy exactly from Provided sources],
-    "evidence": [...copy exactly from Provided evidence],
-    "nodes": [existing endpoint BrainNodeRecord copies only when needed],
     "edges": [cross-source BrainRelationRecord...],
     "claims": [cross-source ClaimRecord...],
     "memories": [cross-source MemoryRecord...],
-    "wikiPages": [cross-source WikiPage...],
-    "entities": [],
-    "extractions": []
+    "wikiPages": [cross-source WikiPage...]
   }}
 }}
 

@@ -2,8 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::artifacts::{
-    provider_workspace_rebuild_response_schema, write_provider_graph_run_artifacts,
-    write_provider_graph_run_validation_report,
+    provider_workspace_linking_response_schema, provider_workspace_rebuild_response_schema,
+    write_provider_graph_run_artifacts, write_provider_graph_run_validation_report,
 };
 use super::prompt::{build_source_local_graph_prompt, build_workspace_linking_prompt};
 use super::response::{
@@ -149,6 +149,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
         &config,
         &source_graph_run_id,
         &source_graph_prompt,
+        provider_workspace_rebuild_response_schema(),
     ) {
         Ok(response) => response,
         Err(error) => {
@@ -258,6 +259,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
         &config,
         &workspace_linking_run_id,
         &workspace_linking_prompt,
+        provider_workspace_linking_response_schema(),
     ) {
         Ok(response) => response,
         Err(error) => {
@@ -377,11 +379,12 @@ fn run_provider_graph_stage(
     config: &EngineConfig,
     run_id: &str,
     prompt: &str,
+    response_schema: async_openai::types::chat::ResponseFormatJsonSchema,
 ) -> Result<String> {
     let response = match parse_openai_compatible_json_schema_with_timeout(
         config,
         prompt,
-        provider_workspace_rebuild_response_schema(),
+        response_schema,
         Some(Duration::from_secs(
             PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
         )),

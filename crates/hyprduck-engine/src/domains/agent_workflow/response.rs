@@ -535,7 +535,11 @@ fn is_cross_source_relation(
     let right_has_other = right
         .iter()
         .any(|source_id| source_id != imported_source_id);
-    (left_has_import && right_has_other) || (right_has_import && left_has_other)
+    let left_import_only = left_has_import && !left_has_other;
+    let right_import_only = right_has_import && !right_has_other;
+    let left_other_only = left_has_other && !left_has_import;
+    let right_other_only = right_has_other && !right_has_import;
+    (left_import_only && right_other_only) || (right_import_only && left_other_only)
 }
 
 #[cfg(test)]
