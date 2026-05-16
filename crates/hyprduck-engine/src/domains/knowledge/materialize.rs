@@ -1242,28 +1242,51 @@ pub(crate) fn persist_materialized_graph_and_wiki_state(
 }
 
 fn remove_stale_materialized_wiki_files(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
-    let previous_snapshot_path = root.join("brain-manifest.json");
-    if !previous_snapshot_path.exists() {
-        return Ok(());
-    }
-    let previous_snapshot: BrainRepoSnapshot = read_json_artifact(&previous_snapshot_path)
-        .with_context(|| format!("failed reading {}", previous_snapshot_path.display()))?;
     let next_wiki_paths = snapshot
         .wiki_pages
         .iter()
         .map(|page| page.path.as_str())
         .collect::<BTreeSet<_>>();
-    for page in previous_snapshot.wiki_pages {
-        if next_wiki_paths.contains(page.path.as_str()) || !is_wiki_markdown_ref(&page.path) {
+    for relative_path in existing_wiki_markdown_files(root)? {
+        if next_wiki_paths.contains(relative_path.as_str()) {
             continue;
         }
-        let path = root.join(&page.path);
+        let path = root.join(&relative_path);
         if path.exists() {
             fs::remove_file(&path)
                 .with_context(|| format!("failed removing stale wiki page {}", path.display()))?;
         }
     }
     Ok(())
+}
+
+fn existing_wiki_markdown_files(root: &Path) -> Result<Vec<String>> {
+    let wiki_root = root.join("wiki");
+    if !wiki_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut stack = vec![wiki_root];
+    let mut files = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("failed reading {}", dir.display()))?
+        {
+            let entry = entry.with_context(|| format!("failed reading {}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(relative_path) = path.strip_prefix(root) else {
+                continue;
+            };
+            let relative_path = relative_path.to_string_lossy().replace('\\', "/");
+            if is_wiki_markdown_ref(&relative_path) {
+                files.push(relative_path);
+            }
+        }
+    }
+    Ok(files)
 }
 
 pub(crate) fn merge_materialized_memory_records(
@@ -1507,7 +1530,9 @@ fn clear_replayable_provider_overlay_records(
         .collect::<BTreeSet<_>>();
 
     snapshot.nodes.retain(|node| {
-        node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
+        node.kind == BrainNodeKind::Source
+            || (!target_node_ids.contains(&node.node_id)
+                && !provider_overlay_refs.node_ids.contains(&node.node_id))
     });
     snapshot.relations.retain(|relation| {
         !target_edge_ids.contains(&relation.relation_id)
@@ -1543,6 +1568,7 @@ fn clear_replayable_provider_overlay_records(
 
 #[derive(Debug, Default)]
 struct ProviderOverlayRefs {
+    node_ids: BTreeSet<String>,
     evidence_ids: BTreeSet<String>,
     relation_ids: BTreeSet<String>,
     claim_ids: BTreeSet<String>,
@@ -1557,6 +1583,10 @@ impl ProviderOverlayRefs {
     fn extend_from_event(&mut self, event: &BrainEvent) {
         self.evidence_ids
             .extend(event.evidence_refs.iter().cloned());
+        self.relation_ids
+            .extend(event.relation_refs.iter().cloned());
+        self.claim_ids.extend(event.claim_refs.iter().cloned());
+        self.memory_ids.extend(event.memory_refs.iter().cloned());
         let Ok(payload) =
             serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
         else {
@@ -1570,6 +1600,12 @@ impl ProviderOverlayRefs {
                 .evidence
                 .into_iter()
                 .map(|evidence| evidence.id),
+        );
+        self.node_ids.extend(
+            materialized_graph
+                .nodes
+                .into_iter()
+                .map(|node| node.node_id),
         );
         self.relation_ids.extend(
             materialized_graph
