@@ -1223,6 +1223,7 @@ pub(crate) fn persist_materialized_graph_and_wiki_state(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
+    remove_stale_materialized_wiki_files(root, snapshot)?;
     write_json_pretty(&root.join("brain-manifest.json"), snapshot)?;
     write_json_pretty(&root.join("graph/nodes.json"), &snapshot.nodes)?;
     write_json_pretty(&root.join("graph/edges.json"), &snapshot.relations)?;
@@ -1236,6 +1237,31 @@ pub(crate) fn persist_materialized_graph_and_wiki_state(
             &path,
             materialized_wiki_page_body(page, snapshot).as_bytes(),
         )?;
+    }
+    Ok(())
+}
+
+fn remove_stale_materialized_wiki_files(root: &Path, snapshot: &BrainRepoSnapshot) -> Result<()> {
+    let previous_snapshot_path = root.join("brain-manifest.json");
+    if !previous_snapshot_path.exists() {
+        return Ok(());
+    }
+    let previous_snapshot: BrainRepoSnapshot = read_json_artifact(&previous_snapshot_path)
+        .with_context(|| format!("failed reading {}", previous_snapshot_path.display()))?;
+    let next_wiki_paths = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| page.path.as_str())
+        .collect::<BTreeSet<_>>();
+    for page in previous_snapshot.wiki_pages {
+        if next_wiki_paths.contains(page.path.as_str()) || !is_wiki_markdown_ref(&page.path) {
+            continue;
+        }
+        let path = root.join(&page.path);
+        if path.exists() {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed removing stale wiki page {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -1483,15 +1509,20 @@ fn clear_replayable_provider_overlay_records(
     snapshot.nodes.retain(|node| {
         node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
     });
-    snapshot
-        .relations
-        .retain(|relation| !target_edge_ids.contains(&relation.relation_id));
-    snapshot
-        .claims
-        .retain(|claim| !target_claim_ids.contains(&claim.claim_id));
-    snapshot
-        .memories
-        .retain(|memory| !target_memory_ids.contains(&memory.memory_id));
+    snapshot.relations.retain(|relation| {
+        !target_edge_ids.contains(&relation.relation_id)
+            && !provider_overlay_refs
+                .relation_ids
+                .contains(&relation.relation_id)
+    });
+    snapshot.claims.retain(|claim| {
+        !target_claim_ids.contains(&claim.claim_id)
+            && !provider_overlay_refs.claim_ids.contains(&claim.claim_id)
+    });
+    snapshot.memories.retain(|memory| {
+        !target_memory_ids.contains(&memory.memory_id)
+            && !provider_overlay_refs.memory_ids.contains(&memory.memory_id)
+    });
     snapshot.evidence.retain(|evidence| {
         !provider_overlay_refs.evidence_ids.contains(&evidence.id)
             || deterministic_source_evidence_ids.contains(&evidence.id)
@@ -1513,6 +1544,9 @@ fn clear_replayable_provider_overlay_records(
 #[derive(Debug, Default)]
 struct ProviderOverlayRefs {
     evidence_ids: BTreeSet<String>,
+    relation_ids: BTreeSet<String>,
+    claim_ids: BTreeSet<String>,
+    memory_ids: BTreeSet<String>,
     entity_ids: BTreeSet<String>,
     wiki_page_ids: BTreeSet<String>,
     wiki_paths: BTreeSet<String>,
@@ -1536,6 +1570,24 @@ impl ProviderOverlayRefs {
                 .evidence
                 .into_iter()
                 .map(|evidence| evidence.id),
+        );
+        self.relation_ids.extend(
+            materialized_graph
+                .relations
+                .into_iter()
+                .map(|relation| relation.relation_id),
+        );
+        self.claim_ids.extend(
+            materialized_graph
+                .claims
+                .into_iter()
+                .map(|claim| claim.claim_id),
+        );
+        self.memory_ids.extend(
+            materialized_graph
+                .memories
+                .into_iter()
+                .map(|memory| memory.memory_id),
         );
         self.entity_ids.extend(
             materialized_graph
@@ -1615,6 +1667,16 @@ fn apply_filtered_materialized_graph_overlay(
         .iter()
         .map(|node| node.node_id.clone())
         .collect::<BTreeSet<_>>();
+    let evidence_source_ids = snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (evidence.id.clone(), source_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
     let require_cross_source_artifacts =
         event.operation_type.as_deref() == Some("workspace_linking");
     merge_filtered_relations(
@@ -1622,6 +1684,8 @@ fn apply_filtered_materialized_graph_overlay(
         materialized_graph.relations,
         &valid_node_ids,
         &valid_evidence_ids,
+        &evidence_source_ids,
+        require_cross_source_artifacts,
     );
     merge_filtered_claims(
         snapshot,
@@ -1788,6 +1852,8 @@ fn merge_filtered_relations(
     relations: Vec<BrainRelationRecord>,
     valid_node_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
+    require_cross_source: bool,
 ) {
     let mut by_id = snapshot
         .relations
@@ -1805,6 +1871,11 @@ fn merge_filtered_relations(
             .evidence_ids
             .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
         if relation.evidence_ids.is_empty() {
+            continue;
+        }
+        if require_cross_source
+            && !has_cross_source_evidence_refs(&relation.evidence_ids, evidence_source_ids)
+        {
             continue;
         }
         by_id.insert(relation.relation_id.clone(), relation);
@@ -1972,6 +2043,18 @@ fn has_cross_source_refs(source_refs: &[String]) -> bool {
         .iter()
         .map(|source_ref| source_ref.trim())
         .filter(|source_ref| !source_ref.is_empty())
+        .collect::<BTreeSet<_>>()
+        .len()
+        >= 2
+}
+
+fn has_cross_source_evidence_refs(
+    evidence_refs: &[String],
+    evidence_source_ids: &BTreeMap<String, String>,
+) -> bool {
+    evidence_refs
+        .iter()
+        .filter_map(|evidence_ref| evidence_source_ids.get(evidence_ref))
         .collect::<BTreeSet<_>>()
         .len()
         >= 2

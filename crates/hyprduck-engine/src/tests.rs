@@ -2353,6 +2353,17 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         confidence: Some(0.9),
         updated_at: 1,
     };
+    let active_peer_node = BrainNodeRecord {
+        node_id: "concept-active-peer".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Active peer concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![active_evidence.id.clone()],
+        source_ids: vec![active_source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 1,
+    };
     let deleted_node = BrainNodeRecord {
         node_id: "concept-deleted".into(),
         kind: BrainNodeKind::Concept,
@@ -2401,6 +2412,16 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         evidence_refs: cross_evidence_refs,
         updated_at: 100,
     };
+    let linking_relation = BrainRelationRecord {
+        relation_id: "relation-cross-source".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: active_node.node_id.clone(),
+        target_node_id: active_peer_node.node_id.clone(),
+        label: "cross-source relation".into(),
+        evidence_ids: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
     let linking_event = BrainEvent {
         event_id: "evt-workspace-linking-cross-source".into(),
         schema_version: BRAIN_EVENT_SCHEMA_VERSION,
@@ -2420,20 +2441,24 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
             active_source.markdown_path.clone(),
             deleted_source.markdown_path.clone(),
         ],
-        node_refs: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
-        relation_refs: Vec::new(),
+        node_refs: vec![
+            active_node.node_id.clone(),
+            active_peer_node.node_id.clone(),
+            deleted_node.node_id.clone(),
+        ],
+        relation_refs: vec![linking_relation.relation_id.clone()],
         claim_refs: vec![linking_claim.claim_id.clone()],
         memory_refs: vec![linking_memory.memory_id.clone()],
         target_node_ids: Vec::new(),
         target_edge_ids: Vec::new(),
-        target_claim_ids: vec![linking_claim.claim_id.clone()],
-        target_memory_ids: vec![linking_memory.memory_id.clone()],
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
         evidence_refs: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
         payload_json: materialized_graph_event_payload_json(
             100,
             &[],
-            &[active_node.clone(), deleted_node],
-            &[],
+            &[active_node.clone(), active_peer_node.clone(), deleted_node],
+            std::slice::from_ref(&linking_relation),
             &[active_evidence.clone(), deleted_evidence],
             std::slice::from_ref(&linking_memory),
             std::slice::from_ref(&linking_wiki_page),
@@ -2456,8 +2481,18 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     snapshot.generated_at = 1;
     snapshot.sources = vec![active_source];
     snapshot.evidence = vec![active_evidence];
-    snapshot.nodes = vec![active_node];
+    snapshot.nodes = vec![active_node, active_peer_node];
+    snapshot.relations = vec![linking_relation];
+    snapshot.claims = vec![linking_claim];
+    snapshot.memories = vec![linking_memory];
+    snapshot.wiki_pages = vec![linking_wiki_page.clone()];
     snapshot.events = vec![linking_event];
+    ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure workspace dirs");
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write previous manifest with stale wiki page");
+    let stale_wiki_path = workspace_root.join(&linking_wiki_page.path);
+    write_file_atomic(&stale_wiki_path, b"stale cross-source wiki page")
+        .expect("write stale wiki file");
 
     write_materialized_brain_repo(&workspace_root, &snapshot)
         .expect("write replayed workspace graph");
@@ -2473,9 +2508,17 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .iter()
         .any(|memory| memory.memory_id == "memory-cross-source"));
     assert!(!replayed
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "relation-cross-source"));
+    assert!(!replayed
         .wiki_pages
         .iter()
         .any(|page| page.page_id == "wiki-cross-source"));
+    assert!(
+        !stale_wiki_path.exists(),
+        "stale workspace-linking wiki markdown should be removed"
+    );
 }
 
 fn provider_test_event(
