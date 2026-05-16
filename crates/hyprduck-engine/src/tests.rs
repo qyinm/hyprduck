@@ -2425,6 +2425,82 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         confidence: Some(0.9),
         updated_at: 100,
     };
+    let current_relation_collision = BrainRelationRecord {
+        relation_id: "relation-collision".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: active_node.node_id.clone(),
+        target_node_id: active_peer_node.node_id.clone(),
+        label: "current source relation".into(),
+        evidence_ids: vec![active_evidence.id.clone()],
+        confidence: Some(0.8),
+        updated_at: 1,
+    };
+    let mut stale_payload_relation_collision = current_relation_collision.clone();
+    stale_payload_relation_collision.label = "stale workspace relation".into();
+    stale_payload_relation_collision.evidence_ids =
+        vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
+    stale_payload_relation_collision.updated_at = 100;
+    let current_claim_collision = ClaimRecord {
+        claim_id: "claim-collision".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        statement: "current source claim".into(),
+        topic_refs: vec![active_node.node_id.clone()],
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        status: "supported".into(),
+        updated_at: 1,
+    };
+    let mut stale_payload_claim_collision = current_claim_collision.clone();
+    stale_payload_claim_collision.statement = "stale workspace claim".into();
+    stale_payload_claim_collision.source_refs = vec![
+        active_source.source_id.clone(),
+        deleted_source.source_id.clone(),
+    ];
+    stale_payload_claim_collision.evidence_refs =
+        vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
+    stale_payload_claim_collision.updated_at = 100;
+    let current_memory_collision = MemoryRecord {
+        memory_id: "memory-collision".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        title: "current source memory".into(),
+        body: "current source memory".into(),
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        created_at: 1,
+        updated_at: 1,
+    };
+    let mut stale_payload_memory_collision = current_memory_collision.clone();
+    stale_payload_memory_collision.title = "stale workspace memory".into();
+    stale_payload_memory_collision.body = "stale workspace memory".into();
+    stale_payload_memory_collision.source_refs = vec![
+        active_source.source_id.clone(),
+        deleted_source.source_id.clone(),
+    ];
+    stale_payload_memory_collision.evidence_refs =
+        vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
+    stale_payload_memory_collision.updated_at = 100;
+    let current_wiki_collision = WikiPage {
+        page_id: "wiki-collision".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        path: "wiki/workspace/collision.md".into(),
+        title: "Current source wiki".into(),
+        body: "current source wiki".into(),
+        node_refs: vec![active_node.node_id.clone()],
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        updated_at: 1,
+    };
+    let mut stale_payload_wiki_collision = current_wiki_collision.clone();
+    stale_payload_wiki_collision.title = "Stale workspace wiki".into();
+    stale_payload_wiki_collision.body = "stale workspace wiki".into();
+    stale_payload_wiki_collision.source_refs = vec![
+        active_source.source_id.clone(),
+        deleted_source.source_id.clone(),
+    ];
+    stale_payload_wiki_collision.evidence_refs =
+        vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
+    stale_payload_wiki_collision.updated_at = 100;
     let current_entity = EntityRecord {
         entity_id: "entity-active".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
@@ -2476,9 +2552,18 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         claim_refs: vec![linking_claim.claim_id.clone()],
         memory_refs: vec![linking_memory.memory_id.clone()],
         target_node_ids: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
-        target_edge_ids: vec![linking_relation.relation_id.clone()],
-        target_claim_ids: vec![linking_claim.claim_id.clone()],
-        target_memory_ids: vec![linking_memory.memory_id.clone()],
+        target_edge_ids: vec![
+            linking_relation.relation_id.clone(),
+            current_relation_collision.relation_id.clone(),
+        ],
+        target_claim_ids: vec![
+            linking_claim.claim_id.clone(),
+            current_claim_collision.claim_id.clone(),
+        ],
+        target_memory_ids: vec![
+            linking_memory.memory_id.clone(),
+            current_memory_collision.memory_id.clone(),
+        ],
         evidence_refs: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
         payload_json: materialized_graph_event_payload_json(
             100,
@@ -2488,12 +2573,12 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
                 active_peer_node.clone(),
                 deleted_node.clone(),
             ],
-            std::slice::from_ref(&linking_relation),
+            &[linking_relation.clone(), stale_payload_relation_collision],
             &[active_evidence.clone(), deleted_evidence],
-            std::slice::from_ref(&linking_memory),
-            std::slice::from_ref(&linking_wiki_page),
+            &[linking_memory.clone(), stale_payload_memory_collision],
+            &[linking_wiki_page.clone(), stale_payload_wiki_collision],
             std::slice::from_ref(&stale_payload_entity),
-            std::slice::from_ref(&linking_claim),
+            &[linking_claim.clone(), stale_payload_claim_collision],
             &[],
         )
         .expect("workspace linking payload"),
@@ -2512,11 +2597,11 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
     snapshot.sources = vec![active_source];
     snapshot.evidence = vec![active_evidence];
     snapshot.nodes = vec![active_node, active_peer_node];
-    snapshot.relations = vec![linking_relation];
-    snapshot.claims = vec![linking_claim];
-    snapshot.memories = vec![linking_memory];
+    snapshot.relations = vec![linking_relation, current_relation_collision];
+    snapshot.claims = vec![linking_claim, current_claim_collision];
+    snapshot.memories = vec![linking_memory, current_memory_collision];
     snapshot.entities = vec![current_entity];
-    snapshot.wiki_pages = vec![linking_wiki_page.clone()];
+    snapshot.wiki_pages = vec![linking_wiki_page.clone(), current_wiki_collision];
     snapshot.events = vec![linking_event];
     ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure workspace dirs");
     write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
@@ -2547,6 +2632,14 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .any(|relation| relation.relation_id == "relation-cross-source"));
     assert_eq!(
         replayed
+            .relations
+            .iter()
+            .find(|relation| relation.relation_id == "relation-collision")
+            .map(|relation| relation.label.as_str()),
+        Some("current source relation")
+    );
+    assert_eq!(
+        replayed
             .nodes
             .iter()
             .find(|node| node.node_id == "concept-active")
@@ -2569,6 +2662,30 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .wiki_pages
         .iter()
         .any(|page| page.page_id == "wiki-cross-source"));
+    assert_eq!(
+        replayed
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == "claim-collision")
+            .map(|claim| claim.statement.as_str()),
+        Some("current source claim")
+    );
+    assert_eq!(
+        replayed
+            .memories
+            .iter()
+            .find(|memory| memory.memory_id == "memory-collision")
+            .map(|memory| memory.body.as_str()),
+        Some("current source memory")
+    );
+    assert_eq!(
+        replayed
+            .wiki_pages
+            .iter()
+            .find(|page| page.page_id == "wiki-collision")
+            .map(|page| page.body.as_str()),
+        Some("current source wiki")
+    );
     assert!(
         !stale_wiki_path.exists(),
         "stale workspace-linking wiki markdown should be removed"

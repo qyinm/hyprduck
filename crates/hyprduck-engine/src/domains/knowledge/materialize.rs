@@ -1541,14 +1541,26 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .relation_ids
                 .contains(&relation.relation_id)
+            && !provider_overlay_refs
+                .workspace_linking_relations
+                .get(&relation.relation_id)
+                .is_some_and(|payload_relation| payload_relation == relation)
     });
     snapshot.claims.retain(|claim| {
         !target_claim_ids.contains(&claim.claim_id)
             && !provider_overlay_refs.claim_ids.contains(&claim.claim_id)
+            && !provider_overlay_refs
+                .workspace_linking_claims
+                .get(&claim.claim_id)
+                .is_some_and(|payload_claim| payload_claim == claim)
     });
     snapshot.memories.retain(|memory| {
         !target_memory_ids.contains(&memory.memory_id)
             && !provider_overlay_refs.memory_ids.contains(&memory.memory_id)
+            && !provider_overlay_refs
+                .workspace_linking_memories
+                .get(&memory.memory_id)
+                .is_some_and(|payload_memory| payload_memory == memory)
     });
     snapshot.evidence.retain(|evidence| {
         !provider_overlay_refs.evidence_ids.contains(&evidence.id)
@@ -1560,6 +1572,14 @@ fn clear_replayable_provider_overlay_records(
     snapshot.wiki_pages.retain(|page| {
         !provider_overlay_refs.wiki_page_ids.contains(&page.page_id)
             && !provider_overlay_refs.wiki_paths.contains(&page.path)
+            && !provider_overlay_refs
+                .workspace_linking_wiki_pages_by_id
+                .get(&page.page_id)
+                .is_some_and(|payload_page| payload_page == page)
+            && !provider_overlay_refs
+                .workspace_linking_wiki_pages_by_path
+                .get(&page.path)
+                .is_some_and(|payload_page| payload_page == page)
     });
     snapshot.extractions.retain(|extraction| {
         !provider_overlay_refs
@@ -1574,6 +1594,11 @@ struct ProviderOverlayRefs {
     relation_ids: BTreeSet<String>,
     claim_ids: BTreeSet<String>,
     memory_ids: BTreeSet<String>,
+    workspace_linking_relations: BTreeMap<String, BrainRelationRecord>,
+    workspace_linking_claims: BTreeMap<String, ClaimRecord>,
+    workspace_linking_memories: BTreeMap<String, MemoryRecord>,
+    workspace_linking_wiki_pages_by_id: BTreeMap<String, WikiPage>,
+    workspace_linking_wiki_pages_by_path: BTreeMap<String, WikiPage>,
     entity_ids: BTreeSet<String>,
     wiki_page_ids: BTreeSet<String>,
     wiki_paths: BTreeSet<String>,
@@ -1599,24 +1624,45 @@ impl ProviderOverlayRefs {
                     .map(|evidence| evidence.id),
             );
         }
-        self.relation_ids.extend(
-            materialized_graph
-                .relations
-                .into_iter()
-                .map(|relation| relation.relation_id),
-        );
-        self.claim_ids.extend(
-            materialized_graph
-                .claims
-                .into_iter()
-                .map(|claim| claim.claim_id),
-        );
-        self.memory_ids.extend(
-            materialized_graph
-                .memories
-                .into_iter()
-                .map(|memory| memory.memory_id),
-        );
+        if is_workspace_linking {
+            self.workspace_linking_relations.extend(
+                materialized_graph
+                    .relations
+                    .into_iter()
+                    .map(|relation| (relation.relation_id.clone(), relation)),
+            );
+            self.workspace_linking_claims.extend(
+                materialized_graph
+                    .claims
+                    .into_iter()
+                    .map(|claim| (claim.claim_id.clone(), claim)),
+            );
+            self.workspace_linking_memories.extend(
+                materialized_graph
+                    .memories
+                    .into_iter()
+                    .map(|memory| (memory.memory_id.clone(), memory)),
+            );
+        } else {
+            self.relation_ids.extend(
+                materialized_graph
+                    .relations
+                    .into_iter()
+                    .map(|relation| relation.relation_id),
+            );
+            self.claim_ids.extend(
+                materialized_graph
+                    .claims
+                    .into_iter()
+                    .map(|claim| claim.claim_id),
+            );
+            self.memory_ids.extend(
+                materialized_graph
+                    .memories
+                    .into_iter()
+                    .map(|memory| memory.memory_id),
+            );
+        }
         if !is_workspace_linking {
             self.entity_ids.extend(
                 materialized_graph
@@ -1626,8 +1672,15 @@ impl ProviderOverlayRefs {
             );
         }
         for page in materialized_graph.wiki_pages {
-            self.wiki_page_ids.insert(page.page_id);
-            self.wiki_paths.insert(page.path);
+            if is_workspace_linking {
+                self.workspace_linking_wiki_pages_by_id
+                    .insert(page.page_id.clone(), page.clone());
+                self.workspace_linking_wiki_pages_by_path
+                    .insert(page.path.clone(), page);
+            } else {
+                self.wiki_page_ids.insert(page.page_id);
+                self.wiki_paths.insert(page.path);
+            }
         }
         if !is_workspace_linking {
             self.extraction_artifact_ids.extend(
