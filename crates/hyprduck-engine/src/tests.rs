@@ -1626,6 +1626,209 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
 }
 
 #[test]
+fn provider_overlay_replay_uses_latest_event_per_source_stage() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let source = SourceRecord {
+        source_id: "source-a".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/source-a.pdf".into(),
+        source_path: "/tmp/source-a.pdf".into(),
+        markdown_path: "/tmp/source-a.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let evidence = EvidenceRef {
+        id: "ev-source-a".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Source A evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let source_node = BrainNodeRecord {
+        node_id: "source:source-a".into(),
+        kind: BrainNodeKind::Source,
+        label: "source-a.pdf".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence.id.clone()],
+        source_ids: vec![source.source_id.clone()],
+        confidence: Some(1.0),
+        updated_at: 1,
+    };
+    let concept_x = BrainNodeRecord {
+        node_id: "concept-x".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Concept X".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence.id.clone()],
+        source_ids: vec![source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
+    let concept_y = BrainNodeRecord {
+        node_id: "concept-y".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Concept Y".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence.id.clone()],
+        source_ids: vec![source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
+    let edge_x = BrainRelationRecord {
+        relation_id: "edge-source-x".into(),
+        kind: BrainRelationKind::SourceOf,
+        source_node_id: source_node.node_id.clone(),
+        target_node_id: concept_x.node_id.clone(),
+        label: "source_of".into(),
+        evidence_ids: vec![evidence.id.clone()],
+        confidence: Some(1.0),
+        updated_at: 100,
+    };
+    let edge_y = BrainRelationRecord {
+        relation_id: "edge-source-y".into(),
+        kind: BrainRelationKind::SourceOf,
+        source_node_id: source_node.node_id.clone(),
+        target_node_id: concept_y.node_id.clone(),
+        label: "source_of".into(),
+        evidence_ids: vec![evidence.id.clone()],
+        confidence: Some(1.0),
+        updated_at: 100,
+    };
+    let old_event = provider_test_event(
+        "evt-provider-old",
+        "source_graph_build",
+        100,
+        &[source.clone()],
+        &[source_node.clone(), concept_x.clone(), concept_y.clone()],
+        &[edge_x.clone(), edge_y],
+        &[evidence.clone()],
+    );
+    let new_event = provider_test_event(
+        "evt-provider-new",
+        "source_graph_build",
+        200,
+        &[source.clone()],
+        &[source_node.clone(), concept_x.clone()],
+        &[edge_x],
+        &[evidence.clone()],
+    );
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![source];
+    snapshot.evidence = vec![evidence];
+    snapshot.nodes = vec![source_node];
+    snapshot.events = vec![old_event, new_event];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write replayed graph");
+    let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read replayed graph");
+
+    assert!(replayed
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-x"));
+    assert!(!replayed
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-y"));
+    assert!(!replayed
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-source-y"));
+}
+
+fn provider_test_event(
+    event_id: &str,
+    operation_type: &str,
+    generated_at: u64,
+    sources: &[SourceRecord],
+    nodes: &[BrainNodeRecord],
+    relations: &[BrainRelationRecord],
+    evidence: &[EvidenceRef],
+) -> BrainEvent {
+    BrainEvent {
+        event_id: event_id.into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some(operation_type.into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "hyprduck-provider-graph-agent:test".into(),
+        },
+        source_refs: sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
+        relation_refs: relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: nodes
+            .iter()
+            .filter(|node| node.kind != BrainNodeKind::Source)
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: materialized_graph_event_payload_json(
+            generated_at,
+            sources,
+            nodes,
+            relations,
+            evidence,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("provider graph payload"),
+        causality: BrainEventCausality {
+            caused_by_source_ids: sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            snapshot_id: Some(format!("snapshot-{event_id}")),
+            materialized_version: Some(generated_at),
+            ..Default::default()
+        },
+        confidence: Some("provider_test".into()),
+        policy_result: "materialized".into(),
+        created_at: generated_at,
+    }
+}
+
+#[test]
 fn exact_project_load_uses_project_workspace_sources() {
     static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");

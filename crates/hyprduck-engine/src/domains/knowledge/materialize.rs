@@ -1326,12 +1326,13 @@ pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
 }
 
 fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
-    let mut events = snapshot
+    let replayable_events = snapshot
         .events
         .iter()
         .filter(|event| is_replayable_materialized_graph_event(event))
         .cloned()
         .collect::<Vec<_>>();
+    let mut events = latest_replayable_materialized_graph_events(&replayable_events);
     events.sort_by(|left, right| {
         left.causality
             .materialized_version
@@ -1345,6 +1346,7 @@ fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) 
             .then_with(|| left.created_at.cmp(&right.created_at))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
+    clear_replayable_provider_overlay_records(snapshot, &replayable_events);
     for event in events {
         let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
             .with_context(|| {
@@ -1358,6 +1360,90 @@ fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) 
         }
     }
     Ok(())
+}
+
+fn latest_replayable_materialized_graph_events(events: &[BrainEvent]) -> Vec<BrainEvent> {
+    let mut latest_by_key = BTreeMap::<String, BrainEvent>::new();
+    for event in events {
+        let key = materialized_graph_replay_key(event);
+        match latest_by_key.get(&key) {
+            Some(existing) if replay_event_order_key(existing) >= replay_event_order_key(event) => {
+            }
+            _ => {
+                latest_by_key.insert(key, event.clone());
+            }
+        }
+    }
+    latest_by_key.into_values().collect()
+}
+
+fn replay_event_order_key(event: &BrainEvent) -> (u64, u64, &str) {
+    (
+        event
+            .causality
+            .materialized_version
+            .unwrap_or(event.created_at),
+        event.created_at,
+        event.event_id.as_str(),
+    )
+}
+
+fn materialized_graph_replay_key(event: &BrainEvent) -> String {
+    let mut source_ids = if event.causality.caused_by_source_ids.is_empty() {
+        event.source_refs.clone()
+    } else {
+        event.causality.caused_by_source_ids.clone()
+    };
+    source_ids.sort();
+    source_ids.dedup();
+    format!(
+        "{}:{:?}:{}:{}",
+        event.workspace_id,
+        event.scope,
+        event
+            .operation_type
+            .as_deref()
+            .unwrap_or("graph_materialized"),
+        source_ids.join("+")
+    )
+}
+
+fn clear_replayable_provider_overlay_records(
+    snapshot: &mut BrainRepoSnapshot,
+    replayable_events: &[BrainEvent],
+) {
+    if replayable_events.is_empty() {
+        return;
+    }
+    let target_node_ids = replayable_events
+        .iter()
+        .flat_map(|event| event.target_node_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let target_edge_ids = replayable_events
+        .iter()
+        .flat_map(|event| event.target_edge_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let target_claim_ids = replayable_events
+        .iter()
+        .flat_map(|event| event.target_claim_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let target_memory_ids = replayable_events
+        .iter()
+        .flat_map(|event| event.target_memory_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+
+    snapshot.nodes.retain(|node| {
+        node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
+    });
+    snapshot
+        .relations
+        .retain(|relation| !target_edge_ids.contains(&relation.relation_id));
+    snapshot
+        .claims
+        .retain(|claim| !target_claim_ids.contains(&claim.claim_id));
+    snapshot
+        .memories
+        .retain(|memory| !target_memory_ids.contains(&memory.memory_id));
 }
 
 fn apply_filtered_materialized_graph_overlay(
