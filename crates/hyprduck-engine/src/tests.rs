@@ -1,6 +1,8 @@
 use super::*;
 use crate::provider::{ollama_models_endpoint, ProviderKind};
 
+static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn compile_fixture_project(temp: &tempfile::TempDir, markdown: &str) -> KnowledgeProject {
     let markdown_path = temp.path().join("sample.md");
     fs::write(&markdown_path, markdown).expect("write markdown");
@@ -1354,8 +1356,7 @@ fn source_rows_round_trip_paths_with_pipe_characters() {
 
 #[test]
 fn handle_load_project_defaults_to_workspace_graph_aggregate() {
-    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let store_path = temp.path().join("knowledge.sqlite3");
     let store = KnowledgeProjectStore::new(store_path.clone());
@@ -1401,8 +1402,7 @@ fn handle_load_project_defaults_to_workspace_graph_aggregate() {
 
 #[test]
 fn default_load_project_falls_back_to_latest_legacy_project() {
-    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let store_path = temp.path().join("knowledge.sqlite3");
     let store = KnowledgeProjectStore::new(store_path.clone());
@@ -1440,8 +1440,7 @@ fn default_load_project_falls_back_to_latest_legacy_project() {
 
 #[test]
 fn workspace_delete_materialized_node_without_source_rows_returns_empty_project() {
-    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let store_path = temp.path().join("HyprDuck").join("knowledge.sqlite3");
     let output_root = temp.path().join("HyprDuck");
@@ -1516,8 +1515,7 @@ fn workspace_delete_materialized_node_without_source_rows_returns_empty_project(
 
 #[test]
 fn deleting_source_replays_provider_graph_for_remaining_sources() {
-    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let store_path = temp.path().join("knowledge.sqlite3");
     let store = KnowledgeProjectStore::new(store_path.clone());
@@ -3452,8 +3450,7 @@ fn provider_test_event(
 
 #[test]
 fn exact_project_load_uses_project_workspace_sources() {
-    static PROJECT_STORE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = PROJECT_STORE_ENV_LOCK.lock().expect("env lock");
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let store_path = temp.path().join("knowledge.sqlite3");
     let store = KnowledgeProjectStore::new(store_path.clone());
@@ -3789,6 +3786,7 @@ fn ollama_models_endpoint_normalizes_common_base_urls() {
 
 #[test]
 fn resolve_binary_prefers_path_before_common_locations() {
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let bin_dir = temp.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("bin dir");
