@@ -2706,11 +2706,19 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
                 "relation-cross-source": {
                     "eventId": "evt-workspace-linking-cross-source",
                     "operationType": "workspace_linking"
+                },
+                "relation-exact-source-owned": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
                 }
             },
             "claims": {
                 "claim-cross-source": {
                     "eventId": "evt-workspace-linking-cross-source",
+                    "operationType": "workspace_linking"
+                },
+                "claim-exact-source-owned": {
+                    "eventId": "evt-stale-origin",
                     "operationType": "workspace_linking"
                 }
             },
@@ -2718,17 +2726,29 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
                 "memory-cross-source": {
                     "eventId": "evt-workspace-linking-cross-source",
                     "operationType": "workspace_linking"
+                },
+                "memory-exact-source-owned": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
                 }
             },
             "wikiPagesById": {
                 "wiki-cross-source": {
                     "eventId": "evt-workspace-linking-cross-source",
                     "operationType": "workspace_linking"
+                },
+                "wiki-exact-source-owned": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
                 }
             },
             "wikiPagesByPath": {
                 "wiki/workspace/cross-source.md": {
                     "eventId": "evt-workspace-linking-cross-source",
+                    "operationType": "workspace_linking"
+                },
+                "wiki/workspace/exact-source-owned.md": {
+                    "eventId": "evt-stale-origin",
                     "operationType": "workspace_linking"
                 }
             }

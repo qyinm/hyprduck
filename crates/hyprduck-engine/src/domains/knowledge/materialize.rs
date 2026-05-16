@@ -1084,11 +1084,103 @@ struct EffectiveBrainState {
     origins: MaterializedRecordOrigins,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProtectedMaterializedRecordKeys {
+    relations: BTreeSet<String>,
+    claims: BTreeSet<String>,
+    memories: BTreeSet<String>,
+    wiki_page_ids: BTreeSet<String>,
+    wiki_paths: BTreeSet<String>,
+}
+
+impl ProtectedMaterializedRecordKeys {
+    fn from_snapshot(snapshot: &BrainRepoSnapshot) -> Self {
+        let valid_source_ids = snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect::<BTreeSet<_>>();
+        let valid_node_ids = snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect::<BTreeSet<_>>();
+        let valid_evidence_ids = snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect::<BTreeSet<_>>();
+        Self {
+            relations: snapshot
+                .relations
+                .iter()
+                .filter(|relation| {
+                    relation_refs_are_current(relation, &valid_node_ids, &valid_evidence_ids)
+                })
+                .map(|relation| relation.relation_id.clone())
+                .collect(),
+            claims: snapshot
+                .claims
+                .iter()
+                .filter(|claim| {
+                    claim_refs_are_current(
+                        claim,
+                        &valid_source_ids,
+                        &valid_evidence_ids,
+                        &valid_node_ids,
+                    )
+                })
+                .map(|claim| claim.claim_id.clone())
+                .collect(),
+            memories: snapshot
+                .memories
+                .iter()
+                .filter(|memory| {
+                    source_and_evidence_refs_are_current(
+                        &memory.source_refs,
+                        &memory.evidence_refs,
+                        &valid_source_ids,
+                        &valid_evidence_ids,
+                    )
+                })
+                .map(|memory| memory.memory_id.clone())
+                .collect(),
+            wiki_page_ids: snapshot
+                .wiki_pages
+                .iter()
+                .filter(|page| {
+                    wiki_page_refs_are_current(
+                        page,
+                        &valid_source_ids,
+                        &valid_evidence_ids,
+                        &valid_node_ids,
+                    )
+                })
+                .map(|page| page.page_id.clone())
+                .collect(),
+            wiki_paths: snapshot
+                .wiki_pages
+                .iter()
+                .filter(|page| {
+                    wiki_page_refs_are_current(
+                        page,
+                        &valid_source_ids,
+                        &valid_evidence_ids,
+                        &valid_node_ids,
+                    )
+                })
+                .map(|page| page.path.clone())
+                .collect(),
+        }
+    }
+}
+
 fn compute_effective_brain_state(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<EffectiveBrainState> {
     let mut effective_snapshot = snapshot.clone();
+    let protected_current_records = ProtectedMaterializedRecordKeys::from_snapshot(snapshot);
     effective_snapshot.memories =
         merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
     let events_path = root.join("events/brain_events.jsonl");
@@ -1100,9 +1192,13 @@ fn compute_effective_brain_state(
     };
     effective_snapshot.events =
         merge_preserved_brain_events(snapshot.events.clone(), &existing_events);
-    let previous_origins = read_materialized_record_origins(root)?;
-    let origins =
-        replay_preserved_materialized_graph_events(&mut effective_snapshot, &previous_origins)?;
+    let previous_origins =
+        read_or_bootstrap_materialized_record_origins(root, &effective_snapshot)?;
+    let origins = replay_preserved_materialized_graph_events(
+        &mut effective_snapshot,
+        &previous_origins,
+        &protected_current_records,
+    )?;
     apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
     refresh_materialized_wiki_pages(&mut effective_snapshot);
     refresh_current_materialized_events(&mut effective_snapshot)?;
@@ -1290,6 +1386,17 @@ fn read_materialized_record_origins(root: &Path) -> Result<MaterializedRecordOri
     Ok(origins)
 }
 
+fn read_or_bootstrap_materialized_record_origins(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<MaterializedRecordOrigins> {
+    let path = root.join(MATERIALIZED_RECORD_ORIGINS_PATH);
+    if path.exists() {
+        return read_materialized_record_origins(root);
+    }
+    Ok(bootstrap_legacy_workspace_linking_origins(snapshot))
+}
+
 fn write_materialized_record_origins(
     root: &Path,
     origins: &MaterializedRecordOrigins,
@@ -1297,6 +1404,275 @@ fn write_materialized_record_origins(
     let mut origins = origins.clone();
     origins.schema_version = BRAIN_EVENT_SCHEMA_VERSION;
     write_json_pretty(&root.join(MATERIALIZED_RECORD_ORIGINS_PATH), &origins)
+}
+
+fn bootstrap_legacy_workspace_linking_origins(
+    snapshot: &BrainRepoSnapshot,
+) -> MaterializedRecordOrigins {
+    let valid_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_node_ids = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    let evidence_source_ids = snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (evidence.id.clone(), source_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut origins = MaterializedRecordOrigins {
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        ..Default::default()
+    };
+    for event in snapshot.events.iter().filter(|event| {
+        event.event_type == BrainEventKind::GraphMaterialized
+            && event.operation_type.as_deref() == Some("workspace_linking")
+    }) {
+        let Ok(payload) =
+            serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
+        else {
+            continue;
+        };
+        let Some(materialized_graph) = payload.materialized_graph else {
+            continue;
+        };
+        let origin = MaterializedRecordOrigin::from_event(event);
+        for relation in materialized_graph.relations {
+            let Some(current) = snapshot
+                .relations
+                .iter()
+                .find(|current| current.relation_id == relation.relation_id)
+            else {
+                continue;
+            };
+            if relation_is_legacy_workspace_linking_stale(
+                current,
+                &valid_node_ids,
+                &valid_evidence_ids,
+                &evidence_source_ids,
+            ) {
+                origins
+                    .relations
+                    .insert(current.relation_id.clone(), origin.clone());
+            }
+        }
+        for claim in materialized_graph.claims {
+            let Some(current) = snapshot
+                .claims
+                .iter()
+                .find(|current| current.claim_id == claim.claim_id)
+            else {
+                continue;
+            };
+            if claim_is_legacy_workspace_linking_stale(
+                current,
+                &valid_source_ids,
+                &valid_evidence_ids,
+                &valid_node_ids,
+                &evidence_source_ids,
+            ) {
+                origins
+                    .claims
+                    .insert(current.claim_id.clone(), origin.clone());
+            }
+        }
+        for memory in materialized_graph.memories {
+            let Some(current) = snapshot
+                .memories
+                .iter()
+                .find(|current| current.memory_id == memory.memory_id)
+            else {
+                continue;
+            };
+            if memory_is_legacy_workspace_linking_stale(
+                current,
+                &valid_source_ids,
+                &valid_evidence_ids,
+                &evidence_source_ids,
+            ) {
+                origins
+                    .memories
+                    .insert(current.memory_id.clone(), origin.clone());
+            }
+        }
+        for page in materialized_graph.wiki_pages {
+            let current = snapshot
+                .wiki_pages
+                .iter()
+                .find(|current| current.page_id == page.page_id || current.path == page.path);
+            let Some(current) = current else {
+                continue;
+            };
+            if wiki_page_is_legacy_workspace_linking_stale(
+                current,
+                &valid_source_ids,
+                &valid_evidence_ids,
+                &valid_node_ids,
+                &evidence_source_ids,
+            ) {
+                origins
+                    .wiki_pages_by_id
+                    .insert(current.page_id.clone(), origin.clone());
+                origins
+                    .wiki_pages_by_path
+                    .insert(current.path.clone(), origin.clone());
+            }
+        }
+    }
+    origins
+}
+
+fn relation_is_legacy_workspace_linking_stale(
+    relation: &BrainRelationRecord,
+    valid_node_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
+) -> bool {
+    !valid_node_ids.contains(&relation.source_node_id)
+        || !valid_node_ids.contains(&relation.target_node_id)
+        || relation
+            .evidence_ids
+            .iter()
+            .any(|evidence_id| !valid_evidence_ids.contains(evidence_id))
+        || !has_cross_source_evidence_refs(&relation.evidence_ids, evidence_source_ids)
+}
+
+fn relation_refs_are_current(
+    relation: &BrainRelationRecord,
+    valid_node_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) -> bool {
+    valid_node_ids.contains(&relation.source_node_id)
+        && valid_node_ids.contains(&relation.target_node_id)
+        && relation
+            .evidence_ids
+            .iter()
+            .all(|evidence_id| valid_evidence_ids.contains(evidence_id))
+}
+
+fn claim_is_legacy_workspace_linking_stale(
+    claim: &ClaimRecord,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
+) -> bool {
+    claim
+        .source_refs
+        .iter()
+        .any(|source_id| !valid_source_ids.contains(source_id))
+        || claim
+            .evidence_refs
+            .iter()
+            .any(|evidence_id| !valid_evidence_ids.contains(evidence_id))
+        || claim
+            .topic_refs
+            .iter()
+            .any(|node_id| !valid_node_ids.contains(node_id))
+        || !has_cross_source_refs(&claim.source_refs)
+        || !has_cross_source_evidence_refs(&claim.evidence_refs, evidence_source_ids)
+}
+
+fn claim_refs_are_current(
+    claim: &ClaimRecord,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+) -> bool {
+    source_and_evidence_refs_are_current(
+        &claim.source_refs,
+        &claim.evidence_refs,
+        valid_source_ids,
+        valid_evidence_ids,
+    ) && claim
+        .topic_refs
+        .iter()
+        .all(|node_id| valid_node_ids.contains(node_id))
+}
+
+fn memory_is_legacy_workspace_linking_stale(
+    memory: &MemoryRecord,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
+) -> bool {
+    memory
+        .source_refs
+        .iter()
+        .any(|source_id| !valid_source_ids.contains(source_id))
+        || memory
+            .evidence_refs
+            .iter()
+            .any(|evidence_id| !valid_evidence_ids.contains(evidence_id))
+        || !has_cross_source_refs(&memory.source_refs)
+        || !has_cross_source_evidence_refs(&memory.evidence_refs, evidence_source_ids)
+}
+
+fn source_and_evidence_refs_are_current(
+    source_refs: &[String],
+    evidence_refs: &[String],
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+) -> bool {
+    source_refs
+        .iter()
+        .all(|source_id| valid_source_ids.contains(source_id))
+        && evidence_refs
+            .iter()
+            .all(|evidence_id| valid_evidence_ids.contains(evidence_id))
+}
+
+fn wiki_page_is_legacy_workspace_linking_stale(
+    page: &WikiPage,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+    evidence_source_ids: &BTreeMap<String, String>,
+) -> bool {
+    page.source_refs
+        .iter()
+        .any(|source_id| !valid_source_ids.contains(source_id))
+        || page
+            .evidence_refs
+            .iter()
+            .any(|evidence_id| !valid_evidence_ids.contains(evidence_id))
+        || page
+            .node_refs
+            .iter()
+            .any(|node_id| !valid_node_ids.contains(node_id))
+        || !has_cross_source_refs(&page.source_refs)
+        || !has_cross_source_evidence_refs(&page.evidence_refs, evidence_source_ids)
+}
+
+fn wiki_page_refs_are_current(
+    page: &WikiPage,
+    valid_source_ids: &BTreeSet<String>,
+    valid_evidence_ids: &BTreeSet<String>,
+    valid_node_ids: &BTreeSet<String>,
+) -> bool {
+    source_and_evidence_refs_are_current(
+        &page.source_refs,
+        &page.evidence_refs,
+        valid_source_ids,
+        valid_evidence_ids,
+    ) && page
+        .node_refs
+        .iter()
+        .all(|node_id| valid_node_ids.contains(node_id))
 }
 
 pub(crate) fn write_structured_extraction_artifacts(
@@ -1494,6 +1870,7 @@ pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
 fn replay_preserved_materialized_graph_events(
     snapshot: &mut BrainRepoSnapshot,
     previous_origins: &MaterializedRecordOrigins,
+    protected_current_records: &ProtectedMaterializedRecordKeys,
 ) -> Result<MaterializedRecordOrigins> {
     let replayable_events = snapshot
         .events
@@ -1501,13 +1878,19 @@ fn replay_preserved_materialized_graph_events(
         .filter(|event| is_replayable_materialized_graph_event(event))
         .cloned()
         .collect::<Vec<_>>();
-    replay_materialized_graph_overlay_events(snapshot, &replayable_events, previous_origins)
+    replay_materialized_graph_overlay_events(
+        snapshot,
+        &replayable_events,
+        previous_origins,
+        protected_current_records,
+    )
 }
 
 pub(crate) fn replay_materialized_graph_overlay_events(
     snapshot: &mut BrainRepoSnapshot,
     replayable_events: &[BrainEvent],
     previous_origins: &MaterializedRecordOrigins,
+    protected_current_records: &ProtectedMaterializedRecordKeys,
 ) -> Result<MaterializedRecordOrigins> {
     let mut events = latest_replayable_materialized_graph_events(&replayable_events);
     events.sort_by(|left, right| {
@@ -1527,7 +1910,12 @@ pub(crate) fn replay_materialized_graph_overlay_events(
         schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         ..Default::default()
     };
-    clear_replayable_provider_overlay_records(snapshot, &replayable_events, previous_origins);
+    clear_replayable_provider_overlay_records(
+        snapshot,
+        &replayable_events,
+        previous_origins,
+        protected_current_records,
+    );
     for event in events {
         let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
             .with_context(|| {
@@ -1605,6 +1993,7 @@ fn clear_replayable_provider_overlay_records(
     snapshot: &mut BrainRepoSnapshot,
     replayable_events: &[BrainEvent],
     previous_origins: &MaterializedRecordOrigins,
+    protected_current_records: &ProtectedMaterializedRecordKeys,
 ) {
     if replayable_events.is_empty() {
         return;
@@ -1655,16 +2044,23 @@ fn clear_replayable_provider_overlay_records(
                 &previous_origins.relations,
                 &relation.relation_id,
             )
+            || protected_current_records
+                .relations
+                .contains(&relation.relation_id)
     });
     snapshot.claims.retain(|claim| {
         !target_claim_ids.contains(&claim.claim_id)
             && !provider_overlay_refs.claim_ids.contains(&claim.claim_id)
             && !record_has_workspace_linking_origin(&previous_origins.claims, &claim.claim_id)
+            || protected_current_records.claims.contains(&claim.claim_id)
     });
     snapshot.memories.retain(|memory| {
         !target_memory_ids.contains(&memory.memory_id)
             && !provider_overlay_refs.memory_ids.contains(&memory.memory_id)
             && !record_has_workspace_linking_origin(&previous_origins.memories, &memory.memory_id)
+            || protected_current_records
+                .memories
+                .contains(&memory.memory_id)
     });
     snapshot.evidence.retain(|evidence| {
         !provider_overlay_refs.evidence_ids.contains(&evidence.id)
@@ -1684,6 +2080,10 @@ fn clear_replayable_provider_overlay_records(
                 &previous_origins.wiki_pages_by_path,
                 &page.path,
             )
+            || protected_current_records
+                .wiki_page_ids
+                .contains(&page.page_id)
+            || protected_current_records.wiki_paths.contains(&page.path)
     });
     snapshot.extractions.retain(|extraction| {
         !provider_overlay_refs

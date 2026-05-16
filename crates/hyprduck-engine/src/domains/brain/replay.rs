@@ -241,6 +241,7 @@ impl BrainReplayState {
             &mut self.snapshot,
             &self.provider_overlay_events,
             &Default::default(),
+            &Default::default(),
         )
         .map(|_| ())
     }
