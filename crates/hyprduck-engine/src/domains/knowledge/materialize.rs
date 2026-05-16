@@ -1615,6 +1615,8 @@ fn apply_filtered_materialized_graph_overlay(
         .iter()
         .map(|node| node.node_id.clone())
         .collect::<BTreeSet<_>>();
+    let require_cross_source_artifacts =
+        event.operation_type.as_deref() == Some("workspace_linking");
     merge_filtered_relations(
         snapshot,
         materialized_graph.relations,
@@ -1627,12 +1629,14 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_source_ids,
         &valid_evidence_ids,
         &valid_node_ids,
+        require_cross_source_artifacts,
     );
     merge_filtered_memories(
         snapshot,
         materialized_graph.memories,
         &valid_source_ids,
         &valid_evidence_ids,
+        require_cross_source_artifacts,
     );
     merge_filtered_entities(
         snapshot,
@@ -1647,6 +1651,7 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_source_ids,
         &valid_evidence_ids,
         &valid_node_ids,
+        require_cross_source_artifacts,
     );
     snapshot.generated_at = snapshot.generated_at.max(
         materialized_graph
@@ -1813,6 +1818,7 @@ fn merge_filtered_claims(
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
     valid_node_ids: &BTreeSet<String>,
+    require_cross_source: bool,
 ) {
     let mut by_id = snapshot
         .claims
@@ -1836,6 +1842,9 @@ fn merge_filtered_claims(
         if claim.topic_refs.is_empty() {
             continue;
         }
+        if require_cross_source && !has_cross_source_refs(&claim.source_refs) {
+            continue;
+        }
         by_id.insert(claim.claim_id.clone(), claim);
     }
     snapshot.claims = by_id.into_values().collect();
@@ -1846,6 +1855,7 @@ fn merge_filtered_memories(
     memories: Vec<MemoryRecord>,
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
+    require_cross_source: bool,
 ) {
     let mut by_id = snapshot
         .memories
@@ -1861,6 +1871,9 @@ fn merge_filtered_memories(
             .evidence_refs
             .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
         if memory.source_refs.is_empty() && memory.evidence_refs.is_empty() {
+            continue;
+        }
+        if require_cross_source && !has_cross_source_refs(&memory.source_refs) {
             continue;
         }
         by_id.insert(memory.memory_id.clone(), memory);
@@ -1920,6 +1933,7 @@ fn merge_filtered_wiki_pages(
     valid_source_ids: &BTreeSet<String>,
     valid_evidence_ids: &BTreeSet<String>,
     valid_node_ids: &BTreeSet<String>,
+    require_cross_source: bool,
 ) {
     let mut by_path = snapshot
         .wiki_pages
@@ -1945,9 +1959,22 @@ fn merge_filtered_wiki_pages(
         if page.path.starts_with("wiki/topics/") && page.node_refs.is_empty() {
             continue;
         }
+        if require_cross_source && !has_cross_source_refs(&page.source_refs) {
+            continue;
+        }
         by_path.insert(page.path.clone(), page);
     }
     snapshot.wiki_pages = by_path.into_values().collect();
+}
+
+fn has_cross_source_refs(source_refs: &[String]) -> bool {
+    source_refs
+        .iter()
+        .map(|source_ref| source_ref.trim())
+        .filter(|source_ref| !source_ref.is_empty())
+        .collect::<BTreeSet<_>>()
+        .len()
+        >= 2
 }
 
 pub(crate) fn refresh_current_materialized_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {

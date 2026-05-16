@@ -2288,6 +2288,196 @@ fn provider_overlay_drops_null_source_evidence_after_source_deletion() {
         .any(|claim| claim.claim_id == "claim-deleted-source"));
 }
 
+#[test]
+fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_refs() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let active_source = SourceRecord {
+        source_id: "source-active".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/active.pdf".into(),
+        source_path: "/tmp/active.pdf".into(),
+        markdown_path: "/tmp/active.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let deleted_source = SourceRecord {
+        source_id: "source-deleted".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/deleted.pdf".into(),
+        source_path: "/tmp/deleted.pdf".into(),
+        markdown_path: "/tmp/deleted.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let active_evidence = EvidenceRef {
+        id: "ev-active".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Active source evidence.".into(),
+        source_path: Some(active_source.source_path.clone()),
+        source_id: Some(active_source.source_id.clone()),
+        markdown_path: Some(active_source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let deleted_evidence = EvidenceRef {
+        id: "ev-deleted".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Deleted source evidence.".into(),
+        source_path: Some(deleted_source.source_path.clone()),
+        source_id: Some(deleted_source.source_id.clone()),
+        markdown_path: Some(deleted_source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let active_node = BrainNodeRecord {
+        node_id: "concept-active".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Active concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![active_evidence.id.clone()],
+        source_ids: vec![active_source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 1,
+    };
+    let deleted_node = BrainNodeRecord {
+        node_id: "concept-deleted".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Deleted concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![deleted_evidence.id.clone()],
+        source_ids: vec![deleted_source.source_id.clone()],
+        confidence: Some(0.9),
+        updated_at: 1,
+    };
+    let cross_source_refs = vec![
+        active_source.source_id.clone(),
+        deleted_source.source_id.clone(),
+    ];
+    let cross_evidence_refs = vec![active_evidence.id.clone(), deleted_evidence.id.clone()];
+    let linking_claim = ClaimRecord {
+        claim_id: "claim-cross-source".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        statement: "This claim only has meaning while both sources exist.".into(),
+        topic_refs: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
+        source_refs: cross_source_refs.clone(),
+        evidence_refs: cross_evidence_refs.clone(),
+        status: "supported".into(),
+        updated_at: 100,
+    };
+    let linking_memory = MemoryRecord {
+        memory_id: "memory-cross-source".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        title: "Cross-source memory".into(),
+        body: "This memory only has meaning while both sources exist.".into(),
+        source_refs: cross_source_refs.clone(),
+        evidence_refs: cross_evidence_refs.clone(),
+        created_at: 100,
+        updated_at: 100,
+    };
+    let linking_wiki_page = WikiPage {
+        page_id: "wiki-cross-source".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        path: "wiki/workspace/cross-source.md".into(),
+        title: "Cross-source wiki".into(),
+        body: "This wiki page only has meaning while both sources exist.".into(),
+        node_refs: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
+        source_refs: cross_source_refs,
+        evidence_refs: cross_evidence_refs,
+        updated_at: 100,
+    };
+    let linking_event = BrainEvent {
+        event_id: "evt-workspace-linking-cross-source".into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("workspace_linking".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "hyprduck-provider-workspace-linking-agent:test".into(),
+        },
+        source_refs: vec![
+            active_source.source_id.clone(),
+            deleted_source.source_id.clone(),
+        ],
+        source_markdown_refs: vec![
+            active_source.markdown_path.clone(),
+            deleted_source.markdown_path.clone(),
+        ],
+        node_refs: vec![active_node.node_id.clone(), deleted_node.node_id.clone()],
+        relation_refs: Vec::new(),
+        claim_refs: vec![linking_claim.claim_id.clone()],
+        memory_refs: vec![linking_memory.memory_id.clone()],
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: vec![linking_claim.claim_id.clone()],
+        target_memory_ids: vec![linking_memory.memory_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
+        payload_json: materialized_graph_event_payload_json(
+            100,
+            &[],
+            &[active_node.clone(), deleted_node],
+            &[],
+            &[active_evidence.clone(), deleted_evidence],
+            std::slice::from_ref(&linking_memory),
+            std::slice::from_ref(&linking_wiki_page),
+            &[],
+            std::slice::from_ref(&linking_claim),
+            &[],
+        )
+        .expect("workspace linking payload"),
+        causality: BrainEventCausality {
+            caused_by_source_ids: vec![active_source.source_id.clone()],
+            snapshot_id: Some("snapshot-workspace-linking-cross-source".into()),
+            materialized_version: Some(100),
+            ..Default::default()
+        },
+        confidence: Some("provider_test".into()),
+        policy_result: "materialized".into(),
+        created_at: 100,
+    };
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![active_source];
+    snapshot.evidence = vec![active_evidence];
+    snapshot.nodes = vec![active_node];
+    snapshot.events = vec![linking_event];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot)
+        .expect("write replayed workspace graph");
+    let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read replayed workspace graph");
+
+    assert!(!replayed
+        .claims
+        .iter()
+        .any(|claim| claim.claim_id == "claim-cross-source"));
+    assert!(!replayed
+        .memories
+        .iter()
+        .any(|memory| memory.memory_id == "memory-cross-source"));
+    assert!(!replayed
+        .wiki_pages
+        .iter()
+        .any(|page| page.page_id == "wiki-cross-source"));
+}
+
 fn provider_test_event(
     event_id: &str,
     operation_type: &str,
