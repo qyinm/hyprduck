@@ -2027,10 +2027,11 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
             "sourceGraphNodeCount": 2,
             "sourceGraphRelationCount": 1,
             "workspaceLinkCount": 0,
-            "materializedNodeCount": 0,
-            "materializedRelationCount": 0,
+            "materializedNodeCount": 2,
+            "materializedRelationCount": 1,
             "materializedClaimCount": 0,
             "materializedMemoryCount": 0,
+            "providerRunIds": ["provider-source-graph-test", "provider-workspace-linking-test"],
             "sourceGraphRunId": "provider-source-graph-test",
             "workspaceLinkingRunId": "provider-workspace-linking-test",
             "sourceGraphMaterialized": true,
@@ -2058,6 +2059,16 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
     assert_eq!(report["status"], "source_graph_materialized_linking_failed");
     assert_eq!(report["sourceGraphMaterialized"], true);
     assert_eq!(report["workspaceLinkingMaterialized"], false);
+    assert_eq!(report["materializedNodeCount"], 2);
+    assert_eq!(report["materializedRelationCount"], 1);
+    assert!(report.get("providerRunId").is_none());
+    assert_eq!(
+        report["providerRunIds"],
+        json!([
+            "provider-source-graph-test",
+            "provider-workspace-linking-test"
+        ])
+    );
 }
 
 #[test]
