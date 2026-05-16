@@ -3313,6 +3313,64 @@ fn valid_workspace_linking_records_carry_forward_previous_origins() {
     );
 }
 
+#[test]
+fn persist_effective_brain_snapshot_recomputes_record_origins() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure workspace dirs");
+    write_json_pretty(
+        &workspace_root.join("state/materialized-record-origins.json"),
+        &serde_json::json!({
+            "schemaVersion": BRAIN_EVENT_SCHEMA_VERSION,
+            "relations": {
+                "relation-stale-origin": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
+                }
+            },
+            "claims": {
+                "claim-stale-origin": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
+                }
+            },
+            "memories": {
+                "memory-stale-origin": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
+                }
+            },
+            "wikiPagesById": {
+                "wiki-stale-origin": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
+                }
+            },
+            "wikiPagesByPath": {
+                "wiki/workspace/stale-origin.md": {
+                    "eventId": "evt-stale-origin",
+                    "operationType": "workspace_linking"
+                }
+            }
+        }),
+    )
+    .expect("write stale materialized record origins");
+
+    persist_effective_brain_snapshot(&workspace_root, &snapshot)
+        .expect("persist effective snapshot");
+    let origins: serde_json::Value =
+        read_json_artifact(&workspace_root.join("state/materialized-record-origins.json"))
+            .expect("read recomputed materialized record origins");
+
+    assert_eq!(origins["relations"].as_object().unwrap().len(), 0);
+    assert_eq!(origins["claims"].as_object().unwrap().len(), 0);
+    assert_eq!(origins["memories"].as_object().unwrap().len(), 0);
+    assert_eq!(origins["wikiPagesById"].as_object().unwrap().len(), 0);
+    assert_eq!(origins["wikiPagesByPath"].as_object().unwrap().len(), 0);
+}
+
 fn provider_test_event(
     event_id: &str,
     operation_type: &str,

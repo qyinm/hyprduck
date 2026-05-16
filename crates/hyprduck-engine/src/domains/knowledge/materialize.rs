@@ -1274,14 +1274,8 @@ pub(crate) fn persist_effective_brain_snapshot(
     root: &Path,
     effective_snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
-    let origins = read_materialized_record_origins(root)?;
-    persist_effective_brain_state(
-        root,
-        &EffectiveBrainState {
-            snapshot: effective_snapshot.clone(),
-            origins,
-        },
-    )
+    let effective_state = compute_effective_brain_state(root, effective_snapshot)?;
+    persist_effective_brain_state(root, &effective_state)
 }
 
 fn persist_effective_brain_state(root: &Path, effective_state: &EffectiveBrainState) -> Result<()> {
