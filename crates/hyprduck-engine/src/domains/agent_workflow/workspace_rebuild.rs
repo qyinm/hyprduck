@@ -42,6 +42,10 @@ pub(crate) struct ProviderGraphProposalGenerationReport {
     pub(crate) source_graph_run_id: Option<String>,
     #[serde(default)]
     pub(crate) workspace_linking_run_id: Option<String>,
+    #[serde(default)]
+    pub(crate) source_graph_materialized: bool,
+    #[serde(default)]
+    pub(crate) workspace_linking_materialized: bool,
     pub(crate) updated_at: u64,
 }
 
@@ -80,6 +84,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
                 provider_run_id: None,
                 source_graph_run_id: None,
                 workspace_linking_run_id: None,
+                source_graph_materialized: false,
+                workspace_linking_materialized: false,
                 updated_at: unix_timestamp_seconds(),
             };
             write_json_pretty(&report_path, &report)?;
@@ -102,6 +108,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         provider_run_id: None,
         source_graph_run_id: None,
         workspace_linking_run_id: None,
+        source_graph_materialized: false,
+        workspace_linking_materialized: false,
         updated_at: unix_timestamp_seconds(),
     };
 
@@ -196,6 +204,8 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     source_materialization_input.events =
         merge_preserved_brain_events(vec![source_graph_event], &snapshot.events);
     write_materialized_brain_repo(workspace_root, &source_materialization_input)?;
+    report.source_graph_materialized = true;
+    report.status = "source_graph_materialized".into();
     let after_source_graph = capture_materialized_file_snapshot(workspace_root)?;
     let source_graph_changed_files =
         changed_materialized_files(&before_source_graph, &after_source_graph);
@@ -240,8 +250,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     ) {
         Ok(response) => response,
         Err(error) => {
-            report.status = "failed".into();
-            report.error_message = Some(format!("{error:#}"));
+            mark_workspace_linking_failed(&mut report, &error);
             write_json_pretty(&report_path, &report)?;
             return Ok(report);
         }
@@ -250,8 +259,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         match parse_provider_workspace_rebuild_snapshot(&workspace_linking_response) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                report.status = "failed".into();
-                report.error_message = Some(format!("{error:#}"));
+                mark_workspace_linking_failed(&mut report, &error);
                 write_provider_graph_run_validation_report(
                     workspace_root,
                     &workspace_linking_run_id,
@@ -277,8 +285,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
         &linked_baseline,
         &manifest.source_id,
     ) {
-        report.status = "failed".into();
-        report.error_message = Some(format!("{error:#}"));
+        mark_workspace_linking_failed(&mut report, &error);
         write_provider_graph_run_validation_report(
             workspace_root,
             &workspace_linking_run_id,
@@ -303,6 +310,7 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     linking_materialization_input.events =
         merge_preserved_brain_events(vec![workspace_linking_event], &linked_baseline.events);
     write_materialized_brain_repo(workspace_root, &linking_materialization_input)?;
+    report.workspace_linking_materialized = true;
     let after_linking = capture_materialized_file_snapshot(workspace_root)?;
     let workspace_linking_changed_files =
         changed_materialized_files(&before_linking, &after_linking);
@@ -332,6 +340,20 @@ pub(crate) fn maybe_generate_provider_graph_proposals(
     report.updated_at = unix_timestamp_seconds();
     write_json_pretty(&report_path, &report)?;
     Ok(report)
+}
+
+fn mark_workspace_linking_failed(
+    report: &mut ProviderGraphProposalGenerationReport,
+    error: &anyhow::Error,
+) {
+    report.status = if report.source_graph_materialized {
+        "source_graph_materialized_linking_failed".into()
+    } else {
+        "failed".into()
+    };
+    report.workspace_linking_materialized = false;
+    report.error_message = Some(format!("{error:#}"));
+    report.updated_at = unix_timestamp_seconds();
 }
 
 fn run_provider_graph_stage(
@@ -540,4 +562,43 @@ fn provider_graph_materialized_event(
 fn provider_graph_generation_disabled_for_process() -> bool {
     std::env::var_os("HYPRDUCK_DISABLE_PROVIDER_GRAPH").is_some()
         || (cfg!(test) && std::env::var_os("HYPRDUCK_TEST_ENABLE_PROVIDER_GRAPH").is_none())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linking_failure_after_source_materialization_is_reported_as_partial_commit() {
+        let mut report = ProviderGraphProposalGenerationReport {
+            status: "source_graph_materialized".into(),
+            provider: "openai".into(),
+            model: "test-model".into(),
+            source_id: "source-alpha".into(),
+            proposal_count: 0,
+            applied_count: 0,
+            failed_count: 0,
+            proposal_ids: Vec::new(),
+            applied_proposal_ids: Vec::new(),
+            failed_proposals: Vec::new(),
+            skipped_reason: None,
+            error_message: None,
+            provider_run_id: Some("provider-workspace-linking-test".into()),
+            source_graph_run_id: Some("provider-source-graph-test".into()),
+            workspace_linking_run_id: Some("provider-workspace-linking-test".into()),
+            source_graph_materialized: true,
+            workspace_linking_materialized: false,
+            updated_at: 1,
+        };
+
+        mark_workspace_linking_failed(&mut report, &anyhow!("link validation failed"));
+
+        assert_eq!(report.status, "source_graph_materialized_linking_failed");
+        assert!(report.source_graph_materialized);
+        assert!(!report.workspace_linking_materialized);
+        assert!(report
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("link validation failed")));
+    }
 }
