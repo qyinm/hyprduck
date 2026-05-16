@@ -1431,12 +1431,13 @@ fn clear_replayable_provider_overlay_records(
         .iter()
         .flat_map(|event| event.target_memory_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
-    let provider_overlay_refs = replayable_events
-        .iter()
-        .fold(ProviderOverlayRefs::default(), |mut refs, event| {
-            refs.extend_from_event(event);
-            refs
-        });
+    let provider_overlay_refs =
+        replayable_events
+            .iter()
+            .fold(ProviderOverlayRefs::default(), |mut refs, event| {
+                refs.extend_from_event(event);
+                refs
+            });
     let deterministic_source_evidence_ids = snapshot
         .nodes
         .iter()
@@ -1485,8 +1486,10 @@ struct ProviderOverlayRefs {
 
 impl ProviderOverlayRefs {
     fn extend_from_event(&mut self, event: &BrainEvent) {
-        self.evidence_ids.extend(event.evidence_refs.iter().cloned());
-        let Ok(payload) = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
+        self.evidence_ids
+            .extend(event.evidence_refs.iter().cloned());
+        let Ok(payload) =
+            serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
         else {
             return;
         };

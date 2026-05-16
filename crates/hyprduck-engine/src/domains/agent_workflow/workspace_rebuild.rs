@@ -275,7 +275,9 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
         .unwrap_or_else(|_| source_materialization_input.clone());
     update_materialized_counts(&mut report, &linked_baseline);
     let workspace_linking_run_id = format!("provider-workspace-linking-{}", Uuid::now_v7());
-    report.provider_run_ids.push(workspace_linking_run_id.clone());
+    report
+        .provider_run_ids
+        .push(workspace_linking_run_id.clone());
     report.workspace_linking_run_id = Some(workspace_linking_run_id.clone());
     let workspace_linking_prompt = build_workspace_linking_prompt(
         workspace_root,
@@ -853,7 +855,10 @@ mod tests {
         assert!(encoded.get("materializedNodeCount").is_some());
         assert_eq!(
             encoded["providerRunIds"],
-            json!(["provider-source-graph-test", "provider-workspace-linking-test"])
+            json!([
+                "provider-source-graph-test",
+                "provider-workspace-linking-test"
+            ])
         );
         assert!(encoded.get("providerRunId").is_none());
         assert!(encoded.get("proposalCount").is_none());

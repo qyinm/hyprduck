@@ -586,12 +586,14 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         .find(|relation| relation.relation_id == "edge-cross")
         .expect("cross relation")
         .evidence_ids = vec!["ev-alpha".into()];
-    let relation_error =
-        validate_provider_workspace_linking_snapshot(&relation_undercovered, &baseline, "source-alpha")
-            .expect_err("cross-source relation must be backed by evidence from both endpoint sources");
-    assert!(
-        format!("{relation_error:#}").contains("evidence does not cover both endpoint source sides")
-    );
+    let relation_error = validate_provider_workspace_linking_snapshot(
+        &relation_undercovered,
+        &baseline,
+        "source-alpha",
+    )
+    .expect_err("cross-source relation must be backed by evidence from both endpoint sources");
+    assert!(format!("{relation_error:#}")
+        .contains("evidence does not cover both endpoint source sides"));
 
     let mut claim_undercovered = snapshot.clone();
     claim_undercovered.claims.push(ClaimRecord {
@@ -604,10 +606,14 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         status: "active".into(),
         updated_at: generated_at,
     });
-    let claim_error =
-        validate_provider_workspace_linking_snapshot(&claim_undercovered, &baseline, "source-alpha")
-            .expect_err("claim source refs must be covered by supporting evidence");
-    assert!(format!("{claim_error:#}").contains("claim claim-undercovered evidence does not cover all source refs"));
+    let claim_error = validate_provider_workspace_linking_snapshot(
+        &claim_undercovered,
+        &baseline,
+        "source-alpha",
+    )
+    .expect_err("claim source refs must be covered by supporting evidence");
+    assert!(format!("{claim_error:#}")
+        .contains("claim claim-undercovered evidence does not cover all source refs"));
 
     let mut memory_undercovered = snapshot.clone();
     memory_undercovered.memories.push(MemoryRecord {
@@ -621,10 +627,14 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         created_at: generated_at,
         updated_at: generated_at,
     });
-    let memory_error =
-        validate_provider_workspace_linking_snapshot(&memory_undercovered, &baseline, "source-alpha")
-            .expect_err("memory source refs must be covered by supporting evidence");
-    assert!(format!("{memory_error:#}").contains("memory memory-undercovered evidence does not cover all source refs"));
+    let memory_error = validate_provider_workspace_linking_snapshot(
+        &memory_undercovered,
+        &baseline,
+        "source-alpha",
+    )
+    .expect_err("memory source refs must be covered by supporting evidence");
+    assert!(format!("{memory_error:#}")
+        .contains("memory memory-undercovered evidence does not cover all source refs"));
 
     let mut wiki_undercovered = snapshot.clone();
     wiki_undercovered.wiki_pages.push(WikiPage {
@@ -641,7 +651,8 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
     let wiki_error =
         validate_provider_workspace_linking_snapshot(&wiki_undercovered, &baseline, "source-alpha")
             .expect_err("wiki source refs must be covered by supporting evidence");
-    assert!(format!("{wiki_error:#}").contains("wiki page wiki/undercovered.md evidence does not cover all source refs"));
+    assert!(format!("{wiki_error:#}")
+        .contains("wiki page wiki/undercovered.md evidence does not cover all source refs"));
 }
 
 #[test]

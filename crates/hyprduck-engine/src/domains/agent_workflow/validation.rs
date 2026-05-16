@@ -184,12 +184,7 @@ pub(crate) fn validate_provider_source_local_graph_snapshot(
         }
     }
     let evidence_source_by_id = evidence_source_map(snapshot);
-    validate_common_refs(
-        snapshot,
-        &source_ids,
-        &evidence_ids,
-        &evidence_source_by_id,
-    )?;
+    validate_common_refs(snapshot, &source_ids, &evidence_ids, &evidence_source_by_id)?;
     let report = lint_brain_snapshot(snapshot);
     if report.issue_count > 0 {
         bail!(
@@ -231,12 +226,7 @@ pub(crate) fn validate_provider_workspace_linking_snapshot(
         .map(|evidence| evidence.id.clone())
         .collect::<BTreeSet<_>>();
     let evidence_source_by_id = evidence_source_map(snapshot);
-    validate_common_refs(
-        snapshot,
-        &source_ids,
-        &evidence_ids,
-        &evidence_source_by_id,
-    )?;
+    validate_common_refs(snapshot, &source_ids, &evidence_ids, &evidence_source_by_id)?;
 
     let node_sources = snapshot
         .nodes
