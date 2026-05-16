@@ -1000,6 +1000,24 @@ fn brain_writer_bootstraps_missing_memory_and_events_files() {
 }
 
 #[test]
+fn materialization_fails_on_corrupt_existing_events_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure repo dirs");
+    fs::write(
+        workspace_root.join("events/brain_events.jsonl"),
+        "{not valid json}\n",
+    )
+    .expect("write corrupt events file");
+    let snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+
+    let error = compute_effective_brain_snapshot(&workspace_root, &snapshot)
+        .expect_err("corrupt existing events must fail materialization");
+
+    assert!(format!("{error:#}").contains("failed reading existing events"));
+}
+
+#[test]
 fn brain_writer_uses_directory_lock_without_pid_file() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);

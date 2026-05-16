@@ -1037,10 +1037,15 @@ pub(crate) fn compute_effective_brain_snapshot(
     let mut effective_snapshot = snapshot.clone();
     effective_snapshot.memories =
         merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
-    effective_snapshot.events = merge_preserved_brain_events(
-        snapshot.events.clone(),
-        &read_brain_events_jsonl(&root.join("events/brain_events.jsonl")).unwrap_or_default(),
-    );
+    let events_path = root.join("events/brain_events.jsonl");
+    let existing_events = if events_path.exists() {
+        read_brain_events_jsonl(&events_path)
+            .with_context(|| format!("failed reading existing events {}", events_path.display()))?
+    } else {
+        Vec::new()
+    };
+    effective_snapshot.events =
+        merge_preserved_brain_events(snapshot.events.clone(), &existing_events);
     replay_preserved_materialized_graph_events(&mut effective_snapshot)?;
     apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
     refresh_materialized_wiki_pages(&mut effective_snapshot);
