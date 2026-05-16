@@ -309,6 +309,7 @@ mod corrections;
 mod markdown_extract;
 mod materialize;
 mod origin;
+mod replay;
 
 pub(crate) use aggregate::*;
 pub(crate) use answer::*;
@@ -316,3 +317,4 @@ pub(crate) use compiler::*;
 pub(crate) use corrections::*;
 pub(crate) use markdown_extract::*;
 pub(crate) use materialize::*;
+pub(crate) use replay::*;
