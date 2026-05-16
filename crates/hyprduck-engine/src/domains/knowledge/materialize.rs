@@ -1,5 +1,47 @@
 use super::*;
 
+const MATERIALIZED_RECORD_ORIGINS_PATH: &str = "state/materialized-record-origins.json";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaterializedRecordOrigins {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    relations: BTreeMap<String, MaterializedRecordOrigin>,
+    #[serde(default)]
+    claims: BTreeMap<String, MaterializedRecordOrigin>,
+    #[serde(default)]
+    memories: BTreeMap<String, MaterializedRecordOrigin>,
+    #[serde(default)]
+    wiki_pages_by_id: BTreeMap<String, MaterializedRecordOrigin>,
+    #[serde(default)]
+    wiki_pages_by_path: BTreeMap<String, MaterializedRecordOrigin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedRecordOrigin {
+    event_id: String,
+    operation_type: String,
+}
+
+impl MaterializedRecordOrigin {
+    fn from_event(event: &BrainEvent) -> Self {
+        Self {
+            event_id: event.event_id.clone(),
+            operation_type: event
+                .operation_type
+                .clone()
+                .unwrap_or_else(|| "graph_materialized".into()),
+        }
+    }
+
+    fn is_workspace_linking(&self) -> bool {
+        self.operation_type == "workspace_linking"
+    }
+}
+
 pub(crate) fn build_brain_repo_snapshot(
     workspace_id: &str,
     rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
@@ -1024,8 +1066,8 @@ pub(crate) fn write_materialized_brain_repo(
     let writer = BrainWorkspaceWriter::open(root.to_path_buf())?;
     let root = writer.root();
     ensure_materialized_brain_repo_dirs(root)?;
-    let effective_snapshot = compute_effective_brain_snapshot(root, snapshot)?;
-    persist_effective_brain_snapshot(root, &effective_snapshot)?;
+    let effective_state = compute_effective_brain_state(root, snapshot)?;
+    persist_effective_brain_state(root, &effective_state)?;
 
     Ok(())
 }
@@ -1034,6 +1076,18 @@ pub(crate) fn compute_effective_brain_snapshot(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<BrainRepoSnapshot> {
+    Ok(compute_effective_brain_state(root, snapshot)?.snapshot)
+}
+
+struct EffectiveBrainState {
+    snapshot: BrainRepoSnapshot,
+    origins: MaterializedRecordOrigins,
+}
+
+fn compute_effective_brain_state(
+    root: &Path,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<EffectiveBrainState> {
     let mut effective_snapshot = snapshot.clone();
     effective_snapshot.memories =
         merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
@@ -1046,18 +1100,35 @@ pub(crate) fn compute_effective_brain_snapshot(
     };
     effective_snapshot.events =
         merge_preserved_brain_events(snapshot.events.clone(), &existing_events);
-    replay_preserved_materialized_graph_events(&mut effective_snapshot)?;
+    let previous_origins = read_materialized_record_origins(root)?;
+    let origins =
+        replay_preserved_materialized_graph_events(&mut effective_snapshot, &previous_origins)?;
     apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
     refresh_materialized_wiki_pages(&mut effective_snapshot);
     refresh_current_materialized_events(&mut effective_snapshot)?;
-    Ok(effective_snapshot)
+    Ok(EffectiveBrainState {
+        snapshot: effective_snapshot,
+        origins,
+    })
 }
 
 pub(crate) fn persist_effective_brain_snapshot(
     root: &Path,
     effective_snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
-    persist_materialized_graph_and_wiki_state(root, &effective_snapshot)?;
+    let origins = read_materialized_record_origins(root)?;
+    persist_effective_brain_state(
+        root,
+        &EffectiveBrainState {
+            snapshot: effective_snapshot.clone(),
+            origins,
+        },
+    )
+}
+
+fn persist_effective_brain_state(root: &Path, effective_state: &EffectiveBrainState) -> Result<()> {
+    let effective_snapshot = &effective_state.snapshot;
+    persist_materialized_graph_and_wiki_state(root, effective_snapshot)?;
     write_json_pretty(
         &root.join("memory/records.json"),
         &effective_snapshot.memories,
@@ -1067,6 +1138,7 @@ pub(crate) fn persist_effective_brain_snapshot(
         &root.join("events/brain_events.jsonl"),
         &effective_snapshot.events,
     )?;
+    write_materialized_record_origins(root, &effective_state.origins)?;
     publish_latest_readable_graph_snapshot_marker(root, &effective_snapshot)?;
 
     Ok(())
@@ -1196,11 +1268,35 @@ pub(crate) fn latest_readable_materialized_file_refs(snapshot: &BrainRepoSnapsho
         "graph/claims.json".to_string(),
         "memory/records.json".to_string(),
         "events/brain_events.jsonl".to_string(),
+        MATERIALIZED_RECORD_ORIGINS_PATH.to_string(),
     ];
     files.extend(snapshot.wiki_pages.iter().map(|page| page.path.clone()));
     files.sort();
     files.dedup();
     files
+}
+
+fn read_materialized_record_origins(root: &Path) -> Result<MaterializedRecordOrigins> {
+    let path = root.join(MATERIALIZED_RECORD_ORIGINS_PATH);
+    if !path.exists() {
+        return Ok(MaterializedRecordOrigins {
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            ..Default::default()
+        });
+    }
+    let mut origins: MaterializedRecordOrigins =
+        read_json_artifact(&path).with_context(|| format!("failed reading {}", path.display()))?;
+    origins.schema_version = BRAIN_EVENT_SCHEMA_VERSION;
+    Ok(origins)
+}
+
+fn write_materialized_record_origins(
+    root: &Path,
+    origins: &MaterializedRecordOrigins,
+) -> Result<()> {
+    let mut origins = origins.clone();
+    origins.schema_version = BRAIN_EVENT_SCHEMA_VERSION;
+    write_json_pretty(&root.join(MATERIALIZED_RECORD_ORIGINS_PATH), &origins)
 }
 
 pub(crate) fn write_structured_extraction_artifacts(
@@ -1395,20 +1491,24 @@ pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
     )
 }
 
-fn replay_preserved_materialized_graph_events(snapshot: &mut BrainRepoSnapshot) -> Result<()> {
+fn replay_preserved_materialized_graph_events(
+    snapshot: &mut BrainRepoSnapshot,
+    previous_origins: &MaterializedRecordOrigins,
+) -> Result<MaterializedRecordOrigins> {
     let replayable_events = snapshot
         .events
         .iter()
         .filter(|event| is_replayable_materialized_graph_event(event))
         .cloned()
         .collect::<Vec<_>>();
-    replay_materialized_graph_overlay_events(snapshot, &replayable_events)
+    replay_materialized_graph_overlay_events(snapshot, &replayable_events, previous_origins)
 }
 
 pub(crate) fn replay_materialized_graph_overlay_events(
     snapshot: &mut BrainRepoSnapshot,
     replayable_events: &[BrainEvent],
-) -> Result<()> {
+    previous_origins: &MaterializedRecordOrigins,
+) -> Result<MaterializedRecordOrigins> {
     let mut events = latest_replayable_materialized_graph_events(&replayable_events);
     events.sort_by(|left, right| {
         left.causality
@@ -1423,7 +1523,11 @@ pub(crate) fn replay_materialized_graph_overlay_events(
             .then_with(|| left.created_at.cmp(&right.created_at))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    clear_replayable_provider_overlay_records(snapshot, &replayable_events);
+    let mut origins = MaterializedRecordOrigins {
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        ..Default::default()
+    };
+    clear_replayable_provider_overlay_records(snapshot, &replayable_events, previous_origins);
     for event in events {
         let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
             .with_context(|| {
@@ -1433,10 +1537,15 @@ pub(crate) fn replay_materialized_graph_overlay_events(
                 )
             })?;
         if let Some(materialized_graph) = payload.materialized_graph {
-            apply_filtered_materialized_graph_overlay(snapshot, materialized_graph, &event);
+            apply_filtered_materialized_graph_overlay(
+                snapshot,
+                materialized_graph,
+                &event,
+                &mut origins,
+            );
         }
     }
-    Ok(())
+    Ok(origins)
 }
 
 fn latest_replayable_materialized_graph_events(events: &[BrainEvent]) -> Vec<BrainEvent> {
@@ -1495,6 +1604,7 @@ fn materialized_graph_replay_key(event: &BrainEvent) -> String {
 fn clear_replayable_provider_overlay_records(
     snapshot: &mut BrainRepoSnapshot,
     replayable_events: &[BrainEvent],
+    previous_origins: &MaterializedRecordOrigins,
 ) {
     if replayable_events.is_empty() {
         return;
@@ -1541,41 +1651,20 @@ fn clear_replayable_provider_overlay_records(
             && !provider_overlay_refs
                 .relation_ids
                 .contains(&relation.relation_id)
-            && !provider_overlay_refs
-                .workspace_linking_relations
-                .get(&relation.relation_id)
-                .is_some_and(|payload_relations| {
-                    payload_relations.iter().any(|payload_relation| {
-                        workspace_linking_relation_matches_payload_projection(
-                            relation,
-                            payload_relation,
-                        )
-                    })
-                })
+            && !record_has_workspace_linking_origin(
+                &previous_origins.relations,
+                &relation.relation_id,
+            )
     });
     snapshot.claims.retain(|claim| {
         !target_claim_ids.contains(&claim.claim_id)
             && !provider_overlay_refs.claim_ids.contains(&claim.claim_id)
-            && !provider_overlay_refs
-                .workspace_linking_claims
-                .get(&claim.claim_id)
-                .is_some_and(|payload_claims| {
-                    payload_claims.iter().any(|payload_claim| {
-                        workspace_linking_claim_matches_payload_projection(claim, payload_claim)
-                    })
-                })
+            && !record_has_workspace_linking_origin(&previous_origins.claims, &claim.claim_id)
     });
     snapshot.memories.retain(|memory| {
         !target_memory_ids.contains(&memory.memory_id)
             && !provider_overlay_refs.memory_ids.contains(&memory.memory_id)
-            && !provider_overlay_refs
-                .workspace_linking_memories
-                .get(&memory.memory_id)
-                .is_some_and(|payload_memories| {
-                    payload_memories.iter().any(|payload_memory| {
-                        workspace_linking_memory_matches_payload_projection(memory, payload_memory)
-                    })
-                })
+            && !record_has_workspace_linking_origin(&previous_origins.memories, &memory.memory_id)
     });
     snapshot.evidence.retain(|evidence| {
         !provider_overlay_refs.evidence_ids.contains(&evidence.id)
@@ -1587,22 +1676,14 @@ fn clear_replayable_provider_overlay_records(
     snapshot.wiki_pages.retain(|page| {
         !provider_overlay_refs.wiki_page_ids.contains(&page.page_id)
             && !provider_overlay_refs.wiki_paths.contains(&page.path)
-            && !provider_overlay_refs
-                .workspace_linking_wiki_pages_by_id
-                .get(&page.page_id)
-                .is_some_and(|payload_pages| {
-                    payload_pages.iter().any(|payload_page| {
-                        workspace_linking_wiki_page_matches_payload_projection(page, payload_page)
-                    })
-                })
-            && !provider_overlay_refs
-                .workspace_linking_wiki_pages_by_path
-                .get(&page.path)
-                .is_some_and(|payload_pages| {
-                    payload_pages.iter().any(|payload_page| {
-                        workspace_linking_wiki_page_matches_payload_projection(page, payload_page)
-                    })
-                })
+            && !record_has_workspace_linking_origin(
+                &previous_origins.wiki_pages_by_id,
+                &page.page_id,
+            )
+            && !record_has_workspace_linking_origin(
+                &previous_origins.wiki_pages_by_path,
+                &page.path,
+            )
     });
     snapshot.extractions.retain(|extraction| {
         !provider_overlay_refs
@@ -1611,17 +1692,21 @@ fn clear_replayable_provider_overlay_records(
     });
 }
 
+fn record_has_workspace_linking_origin(
+    origins: &BTreeMap<String, MaterializedRecordOrigin>,
+    record_id: &str,
+) -> bool {
+    origins
+        .get(record_id)
+        .is_some_and(MaterializedRecordOrigin::is_workspace_linking)
+}
+
 #[derive(Debug, Default)]
 struct ProviderOverlayRefs {
     evidence_ids: BTreeSet<String>,
     relation_ids: BTreeSet<String>,
     claim_ids: BTreeSet<String>,
     memory_ids: BTreeSet<String>,
-    workspace_linking_relations: BTreeMap<String, Vec<BrainRelationRecord>>,
-    workspace_linking_claims: BTreeMap<String, Vec<ClaimRecord>>,
-    workspace_linking_memories: BTreeMap<String, Vec<MemoryRecord>>,
-    workspace_linking_wiki_pages_by_id: BTreeMap<String, Vec<WikiPage>>,
-    workspace_linking_wiki_pages_by_path: BTreeMap<String, Vec<WikiPage>>,
     entity_ids: BTreeSet<String>,
     wiki_page_ids: BTreeSet<String>,
     wiki_paths: BTreeSet<String>,
@@ -1647,26 +1732,7 @@ impl ProviderOverlayRefs {
                     .map(|evidence| evidence.id),
             );
         }
-        if is_workspace_linking {
-            for relation in materialized_graph.relations {
-                self.workspace_linking_relations
-                    .entry(relation.relation_id.clone())
-                    .or_default()
-                    .push(relation);
-            }
-            for claim in materialized_graph.claims {
-                self.workspace_linking_claims
-                    .entry(claim.claim_id.clone())
-                    .or_default()
-                    .push(claim);
-            }
-            for memory in materialized_graph.memories {
-                self.workspace_linking_memories
-                    .entry(memory.memory_id.clone())
-                    .or_default()
-                    .push(memory);
-            }
-        } else {
+        if !is_workspace_linking {
             self.relation_ids.extend(
                 materialized_graph
                     .relations
@@ -1695,16 +1761,7 @@ impl ProviderOverlayRefs {
             );
         }
         for page in materialized_graph.wiki_pages {
-            if is_workspace_linking {
-                self.workspace_linking_wiki_pages_by_id
-                    .entry(page.page_id.clone())
-                    .or_default()
-                    .push(page.clone());
-                self.workspace_linking_wiki_pages_by_path
-                    .entry(page.path.clone())
-                    .or_default()
-                    .push(page);
-            } else {
+            if !is_workspace_linking {
                 self.wiki_page_ids.insert(page.page_id);
                 self.wiki_paths.insert(page.path);
             }
@@ -1724,6 +1781,7 @@ fn apply_filtered_materialized_graph_overlay(
     snapshot: &mut BrainRepoSnapshot,
     materialized_graph: MaterializedGraphPayload,
     event: &BrainEvent,
+    origins: &mut MaterializedRecordOrigins,
 ) {
     let valid_source_ids = snapshot
         .sources
@@ -1802,6 +1860,8 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_evidence_ids,
         &evidence_source_ids,
         require_cross_source_artifacts,
+        event,
+        origins,
     );
     merge_filtered_claims(
         snapshot,
@@ -1811,6 +1871,8 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_node_ids,
         &evidence_source_ids,
         require_cross_source_artifacts,
+        event,
+        origins,
     );
     merge_filtered_memories(
         snapshot,
@@ -1819,6 +1881,8 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_evidence_ids,
         &evidence_source_ids,
         require_cross_source_artifacts,
+        event,
+        origins,
     );
     if !require_cross_source_artifacts {
         merge_filtered_entities(
@@ -1837,6 +1901,8 @@ fn apply_filtered_materialized_graph_overlay(
         &valid_node_ids,
         &evidence_source_ids,
         require_cross_source_artifacts,
+        event,
+        origins,
     );
     snapshot.generated_at = snapshot.generated_at.max(
         materialized_graph
@@ -1975,6 +2041,8 @@ fn merge_filtered_relations(
     valid_evidence_ids: &BTreeSet<String>,
     evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
+    event: &BrainEvent,
+    origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
         .relations
@@ -2002,7 +2070,11 @@ fn merge_filtered_relations(
         if require_cross_source && by_id.contains_key(&relation.relation_id) {
             continue;
         }
-        by_id.insert(relation.relation_id.clone(), relation);
+        let relation_id = relation.relation_id.clone();
+        by_id.insert(relation_id.clone(), relation);
+        origins
+            .relations
+            .insert(relation_id, MaterializedRecordOrigin::from_event(event));
     }
     snapshot.relations = by_id.into_values().collect();
 }
@@ -2015,6 +2087,8 @@ fn merge_filtered_claims(
     valid_node_ids: &BTreeSet<String>,
     evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
+    event: &BrainEvent,
+    origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
         .claims
@@ -2047,7 +2121,11 @@ fn merge_filtered_claims(
         if require_cross_source && by_id.contains_key(&claim.claim_id) {
             continue;
         }
-        by_id.insert(claim.claim_id.clone(), claim);
+        let claim_id = claim.claim_id.clone();
+        by_id.insert(claim_id.clone(), claim);
+        origins
+            .claims
+            .insert(claim_id, MaterializedRecordOrigin::from_event(event));
     }
     snapshot.claims = by_id.into_values().collect();
 }
@@ -2059,6 +2137,8 @@ fn merge_filtered_memories(
     valid_evidence_ids: &BTreeSet<String>,
     evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
+    event: &BrainEvent,
+    origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
         .memories
@@ -2085,7 +2165,11 @@ fn merge_filtered_memories(
         if require_cross_source && by_id.contains_key(&memory.memory_id) {
             continue;
         }
-        by_id.insert(memory.memory_id.clone(), memory);
+        let memory_id = memory.memory_id.clone();
+        by_id.insert(memory_id.clone(), memory);
+        origins
+            .memories
+            .insert(memory_id, MaterializedRecordOrigin::from_event(event));
     }
     snapshot.memories = by_id.into_values().collect();
 }
@@ -2144,6 +2228,8 @@ fn merge_filtered_wiki_pages(
     valid_node_ids: &BTreeSet<String>,
     evidence_source_ids: &BTreeMap<String, String>,
     require_cross_source: bool,
+    event: &BrainEvent,
+    origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_path = snapshot
         .wiki_pages
@@ -2183,7 +2269,12 @@ fn merge_filtered_wiki_pages(
         {
             continue;
         }
-        by_path.insert(page.path.clone(), page);
+        let page_id = page.page_id.clone();
+        let path = page.path.clone();
+        by_path.insert(path.clone(), page);
+        let origin = MaterializedRecordOrigin::from_event(event);
+        origins.wiki_pages_by_id.insert(page_id, origin.clone());
+        origins.wiki_pages_by_path.insert(path, origin);
     }
     snapshot.wiki_pages = by_path.into_values().collect();
 }
@@ -2196,34 +2287,6 @@ fn has_cross_source_refs(source_refs: &[String]) -> bool {
         .collect::<BTreeSet<_>>()
         .len()
         >= 2
-}
-
-fn workspace_linking_relation_matches_payload_projection(
-    current: &BrainRelationRecord,
-    payload: &BrainRelationRecord,
-) -> bool {
-    current == payload
-}
-
-fn workspace_linking_claim_matches_payload_projection(
-    current: &ClaimRecord,
-    payload: &ClaimRecord,
-) -> bool {
-    current == payload
-}
-
-fn workspace_linking_memory_matches_payload_projection(
-    current: &MemoryRecord,
-    payload: &MemoryRecord,
-) -> bool {
-    current == payload
-}
-
-fn workspace_linking_wiki_page_matches_payload_projection(
-    current: &WikiPage,
-    payload: &WikiPage,
-) -> bool {
-    current == payload
 }
 
 fn has_cross_source_evidence_refs(

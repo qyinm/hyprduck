@@ -240,7 +240,9 @@ impl BrainReplayState {
         crate::domains::knowledge::replay_materialized_graph_overlay_events(
             &mut self.snapshot,
             &self.provider_overlay_events,
+            &Default::default(),
         )
+        .map(|_| ())
     }
 
     fn apply_accepted_mutations(&mut self) -> Result<()> {
