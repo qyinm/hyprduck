@@ -938,15 +938,15 @@ mod tests {
             policy_result: "auto_applied".into(),
             created_at: 200,
         };
+        let events = vec![
+            base_event.clone(),
+            provider_event.clone(),
+            proposal_event.clone(),
+        ];
 
-        let replay = reconstruct_brain_snapshot_from_events(
-            workspace_id,
-            &[base_event, provider_event, proposal_event],
-            None,
-            None,
-            None,
-        )
-        .expect("reconstruct graph");
+        let replay =
+            reconstruct_brain_snapshot_from_events(workspace_id, &events, None, None, None)
+                .expect("reconstruct graph");
 
         let concept = replay
             .snapshot
@@ -955,6 +955,37 @@ mod tests {
             .find(|node| node.node_id == "concept-shared")
             .expect("shared concept");
         assert_eq!(concept.label, "User Approved Label");
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join(workspace_id);
+        ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure repo dirs");
+        write_json_pretty(
+            &workspace_root
+                .join("reviews/proposed-updates")
+                .join("proposal-user-label.json"),
+            &proposal,
+        )
+        .expect("write accepted proposal");
+        let mut materialized_input = empty_replayed_brain_snapshot(workspace_id);
+        materialized_input.generated_at = 1;
+        materialized_input.sources = vec![source];
+        materialized_input.evidence = vec![evidence];
+        materialized_input.events = vec![provider_event];
+        materialized_input.nodes = replay
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.kind == BrainNodeKind::Source)
+            .cloned()
+            .collect();
+        let effective = compute_effective_brain_snapshot(&workspace_root, &materialized_input)
+            .expect("compute materialized snapshot");
+        let materialized_concept = effective
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "concept-shared")
+            .expect("materialized shared concept");
+        assert_eq!(materialized_concept.label, concept.label);
     }
 
     fn provider_test_concept(
