@@ -166,7 +166,7 @@ pub(crate) fn reconstruct_brain_snapshot_from_events(
     let mut selected_materialized_version = None;
     for (_, event) in ordered {
         if up_to_timestamp.is_some_and(|cutoff| event.created_at > cutoff) {
-            break;
+            continue;
         }
         if up_to_materialized_version.is_some_and(|cutoff| {
             event
@@ -277,10 +277,12 @@ fn apply_replayed_brain_event(
             }
             let payload =
                 serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
-                    .unwrap_or(MaterializedGraphEventPayload {
-                        materialized_graph: None,
-                        proposal: None,
-                    });
+                    .with_context(|| {
+                        format!(
+                            "failed parsing graph materialized payload for event `{}`",
+                            event.event_id
+                        )
+                    })?;
             if let Some(materialized) = payload.materialized_graph {
                 apply_materialized_graph_payload(snapshot, materialized, event);
             } else if let Some(mut proposal) = payload.proposal {
@@ -809,6 +811,130 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.node_id == "concept-y"));
+    }
+
+    #[test]
+    fn reconstruct_timestamp_cutoff_filters_without_truncating_replay_order() {
+        let workspace_id = "default";
+        let source = SourceRecord {
+            source_id: "source-a".into(),
+            workspace_id: workspace_id.into(),
+            original_path: "/tmp/source-a.pdf".into(),
+            source_path: "/tmp/source-a.pdf".into(),
+            markdown_path: "/tmp/source-a.md".into(),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        };
+        let evidence = EvidenceRef {
+            id: "ev-source-a".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Source A evidence.".into(),
+            source_path: Some(source.source_path.clone()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(source.markdown_path.clone()),
+            image_path: None,
+            provenance: Some("test".into()),
+        };
+        let source_node = BrainNodeRecord {
+            node_id: "source:source-a".into(),
+            kind: BrainNodeKind::Source,
+            label: "source-a.pdf".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence.id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(1.0),
+            updated_at: 1,
+        };
+        let base_event = test_graph_event(
+            workspace_id,
+            "evt-base",
+            "graph_materialized",
+            1,
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&source_node),
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+        let concept_skipped = provider_test_concept("concept-skipped", &source, &evidence, 100);
+        let mut created_after_cutoff = test_graph_event(
+            workspace_id,
+            "evt-created-after-cutoff",
+            "source_graph_build",
+            100,
+            std::slice::from_ref(&source),
+            &[source_node.clone(), concept_skipped],
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+        created_after_cutoff.created_at = 1_000;
+        let concept_included = provider_test_concept("concept-included", &source, &evidence, 200);
+        let mut created_before_cutoff = test_graph_event(
+            workspace_id,
+            "evt-created-before-cutoff",
+            "source_graph_build",
+            200,
+            std::slice::from_ref(&source),
+            &[source_node, concept_included],
+            &[],
+            std::slice::from_ref(&evidence),
+        );
+        created_before_cutoff.created_at = 800;
+
+        let replay = reconstruct_brain_snapshot_from_events(
+            workspace_id,
+            &[base_event, created_after_cutoff, created_before_cutoff],
+            Some(900),
+            None,
+            None,
+        )
+        .expect("reconstruct with timestamp cutoff");
+
+        assert!(replay
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-included"));
+        assert!(!replay
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "concept-skipped"));
+    }
+
+    #[test]
+    fn reconstruct_fails_on_corrupt_graph_materialized_payload() {
+        let workspace_id = "default";
+        let mut event = test_graph_event(
+            workspace_id,
+            "evt-corrupt",
+            "graph_materialized",
+            1,
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        event.payload_json = "{not valid json}".into();
+
+        let error = reconstruct_brain_snapshot_from_events(
+            workspace_id,
+            std::slice::from_ref(&event),
+            None,
+            None,
+            None,
+        )
+        .expect_err("corrupt graph materialized payload should fail");
+
+        assert!(error
+            .to_string()
+            .contains("failed parsing graph materialized payload for event `evt-corrupt`"));
     }
 
     #[test]
