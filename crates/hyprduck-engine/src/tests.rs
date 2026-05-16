@@ -2450,6 +2450,16 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         confidence: Some(0.9),
         updated_at: 100,
     };
+    let stale_active_only_relation = BrainRelationRecord {
+        relation_id: "relation-active-only-stale".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: active_node.node_id.clone(),
+        target_node_id: active_peer_node.node_id.clone(),
+        label: "stale active-only relation".into(),
+        evidence_ids: vec![active_evidence.id.clone()],
+        confidence: Some(0.9),
+        updated_at: 100,
+    };
     let current_claim_collision = ClaimRecord {
         claim_id: "claim-collision".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
@@ -2473,6 +2483,16 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         claim_id: "claim-exact-source-owned".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         statement: "exact source-owned claim".into(),
+        topic_refs: vec![active_node.node_id.clone()],
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        status: "supported".into(),
+        updated_at: 100,
+    };
+    let stale_active_only_claim = ClaimRecord {
+        claim_id: "claim-active-only-stale".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        statement: "stale active-only claim".into(),
         topic_refs: vec![active_node.node_id.clone()],
         source_refs: vec![active_source.source_id.clone()],
         evidence_refs: vec![active_evidence.id.clone()],
@@ -2506,6 +2526,17 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         scope: BrainScope::Project,
         title: "exact source-owned memory".into(),
         body: "exact source-owned memory".into(),
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        created_at: 100,
+        updated_at: 100,
+    };
+    let stale_active_only_memory = MemoryRecord {
+        memory_id: "memory-active-only-stale".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        title: "stale active-only memory".into(),
+        body: "stale active-only memory".into(),
         source_refs: vec![active_source.source_id.clone()],
         evidence_refs: vec![active_evidence.id.clone()],
         created_at: 100,
@@ -2556,6 +2587,17 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         path: "wiki/workspace/exact-source-owned.md".into(),
         title: "Exact source-owned wiki".into(),
         body: "exact source-owned wiki".into(),
+        node_refs: vec![active_node.node_id.clone()],
+        source_refs: vec![active_source.source_id.clone()],
+        evidence_refs: vec![active_evidence.id.clone()],
+        updated_at: 100,
+    };
+    let stale_active_only_wiki = WikiPage {
+        page_id: "wiki-active-only-stale".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        path: "wiki/workspace/active-only-stale.md".into(),
+        title: "Stale active-only wiki".into(),
+        body: "stale active-only wiki".into(),
         node_refs: vec![active_node.node_id.clone()],
         source_refs: vec![active_source.source_id.clone()],
         evidence_refs: vec![active_evidence.id.clone()],
@@ -2678,23 +2720,27 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         linking_relation,
         current_relation_collision,
         current_exact_relation_collision,
+        stale_active_only_relation,
     ];
     snapshot.claims = vec![
         linking_claim,
         current_claim_collision,
         current_exact_claim_collision,
+        stale_active_only_claim,
     ];
     snapshot.memories = vec![
         linking_memory,
         current_memory_collision,
         current_exact_memory_collision.clone(),
         source_owned_subset_memory,
+        stale_active_only_memory,
     ];
     snapshot.entities = vec![current_entity];
     snapshot.wiki_pages = vec![
         linking_wiki_page.clone(),
         current_wiki_collision,
         current_exact_wiki_collision,
+        stale_active_only_wiki,
     ];
     snapshot.events = vec![linking_event];
     ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure workspace dirs");
@@ -2703,27 +2749,32 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         &serde_json::json!({
             "schemaVersion": BRAIN_EVENT_SCHEMA_VERSION,
             "relations": {
-                "relation-exact-source-owned": {
-                    "eventId": "evt-stale-origin",
+                "relation-active-only-stale": {
+                    "eventId": "evt-workspace-linking-active-only-projection",
                     "operationType": "workspace_linking"
                 }
             },
             "claims": {
-                "claim-exact-source-owned": {
-                    "eventId": "evt-stale-origin",
+                "claim-active-only-stale": {
+                    "eventId": "evt-workspace-linking-active-only-projection",
                     "operationType": "workspace_linking"
                 }
             },
-            "memories": {},
+            "memories": {
+                "memory-active-only-stale": {
+                    "eventId": "evt-workspace-linking-active-only-projection",
+                    "operationType": "workspace_linking"
+                }
+            },
             "wikiPagesById": {
-                "wiki-exact-source-owned": {
-                    "eventId": "evt-stale-origin",
+                "wiki-active-only-stale": {
+                    "eventId": "evt-workspace-linking-active-only-projection",
                     "operationType": "workspace_linking"
                 }
             },
             "wikiPagesByPath": {
-                "wiki/workspace/exact-source-owned.md": {
-                    "eventId": "evt-stale-origin",
+                "wiki/workspace/active-only-stale.md": {
+                    "eventId": "evt-workspace-linking-active-only-projection",
                     "operationType": "workspace_linking"
                 }
             }
@@ -2766,6 +2817,10 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .relations
         .iter()
         .any(|relation| relation.relation_id == "relation-cross-source"));
+    assert!(!replayed
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "relation-active-only-stale"));
     assert_eq!(
         replayed
             .relations
@@ -2802,6 +2857,18 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         .wiki_pages
         .iter()
         .any(|page| page.page_id == "wiki-cross-source"));
+    assert!(!replayed
+        .claims
+        .iter()
+        .any(|claim| claim.claim_id == "claim-active-only-stale"));
+    assert!(!replayed
+        .memories
+        .iter()
+        .any(|memory| memory.memory_id == "memory-active-only-stale"));
+    assert!(!replayed
+        .wiki_pages
+        .iter()
+        .any(|page| page.page_id == "wiki-active-only-stale"));
     assert_eq!(
         replayed
             .claims
