@@ -652,7 +652,7 @@ fn provider_graph_materialized_event(
             caused_by_source_ids: vec![manifest.source_id.clone()],
             caused_by_event_ids: Vec::new(),
             caused_by_proposal_id: None,
-            snapshot_id: Some(format!("snapshot-{workspace_id}-{}", snapshot.generated_at)),
+            snapshot_id: Some(format!("snapshot-{run_id}")),
             previous_snapshot_id: None,
             materialized_version: Some(snapshot.generated_at),
             schema_version: 1,
@@ -766,6 +766,41 @@ mod tests {
             &manifest,
             &changed_markdown
         ));
+    }
+
+    #[test]
+    fn provider_graph_stage_snapshot_ids_use_run_ids() {
+        let manifest = test_manifest("source-alpha");
+        let mut snapshot = empty_replayed_brain_snapshot("default");
+        snapshot.generated_at = 42;
+
+        let source_event = source_graph_build_materialized_event(
+            "default",
+            "provider-source-graph-run-a",
+            &manifest,
+            &snapshot,
+        )
+        .expect("source graph event");
+        let linking_event = workspace_linking_materialized_event(
+            "default",
+            "provider-workspace-linking-run-b",
+            &manifest,
+            &snapshot,
+        )
+        .expect("workspace linking event");
+
+        assert_eq!(
+            source_event.causality.snapshot_id.as_deref(),
+            Some("snapshot-provider-source-graph-run-a")
+        );
+        assert_eq!(
+            linking_event.causality.snapshot_id.as_deref(),
+            Some("snapshot-provider-workspace-linking-run-b")
+        );
+        assert_ne!(
+            source_event.causality.snapshot_id,
+            linking_event.causality.snapshot_id
+        );
     }
 
     #[test]
