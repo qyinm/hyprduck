@@ -1412,6 +1412,16 @@ fn replay_event_order_key(event: &BrainEvent) -> (u64, u64, &str) {
 }
 
 fn materialized_graph_replay_key(event: &BrainEvent) -> String {
+    let operation_type = event
+        .operation_type
+        .as_deref()
+        .unwrap_or("graph_materialized");
+    if operation_type == "full_workspace_rebuild" {
+        return format!(
+            "{}:{:?}:{operation_type}:workspace",
+            event.workspace_id, event.scope
+        );
+    }
     let mut source_ids = if event.causality.caused_by_source_ids.is_empty() {
         event.source_refs.clone()
     } else {
@@ -1423,10 +1433,7 @@ fn materialized_graph_replay_key(event: &BrainEvent) -> String {
         "{}:{:?}:{}:{}",
         event.workspace_id,
         event.scope,
-        event
-            .operation_type
-            .as_deref()
-            .unwrap_or("graph_materialized"),
+        operation_type,
         source_ids.join("+")
     )
 }

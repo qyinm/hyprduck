@@ -1938,6 +1938,108 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
 }
 
 #[test]
+fn full_workspace_rebuild_replay_supersedes_old_source_sets() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let source_a = SourceRecord {
+        source_id: "source-a".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/source-a.pdf".into(),
+        source_path: "/tmp/source-a.pdf".into(),
+        markdown_path: "/tmp/source-a.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let source_b = SourceRecord {
+        source_id: "source-b".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/source-b.pdf".into(),
+        source_path: "/tmp/source-b.pdf".into(),
+        markdown_path: "/tmp/source-b.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let evidence_a = EvidenceRef {
+        id: "ev-source-a".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Source A evidence.".into(),
+        source_path: Some(source_a.source_path.clone()),
+        source_id: Some(source_a.source_id.clone()),
+        markdown_path: Some(source_a.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let source_node_a = BrainNodeRecord {
+        node_id: "source:source-a".into(),
+        kind: BrainNodeKind::Source,
+        label: "source-a.pdf".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence_a.id.clone()],
+        source_ids: vec![source_a.source_id.clone()],
+        confidence: Some(1.0),
+        updated_at: 1,
+    };
+    let stale_a_concept = BrainNodeRecord {
+        node_id: "concept-stale-a".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Stale A Concept".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec![evidence_a.id.clone()],
+        source_ids: vec![source_a.source_id.clone()],
+        confidence: Some(0.8),
+        updated_at: 100,
+    };
+    let old_event = provider_test_event(
+        "evt-full-old",
+        "full_workspace_rebuild",
+        100,
+        &[source_a.clone(), source_b],
+        &[source_node_a.clone(), stale_a_concept],
+        &[],
+        std::slice::from_ref(&evidence_a),
+        &[],
+    );
+    let new_event = provider_test_event(
+        "evt-full-new",
+        "full_workspace_rebuild",
+        200,
+        std::slice::from_ref(&source_a),
+        std::slice::from_ref(&source_node_a),
+        &[],
+        std::slice::from_ref(&evidence_a),
+        &[],
+    );
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![source_a];
+    snapshot.evidence = vec![evidence_a];
+    snapshot.nodes = vec![source_node_a];
+    snapshot.events = vec![old_event, new_event];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write replayed graph");
+    let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read replayed graph");
+
+    assert!(!replayed
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-stale-a"));
+}
+
+#[test]
 fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
