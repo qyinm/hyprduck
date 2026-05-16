@@ -2714,12 +2714,7 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
                     "operationType": "workspace_linking"
                 }
             },
-            "memories": {
-                "memory-exact-source-owned": {
-                    "eventId": "evt-stale-origin",
-                    "operationType": "workspace_linking"
-                }
-            },
+            "memories": {},
             "wikiPagesById": {
                 "wiki-exact-source-owned": {
                     "eventId": "evt-stale-origin",

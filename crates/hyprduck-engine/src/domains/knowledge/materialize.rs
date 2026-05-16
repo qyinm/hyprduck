@@ -1217,13 +1217,6 @@ fn compute_effective_brain_state(
     let mut effective_snapshot = snapshot.clone();
     let disk_origins = read_materialized_record_origins(root)?;
     let protected_current_records = ProtectedMaterializedRecordKeys::from_snapshot(snapshot);
-    let existing_memories = discard_stale_workspace_linking_memory_collisions(
-        read_memory_records(root)?,
-        snapshot,
-        &disk_origins,
-    );
-    effective_snapshot.memories =
-        merge_materialized_memory_records(snapshot.memories.clone(), existing_memories);
     let events_path = root.join("events/brain_events.jsonl");
     let existing_events = if events_path.exists() {
         read_brain_events_jsonl(&events_path)
@@ -1233,8 +1226,19 @@ fn compute_effective_brain_state(
     };
     effective_snapshot.events =
         merge_preserved_brain_events(snapshot.events.clone(), &existing_events);
+    let existing_memories = read_memory_records(root)?;
+    let mut bootstrap_snapshot = effective_snapshot.clone();
+    bootstrap_snapshot.memories =
+        merge_materialized_memory_records(snapshot.memories.clone(), existing_memories.clone());
     let previous_origins =
-        merge_bootstrapped_materialized_record_origins(disk_origins, &effective_snapshot);
+        merge_bootstrapped_materialized_record_origins(disk_origins, &bootstrap_snapshot);
+    let existing_memories = discard_stale_workspace_linking_memory_collisions(
+        existing_memories,
+        snapshot,
+        &previous_origins,
+    );
+    effective_snapshot.memories =
+        merge_materialized_memory_records(snapshot.memories.clone(), existing_memories);
     let origins = replay_preserved_materialized_graph_events(
         &mut effective_snapshot,
         &previous_origins,
