@@ -1086,6 +1086,8 @@ struct EffectiveBrainState {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProtectedMaterializedRecordKeys {
+    nodes: BTreeSet<String>,
+    evidence: BTreeSet<String>,
     relations: BTreeSet<String>,
     claims: BTreeSet<String>,
     memories: BTreeSet<String>,
@@ -1110,65 +1112,98 @@ impl ProtectedMaterializedRecordKeys {
             .iter()
             .map(|evidence| evidence.id.clone())
             .collect::<BTreeSet<_>>();
+        let protected_relations = snapshot
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation_refs_are_current(relation, &valid_node_ids, &valid_evidence_ids)
+            })
+            .collect::<Vec<_>>();
+        let protected_claims = snapshot
+            .claims
+            .iter()
+            .filter(|claim| {
+                claim_refs_are_current(
+                    claim,
+                    &valid_source_ids,
+                    &valid_evidence_ids,
+                    &valid_node_ids,
+                )
+            })
+            .collect::<Vec<_>>();
+        let protected_memories = snapshot
+            .memories
+            .iter()
+            .filter(|memory| {
+                source_and_evidence_refs_are_current(
+                    &memory.source_refs,
+                    &memory.evidence_refs,
+                    &valid_source_ids,
+                    &valid_evidence_ids,
+                )
+            })
+            .collect::<Vec<_>>();
+        let protected_wiki_pages = snapshot
+            .wiki_pages
+            .iter()
+            .filter(|page| {
+                wiki_page_refs_are_current(
+                    page,
+                    &valid_source_ids,
+                    &valid_evidence_ids,
+                    &valid_node_ids,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut nodes = BTreeSet::new();
+        let mut evidence = BTreeSet::new();
+        for relation in &protected_relations {
+            nodes.insert(relation.source_node_id.clone());
+            nodes.insert(relation.target_node_id.clone());
+            evidence.extend(relation.evidence_ids.iter().cloned());
+        }
+        for claim in &protected_claims {
+            nodes.extend(claim.topic_refs.iter().cloned());
+            evidence.extend(claim.evidence_refs.iter().cloned());
+        }
+        for memory in &protected_memories {
+            evidence.extend(memory.evidence_refs.iter().cloned());
+        }
+        for page in &protected_wiki_pages {
+            nodes.extend(page.node_refs.iter().cloned());
+            evidence.extend(page.evidence_refs.iter().cloned());
+        }
         Self {
+            nodes,
+            evidence,
             relations: snapshot
                 .relations
                 .iter()
-                .filter(|relation| {
-                    relation_refs_are_current(relation, &valid_node_ids, &valid_evidence_ids)
-                })
+                .filter(|relation| protected_relations.contains(relation))
                 .map(|relation| relation.relation_id.clone())
                 .collect(),
             claims: snapshot
                 .claims
                 .iter()
-                .filter(|claim| {
-                    claim_refs_are_current(
-                        claim,
-                        &valid_source_ids,
-                        &valid_evidence_ids,
-                        &valid_node_ids,
-                    )
-                })
+                .filter(|claim| protected_claims.contains(claim))
                 .map(|claim| claim.claim_id.clone())
                 .collect(),
             memories: snapshot
                 .memories
                 .iter()
-                .filter(|memory| {
-                    source_and_evidence_refs_are_current(
-                        &memory.source_refs,
-                        &memory.evidence_refs,
-                        &valid_source_ids,
-                        &valid_evidence_ids,
-                    )
-                })
+                .filter(|memory| protected_memories.contains(memory))
                 .map(|memory| memory.memory_id.clone())
                 .collect(),
             wiki_page_ids: snapshot
                 .wiki_pages
                 .iter()
-                .filter(|page| {
-                    wiki_page_refs_are_current(
-                        page,
-                        &valid_source_ids,
-                        &valid_evidence_ids,
-                        &valid_node_ids,
-                    )
-                })
+                .filter(|page| protected_wiki_pages.contains(page))
                 .map(|page| page.page_id.clone())
                 .collect(),
             wiki_paths: snapshot
                 .wiki_pages
                 .iter()
-                .filter(|page| {
-                    wiki_page_refs_are_current(
-                        page,
-                        &valid_source_ids,
-                        &valid_evidence_ids,
-                        &valid_node_ids,
-                    )
-                })
+                .filter(|page| protected_wiki_pages.contains(page))
                 .map(|page| page.path.clone())
                 .collect(),
         }
@@ -1180,9 +1215,10 @@ fn compute_effective_brain_state(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<EffectiveBrainState> {
     let mut effective_snapshot = snapshot.clone();
-    let protected_current_records = ProtectedMaterializedRecordKeys::from_snapshot(snapshot);
     effective_snapshot.memories =
         merge_materialized_memory_records(snapshot.memories.clone(), read_memory_records(root)?);
+    let protected_current_records =
+        ProtectedMaterializedRecordKeys::from_snapshot(&effective_snapshot);
     let events_path = root.join("events/brain_events.jsonl");
     let existing_events = if events_path.exists() {
         read_brain_events_jsonl(&events_path)
@@ -2033,7 +2069,9 @@ fn clear_replayable_provider_overlay_records(
         .collect::<BTreeSet<_>>();
 
     snapshot.nodes.retain(|node| {
-        node.kind == BrainNodeKind::Source || !target_node_ids.contains(&node.node_id)
+        node.kind == BrainNodeKind::Source
+            || protected_current_records.nodes.contains(&node.node_id)
+            || !target_node_ids.contains(&node.node_id)
     });
     snapshot.relations.retain(|relation| {
         !target_edge_ids.contains(&relation.relation_id)
@@ -2063,7 +2101,8 @@ fn clear_replayable_provider_overlay_records(
                 .contains(&memory.memory_id)
     });
     snapshot.evidence.retain(|evidence| {
-        !provider_overlay_refs.evidence_ids.contains(&evidence.id)
+        protected_current_records.evidence.contains(&evidence.id)
+            || !provider_overlay_refs.evidence_ids.contains(&evidence.id)
             || deterministic_source_evidence_ids.contains(&evidence.id)
     });
     snapshot
