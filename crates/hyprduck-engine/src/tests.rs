@@ -1872,21 +1872,21 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         provenance: "provider_test".into(),
         created_at: 100,
     };
-    let mut old_event = provider_test_event(
-        "evt-provider-old",
-        "source_graph_build",
-        100,
-        &[source.clone()],
-        &[source_node.clone(), concept_x.clone(), concept_y.clone()],
-        &[edge_x.clone(), edge_y],
-        &[evidence.clone(), old_provider_evidence.clone()],
-        &[],
-    );
+    let mut old_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-provider-old",
+        operation_type: "source_graph_build",
+        generated_at: 100,
+        sources: std::slice::from_ref(&source),
+        nodes: &[source_node.clone(), concept_x.clone(), concept_y.clone()],
+        relations: &[edge_x.clone(), edge_y],
+        evidence: &[evidence.clone(), old_provider_evidence.clone()],
+        claims: &[],
+    });
     old_event.payload_json = materialized_graph_event_payload_json(
         100,
-        &[source.clone()],
+        std::slice::from_ref(&source),
         &[source_node.clone(), concept_x.clone(), concept_y.clone()],
-        &[edge_x.clone()],
+        std::slice::from_ref(&edge_x),
         &[evidence.clone(), old_provider_evidence.clone()],
         &[],
         std::slice::from_ref(&old_wiki_page),
@@ -1895,16 +1895,16 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         std::slice::from_ref(&old_extraction),
     )
     .expect("provider graph payload with stale artifacts");
-    let new_event = provider_test_event(
-        "evt-provider-new",
-        "source_graph_build",
-        200,
-        &[source.clone()],
-        &[source_node.clone(), concept_x.clone()],
-        &[edge_x],
-        &[evidence.clone()],
-        &[],
-    );
+    let new_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-provider-new",
+        operation_type: "source_graph_build",
+        generated_at: 200,
+        sources: std::slice::from_ref(&source),
+        nodes: &[source_node.clone(), concept_x.clone()],
+        relations: &[edge_x],
+        evidence: std::slice::from_ref(&evidence),
+        claims: &[],
+    });
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
     snapshot.sources = vec![source];
@@ -2018,26 +2018,26 @@ fn full_workspace_rebuild_replay_supersedes_old_source_sets() {
         confidence: Some(0.8),
         updated_at: 100,
     };
-    let old_event = provider_test_event(
-        "evt-full-old",
-        "full_workspace_rebuild",
-        100,
-        &[source_a.clone(), source_b],
-        &[source_node_a.clone(), stale_a_concept],
-        &[],
-        std::slice::from_ref(&evidence_a),
-        &[],
-    );
-    let new_event = provider_test_event(
-        "evt-full-new",
-        "full_workspace_rebuild",
-        200,
-        std::slice::from_ref(&source_a),
-        std::slice::from_ref(&source_node_a),
-        &[],
-        std::slice::from_ref(&evidence_a),
-        &[],
-    );
+    let old_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-full-old",
+        operation_type: "full_workspace_rebuild",
+        generated_at: 100,
+        sources: &[source_a.clone(), source_b],
+        nodes: &[source_node_a.clone(), stale_a_concept],
+        relations: &[],
+        evidence: std::slice::from_ref(&evidence_a),
+        claims: &[],
+    });
+    let new_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-full-new",
+        operation_type: "full_workspace_rebuild",
+        generated_at: 200,
+        sources: std::slice::from_ref(&source_a),
+        nodes: std::slice::from_ref(&source_node_a),
+        relations: &[],
+        evidence: std::slice::from_ref(&evidence_a),
+        claims: &[],
+    });
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
     snapshot.sources = vec![source_a];
@@ -2116,16 +2116,16 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
         confidence: Some(1.0),
         updated_at: 100,
     };
-    let source_event = provider_test_event(
-        "evt-provider-source-a",
-        "source_graph_build",
-        100,
-        &[source.clone()],
-        &[source_node.clone(), concept.clone()],
-        &[edge],
-        &[evidence.clone()],
-        &[],
-    );
+    let source_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-provider-source-a",
+        operation_type: "source_graph_build",
+        generated_at: 100,
+        sources: std::slice::from_ref(&source),
+        nodes: &[source_node.clone(), concept.clone()],
+        relations: &[edge],
+        evidence: std::slice::from_ref(&evidence),
+        claims: &[],
+    });
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
     snapshot.sources = vec![source.clone()];
@@ -2253,16 +2253,16 @@ fn provider_overlay_drops_null_source_evidence_after_source_deletion() {
         status: "supported".into(),
         updated_at: 100,
     };
-    let deleted_event = provider_test_event(
-        "evt-provider-deleted-source",
-        "source_graph_build",
-        100,
-        &[deleted_source],
-        &[deleted_node],
-        &[],
-        &[null_source_evidence],
-        &[deleted_claim],
-    );
+    let deleted_event = provider_test_event(ProviderTestEventInput {
+        event_id: "evt-provider-deleted-source",
+        operation_type: "source_graph_build",
+        generated_at: 100,
+        sources: &[deleted_source],
+        nodes: &[deleted_node],
+        relations: &[],
+        evidence: &[null_source_evidence],
+        claims: &[deleted_claim],
+    });
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 1;
     snapshot.sources = vec![active_source];
@@ -3369,82 +3369,103 @@ fn persist_effective_brain_snapshot_recomputes_record_origins() {
     assert_eq!(origins["wikiPagesByPath"].as_object().unwrap().len(), 0);
 }
 
-fn provider_test_event(
-    event_id: &str,
-    operation_type: &str,
+struct ProviderTestEventInput<'a> {
+    event_id: &'a str,
+    operation_type: &'a str,
     generated_at: u64,
-    sources: &[SourceRecord],
-    nodes: &[BrainNodeRecord],
-    relations: &[BrainRelationRecord],
-    evidence: &[EvidenceRef],
-    claims: &[ClaimRecord],
-) -> BrainEvent {
+    sources: &'a [SourceRecord],
+    nodes: &'a [BrainNodeRecord],
+    relations: &'a [BrainRelationRecord],
+    evidence: &'a [EvidenceRef],
+    claims: &'a [ClaimRecord],
+}
+
+fn provider_test_event(input: ProviderTestEventInput<'_>) -> BrainEvent {
     BrainEvent {
-        event_id: event_id.into(),
+        event_id: input.event_id.into(),
         schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         scope: BrainScope::Project,
         event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some(operation_type.into()),
+        operation_type: Some(input.operation_type.into()),
         actor: BrainActor {
             actor_type: BrainActorType::Agent,
             actor_id: "hyprduck-provider-graph-agent:test".into(),
         },
-        source_refs: sources
+        source_refs: input
+            .sources
             .iter()
             .map(|source| source.source_id.clone())
             .collect(),
-        source_markdown_refs: sources
+        source_markdown_refs: input
+            .sources
             .iter()
             .map(|source| source.markdown_path.clone())
             .collect(),
-        node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
-        relation_refs: relations
+        node_refs: input
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: input
+            .relations
             .iter()
             .map(|relation| relation.relation_id.clone())
             .collect(),
-        claim_refs: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
+        claim_refs: input
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
         memory_refs: Vec::new(),
-        target_node_ids: nodes
+        target_node_ids: input
+            .nodes
             .iter()
             .filter(|node| node.kind != BrainNodeKind::Source)
             .map(|node| node.node_id.clone())
             .collect(),
-        target_edge_ids: relations
+        target_edge_ids: input
+            .relations
             .iter()
             .map(|relation| relation.relation_id.clone())
             .collect(),
-        target_claim_ids: claims.iter().map(|claim| claim.claim_id.clone()).collect(),
+        target_claim_ids: input
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
         target_memory_ids: Vec::new(),
-        evidence_refs: evidence
+        evidence_refs: input
+            .evidence
             .iter()
             .map(|evidence| evidence.id.clone())
             .collect(),
         payload_json: materialized_graph_event_payload_json(
-            generated_at,
-            sources,
-            nodes,
-            relations,
-            evidence,
+            input.generated_at,
+            input.sources,
+            input.nodes,
+            input.relations,
+            input.evidence,
             &[],
             &[],
             &[],
-            claims,
+            input.claims,
             &[],
         )
         .expect("provider graph payload"),
         causality: BrainEventCausality {
-            caused_by_source_ids: sources
+            caused_by_source_ids: input
+                .sources
                 .iter()
                 .map(|source| source.source_id.clone())
                 .collect(),
-            snapshot_id: Some(format!("snapshot-{event_id}")),
-            materialized_version: Some(generated_at),
+            snapshot_id: Some(format!("snapshot-{}", input.event_id)),
+            materialized_version: Some(input.generated_at),
             ..Default::default()
         },
         confidence: Some("provider_test".into()),
         policy_result: "materialized".into(),
-        created_at: generated_at,
+        created_at: input.generated_at,
     }
 }
 
@@ -3716,7 +3737,7 @@ fn output_packaging_uses_requested_workspace_and_source_ids() {
     });
 
     let manifest = write_output_package_with_fallback(
-        &[fallback_root.clone()],
+        std::slice::from_ref(&fallback_root),
         "sample-import",
         "123",
         &request,

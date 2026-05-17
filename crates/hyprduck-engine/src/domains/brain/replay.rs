@@ -760,36 +760,36 @@ mod tests {
         };
         let concept_x = provider_test_concept("concept-x", &source, &evidence, 200);
         let concept_y = provider_test_concept("concept-y", &source, &evidence, 100);
-        let base_event = test_graph_event(
+        let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-base",
-            "graph_materialized",
-            1,
-            &[source.clone()],
-            std::slice::from_ref(&source_node),
-            &[],
-            std::slice::from_ref(&evidence),
-        );
-        let old_provider_event = test_graph_event(
+            event_id: "evt-base",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: std::slice::from_ref(&source),
+            nodes: std::slice::from_ref(&source_node),
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
+        let old_provider_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-provider-old",
-            "source_graph_build",
-            100,
-            std::slice::from_ref(&source),
-            &[source_node.clone(), concept_y],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
-        let new_provider_event = test_graph_event(
+            event_id: "evt-provider-old",
+            operation_type: "source_graph_build",
+            generated_at: 100,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node.clone(), concept_y],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
+        let new_provider_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-provider-new",
-            "source_graph_build",
-            200,
-            std::slice::from_ref(&source),
-            &[source_node, concept_x],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-provider-new",
+            operation_type: "source_graph_build",
+            generated_at: 200,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node, concept_x],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
 
         let replay = reconstruct_brain_snapshot_from_events(
             workspace_id,
@@ -856,39 +856,39 @@ mod tests {
             confidence: Some(1.0),
             updated_at: 1,
         };
-        let base_event = test_graph_event(
+        let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-base",
-            "graph_materialized",
-            1,
-            std::slice::from_ref(&source),
-            std::slice::from_ref(&source_node),
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-base",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: std::slice::from_ref(&source),
+            nodes: std::slice::from_ref(&source_node),
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
         let concept_skipped = provider_test_concept("concept-skipped", &source, &evidence, 100);
-        let mut created_after_cutoff = test_graph_event(
+        let mut created_after_cutoff = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-created-after-cutoff",
-            "source_graph_build",
-            100,
-            std::slice::from_ref(&source),
-            &[source_node.clone(), concept_skipped],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-created-after-cutoff",
+            operation_type: "source_graph_build",
+            generated_at: 100,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node.clone(), concept_skipped],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
         created_after_cutoff.created_at = 1_000;
         let concept_included = provider_test_concept("concept-included", &source, &evidence, 200);
-        let mut created_before_cutoff = test_graph_event(
+        let mut created_before_cutoff = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-created-before-cutoff",
-            "source_graph_build",
-            200,
-            std::slice::from_ref(&source),
-            &[source_node, concept_included],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-created-before-cutoff",
+            operation_type: "source_graph_build",
+            generated_at: 200,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node, concept_included],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
         created_before_cutoff.created_at = 800;
 
         let replay = reconstruct_brain_snapshot_from_events(
@@ -915,16 +915,16 @@ mod tests {
     #[test]
     fn reconstruct_fails_on_corrupt_graph_materialized_payload() {
         let workspace_id = "default";
-        let mut event = test_graph_event(
+        let mut event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-corrupt",
-            "graph_materialized",
-            1,
-            &[],
-            &[],
-            &[],
-            &[],
-        );
+            event_id: "evt-corrupt",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: &[],
+            nodes: &[],
+            relations: &[],
+            evidence: &[],
+        });
         event.payload_json = "{not valid json}".into();
 
         let error = reconstruct_brain_snapshot_from_events(
@@ -1023,26 +1023,26 @@ mod tests {
             }),
             created_at: 200,
         };
-        let base_event = test_graph_event(
+        let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-base",
-            "graph_materialized",
-            1,
-            std::slice::from_ref(&source),
-            std::slice::from_ref(&source_node),
-            &[],
-            std::slice::from_ref(&evidence),
-        );
-        let provider_event = test_graph_event(
+            event_id: "evt-base",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: std::slice::from_ref(&source),
+            nodes: std::slice::from_ref(&source_node),
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
+        let provider_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-provider",
-            "source_graph_build",
-            100,
-            std::slice::from_ref(&source),
-            &[source_node, provider_concept],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-provider",
+            operation_type: "source_graph_build",
+            generated_at: 100,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node, provider_concept],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
         let proposal_event = BrainEvent {
             event_id: "evt-proposal-user-label".into(),
             schema_version: BRAIN_EVENT_SCHEMA_VERSION,
@@ -1159,28 +1159,28 @@ mod tests {
         };
         let concept_a = provider_test_concept("concept-a", &source, &evidence, 1);
         let concept_b = provider_test_concept("concept-b", &source, &evidence, 1);
-        let base_event = test_graph_event(
+        let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
-            "evt-base",
-            "graph_materialized",
-            1,
-            std::slice::from_ref(&source),
-            &[source_node.clone(), concept_a.clone(), concept_b.clone()],
-            &[],
-            std::slice::from_ref(&evidence),
-        );
+            event_id: "evt-base",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node.clone(), concept_a.clone(), concept_b.clone()],
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
         let proposals = vec![
-            accepted_test_proposal(
+            accepted_test_proposal(AcceptedTestProposalInput {
                 workspace_id,
-                "proposal-claim",
-                BrainProposalKind::Claim,
-                "Accepted claim",
-                "Claim accepted by user.",
-                vec![source.source_id.clone()],
-                vec!["concept-a".into()],
-                vec![evidence.id.clone()],
-                None,
-                Some(AgentGraphProposalPayload::NewClaim {
+                proposal_id: "proposal-claim",
+                kind: BrainProposalKind::Claim,
+                title: "Accepted claim",
+                body: "Claim accepted by user.",
+                source_refs: vec![source.source_id.clone()],
+                node_refs: vec!["concept-a".into()],
+                evidence_refs: vec![evidence.id.clone()],
+                target_node_id: None,
+                proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
                     claim: AgentNewClaimPayload {
                         statement: "Claim accepted by user.".into(),
                         source_path: source.source_path.clone(),
@@ -1191,19 +1191,19 @@ mod tests {
                         reason: None,
                     },
                 }),
-                10,
-            ),
-            accepted_test_proposal(
+                created_at: 10,
+            }),
+            accepted_test_proposal(AcceptedTestProposalInput {
                 workspace_id,
-                "proposal-link",
-                BrainProposalKind::Link,
-                "Accepted relation",
-                "Concept A relates to concept B.",
-                vec![source.source_id.clone()],
-                vec!["concept-a".into()],
-                vec![evidence.id.clone()],
-                Some("concept-b".into()),
-                Some(AgentGraphProposalPayload::NewEdge {
+                proposal_id: "proposal-link",
+                kind: BrainProposalKind::Link,
+                title: "Accepted relation",
+                body: "Concept A relates to concept B.",
+                source_refs: vec![source.source_id.clone()],
+                node_refs: vec!["concept-a".into()],
+                evidence_refs: vec![evidence.id.clone()],
+                target_node_id: Some("concept-b".into()),
+                proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
                     edge: AgentNewEdgePayload {
                         source_node_id: "concept-a".into(),
                         target_node_id: "concept-b".into(),
@@ -1216,32 +1216,32 @@ mod tests {
                         reason: None,
                     },
                 }),
-                11,
-            ),
-            accepted_test_proposal(
+                created_at: 11,
+            }),
+            accepted_test_proposal(AcceptedTestProposalInput {
                 workspace_id,
-                "proposal-wiki",
-                BrainProposalKind::WikiPage,
-                "Accepted wiki page",
-                "Wiki page accepted by user.",
-                vec![source.source_id.clone()],
-                vec!["concept-a".into()],
-                vec![evidence.id.clone()],
-                Some("concept-a".into()),
-                None,
-                12,
-            ),
-            accepted_test_proposal(
+                proposal_id: "proposal-wiki",
+                kind: BrainProposalKind::WikiPage,
+                title: "Accepted wiki page",
+                body: "Wiki page accepted by user.",
+                source_refs: vec![source.source_id.clone()],
+                node_refs: vec!["concept-a".into()],
+                evidence_refs: vec![evidence.id.clone()],
+                target_node_id: Some("concept-a".into()),
+                proposal_payload: None,
+                created_at: 12,
+            }),
+            accepted_test_proposal(AcceptedTestProposalInput {
                 workspace_id,
-                "proposal-memory",
-                BrainProposalKind::Memory,
-                "Accepted memory",
-                "Memory accepted by user.",
-                vec![source.source_id.clone()],
-                Vec::new(),
-                vec![evidence.id.clone()],
-                None,
-                Some(AgentGraphProposalPayload::NewMemory {
+                proposal_id: "proposal-memory",
+                kind: BrainProposalKind::Memory,
+                title: "Accepted memory",
+                body: "Memory accepted by user.",
+                source_refs: vec![source.source_id.clone()],
+                node_refs: Vec::new(),
+                evidence_refs: vec![evidence.id.clone()],
+                target_node_id: None,
+                proposal_payload: Some(AgentGraphProposalPayload::NewMemory {
                     memory: AgentNewMemoryPayload {
                         title: "Accepted memory".into(),
                         body: "Memory accepted by user.".into(),
@@ -1252,8 +1252,8 @@ mod tests {
                         reason: None,
                     },
                 }),
-                13,
-            ),
+                created_at: 13,
+            }),
         ];
         let mut events = vec![base_event.clone()];
         for proposal in &proposals {
@@ -1353,39 +1353,41 @@ mod tests {
         );
     }
 
-    fn accepted_test_proposal(
-        workspace_id: &str,
-        proposal_id: &str,
+    struct AcceptedTestProposalInput {
+        workspace_id: &'static str,
+        proposal_id: &'static str,
         kind: BrainProposalKind,
-        title: &str,
-        body: &str,
+        title: &'static str,
+        body: &'static str,
         source_refs: Vec<String>,
         node_refs: Vec<String>,
         evidence_refs: Vec<String>,
         target_node_id: Option<String>,
         proposal_payload: Option<AgentGraphProposalPayload>,
         created_at: u64,
-    ) -> BrainUpdateProposal {
+    }
+
+    fn accepted_test_proposal(input: AcceptedTestProposalInput) -> BrainUpdateProposal {
         BrainUpdateProposal {
-            proposal_id: proposal_id.into(),
-            workspace_id: workspace_id.into(),
-            kind,
+            proposal_id: input.proposal_id.into(),
+            workspace_id: input.workspace_id.into(),
+            kind: input.kind,
             status: BrainProposalStatus::Accepted,
             actor: BrainActor {
                 actor_type: BrainActorType::User,
                 actor_id: "local-user".into(),
             },
             scope: BrainScope::Project,
-            title: title.into(),
-            body: body.into(),
-            target_node_id,
+            title: input.title.into(),
+            body: input.body.into(),
+            target_node_id: input.target_node_id,
             target_source_id: None,
             relation_kind: None,
-            source_refs,
-            node_refs,
-            evidence_refs,
-            proposal_payload,
-            created_at,
+            source_refs: input.source_refs,
+            node_refs: input.node_refs,
+            evidence_refs: input.evidence_refs,
+            proposal_payload: input.proposal_payload,
+            created_at: input.created_at,
         }
     }
 
@@ -1408,63 +1410,75 @@ mod tests {
         }
     }
 
-    fn test_graph_event(
-        workspace_id: &str,
-        event_id: &str,
-        operation_type: &str,
+    struct TestGraphEventInput<'a> {
+        workspace_id: &'a str,
+        event_id: &'a str,
+        operation_type: &'a str,
         generated_at: u64,
-        sources: &[SourceRecord],
-        nodes: &[BrainNodeRecord],
-        relations: &[BrainRelationRecord],
-        evidence: &[EvidenceRef],
-    ) -> BrainEvent {
+        sources: &'a [SourceRecord],
+        nodes: &'a [BrainNodeRecord],
+        relations: &'a [BrainRelationRecord],
+        evidence: &'a [EvidenceRef],
+    }
+
+    fn test_graph_event(input: TestGraphEventInput<'_>) -> BrainEvent {
         BrainEvent {
-            event_id: event_id.into(),
+            event_id: input.event_id.into(),
             schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-            workspace_id: workspace_id.into(),
+            workspace_id: input.workspace_id.into(),
             scope: BrainScope::Project,
             event_type: BrainEventKind::GraphMaterialized,
-            operation_type: Some(operation_type.into()),
+            operation_type: Some(input.operation_type.into()),
             actor: BrainActor {
                 actor_type: BrainActorType::Agent,
                 actor_id: "hyprduck-provider-graph-agent:test".into(),
             },
-            source_refs: sources
+            source_refs: input
+                .sources
                 .iter()
                 .map(|source| source.source_id.clone())
                 .collect(),
-            source_markdown_refs: sources
+            source_markdown_refs: input
+                .sources
                 .iter()
                 .map(|source| source.markdown_path.clone())
                 .collect(),
-            node_refs: nodes.iter().map(|node| node.node_id.clone()).collect(),
-            relation_refs: relations
+            node_refs: input
+                .nodes
+                .iter()
+                .map(|node| node.node_id.clone())
+                .collect(),
+            relation_refs: input
+                .relations
                 .iter()
                 .map(|relation| relation.relation_id.clone())
                 .collect(),
             claim_refs: Vec::new(),
             memory_refs: Vec::new(),
-            target_node_ids: nodes
+            target_node_ids: input
+                .nodes
                 .iter()
                 .filter(|node| node.kind != BrainNodeKind::Source)
                 .map(|node| node.node_id.clone())
                 .collect(),
-            target_edge_ids: relations
+            target_edge_ids: input
+                .relations
                 .iter()
                 .map(|relation| relation.relation_id.clone())
                 .collect(),
             target_claim_ids: Vec::new(),
             target_memory_ids: Vec::new(),
-            evidence_refs: evidence
+            evidence_refs: input
+                .evidence
                 .iter()
                 .map(|evidence| evidence.id.clone())
                 .collect(),
             payload_json: materialized_graph_event_payload_json(
-                generated_at,
-                sources,
-                nodes,
-                relations,
-                evidence,
+                input.generated_at,
+                input.sources,
+                input.nodes,
+                input.relations,
+                input.evidence,
                 &[],
                 &[],
                 &[],
@@ -1473,17 +1487,18 @@ mod tests {
             )
             .expect("graph payload"),
             causality: BrainEventCausality {
-                caused_by_source_ids: sources
+                caused_by_source_ids: input
+                    .sources
                     .iter()
                     .map(|source| source.source_id.clone())
                     .collect(),
-                snapshot_id: Some(format!("snapshot-{event_id}")),
-                materialized_version: Some(generated_at),
+                snapshot_id: Some(format!("snapshot-{}", input.event_id)),
+                materialized_version: Some(input.generated_at),
                 ..Default::default()
             },
             confidence: Some("test".into()),
             policy_result: "materialized".into(),
-            created_at: generated_at,
+            created_at: input.generated_at,
         }
     }
 }

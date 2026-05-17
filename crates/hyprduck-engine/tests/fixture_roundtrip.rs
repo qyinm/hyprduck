@@ -334,19 +334,16 @@ fn serve_mode_wraps_parse_progress_events_with_request_id() {
         .expect("request write");
     stdin.write_all(b"\n").expect("request newline");
 
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("runtime line");
-        let envelope: serde_json::Value = serde_json::from_str(&line).expect("runtime envelope");
-        assert_eq!(envelope["id"], request_id);
-        match envelope["type"].as_str() {
-            Some("response") => {
-                assert_eq!(envelope["command"], "parse");
-                assert_eq!(envelope["ok"], true);
-                break;
-            }
-            other => panic!("unexpected runtime envelope type: {other:?}"),
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("runtime line");
+    let envelope: serde_json::Value = serde_json::from_str(&line).expect("runtime envelope");
+    assert_eq!(envelope["id"], request_id);
+    match envelope["type"].as_str() {
+        Some("response") => {
+            assert_eq!(envelope["command"], "parse");
+            assert_eq!(envelope["ok"], true);
         }
+        other => panic!("unexpected runtime envelope type: {other:?}"),
     }
 
     let mut saw_event = false;
