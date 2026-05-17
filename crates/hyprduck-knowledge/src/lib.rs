@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 macro_rules! open_slug_type {
@@ -494,6 +495,27 @@ pub struct BrainEvent {
     pub confidence: Option<String>,
     pub policy_result: PolicyResult,
     pub created_at: u64,
+}
+
+impl BrainEvent {
+    pub fn payload_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        self.payload_as()
+    }
+
+    pub fn payload_as<T>(&self) -> Result<T, serde_json::Error>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_str(&self.payload_json)
+    }
+
+    pub fn set_payload<T>(&mut self, payload: &T) -> Result<(), serde_json::Error>
+    where
+        T: Serialize + ?Sized,
+    {
+        self.payload_json = serde_json::to_string(payload)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1085,5 +1107,79 @@ mod tests {
             serde_json::to_string(&policy_result).expect("serialize unknown policy"),
             "\"custom_policy\""
         );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestBrainEventPayload {
+        proposal_id: String,
+        accepted: bool,
+    }
+
+    fn test_brain_event() -> BrainEvent {
+        BrainEvent {
+            event_id: "event-1".into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: "workspace-1".into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::ReviewResolved,
+            operation_type: None,
+            actor: BrainActor {
+                actor_type: BrainActorType::System,
+                actor_id: "system".into(),
+            },
+            source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
+            node_refs: Vec::new(),
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: Vec::new(),
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: Vec::new(),
+            payload_json: String::new(),
+            causality: BrainEventCausality::default(),
+            confidence: None,
+            policy_result: PolicyResult::accept(),
+            created_at: 42,
+        }
+    }
+
+    #[test]
+    fn brain_event_payload_helpers_round_trip_without_changing_wire_shape() {
+        let mut event = test_brain_event();
+        let payload = TestBrainEventPayload {
+            proposal_id: "proposal-1".into(),
+            accepted: true,
+        };
+
+        event
+            .set_payload(&payload)
+            .expect("serialize typed brain event payload");
+
+        assert_eq!(
+            event
+                .payload_as::<TestBrainEventPayload>()
+                .expect("deserialize typed brain event payload"),
+            payload
+        );
+        assert_eq!(
+            event.payload_value().expect("deserialize value payload")["proposalId"],
+            "proposal-1"
+        );
+
+        let encoded = serde_json::to_string(&event).expect("serialize brain event");
+        assert!(encoded.contains("\"payloadJson\":\"{\\\"proposalId\\\":\\\"proposal-1\\\""));
+    }
+
+    #[test]
+    fn brain_event_payload_helpers_report_invalid_payload_json() {
+        let mut event = test_brain_event();
+        event.payload_json = "{not valid json}".into();
+
+        assert!(event.payload_value().is_err());
+        assert!(event.payload_as::<TestBrainEventPayload>().is_err());
     }
 }

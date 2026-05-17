@@ -278,14 +278,14 @@ fn apply_replayed_brain_event(
                 provider_overlay_events.push(event.clone());
                 return Ok(());
             }
-            let payload =
-                serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json)
-                    .with_context(|| {
-                        format!(
-                            "failed parsing graph materialized payload for event `{}`",
-                            event.event_id
-                        )
-                    })?;
+            let payload = event
+                .payload_as::<MaterializedGraphEventPayload>()
+                .with_context(|| {
+                    format!(
+                        "failed parsing graph materialized payload for event `{}`",
+                        event.event_id
+                    )
+                })?;
             if let Some(materialized) = payload.materialized_graph {
                 apply_materialized_graph_payload(snapshot, materialized, event);
             } else if let Some(mut proposal) = payload.proposal {
@@ -304,9 +304,7 @@ fn apply_replayed_brain_event(
         | BrainEventKind::LinkProposed
         | BrainEventKind::MemoryProposed
         | BrainEventKind::WikiPageProposed => {
-            if let Ok(mut proposal) =
-                serde_json::from_str::<BrainUpdateProposal>(&event.payload_json)
-            {
+            if let Ok(mut proposal) = event.payload_as::<BrainUpdateProposal>() {
                 if event.policy_result == "auto_applied"
                     || proposal.status == BrainProposalStatus::Accepted
                 {
@@ -318,11 +316,11 @@ fn apply_replayed_brain_event(
             }
         }
         BrainEventKind::MemoryAccepted => {
-            if let Ok(proposal) = serde_json::from_str::<BrainUpdateProposal>(&event.payload_json) {
+            if let Ok(proposal) = event.payload_as::<BrainUpdateProposal>() {
                 accepted_mutations.push(AcceptedReplayMutation::Memory(
                     memory_record_for_proposal(&proposal),
                 ));
-            } else if let Ok(memory) = serde_json::from_str::<MemoryRecord>(&event.payload_json) {
+            } else if let Ok(memory) = event.payload_as::<MemoryRecord>() {
                 accepted_mutations.push(AcceptedReplayMutation::Memory(memory));
             }
         }
@@ -370,7 +368,7 @@ fn accepted_review_resolved_proposal_id(event: &BrainEvent) -> Option<String> {
     if event.policy_result != "accept" && event.policy_result != "auto_applied" {
         return None;
     }
-    let payload = serde_json::from_str::<Value>(&event.payload_json).ok()?;
+    let payload = event.payload_value().ok()?;
     let decision = payload
         .get("decision")
         .and_then(Value::as_str)
