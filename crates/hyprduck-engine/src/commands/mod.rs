@@ -71,7 +71,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::ProposeBrainUpdate(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ProposeBrainUpdate,
-            crate::handle_propose_brain_update(request)?,
+            crate::handle_propose_brain_update(*request)?,
         )),
         EngineRequest::ListBrainReviewItems(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ListBrainReviewItems,

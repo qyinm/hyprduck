@@ -864,7 +864,7 @@ pub enum EngineRequest {
     ReadGraphSnapshot(ReadGraphSnapshotRequest),
     ReconstructBrain(ReconstructBrainRequest),
     GetContextPack(GetContextPackRequest),
-    ProposeBrainUpdate(ProposeBrainUpdateRequest),
+    ProposeBrainUpdate(Box<ProposeBrainUpdateRequest>),
     ListBrainReviewItems(ListBrainReviewItemsRequest),
     ResolveBrainReviewItem(ResolveBrainReviewItemRequest),
     GetBrainHealth(GetBrainHealthRequest),
@@ -991,6 +991,59 @@ impl From<ParseEvent> for ParseProgress {
             ParseEvent::Failed { message } => Self::Failed { message },
         }
     }
+}
+
+/// Returns the list of supported model IDs for a given provider slug.
+/// Single source of truth — used by both the engine and the desktop UI.
+pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
+    match provider_slug {
+        "open_router" => vec![
+            "google/gemma-4-31b-it",
+            "z-ai/glm-5v-turbo",
+            "anthropic/claude-sonnet-4.6",
+            "anthropic/claude-opus-4.6",
+            "google/gemini-3-flash-preview",
+            "qwen/qwen3.6-plus:free",
+            "x-ai/grok-4.1-fast",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-2.5-flash",
+            "moonshotai/kimi-k2.5",
+        ],
+        "open_ai" => vec![
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ],
+        "anthropic" => vec![
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        "ollama" => vec![
+            "gemma4:latest",
+            "qwen3.5:latest",
+            "qwen3-vl:8b",
+            "qwen3-vl:72b",
+            "kimi-k2.5:latest",
+            "glm-ocr:latest",
+            "deepseek-ocr:latest",
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// Prefixes used to identify local Ollama models that can process page images.
+pub fn ollama_vision_prefixes() -> Vec<&'static str> {
+    vec![
+        "gemma4",
+        "qwen3.5",
+        "qwen3-vl",
+        "kimi-k2.5",
+        "glm-ocr",
+        "deepseek-ocr",
+    ]
 }
 
 #[cfg(test)]
@@ -1358,7 +1411,7 @@ mod tests {
                 query: "agent context".into(),
                 budget: Some(8000),
             }),
-            EngineRequest::ProposeBrainUpdate(ProposeBrainUpdateRequest {
+            EngineRequest::ProposeBrainUpdate(Box::new(ProposeBrainUpdateRequest {
                 scope: scope.clone(),
                 kind: BrainProposalKind::Memory,
                 title: "Remember project decision".into(),
@@ -1377,7 +1430,7 @@ mod tests {
                 node_refs: vec!["project-hyprduck".into()],
                 evidence_refs: vec![],
                 proposal_payload: None,
-            }),
+            })),
             EngineRequest::ListBrainReviewItems(ListBrainReviewItemsRequest {
                 scope: scope.clone(),
             }),
@@ -1496,57 +1549,4 @@ mod tests {
         let decoded: ParseOptions = serde_json::from_str("{}").unwrap();
         assert_eq!(decoded, ParseOptions::default());
     }
-}
-
-/// Returns the list of supported model IDs for a given provider slug.
-/// Single source of truth — used by both the engine and the desktop UI.
-pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
-    match provider_slug {
-        "open_router" => vec![
-            "google/gemma-4-31b-it",
-            "z-ai/glm-5v-turbo",
-            "anthropic/claude-sonnet-4.6",
-            "anthropic/claude-opus-4.6",
-            "google/gemini-3-flash-preview",
-            "qwen/qwen3.6-plus:free",
-            "x-ai/grok-4.1-fast",
-            "google/gemini-2.5-flash-lite",
-            "google/gemini-2.5-flash",
-            "moonshotai/kimi-k2.5",
-        ],
-        "open_ai" => vec![
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-4o",
-            "gpt-4o-mini",
-        ],
-        "anthropic" => vec![
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-        ],
-        "ollama" => vec![
-            "gemma4:latest",
-            "qwen3.5:latest",
-            "qwen3-vl:8b",
-            "qwen3-vl:72b",
-            "kimi-k2.5:latest",
-            "glm-ocr:latest",
-            "deepseek-ocr:latest",
-        ],
-        _ => Vec::new(),
-    }
-}
-
-/// Prefixes used to identify local Ollama models that can process page images.
-pub fn ollama_vision_prefixes() -> Vec<&'static str> {
-    vec![
-        "gemma4",
-        "qwen3.5",
-        "qwen3-vl",
-        "kimi-k2.5",
-        "glm-ocr",
-        "deepseek-ocr",
-    ]
 }

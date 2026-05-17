@@ -381,7 +381,7 @@ impl EngineClient for SubprocessEngineClient {
         request: ProposeBrainUpdateRequest,
     ) -> Result<ProposeBrainUpdateResponseData> {
         self.run_command::<ProposeBrainUpdateResponseData, ProposeBrainUpdateResponseData>(
-            EngineRequest::ProposeBrainUpdate(request),
+            EngineRequest::ProposeBrainUpdate(Box::new(request)),
             EngineCommand::ProposeBrainUpdate,
             None,
         )
