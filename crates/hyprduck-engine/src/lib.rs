@@ -83,7 +83,7 @@ mod provider {
 }
 
 mod retrieval {
-    pub(crate) use crate::domains::retrieval::retrieval::*;
+    pub(crate) use crate::domains::retrieval::search::*;
 }
 
 mod source_index {
