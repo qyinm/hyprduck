@@ -3484,17 +3484,14 @@ fn relation_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainR
         Some(AgentGraphProposalPayload::NewEdge { edge }) => Some(edge),
         _ => None,
     };
-    let source_node_id = proposal
-        .node_refs
-        .first()
-        .map(|value| value.trim().to_string())
-        .or_else(|| payload_edge.map(|edge| edge.source_node_id.trim().to_string()))
+    let source_node_id = payload_edge
+        .map(|edge| edge.source_node_id.trim().to_string())
+        .or_else(|| proposal.node_refs.first().map(|value| value.trim().to_string()))
         .filter(|value| !value.is_empty())
         .context("accepted link proposal needs a source node ref")?;
-    let target_node_id = proposal
-        .target_node_id
-        .clone()
-        .or_else(|| payload_edge.map(|edge| edge.target_node_id.trim().to_string()))
+    let target_node_id = payload_edge
+        .map(|edge| edge.target_node_id.trim().to_string())
+        .or_else(|| proposal.target_node_id.clone())
         .filter(|value| !value.is_empty())
         .context("accepted link proposal needs a target node ref")?;
     let evidence_ids = payload_edge

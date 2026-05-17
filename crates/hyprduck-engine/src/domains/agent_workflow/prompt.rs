@@ -144,8 +144,10 @@ Task:
 - Add only meaningful cross-source links between the imported source graph and the existing workspace graph.
 - Do not rebuild, replace, or delete existing nodes, edges, claims, memories, wiki pages, sources, or evidence.
 - Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
-- Return only records needed for cross-source linking. It is acceptable to return no new edges if no grounded relationship exists.
+- Actively look for grounded links between algorithms, data structures, complexity topics, graph concepts, tree concepts, sorting/searching topics, and prerequisite/follow-up ideas across sources.
+- Return only records needed for cross-source linking. Return no new edges only when no grounded relationship exists after comparing the imported markdown with the workspace chunks.
 - Every returned edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
+- Every returned edge must cite evidence from both endpoint source sides: at least one evidenceId from sourceId {source_id} and at least one evidenceId from the other endpoint's sourceIds.
 - Do not return sources, evidence, nodes, entities, or extractions. Endpoint nodes must already exist in the current graph.
 - Do not invent sourceIds, evidenceIds, or nodeIds.
 - Use stable ids so repeated linking runs remain readable.

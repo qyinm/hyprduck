@@ -496,18 +496,18 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
             (source === activeHoveredNodeId || target === activeHoveredNodeId);
           const dimmed = activeHoveredNodeId !== null && !hovered && !selected;
           const baseOpacity =
-            crossCluster && !selected
-              ? isSourceDocumentEdge
-                ? Math.max(0.72, Math.min(1, viewport.zoom))
-                : Math.max(0.68, Math.min(0.88, viewport.zoom))
-              : 1;
+            isSourceDocumentEdge
+              ? 0.96
+              : crossCluster && !selected
+                ? Math.max(0.68, Math.min(0.88, viewport.zoom))
+                : 1;
           const baseStroke = isSourceDocumentEdge
-            ? "#94a3b8"
+            ? "#475569"
             : crossCluster
               ? "#64748b"
               : "#cbd5e1";
           const baseStrokeWidth = isSourceDocumentEdge
-            ? 0.42
+            ? 0.58
             : crossCluster
               ? 0.46
               : 0.34;
@@ -520,9 +520,8 @@ function SvgGraphLayer(props: SvgGraphLayerProps) {
               onClick={() => selectEdge(edge)}
               opacity={dimmed ? Math.min(0.18, baseOpacity) : hovered ? 1 : baseOpacity}
               stroke={selected || hovered ? "#111111" : baseStroke}
-              strokeDasharray={isSourceDocumentEdge ? "1.2 1.4" : undefined}
               strokeLinecap="round"
-              strokeWidth={selected ? 0.62 : hovered ? 0.5 : baseStrokeWidth}
+              strokeWidth={selected ? 0.72 : hovered ? 0.64 : baseStrokeWidth}
               vectorEffect="non-scaling-stroke"
               x1={toPercentX(nodePositions[source]?.x ?? sourceNode.x)}
               x2={toPercentX(nodePositions[target]?.x ?? targetNode.x)}

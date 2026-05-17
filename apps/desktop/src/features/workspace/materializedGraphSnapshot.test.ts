@@ -97,7 +97,7 @@ test("keeps derived markdown as a source artifact instead of a graph node", () =
   );
 });
 
-test("hides derived_from plumbing edges even when both endpoints are visible", () => {
+test("shows derived_from source edges when both endpoints are visible", () => {
   const snapshot: MaterializedGraphSnapshot = {
     snapshotId: "snapshot-1",
     sourceIngestId: "ingest-1",
@@ -153,7 +153,12 @@ test("hides derived_from plumbing edges even when both endpoints are visible", (
     "source-pdf",
     "concept-a",
   ]);
-  expect(envelope.project.edges).toEqual([]);
+  expect(envelope.project.edges).toEqual([
+    expect.objectContaining({
+      id: "edge-derived-visible-endpoints",
+      kind: "source_document",
+    }),
+  ]);
 });
 
 test("matches source artifact paths by segment instead of substring", () => {

@@ -216,6 +216,16 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
         .iter()
         .map(|evidence| evidence.id.clone())
         .collect::<BTreeSet<_>>();
+    let evidence_source_by_id = snapshot
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .map(|source_id| (evidence.id.clone(), source_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
     let node_source_ids = snapshot
         .nodes
         .iter()
@@ -233,6 +243,11 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
             && node_ids.contains(&relation.target_node_id)
             && !relation.evidence_ids.is_empty()
             && is_cross_source_relation(relation, &node_source_ids, source_id)
+            && relation_evidence_covers_endpoint_sources(
+                relation,
+                &node_source_ids,
+                &evidence_source_by_id,
+            )
     });
     normalize_supported_records(
         snapshot,
@@ -540,6 +555,43 @@ fn is_cross_source_relation(
     let left_other_only = left_has_other && !left_has_import;
     let right_other_only = right_has_other && !right_has_import;
     (left_import_only && right_other_only) || (right_import_only && left_other_only)
+}
+
+fn relation_evidence_covers_endpoint_sources(
+    relation: &BrainRelationRecord,
+    node_source_ids: &BTreeMap<String, Vec<String>>,
+    evidence_source_by_id: &BTreeMap<String, String>,
+) -> bool {
+    let left = node_source_ids
+        .get(&relation.source_node_id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let right = node_source_ids
+        .get(&relation.target_node_id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    relation_evidence_covers_any_source(&relation.evidence_ids, left, evidence_source_by_id)
+        && relation_evidence_covers_any_source(
+            &relation.evidence_ids,
+            right,
+            evidence_source_by_id,
+        )
+}
+
+fn relation_evidence_covers_any_source(
+    evidence_ids: &[String],
+    source_ids: &[String],
+    evidence_source_by_id: &BTreeMap<String, String>,
+) -> bool {
+    evidence_ids.iter().any(|evidence_id| {
+        evidence_source_by_id
+            .get(evidence_id)
+            .is_some_and(|evidence_source_id| {
+                source_ids
+                    .iter()
+                    .any(|source_id| source_id == evidence_source_id)
+            })
+    })
 }
 
 #[cfg(test)]

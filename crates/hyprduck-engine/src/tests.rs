@@ -1,5 +1,6 @@
 use super::*;
 use crate::provider::{ollama_models_endpoint, ProviderKind};
+use hyprduck_engine_types::AgentNewEdgePayload;
 
 static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -538,6 +539,15 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
                     "updatedAt": generated_at
                 },
                 {
+                    "relationId": "edge-undercovered",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-alpha",
+                    "targetNodeId": "concept-beta",
+                    "label": "missing beta evidence",
+                    "evidenceIds": ["ev-alpha"],
+                    "updatedAt": generated_at
+                },
+                {
                     "relationId": "edge-multisource",
                     "kind": "related_to",
                     "sourceNodeId": "concept-alpha",
@@ -576,6 +586,10 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         .relations
         .iter()
         .any(|relation| relation.relation_id == "edge-local"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-undercovered"));
     assert!(!snapshot
         .relations
         .iter()
@@ -720,6 +734,7 @@ fn workspace_linking_prompt_uses_only_active_workspace_source_chunks() {
     .expect("prompt");
 
     assert!(prompt.contains("Current workspace source text."));
+    assert!(prompt.contains("Every returned edge must cite evidence from both endpoint source sides"));
     assert!(!prompt.contains("Stale source-index text must not enter rebuild prompt."));
     assert!(!prompt.contains("source-stale"));
 }
@@ -999,6 +1014,50 @@ fn brain_writer_bootstraps_missing_memory_and_events_files() {
             && event.target_memory_ids.contains(&memories[0].memory_id)
     }));
     assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
+}
+
+#[test]
+fn link_proposal_relation_uses_structured_edge_payload_endpoints() {
+    let proposal = BrainUpdateProposal {
+        proposal_id: "proposal-edge".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        kind: BrainProposalKind::Link,
+        status: BrainProposalStatus::Accepted,
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "test-agent".into(),
+        },
+        scope: BrainScope::Project,
+        title: "Structured link".into(),
+        body: "The payload carries the concrete relation.".into(),
+        target_node_id: Some("legacy-target".into()),
+        target_source_id: None,
+        relation_kind: None,
+        source_refs: vec!["source-a".into(), "source-b".into()],
+        node_refs: vec!["legacy-source".into()],
+        evidence_refs: vec!["ev-a".into()],
+        proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
+            edge: AgentNewEdgePayload {
+                source_node_id: "payload-source".into(),
+                target_node_id: "payload-target".into(),
+                kind: BrainRelationKind::RelatedTo,
+                label: "Payload edge".into(),
+                source_path: "hyprduck-cli".into(),
+                edge_id: Some("edge-payload".into()),
+                source_refs: vec!["source-b".into()],
+                evidence_refs: vec!["ev-b".into()],
+                reason: None,
+            },
+        }),
+        created_at: 123,
+    };
+
+    let relation = relation_record_for_proposal(&proposal).expect("relation");
+
+    assert_eq!(relation.relation_id, "edge-payload");
+    assert_eq!(relation.source_node_id, "payload-source");
+    assert_eq!(relation.target_node_id, "payload-target");
+    assert_eq!(relation.evidence_ids, vec!["ev-a", "ev-b"]);
 }
 
 #[test]
