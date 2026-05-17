@@ -1,6 +1,7 @@
 use super::origin::*;
 use super::replay::*;
 use super::*;
+use crate::graph_history::{graph_snapshot_source_ingest_id, latest_graph_materialized_event};
 
 pub(crate) fn build_brain_repo_snapshot(
     workspace_id: &str,
