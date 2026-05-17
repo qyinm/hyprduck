@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   ArrowLeft,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   History as HistoryIcon,
@@ -22,7 +21,6 @@ import {
   Save,
   Settings,
   Sparkles,
-  XCircle,
 } from "lucide-react";
 import {
   Card,
@@ -339,17 +337,17 @@ const WEB_MOCK_REVIEW_ITEMS: BrainReviewItem[] = [
 let webMockReviewItems = WEB_MOCK_REVIEW_ITEMS.map((item) => ({ ...item }));
 let webMockRecentEvents: BrainEvent[] = [
   {
-    eventId: "evt-web-review-created",
+    eventId: "evt-web-source-imported",
     workspaceId: "web-preview",
-    eventType: "review_created",
-    actor: { actorType: "agent", actorId: "web-preview-agent" },
+    eventType: "source_imported",
+    actor: { actorType: "system", actorId: "web-preview" },
     sourceRefs: ["preview"],
     nodeRefs: ["source:preview"],
     relationRefs: [],
     evidenceRefs: ["ev-page-1"],
     payloadJson: "{}",
     confidence: null,
-    policyResult: "needs_review",
+    policyResult: "applied",
     createdAt: WEB_MOCK_NOW_SECONDS - 300,
   },
 ];
@@ -1794,22 +1792,12 @@ function SettingsPanel(props: {
 
 function HistoryPanel(props: {
   health: BrainHealthResponseData | null;
-  decisionPending: BrainReviewDecision | null;
-  decisionError: string | null;
   onRefresh: () => Promise<void>;
-  onResolve: (item: BrainReviewItem, decision: BrainReviewDecision) => Promise<void>;
 }) {
-  const {
-    health,
-    decisionPending,
-    decisionError,
-    onRefresh,
-    onResolve,
-  } = props;
+  const { health, onRefresh } = props;
   const recentEvents = health?.recentEvents ?? [];
-  const reviewItems = health?.reviewItems ?? [];
-  const attentionCount = health?.attentionCount ?? 0;
-  const hasActivity = recentEvents.length > 0 || reviewItems.length > 0;
+  const visibleEvents = recentEvents.filter(isHistoryActivityEvent);
+  const hasActivity = visibleEvents.length > 0;
 
   return (
     <section
@@ -1842,11 +1830,11 @@ function HistoryPanel(props: {
         <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/20 px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground">Recent activity</span>
           <span className="text-xs text-muted-foreground">
-            {recentEvents.length} events
+            {visibleEvents.length} events
           </span>
         </div>
         <div className="grid gap-1.5 p-2">
-          {recentEvents.map((event) => (
+          {visibleEvents.map((event) => (
             <div
               className="rounded-md border border-border bg-background px-2.5 py-2"
               key={event.eventId}
@@ -1871,67 +1859,6 @@ function HistoryPanel(props: {
             </div>
           ))}
 
-          {reviewItems.length > 0 && (
-            <div className="mt-1 flex items-center justify-between gap-3 px-0.5 py-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                Pending changes
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {attentionCount} pending
-              </span>
-            </div>
-          )}
-
-          {reviewItems.map((item) => (
-            <div
-              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2"
-              key={item.reviewId}
-            >
-              <div className="min-w-0">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-                    {item.title}
-                  </span>
-                  <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    {formatProposalKind(item.kind)}
-                  </span>
-                </div>
-                <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                  {formatTimestamp(item.createdAt)}
-                </p>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  aria-label={`Reject ${item.title}`}
-                  disabled={decisionPending !== null}
-                  onClick={() => void onResolve(item, "reject")}
-                  size="icon"
-                  title="Reject"
-                  type="button"
-                  variant="ghost"
-                >
-                  <XCircle size={14} />
-                </Button>
-                <Button
-                  aria-label={`Accept ${item.title}`}
-                  disabled={decisionPending !== null}
-                  onClick={() => void onResolve(item, "accept")}
-                  size="icon"
-                  title="Accept"
-                  type="button"
-                  variant="ghost"
-                >
-                  <CheckCircle2 size={14} />
-                </Button>
-              </div>
-            </div>
-          ))}
-
-          {decisionError && (
-            <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
-              {decisionError}
-            </p>
-          )}
           {health && !hasActivity && (
             <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
               No history yet.
@@ -1949,18 +1876,24 @@ function HistoryPanel(props: {
 }
 
 function formatEventType(eventType: string): string {
-  switch (eventType) {
-    case "review_created":
-      return "Change proposed";
-    case "review_resolved":
-      return "Change resolved";
-  }
-
   return eventType
     .split("_")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isHistoryActivityEvent(event: BrainEvent): boolean {
+  return ![
+    "node_proposed",
+    "memory_proposed",
+    "claim_proposed",
+    "link_proposed",
+    "source_note_proposed",
+    "wiki_page_proposed",
+    "review_created",
+    "review_resolved",
+  ].includes(event.eventType);
 }
 
 function formatPolicyResult(policyResult: string): string {
@@ -1983,25 +1916,6 @@ function formatRefsSummary(sourceCount: number, evidenceCount: number): string {
     parts.push(`${evidenceCount} evidence`);
   }
   return parts.join(" · ");
-}
-
-function formatProposalKind(kind: BrainProposalKind): string {
-  switch (kind) {
-    case "node":
-      return "Node";
-    case "claim":
-      return "Claim";
-    case "link":
-      return "Link";
-    case "memory":
-      return "Memory";
-    case "observation":
-      return "Observation";
-    case "source_note":
-      return "Source note";
-    case "wiki_page":
-      return "Wiki page";
-  }
 }
 
 function formatTimestamp(seconds: number): string {
@@ -2037,11 +1951,6 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [reviewDecisionPending, setReviewDecisionPending] =
-    useState<BrainReviewDecision | null>(null);
-  const [reviewDecisionError, setReviewDecisionError] = useState<string | null>(
-    null,
-  );
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = useMemo(
     () => buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob)),
@@ -2378,47 +2287,6 @@ export function App() {
     setBrainHealth(nextHealth);
   };
 
-  const resolveBrainReview = async (
-    item: BrainReviewItem,
-    decision: BrainReviewDecision,
-  ) => {
-    const workspaceId =
-      item.workspaceId ??
-      loadedWorkspaceEnvelope?.workspace_id ??
-      snapshot.lastWorkspaceId ??
-      "default";
-    setReviewDecisionPending(decision);
-    setReviewDecisionError(null);
-    try {
-      await invoke<unknown>("resolve_brain_review", {
-        workspace_id: workspaceId,
-        proposal_id: item.proposalId,
-        decision,
-        reason: null,
-      });
-      setWorkspaceLoadState({
-        status: "loading",
-        message: "Refreshing graph/wiki after review decision.",
-      });
-      const [nextHealth, nextLoad] = await Promise.all([
-        invoke<BrainHealthResponseData>("brain_health", {
-          workspace_id: workspaceId,
-        }),
-        loadGraphWorkspaceEnvelopeResult(
-          workspaceId,
-          loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
-        ),
-      ]);
-      setBrainHealth(nextHealth);
-      setLoadedWorkspaceEnvelope(nextLoad.envelope);
-      setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
-    } catch (error) {
-      setReviewDecisionError(String(error));
-    } finally {
-      setReviewDecisionPending(null);
-    }
-  };
-
   if (startupError) {
     return (
       <main className="grid min-h-screen place-items-center bg-background p-6">
@@ -2524,11 +2392,6 @@ export function App() {
         type="button"
       >
         <HistoryIcon size={14} />
-        {brainHealth && brainHealth.attentionCount > 0 && (
-          <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
-            {brainHealth.attentionCount}
-          </span>
-        )}
       </Button>
       {!settingsOpen && (
         <Button
@@ -2562,11 +2425,8 @@ export function App() {
       )}
       {historyOpen && (
         <HistoryPanel
-          decisionError={reviewDecisionError}
-          decisionPending={reviewDecisionPending}
           health={brainHealth}
           onRefresh={refreshBrainHealth}
-          onResolve={resolveBrainReview}
         />
       )}
       {!settingsOpen && <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />}

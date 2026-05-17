@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const historyPanelSource = appSource.slice(
+  appSource.indexOf("function HistoryPanel"),
+  appSource.indexOf("function formatEventType"),
+);
 const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
@@ -40,26 +44,23 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
   expect(appSource).not.toMatch(/className=\"size-7\"/);
 });
 
-test("History panel exposes activity and keeps pending changes secondary", () => {
+test("History panel exposes recent activity without graph review controls", () => {
   expect(appSource).toMatch(/HistoryPanel/);
-  expect(appSource).toMatch(/aria-label="History"/);
+  expect(historyPanelSource).toMatch(/aria-label="History"/);
   expect(appSource).not.toMatch(/Trust Console/);
-  expect(appSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
-  expect(appSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
-  expect(appSource).toMatch(/Recent activity/);
-  expect(appSource).toMatch(/Pending changes/);
-  expect(appSource).not.toMatch(/Review Queue/);
-  expect(appSource).toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
-  expect(appSource).toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
-  expect(appSource).not.toMatch(/Needs review/);
-  expect(appSource).not.toMatch(/Provenance/);
-  expect(appSource).not.toMatch(/Optional review note/);
-  expect(appSource).not.toMatch(/Review decision/);
-  expect(appSource).not.toMatch(/Accept applies the durable save-back/);
-  expect(appSource).not.toMatch(/Recent brain events/);
-  expect(appSource).toMatch(/resolve_brain_review/);
-  expect(appSource).toMatch(/formatEventType/);
-  expect(appSource).toMatch(/formatProposalKind/);
+  expect(historyPanelSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
+  expect(historyPanelSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
+  expect(historyPanelSource).toMatch(/Recent activity/);
+  expect(historyPanelSource).toMatch(/recentEvents\.filter\(isHistoryActivityEvent\)/);
+  expect(historyPanelSource).not.toMatch(/recentEvents\.map/);
+  expect(historyPanelSource).not.toMatch(/Pending changes/);
+  expect(historyPanelSource).not.toMatch(/Review Queue/);
+  expect(historyPanelSource).not.toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
+  expect(historyPanelSource).not.toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
+  expect(historyPanelSource).not.toMatch(/formatProposalKind/);
+  expect(appSource).not.toMatch(/brainHealth && brainHealth\.attentionCount > 0/);
+  expect(appSource).not.toMatch(/Change proposed|Change resolved/);
+  expect(historyPanelSource).toMatch(/formatEventType/);
 });
 
 test("desktop visual tokens follow DESIGN.md restraint", () => {
