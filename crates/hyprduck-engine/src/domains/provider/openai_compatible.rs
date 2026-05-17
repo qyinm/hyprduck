@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_openai::{
+    Client,
     config::OpenAIConfig,
     types::chat::{
         ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
@@ -10,7 +11,6 @@ use async_openai::{
         CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl, ResponseFormat,
         ResponseFormatJsonSchema,
     },
-    Client,
 };
 
 use crate::provider::{EngineConfig, ProviderKind};
@@ -157,9 +157,10 @@ fn normalize_openai_compatible_api_base(raw: &str) -> String {
 }
 
 pub(crate) fn provider_unavailable(config: &EngineConfig) -> bool {
-    match config.provider {
+    match &config.provider {
         ProviderKind::OpenRouter => config.api_key.trim().is_empty(),
         ProviderKind::Ollama => false,
+        ProviderKind::Unknown(_) => true,
     }
 }
 

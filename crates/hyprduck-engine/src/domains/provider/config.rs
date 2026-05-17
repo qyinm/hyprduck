@@ -28,28 +28,38 @@ fn default_prompt_template() -> String {
     "General".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProviderKind {
     OpenRouter,
     Ollama,
+    Unknown(String),
+}
+
+impl Serialize for ProviderKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.id_slug())
+    }
 }
 
 impl ProviderKind {
-    /// Deserializes a provider slug, falling back to `OpenRouter` for unknown values.
-    /// This handles legacy config files that may contain removed providers like `open_ai` or `anthropic`.
+    /// Deserializes a provider slug while preserving removed or future provider ids.
+    /// Legacy config files still load, but unsupported providers stay explicit internally.
     fn deserialize_unknown<'de, D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let slug = String::deserialize(deserializer)?;
-        Ok(Self::from_slug(&slug).unwrap_or(Self::OpenRouter))
+        Ok(Self::from_config_slug(slug))
     }
 
-    pub(crate) fn id_slug(&self) -> &'static str {
+    pub(crate) fn id_slug(&self) -> &str {
         match self {
             Self::OpenRouter => "open_router",
             Self::Ollama => "ollama",
+            Self::Unknown(slug) => slug.as_str(),
         }
     }
 
@@ -57,6 +67,7 @@ impl ProviderKind {
         match self {
             Self::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
             Self::Ollama => "http://127.0.0.1:11434/v1/chat/completions",
+            Self::Unknown(_) => "https://openrouter.ai/api/v1/chat/completions",
         }
     }
 
@@ -64,11 +75,12 @@ impl ProviderKind {
         match self {
             Self::OpenRouter => "OpenRouter",
             Self::Ollama => "Ollama",
+            Self::Unknown(_) => "Unknown provider",
         }
     }
 
     pub(crate) fn requires_api_key(&self) -> bool {
-        !matches!(self, Self::Ollama)
+        matches!(self, Self::OpenRouter)
     }
 
     pub(crate) fn supports_base_url(&self) -> bool {
@@ -85,6 +97,14 @@ impl ProviderKind {
             "ollama" => Some(Self::Ollama),
             _ => None,
         }
+    }
+
+    pub(crate) fn from_config_slug(value: String) -> Self {
+        Self::from_slug(&value).unwrap_or(Self::Unknown(value))
+    }
+
+    pub(crate) fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown(_))
     }
 }
 
@@ -165,8 +185,7 @@ impl EngineConfig {
 
     pub(crate) fn from_payload(payload: EngineConfigPayload) -> Self {
         Self {
-            provider: ProviderKind::from_slug(&payload.provider)
-                .unwrap_or(ProviderKind::OpenRouter),
+            provider: ProviderKind::from_config_slug(payload.provider),
             model_id: payload.model_id,
             api_key: payload.api_key,
             base_url: payload.base_url,
@@ -187,5 +206,58 @@ fn prompt_template_options() -> [&'static str; 6] {
 }
 
 pub(crate) fn model_options_for(provider: &ProviderKind) -> Vec<&'static str> {
+    if provider.is_unknown() {
+        return Vec::new();
+    }
+
     hyprduck_engine_types::model_options_for(provider.id_slug())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload_with_provider(provider: &str) -> EngineConfigPayload {
+        EngineConfigPayload {
+            provider: provider.into(),
+            model_id: "test-model".into(),
+            api_key: "test-key".into(),
+            base_url: None,
+            prompt_template: "General".into(),
+            provider_options: Vec::new(),
+            model_options: Vec::new(),
+            prompt_template_options: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn config_decode_preserves_unknown_provider_slug() {
+        let decoded: EngineConfig = serde_json::from_value(serde_json::json!({
+            "provider": "legacy_ai",
+            "model_id": "legacy-model",
+            "api_key": "legacy-key",
+            "base_url": null,
+            "prompt_template": "General"
+        }))
+        .expect("legacy config should still decode");
+
+        assert!(matches!(
+            decoded.provider,
+            ProviderKind::Unknown(ref slug) if slug == "legacy_ai"
+        ));
+    }
+
+    #[test]
+    fn payload_decode_preserves_unknown_provider_slug() {
+        let config = EngineConfig::from_payload(payload_with_provider("legacy_ai"));
+
+        assert!(matches!(
+            config.provider,
+            ProviderKind::Unknown(ref slug) if slug == "legacy_ai"
+        ));
+
+        let surfaced = config.to_payload();
+        assert_eq!(surfaced.provider, "legacy_ai");
+        assert!(surfaced.model_options.is_empty());
+    }
 }

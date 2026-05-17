@@ -3,6 +3,15 @@ use crate::infra::process::resolve_binary;
 
 pub(crate) fn validate_provider(config: &EngineConfig) -> ValidateProviderResponseData {
     let mut issues = Vec::new();
+    if let ProviderKind::Unknown(slug) = &config.provider {
+        issues.push(ValidationIssue {
+            code: "unsupported_provider".into(),
+            message: format!(
+                "Provider `{slug}` is no longer supported. Choose OpenRouter or Ollama."
+            ),
+        });
+    }
+
     if config.provider.requires_api_key() && config.api_key.trim().is_empty() {
         issues.push(ValidationIssue {
             code: "missing_api_key".into(),
@@ -18,8 +27,9 @@ pub(crate) fn validate_provider(config: &EngineConfig) -> ValidateProviderRespon
     }
 
     if let Some(base_url) = &config.base_url {
-        if !base_url.trim().is_empty()
-            && !(base_url.starts_with("http://") || base_url.starts_with("https://"))
+        if !(base_url.trim().is_empty()
+            || base_url.starts_with("http://")
+            || base_url.starts_with("https://"))
         {
             issues.push(ValidationIssue {
                 code: "invalid_base_url".into(),
@@ -93,7 +103,7 @@ pub(crate) fn check_readiness(config_store: &EngineConfigStore) -> RuntimeReadin
         },
     });
 
-    if matches!(config.provider, ProviderKind::Ollama) {
+    if matches!(&config.provider, ProviderKind::Ollama) {
         checks.push(check_ollama_endpoint(&config));
     }
 
@@ -205,4 +215,27 @@ pub(crate) fn ollama_models_endpoint(config: &EngineConfig) -> String {
     }
 
     raw
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_validation_reports_unknown_provider() {
+        let config = EngineConfig {
+            provider: ProviderKind::Unknown("legacy_ai".into()),
+            model_id: "legacy-model".into(),
+            api_key: "legacy-key".into(),
+            base_url: None,
+            prompt_template: "General".into(),
+        };
+
+        let validation = validate_provider(&config);
+
+        assert!(!validation.ready);
+        assert!(validation.issues.iter().any(|issue| {
+            issue.code == "unsupported_provider" && issue.message.contains("legacy_ai")
+        }));
+    }
 }
