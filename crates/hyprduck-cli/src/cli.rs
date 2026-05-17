@@ -400,8 +400,8 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 selector,
             })
         }
-        "propose-memory" => proposal_command(
-            BrainProposalKind::Memory,
+        "propose-memory" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::Memory,
             workspace,
             root_dir,
             actor,
@@ -412,9 +412,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "propose-node" => proposal_command(
-            BrainProposalKind::Node,
+        }),
+        "propose-node" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::Node,
             workspace,
             root_dir,
             actor,
@@ -425,9 +425,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "propose-claim" => proposal_command(
-            BrainProposalKind::Claim,
+        }),
+        "propose-claim" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::Claim,
             workspace,
             root_dir,
             actor,
@@ -438,9 +438,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "propose-link" => proposal_command(
-            BrainProposalKind::Link,
+        }),
+        "propose-link" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::Link,
             workspace,
             root_dir,
             actor,
@@ -451,9 +451,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "propose-wiki-page" => proposal_command(
-            BrainProposalKind::WikiPage,
+        }),
+        "propose-wiki-page" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::WikiPage,
             workspace,
             root_dir,
             actor,
@@ -464,9 +464,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "append-observation" => proposal_command(
-            BrainProposalKind::Observation,
+        }),
+        "append-observation" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::Observation,
             workspace,
             root_dir,
             actor,
@@ -477,9 +477,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
-        "add-source-note" => proposal_command(
-            BrainProposalKind::SourceNote,
+        }),
+        "add-source-note" => proposal_command(ProposalCommandOptions {
+            kind: BrainProposalKind::SourceNote,
             workspace,
             root_dir,
             actor,
@@ -490,13 +490,12 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
             node_refs,
             evidence_refs,
             positional,
-        ),
+        }),
         _ => Err(anyhow!("unknown brain subcommand: {subcommand}")),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn proposal_command(
+struct ProposalCommandOptions {
     kind: BrainProposalKind,
     workspace: String,
     root_dir: Option<String>,
@@ -508,7 +507,23 @@ fn proposal_command(
     node_refs: Vec<String>,
     evidence_refs: Vec<String>,
     positional: Vec<String>,
-) -> Result<BrainCommand> {
+}
+
+fn proposal_command(options: ProposalCommandOptions) -> Result<BrainCommand> {
+    let ProposalCommandOptions {
+        kind,
+        workspace,
+        root_dir,
+        actor,
+        target_node_id,
+        target_source_id,
+        relation_kind,
+        source_refs,
+        node_refs,
+        evidence_refs,
+        positional,
+    } = options;
+
     if positional.len() < 2 {
         return Err(anyhow!(
             "hyprduck brain proposal commands need <title> <body>"
@@ -631,4 +646,71 @@ pub enum BrainCommand {
 pub enum GraphStateSelector {
     Snapshot(String),
     Event(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_brain_proposal_options() {
+        let command = parse_brain_command(
+            "propose-link".to_string(),
+            vec![
+                "--workspace".into(),
+                "team".into(),
+                "--root".into(),
+                "/tmp/hyprduck".into(),
+                "--actor".into(),
+                "worker-d".into(),
+                "--target-node".into(),
+                "node-a".into(),
+                "--target-source".into(),
+                "source-a".into(),
+                "--relation".into(),
+                "related_to".into(),
+                "--source".into(),
+                "source-b".into(),
+                "--node".into(),
+                "node-b".into(),
+                "--evidence".into(),
+                "evidence-a".into(),
+                "Link title".into(),
+                "body".into(),
+                "text".into(),
+            ],
+        )
+        .expect("proposal command should parse");
+
+        let BrainCommand::ProposeUpdate {
+            workspace,
+            root_dir,
+            kind,
+            title,
+            body,
+            actor,
+            target_node_id,
+            target_source_id,
+            relation_kind,
+            source_refs,
+            node_refs,
+            evidence_refs,
+        } = command
+        else {
+            panic!("expected proposal command");
+        };
+
+        assert_eq!(workspace, "team");
+        assert_eq!(root_dir.as_deref(), Some("/tmp/hyprduck"));
+        assert!(matches!(kind, BrainProposalKind::Link));
+        assert_eq!(title, "Link title");
+        assert_eq!(body, "body text");
+        assert_eq!(actor, "worker-d");
+        assert_eq!(target_node_id.as_deref(), Some("node-a"));
+        assert_eq!(target_source_id.as_deref(), Some("source-a"));
+        assert!(matches!(relation_kind, Some(BrainRelationKind::RelatedTo)));
+        assert_eq!(source_refs, vec!["source-b"]);
+        assert_eq!(node_refs, vec!["node-b"]);
+        assert_eq!(evidence_refs, vec!["evidence-a"]);
+    }
 }
