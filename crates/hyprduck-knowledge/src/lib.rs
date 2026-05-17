@@ -1,6 +1,95 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
+
+macro_rules! open_slug_type {
+    ($name:ident { $($constructor:ident => $slug:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            $(
+                pub fn $constructor() -> Self {
+                    Self($slug.into())
+                }
+            )+
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.into())
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.as_str() == *other
+            }
+        }
+
+        impl PartialEq<$name> for &str {
+            fn eq(&self, other: &$name) -> bool {
+                *self == other.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+    };
+}
+
+open_slug_type!(SourceFormat {
+    pdf => "pdf",
+    docx => "docx",
+    doc => "doc",
+    image => "image",
+    markdown => "markdown",
+});
+
+open_slug_type!(SourceStatus {
+    added => "added",
+    rendering => "rendering",
+    ingesting => "ingesting",
+    ingested => "ingested",
+    needs_review => "needs_review",
+    failed => "failed",
+    stale => "stale",
+});
+
+open_slug_type!(PolicyResult {
+    accept => "accept",
+    accepted => "accepted",
+    applied => "applied",
+    auto_accept => "auto_accept",
+    auto_applied => "auto_applied",
+    auto_enqueued => "auto_enqueued",
+    auto_rejected => "auto_rejected",
+    idempotent_noop => "idempotent_noop",
+    materialized => "materialized",
+    needs_review => "needs_review",
+    rollback_applied => "rollback_applied",
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,8 +180,8 @@ pub struct SourceBacking {
     pub original_path: String,
     pub source_path: String,
     pub markdown_path: String,
-    pub format: String,
-    pub status: String,
+    pub format: SourceFormat,
+    pub status: SourceStatus,
     pub page_count: usize,
     pub success_count: usize,
     pub failed_count: usize,
@@ -403,7 +492,7 @@ pub struct BrainEvent {
     pub causality: BrainEventCausality,
     #[serde(default)]
     pub confidence: Option<String>,
-    pub policy_result: String,
+    pub policy_result: PolicyResult,
     pub created_at: u64,
 }
 
@@ -415,8 +504,8 @@ pub struct SourceRecord {
     pub original_path: String,
     pub source_path: String,
     pub markdown_path: String,
-    pub format: String,
-    pub status: String,
+    pub format: SourceFormat,
+    pub status: SourceStatus,
     pub page_count: usize,
     #[serde(default)]
     pub description: String,
@@ -928,5 +1017,73 @@ mod tests {
         assert!(encoded.contains("\"sourceNodeId\":\"concept-a\""));
         assert!(encoded.contains("\"targetNodeId\":\"concept-b\""));
         assert!(encoded.contains("\"kind\":\"related_to\""));
+    }
+
+    #[test]
+    fn policy_result_round_trips_existing_slugs_and_supports_typed_usage() {
+        let result: PolicyResult = serde_json::from_str("\"auto_applied\"")
+            .expect("deserialize existing policy result slug");
+
+        assert_eq!(result, PolicyResult::auto_applied());
+        assert_eq!(result, "auto_applied");
+        assert_eq!(
+            serde_json::to_string(&PolicyResult::materialized()).expect("serialize policy result"),
+            "\"materialized\""
+        );
+    }
+
+    #[test]
+    fn source_backing_round_trips_format_and_status_slugs_with_typed_fields() {
+        let source: SourceBacking = serde_json::from_str(
+            r#"{
+                "workspaceId": "default",
+                "sourceId": "source-1",
+                "originalPath": "input.pdf",
+                "sourcePath": "sources/source-1/input.pdf",
+                "markdownPath": "artifacts/source-1/input.md",
+                "format": "pdf",
+                "status": "ingested",
+                "pageCount": 2,
+                "successCount": 2,
+                "failedCount": 0,
+                "updatedAt": 42
+            }"#,
+        )
+        .expect("deserialize source backing with existing slugs");
+
+        assert_eq!(source.format, SourceFormat::pdf());
+        assert_eq!(source.status, SourceStatus::ingested());
+        assert_eq!(source.format, "pdf");
+        assert_eq!(source.status, "ingested");
+
+        let encoded = serde_json::to_string(&source).expect("serialize source backing");
+        assert!(encoded.contains("\"format\":\"pdf\""));
+        assert!(encoded.contains("\"status\":\"ingested\""));
+    }
+
+    #[test]
+    fn open_slug_types_preserve_unknown_compatible_values() {
+        let format: SourceFormat =
+            serde_json::from_str("\"presentation\"").expect("deserialize unknown format slug");
+        let status: SourceStatus =
+            serde_json::from_str("\"archived\"").expect("deserialize unknown status slug");
+        let policy_result: PolicyResult =
+            serde_json::from_str("\"custom_policy\"").expect("deserialize unknown policy slug");
+
+        assert_eq!(format.as_str(), "presentation");
+        assert_eq!(status.as_str(), "archived");
+        assert_eq!(policy_result.as_str(), "custom_policy");
+        assert_eq!(
+            serde_json::to_string(&format).expect("serialize unknown format"),
+            "\"presentation\""
+        );
+        assert_eq!(
+            serde_json::to_string(&status).expect("serialize unknown status"),
+            "\"archived\""
+        );
+        assert_eq!(
+            serde_json::to_string(&policy_result).expect("serialize unknown policy"),
+            "\"custom_policy\""
+        );
     }
 }
