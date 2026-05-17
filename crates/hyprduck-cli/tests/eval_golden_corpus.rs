@@ -4,7 +4,7 @@ use std::process::Command;
 fn golden_corpus_eval_reports_fixture_metrics() {
     let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../hyprduck-engine/tests/fixtures/brain-corpus");
-    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args([
             "eval",
             "golden-corpus",

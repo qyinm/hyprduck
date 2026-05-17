@@ -48,7 +48,8 @@
       "entitlements": "build/macos/entitlements.mac.plist",
       "entitlementsInherit": "build/macos/entitlements.mac.inherit.plist",
       "binaries": [
-        "Contents/Resources/binaries/hyprduck-engine-aarch64-apple-darwin"
+        "Contents/Resources/binaries/hyprduck-engine-aarch64-apple-darwin",
+        "Contents/Resources/binaries/hyprduck-aarch64-apple-darwin"
       ],
       "target": [
         {

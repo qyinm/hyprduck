@@ -3,13 +3,84 @@ use std::{fs, time};
 
 #[test]
 fn doctor_reports_engine_resolution() {
-    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .arg("doctor")
         .output()
         .expect("doctor command should run");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("HyprDuck CLI is available."));
+}
+
+#[test]
+fn mcp_install_claude_code_writes_production_server_entry() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install");
+    let config_dir = home.join(".config/claude-code");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("mcp_servers.json"),
+        r#"{"mcpServers":{"linear":{"command":"npx","args":["-y","mcp-remote","https://mcp.linear.app/sse"]}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "claude-code"])
+        .env("HOME", &home)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = fs::read_to_string(config_dir.join("mcp_servers.json")).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(config["mcpServers"]["linear"]["command"], "npx");
+    assert_eq!(config["mcpServers"]["hyprduck"]["args"][0], "mcp");
+    assert_eq!(config["mcpServers"]["hyprduck"]["args"][1], "serve");
+    assert!(config["mcpServers"]["hyprduck"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("hyprduck"));
+    assert!(home.join(".local/bin/hyprduck").exists());
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn mcp_install_codex_registers_server_and_shell_command() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install-codex");
+    let fake_codex = home.join("fake-codex");
+    let log = home.join("codex-args.log");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        &fake_codex,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&fake_codex);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "codex"])
+        .env("HOME", &home)
+        .env("HYPRDUCK_CODEX_BIN", &fake_codex)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("mcp remove hyprduck"));
+    assert!(calls.contains("mcp add hyprduck --"));
+    assert!(calls.contains("mcp serve"));
+    assert!(home.join(".local/bin/hyprduck").exists());
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]
@@ -36,7 +107,7 @@ fn brain_inspect_state_prints_selected_graph_state_and_related_events() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args([
             "brain",
             "inspect-state",
@@ -95,7 +166,7 @@ fn brain_rollback_state_applies_selected_graph_state() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args([
             "brain",
             "rollback-state",
@@ -130,3 +201,14 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &std::path::Path) {}

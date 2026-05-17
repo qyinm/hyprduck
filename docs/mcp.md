@@ -6,6 +6,18 @@ HyprDuck exposes the local brain through an MCP stdio server:
 hyprduck mcp serve
 ```
 
+For production macOS installs, use the CLI bundled inside the installed app to
+install the shell command and register HyprDuck with Codex or Claude Code:
+
+```bash
+/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install codex
+/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install claude-code
+```
+
+That writes a `hyprduck` MCP server entry pointing at the installed app bundle
+and creates `~/.local/bin/hyprduck`, so clients and shells do not depend on a
+source checkout or `cargo run`.
+
 For local development, run the same server through Cargo:
 
 ```bash

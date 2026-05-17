@@ -16,16 +16,20 @@ mkdir -p "${BIN_DIR}"
 
 pushd "${REPO_ROOT}" >/dev/null
 if [[ "${MODE}" == "release" ]]; then
-  cargo build -p hyprduck-engine --release
-  SOURCE_BIN="${REPO_ROOT}/target/release/hyprduck-engine"
+  cargo build -p hyprduck-engine -p hyprduck-cli --release
+  PROFILE_DIR="${REPO_ROOT}/target/release"
 else
-  cargo build -p hyprduck-engine
-  SOURCE_BIN="${REPO_ROOT}/target/debug/hyprduck-engine"
+  cargo build -p hyprduck-engine -p hyprduck-cli
+  PROFILE_DIR="${REPO_ROOT}/target/debug"
 fi
 popd >/dev/null
 
-TARGET_BIN="${BIN_DIR}/hyprduck-engine-${HOST_TRIPLE}"
-cp "${SOURCE_BIN}" "${TARGET_BIN}"
-chmod +x "${TARGET_BIN}"
+ENGINE_TARGET_BIN="${BIN_DIR}/hyprduck-engine-${HOST_TRIPLE}"
+CLI_TARGET_BIN="${BIN_DIR}/hyprduck-${HOST_TRIPLE}"
 
-echo "synced engine ${SOURCE_BIN} -> ${TARGET_BIN}"
+cp "${PROFILE_DIR}/hyprduck-engine" "${ENGINE_TARGET_BIN}"
+cp "${PROFILE_DIR}/hyprduck" "${CLI_TARGET_BIN}"
+chmod +x "${ENGINE_TARGET_BIN}" "${CLI_TARGET_BIN}"
+
+echo "synced engine ${PROFILE_DIR}/hyprduck-engine -> ${ENGINE_TARGET_BIN}"
+echo "synced cli ${PROFILE_DIR}/hyprduck -> ${CLI_TARGET_BIN}"

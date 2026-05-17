@@ -166,8 +166,13 @@ impl SubprocessEngineClient {
             }
         });
 
-        let mut stdout_reader = BufReader::new(stdout);
-        let mut stdout_payload = String::new();
+        let stdout_thread = thread::spawn(move || {
+            let mut stdout_reader = BufReader::new(stdout);
+            let mut stdout_payload = String::new();
+            stdout_reader
+                .read_to_string(&mut stdout_payload)
+                .map(|_| stdout_payload)
+        });
         let mut stderr_lines = Vec::new();
         let mut on_progress = on_progress;
 
@@ -187,8 +192,9 @@ impl SubprocessEngineClient {
                 .try_wait()
                 .context("failed waiting on engine process")?
             {
-                stdout_reader
-                    .read_to_string(&mut stdout_payload)
+                let stdout_payload = stdout_thread
+                    .join()
+                    .map_err(|_| anyhow!("engine stdout reader panicked"))?
                     .context("failed reading engine stdout")?;
                 while let Ok(line) = rx.try_recv() {
                     stderr_lines.push(line.clone());
@@ -466,25 +472,48 @@ pub fn resolve_engine_bin() -> Result<PathBuf> {
     }
 
     let current_exe = std::env::current_exe().context("failed to locate current executable")?;
+    let current_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
     for root in candidate_roots(
         &current_exe,
         std::env::current_dir().ok(),
         std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
     ) {
-        let candidate = root.join(engine_binary_name());
-        if candidate.exists() {
-            return Ok(candidate);
+        for binary_name in engine_binary_names() {
+            let candidate = root.join(&binary_name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
         }
     }
 
     Err(anyhow!("unable to resolve hyprduck-engine binary"))
 }
 
-fn engine_binary_name() -> OsString {
+fn engine_binary_names() -> Vec<OsString> {
     if cfg!(target_os = "windows") {
-        OsString::from("hyprduck-engine.exe")
+        vec![
+            OsString::from("hyprduck-engine.exe"),
+            OsString::from(format!("hyprduck-engine-{}.exe", target_triple())),
+        ]
     } else {
-        OsString::from("hyprduck-engine")
+        vec![
+            OsString::from("hyprduck-engine"),
+            OsString::from(format!("hyprduck-engine-{}", target_triple())),
+        ]
+    }
+}
+
+fn target_triple() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        std::env::consts::ARCH
     }
 }
 
@@ -494,6 +523,7 @@ pub fn resolve_engine_launch() -> Result<EngineLaunchSpec> {
     }
 
     let current_exe = std::env::current_exe().context("failed to locate current executable")?;
+    let current_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
     let workspace_root = detect_workspace_root(
         std::env::current_dir().ok(),
         std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),

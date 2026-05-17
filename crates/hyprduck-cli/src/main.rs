@@ -9,9 +9,9 @@ use anyhow::Result;
 use cli::{Cli, Commands, GraphStateSelector};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    AgentGraphProposalPayload, AgentNewEdgePayload, BrainActor, BrainActorType,
-    BrainProposalKind, BrainReadScope, BrainRelationKind, DocumentFormat, GetContextPackRequest,
-    GraphHistoryEntry, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
+    AgentGraphProposalPayload, AgentNewEdgePayload, BrainActor, BrainActorType, BrainProposalKind,
+    BrainReadScope, BrainRelationKind, DocumentFormat, GetContextPackRequest, GraphHistoryEntry,
+    ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
     ProposeBrainUpdateRequest, ReadRecentEventsRequest, ReconstructBrainResponseData,
     SearchBrainRequest,
 };
@@ -43,7 +43,107 @@ fn run_serve() -> Result<()> {
 fn run_mcp(command: cli::McpCommand) -> Result<()> {
     match command {
         cli::McpCommand::Serve => mcp::run_mcp_server(),
+        cli::McpCommand::InstallClaudeCode => install_claude_code_mcp(),
+        cli::McpCommand::InstallCodex => install_codex_mcp(),
     }
+}
+
+fn install_claude_code_mcp() -> Result<()> {
+    let home = home_dir()?;
+    let config_path = home
+        .join(".config")
+        .join("claude-code")
+        .join("mcp_servers.json");
+    let current_exe = current_exe_string()?;
+
+    let mut config = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+            anyhow::anyhow!("failed to parse {}: {error}", config_path.display())
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !config.is_object() {
+        anyhow::bail!("{} must contain a JSON object", config_path.display());
+    }
+    if config
+        .get("mcpServers")
+        .and_then(|value| value.as_object())
+        .is_none()
+    {
+        config["mcpServers"] = serde_json::json!({});
+    }
+
+    config["mcpServers"]["hyprduck"] = serde_json::json!({
+        "command": current_exe.clone(),
+        "args": ["mcp", "serve"]
+    });
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)? + "\n")?;
+
+    println!("Installed HyprDuck MCP for Claude Code.");
+    println!("config: {}", config_path.display());
+    println!("command: {current_exe} mcp serve");
+    install_shell_shim(&home, &current_exe)?;
+    Ok(())
+}
+
+fn install_codex_mcp() -> Result<()> {
+    let home = home_dir()?;
+    let current_exe = current_exe_string()?;
+    install_shell_shim(&home, &current_exe)?;
+
+    let codex_bin = std::env::var_os("HYPRDUCK_CODEX_BIN").unwrap_or_else(|| "codex".into());
+    let _ = std::process::Command::new(&codex_bin)
+        .args(["mcp", "remove", "hyprduck"])
+        .status();
+    let status = std::process::Command::new(&codex_bin)
+        .args(["mcp", "add", "hyprduck", "--", &current_exe, "mcp", "serve"])
+        .status()
+        .map_err(|error| anyhow::anyhow!("failed to run codex mcp add: {error}"))?;
+    if !status.success() {
+        anyhow::bail!("codex mcp add exited with status {status}");
+    }
+
+    println!("Installed HyprDuck MCP for Codex.");
+    println!("command: {current_exe} mcp serve");
+    Ok(())
+}
+
+fn home_dir() -> Result<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set"))
+}
+
+fn current_exe_string() -> Result<String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|error| anyhow::anyhow!("failed to locate hyprduck binary: {error}"))?;
+    let current_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
+    Ok(current_exe.to_string_lossy().to_string())
+}
+
+fn install_shell_shim(home: &std::path::Path, current_exe: &str) -> Result<()> {
+    let bin_dir = home.join(".local").join("bin");
+    std::fs::create_dir_all(&bin_dir)?;
+    let shim_path = bin_dir.join("hyprduck");
+    if shim_path.exists() || shim_path.symlink_metadata().is_ok() {
+        std::fs::remove_file(&shim_path)?;
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(current_exe, &shim_path)?;
+
+    #[cfg(not(unix))]
+    std::fs::copy(current_exe, &shim_path)?;
+
+    println!("shell command: {}", shim_path.display());
+    Ok(())
 }
 
 fn run_doctor() -> Result<()> {

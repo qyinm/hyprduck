@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "hyprduck"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 crossterm.workspace = true

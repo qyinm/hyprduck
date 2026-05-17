@@ -10,7 +10,7 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
     let root_dir_arg = root_dir.to_string_lossy().to_string();
     fs::create_dir_all(&root_dir).expect("temp root");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck-cli"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
         .stdin(Stdio::piped())

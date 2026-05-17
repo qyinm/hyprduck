@@ -17,13 +17,27 @@ impl Cli {
             Some("doctor") => Some(Commands::Doctor),
             Some("serve") => Some(Commands::Serve),
             Some("mcp") => {
-                let subcommand = args
-                    .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck mcp serve"))?;
+                let subcommand = args.next().ok_or_else(|| {
+                    anyhow!("usage: hyprduck mcp <serve|install claude-code|install codex>")
+                })?;
                 match subcommand.as_str() {
                     "serve" => Some(Commands::Mcp {
                         command: McpCommand::Serve,
                     }),
+                    "install" => {
+                        let target = args
+                            .next()
+                            .ok_or_else(|| anyhow!("usage: hyprduck mcp install claude-code"))?;
+                        match target.as_str() {
+                            "claude-code" => Some(Commands::Mcp {
+                                command: McpCommand::InstallClaudeCode,
+                            }),
+                            "codex" => Some(Commands::Mcp {
+                                command: McpCommand::InstallCodex,
+                            }),
+                            _ => return Err(anyhow!("unknown mcp install target: {target}")),
+                        }
+                    }
                     _ => return Err(anyhow!("unknown mcp subcommand: {subcommand}")),
                 }
             }
@@ -583,6 +597,8 @@ pub enum Commands {
 #[derive(Debug)]
 pub enum McpCommand {
     Serve,
+    InstallClaudeCode,
+    InstallCodex,
 }
 
 #[derive(Debug)]

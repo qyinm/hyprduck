@@ -46,6 +46,17 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   }
+  if (process.env.HYPRDUCK_DEBUG_RENDERER_LOGS === "1") {
+    mainWindow.webContents.on("did-fail-load", (_event, code, description, validatedURL) => {
+      console.error("renderer failed to load:", { code, description, validatedURL });
+    });
+    mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+      console.error("renderer console:", { level, message, line, sourceId });
+    });
+    mainWindow.webContents.on("render-process-gone", (_event, details) => {
+      console.error("renderer process gone:", details);
+    });
+  }
 }
 
 app.whenReady().then(async () => {
