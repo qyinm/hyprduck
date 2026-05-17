@@ -47,7 +47,6 @@ import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
   WorkspaceProject,
-  WorkspaceProposeBrainUpdateRequest,
   WorkspaceSourceSummary,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
@@ -2208,46 +2207,6 @@ export function App() {
     );
   };
 
-  const proposeBrainUpdate = async (
-    request: WorkspaceProposeBrainUpdateRequest,
-  ) => {
-    const workspaceId =
-      request.workspaceId ??
-      loadedWorkspaceEnvelope?.workspace_id ??
-      snapshot.lastWorkspaceId ??
-      "default";
-    await invoke<unknown>("propose_brain_update", {
-      workspace_id: workspaceId,
-      kind: request.kind,
-      title: request.title,
-      body: request.body,
-      target_node_id: request.targetNodeId ?? null,
-      target_source_id: request.targetSourceId ?? null,
-      relation_kind: request.relationKind ?? null,
-      source_description: request.sourceDescription ?? null,
-      source_user_context: request.sourceUserContext ?? null,
-      source_ingest_instruction: request.sourceIngestInstruction ?? null,
-      source_refs: request.sourceRefs ?? [],
-      node_refs: request.nodeRefs ?? [],
-      evidence_refs: request.evidenceRefs ?? [],
-      proposal_payload: request.proposalPayload ?? null,
-    });
-    setWorkspaceLoadState({
-      status: "loading",
-      message: "Refreshing graph/wiki after brain update.",
-    });
-    const nextLoad = await loadGraphWorkspaceEnvelopeResult(
-      loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
-      loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
-    );
-    setLoadedWorkspaceEnvelope(nextLoad.envelope);
-    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
-    const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
-      workspace_id: workspaceId,
-    });
-    setBrainHealth(nextHealth);
-  };
-
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke<EngineConfigPayload>("save_engine_config", {
       payload,
@@ -2529,7 +2488,6 @@ export function App() {
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
-                onProposeBrainUpdate={proposeBrainUpdate}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />
