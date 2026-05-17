@@ -2,29 +2,34 @@ use std::path::Path;
 
 use crate::*;
 
+pub(crate) struct ProviderGraphRunArtifact<'a> {
+    pub(crate) workspace_root: &'a Path,
+    pub(crate) run_id: &'a str,
+    pub(crate) workspace_id: &'a str,
+    pub(crate) manifest: &'a SourceArtifactManifest,
+    pub(crate) status: &'a str,
+    pub(crate) prompt: Option<&'a str>,
+    pub(crate) provider_response: Option<&'a str>,
+    pub(crate) error_message: Option<String>,
+}
+
 pub(crate) fn write_provider_graph_run_artifacts(
-    workspace_root: &Path,
-    run_id: &str,
-    workspace_id: &str,
-    manifest: &SourceArtifactManifest,
-    status: &str,
-    prompt: Option<&str>,
-    provider_response: Option<&str>,
-    error_message: Option<String>,
+    artifact: ProviderGraphRunArtifact<'_>,
 ) -> Result<()> {
     write_json_pretty(
-        &workspace_root
+        &artifact
+            .workspace_root
             .join("runs")
-            .join(run_id)
+            .join(artifact.run_id)
             .join("provider-response.json"),
         &json!({
-            "runId": run_id,
-            "workspaceId": workspace_id,
-            "sourceId": manifest.source_id,
-            "status": status,
-            "prompt": prompt,
-            "providerResponse": provider_response,
-            "errorMessage": error_message,
+            "runId": artifact.run_id,
+            "workspaceId": artifact.workspace_id,
+            "sourceId": artifact.manifest.source_id,
+            "status": artifact.status,
+            "prompt": artifact.prompt,
+            "providerResponse": artifact.provider_response,
+            "errorMessage": artifact.error_message,
             "createdAt": unix_timestamp_seconds(),
         }),
     )

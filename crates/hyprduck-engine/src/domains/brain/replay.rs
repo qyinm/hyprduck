@@ -250,7 +250,7 @@ impl BrainReplayState {
         for mutation in &self.accepted_mutations {
             match mutation {
                 AcceptedReplayMutation::Proposal(proposal) => {
-                    apply_replayed_accepted_proposal(&mut self.snapshot, proposal)?;
+                    apply_replayed_accepted_proposal(&mut self.snapshot, proposal.as_ref())?;
                 }
                 AcceptedReplayMutation::Memory(memory) => {
                     upsert_replayed_memory(&mut self.snapshot, memory.clone());
@@ -295,7 +295,7 @@ fn apply_replayed_brain_event(
                         memory_record_for_proposal(&proposal),
                     ));
                 } else {
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(proposal));
+                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
                 }
             }
         }
@@ -309,7 +309,7 @@ fn apply_replayed_brain_event(
                     || proposal.status == BrainProposalStatus::Accepted
                 {
                     proposal.status = BrainProposalStatus::Accepted;
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(proposal));
+                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
                 } else {
                     pending_proposals.insert(proposal.proposal_id.clone(), proposal);
                 }
@@ -328,7 +328,7 @@ fn apply_replayed_brain_event(
             if let Some(proposal_id) = accepted_review_resolved_proposal_id(event) {
                 if let Some(mut proposal) = pending_proposals.remove(&proposal_id) {
                     proposal.status = BrainProposalStatus::Accepted;
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(proposal));
+                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
                 }
             }
         }
@@ -339,7 +339,7 @@ fn apply_replayed_brain_event(
 
 #[derive(Debug, Clone)]
 enum AcceptedReplayMutation {
-    Proposal(BrainUpdateProposal),
+    Proposal(Box<BrainUpdateProposal>),
     Memory(MemoryRecord),
 }
 

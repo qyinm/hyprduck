@@ -12,13 +12,13 @@ pub use hyprduck_knowledge::{
     BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
     BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainUpdateProposal, ClaimRecord,
     CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, ProjectOverview,
-    PolicyResult, ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, PolicyResult,
+    ProjectOverview, ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
     SourceBacking, SourceFormat, SourceRecord, SourceStatus, StructuredExtractionArtifact,
-    StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, BRAIN_EVENT_SCHEMA_VERSION,
+    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
+    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
+    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
+    BRAIN_EVENT_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

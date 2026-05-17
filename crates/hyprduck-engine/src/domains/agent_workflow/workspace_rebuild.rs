@@ -4,6 +4,7 @@ use std::time::Duration;
 use super::artifacts::{
     provider_workspace_linking_response_schema, provider_workspace_rebuild_response_schema,
     write_provider_graph_run_artifacts, write_provider_graph_run_validation_report,
+    ProviderGraphRunArtifact,
 };
 use super::prompt::{build_source_local_graph_prompt, build_workspace_linking_prompt};
 use super::response::{
@@ -488,29 +489,29 @@ fn run_provider_graph_stage(
     ) {
         Ok(response) => response,
         Err(error) => {
-            write_provider_graph_run_artifacts(
+            write_provider_graph_run_artifacts(ProviderGraphRunArtifact {
                 workspace_root,
                 run_id,
                 workspace_id,
                 manifest,
-                "failed",
-                Some(prompt),
-                None,
-                Some(format!("{error:#}")),
-            )?;
+                status: "failed",
+                prompt: Some(prompt),
+                provider_response: None,
+                error_message: Some(format!("{error:#}")),
+            })?;
             return Err(error);
         }
     };
-    write_provider_graph_run_artifacts(
+    write_provider_graph_run_artifacts(ProviderGraphRunArtifact {
         workspace_root,
         run_id,
         workspace_id,
         manifest,
-        "received",
-        Some(prompt),
-        Some(&response),
-        None,
-    )?;
+        status: "received",
+        prompt: Some(prompt),
+        provider_response: Some(&response),
+        error_message: None,
+    })?;
     Ok(response)
 }
 

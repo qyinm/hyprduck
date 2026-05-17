@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use async_openai::{
-    Client,
     config::OpenAIConfig,
     types::chat::{
         ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
@@ -11,6 +10,7 @@ use async_openai::{
         CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl, ResponseFormat,
         ResponseFormatJsonSchema,
     },
+    Client,
 };
 
 use crate::provider::{EngineConfig, ProviderKind};
