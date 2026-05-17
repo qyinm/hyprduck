@@ -198,7 +198,7 @@ pub(crate) fn aggregate_workspace_project(
                 (None, Some(right)) => Some(right),
                 (None, None) => None,
             };
-            accumulator.evidence.extend(evidence.into_iter());
+            accumulator.evidence.extend(evidence);
         }
     }
 
@@ -354,12 +354,10 @@ pub(crate) fn merge_workspace_concept_groups(
             merged_accumulator
                 .aliases
                 .insert(stale_accumulator.canonical_name.clone());
-            merged_accumulator
-                .aliases
-                .extend(stale_accumulator.aliases.into_iter());
+            merged_accumulator.aliases.extend(stale_accumulator.aliases);
             merged_accumulator
                 .evidence
-                .extend(stale_accumulator.evidence.into_iter());
+                .extend(stale_accumulator.evidence);
             merged_accumulator.confidence =
                 match (merged_accumulator.confidence, stale_accumulator.confidence) {
                     (Some(left), Some(right)) => Some(left.max(right).min(0.94)),
@@ -419,7 +417,7 @@ pub(crate) fn remap_workspace_edge_accumulators(
             (None, Some(right)) => Some(right),
             (None, None) => None,
         };
-        existing.evidence.extend(accumulator.evidence.into_iter());
+        existing.evidence.extend(accumulator.evidence);
     }
     for accumulator in remapped.values_mut() {
         accumulator.evidence = dedupe_evidence(std::mem::take(&mut accumulator.evidence));

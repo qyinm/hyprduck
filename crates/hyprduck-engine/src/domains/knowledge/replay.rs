@@ -2,6 +2,15 @@ use super::cleanup::*;
 use super::origin::*;
 use super::*;
 
+struct MaterializedOverlayReplayContext<'a> {
+    valid_source_ids: &'a BTreeSet<String>,
+    valid_evidence_ids: &'a BTreeSet<String>,
+    valid_node_ids: &'a BTreeSet<String>,
+    evidence_source_ids: &'a BTreeMap<String, String>,
+    require_cross_source: bool,
+    event: &'a BrainEvent,
+}
+
 pub(super) fn is_replayable_materialized_graph_event(event: &BrainEvent) -> bool {
     event.event_type == BrainEventKind::GraphMaterialized
         && matches!(
@@ -325,35 +334,30 @@ fn apply_filtered_materialized_graph_overlay(
                 .map(|source_id| (evidence.id.clone(), source_id.clone()))
         })
         .collect::<BTreeMap<_, _>>();
+    let replay_context = MaterializedOverlayReplayContext {
+        valid_source_ids: &valid_source_ids,
+        valid_evidence_ids: &valid_evidence_ids,
+        valid_node_ids: &valid_node_ids,
+        evidence_source_ids: &evidence_source_ids,
+        require_cross_source: require_cross_source_artifacts,
+        event,
+    };
     merge_filtered_relations(
         snapshot,
         materialized_graph.relations,
-        &valid_node_ids,
-        &valid_evidence_ids,
-        &evidence_source_ids,
-        require_cross_source_artifacts,
-        event,
+        &replay_context,
         origins,
     );
     merge_filtered_claims(
         snapshot,
         materialized_graph.claims,
-        &valid_source_ids,
-        &valid_evidence_ids,
-        &valid_node_ids,
-        &evidence_source_ids,
-        require_cross_source_artifacts,
-        event,
+        &replay_context,
         origins,
     );
     merge_filtered_memories(
         snapshot,
         materialized_graph.memories,
-        &valid_source_ids,
-        &valid_evidence_ids,
-        &evidence_source_ids,
-        require_cross_source_artifacts,
-        event,
+        &replay_context,
         origins,
     );
     if !require_cross_source_artifacts {
@@ -368,12 +372,7 @@ fn apply_filtered_materialized_graph_overlay(
     merge_filtered_wiki_pages(
         snapshot,
         materialized_graph.wiki_pages,
-        &valid_source_ids,
-        &valid_evidence_ids,
-        &valid_node_ids,
-        &evidence_source_ids,
-        require_cross_source_artifacts,
-        event,
+        &replay_context,
         origins,
     );
     snapshot.generated_at = snapshot.generated_at.max(
@@ -509,11 +508,7 @@ fn source_label_from_source_record(source: &SourceRecord) -> String {
 fn merge_filtered_relations(
     snapshot: &mut BrainRepoSnapshot,
     relations: Vec<BrainRelationRecord>,
-    valid_node_ids: &BTreeSet<String>,
-    valid_evidence_ids: &BTreeSet<String>,
-    evidence_source_ids: &BTreeMap<String, String>,
-    require_cross_source: bool,
-    event: &BrainEvent,
+    replay_context: &MaterializedOverlayReplayContext<'_>,
     origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
@@ -523,30 +518,38 @@ fn merge_filtered_relations(
         .map(|relation| (relation.relation_id.clone(), relation))
         .collect::<BTreeMap<_, _>>();
     for mut relation in relations {
-        if !valid_node_ids.contains(&relation.source_node_id)
-            || !valid_node_ids.contains(&relation.target_node_id)
+        if !replay_context
+            .valid_node_ids
+            .contains(&relation.source_node_id)
+            || !replay_context
+                .valid_node_ids
+                .contains(&relation.target_node_id)
         {
             continue;
         }
         relation
             .evidence_ids
-            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+            .retain(|evidence_id| replay_context.valid_evidence_ids.contains(evidence_id));
         if relation.evidence_ids.is_empty() {
             continue;
         }
-        if require_cross_source
-            && !has_cross_source_evidence_refs(&relation.evidence_ids, evidence_source_ids)
+        if replay_context.require_cross_source
+            && !has_cross_source_evidence_refs(
+                &relation.evidence_ids,
+                replay_context.evidence_source_ids,
+            )
         {
             continue;
         }
-        if require_cross_source && by_id.contains_key(&relation.relation_id) {
+        if replay_context.require_cross_source && by_id.contains_key(&relation.relation_id) {
             continue;
         }
         let relation_id = relation.relation_id.clone();
         by_id.insert(relation_id.clone(), relation);
-        origins
-            .relations
-            .insert(relation_id, MaterializedRecordOrigin::from_event(event));
+        origins.relations.insert(
+            relation_id,
+            MaterializedRecordOrigin::from_event(replay_context.event),
+        );
     }
     snapshot.relations = by_id.into_values().collect();
 }
@@ -554,12 +557,7 @@ fn merge_filtered_relations(
 fn merge_filtered_claims(
     snapshot: &mut BrainRepoSnapshot,
     claims: Vec<ClaimRecord>,
-    valid_source_ids: &BTreeSet<String>,
-    valid_evidence_ids: &BTreeSet<String>,
-    valid_node_ids: &BTreeSet<String>,
-    evidence_source_ids: &BTreeMap<String, String>,
-    require_cross_source: bool,
-    event: &BrainEvent,
+    replay_context: &MaterializedOverlayReplayContext<'_>,
     origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
@@ -571,33 +569,37 @@ fn merge_filtered_claims(
     for mut claim in claims {
         claim
             .source_refs
-            .retain(|source_id| valid_source_ids.contains(source_id));
+            .retain(|source_id| replay_context.valid_source_ids.contains(source_id));
         claim
             .evidence_refs
-            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+            .retain(|evidence_id| replay_context.valid_evidence_ids.contains(evidence_id));
         claim
             .topic_refs
-            .retain(|node_id| valid_node_ids.contains(node_id));
+            .retain(|node_id| replay_context.valid_node_ids.contains(node_id));
         if claim.source_refs.is_empty() && claim.evidence_refs.is_empty() {
             continue;
         }
         if claim.topic_refs.is_empty() {
             continue;
         }
-        if require_cross_source
+        if replay_context.require_cross_source
             && (!has_cross_source_refs(&claim.source_refs)
-                || !has_cross_source_evidence_refs(&claim.evidence_refs, evidence_source_ids))
+                || !has_cross_source_evidence_refs(
+                    &claim.evidence_refs,
+                    replay_context.evidence_source_ids,
+                ))
         {
             continue;
         }
-        if require_cross_source && by_id.contains_key(&claim.claim_id) {
+        if replay_context.require_cross_source && by_id.contains_key(&claim.claim_id) {
             continue;
         }
         let claim_id = claim.claim_id.clone();
         by_id.insert(claim_id.clone(), claim);
-        origins
-            .claims
-            .insert(claim_id, MaterializedRecordOrigin::from_event(event));
+        origins.claims.insert(
+            claim_id,
+            MaterializedRecordOrigin::from_event(replay_context.event),
+        );
     }
     snapshot.claims = by_id.into_values().collect();
 }
@@ -605,11 +607,7 @@ fn merge_filtered_claims(
 fn merge_filtered_memories(
     snapshot: &mut BrainRepoSnapshot,
     memories: Vec<MemoryRecord>,
-    valid_source_ids: &BTreeSet<String>,
-    valid_evidence_ids: &BTreeSet<String>,
-    evidence_source_ids: &BTreeMap<String, String>,
-    require_cross_source: bool,
-    event: &BrainEvent,
+    replay_context: &MaterializedOverlayReplayContext<'_>,
     origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_id = snapshot
@@ -621,27 +619,31 @@ fn merge_filtered_memories(
     for mut memory in memories {
         memory
             .source_refs
-            .retain(|source_id| valid_source_ids.contains(source_id));
+            .retain(|source_id| replay_context.valid_source_ids.contains(source_id));
         memory
             .evidence_refs
-            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+            .retain(|evidence_id| replay_context.valid_evidence_ids.contains(evidence_id));
         if memory.source_refs.is_empty() && memory.evidence_refs.is_empty() {
             continue;
         }
-        if require_cross_source
+        if replay_context.require_cross_source
             && (!has_cross_source_refs(&memory.source_refs)
-                || !has_cross_source_evidence_refs(&memory.evidence_refs, evidence_source_ids))
+                || !has_cross_source_evidence_refs(
+                    &memory.evidence_refs,
+                    replay_context.evidence_source_ids,
+                ))
         {
             continue;
         }
-        if require_cross_source && by_id.contains_key(&memory.memory_id) {
+        if replay_context.require_cross_source && by_id.contains_key(&memory.memory_id) {
             continue;
         }
         let memory_id = memory.memory_id.clone();
         by_id.insert(memory_id.clone(), memory);
-        origins
-            .memories
-            .insert(memory_id, MaterializedRecordOrigin::from_event(event));
+        origins.memories.insert(
+            memory_id,
+            MaterializedRecordOrigin::from_event(replay_context.event),
+        );
     }
     snapshot.memories = by_id.into_values().collect();
 }
@@ -695,12 +697,7 @@ fn merge_filtered_extractions(
 fn merge_filtered_wiki_pages(
     snapshot: &mut BrainRepoSnapshot,
     pages: Vec<WikiPage>,
-    valid_source_ids: &BTreeSet<String>,
-    valid_evidence_ids: &BTreeSet<String>,
-    valid_node_ids: &BTreeSet<String>,
-    evidence_source_ids: &BTreeMap<String, String>,
-    require_cross_source: bool,
-    event: &BrainEvent,
+    replay_context: &MaterializedOverlayReplayContext<'_>,
     origins: &mut MaterializedRecordOrigins,
 ) {
     let mut by_path = snapshot
@@ -711,29 +708,32 @@ fn merge_filtered_wiki_pages(
         .collect::<BTreeMap<_, _>>();
     for mut page in pages {
         page.source_refs
-            .retain(|source_id| valid_source_ids.contains(source_id));
+            .retain(|source_id| replay_context.valid_source_ids.contains(source_id));
         page.evidence_refs
-            .retain(|evidence_id| valid_evidence_ids.contains(evidence_id));
+            .retain(|evidence_id| replay_context.valid_evidence_ids.contains(evidence_id));
         page.node_refs
-            .retain(|node_id| valid_node_ids.contains(node_id));
+            .retain(|node_id| replay_context.valid_node_ids.contains(node_id));
         if page.path.starts_with("wiki/sources/")
             && !page
                 .source_refs
                 .iter()
-                .any(|source_id| valid_source_ids.contains(source_id))
+                .any(|source_id| replay_context.valid_source_ids.contains(source_id))
         {
             continue;
         }
         if page.path.starts_with("wiki/topics/") && page.node_refs.is_empty() {
             continue;
         }
-        if require_cross_source
+        if replay_context.require_cross_source
             && (!has_cross_source_refs(&page.source_refs)
-                || !has_cross_source_evidence_refs(&page.evidence_refs, evidence_source_ids))
+                || !has_cross_source_evidence_refs(
+                    &page.evidence_refs,
+                    replay_context.evidence_source_ids,
+                ))
         {
             continue;
         }
-        if require_cross_source
+        if replay_context.require_cross_source
             && (by_path.contains_key(&page.path)
                 || by_path
                     .values()
@@ -744,7 +744,7 @@ fn merge_filtered_wiki_pages(
         let page_id = page.page_id.clone();
         let path = page.path.clone();
         by_path.insert(path.clone(), page);
-        let origin = MaterializedRecordOrigin::from_event(event);
+        let origin = MaterializedRecordOrigin::from_event(replay_context.event);
         origins.wiki_pages_by_id.insert(page_id, origin.clone());
         origins.wiki_pages_by_path.insert(path, origin);
     }

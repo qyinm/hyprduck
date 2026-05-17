@@ -226,17 +226,12 @@ pub(crate) struct MarkdownEvidenceSpan {
     pub(crate) snippet: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MarkdownClaimClassification {
+    #[default]
     DurableFact,
     Decision,
-}
-
-impl Default for MarkdownClaimClassification {
-    fn default() -> Self {
-        Self::DurableFact
-    }
 }
 
 #[derive(Debug, Clone)]

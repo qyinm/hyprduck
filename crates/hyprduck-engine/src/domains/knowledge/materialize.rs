@@ -1242,7 +1242,7 @@ pub(crate) fn merge_materialized_memory_records(
     existing: Vec<MemoryRecord>,
 ) -> Vec<MemoryRecord> {
     let mut merged = BTreeMap::<String, MemoryRecord>::new();
-    for memory in generated.into_iter().chain(existing.into_iter()) {
+    for memory in generated.into_iter().chain(existing) {
         match merged.get_mut(&memory.memory_id) {
             Some(existing) => merge_memory_record(existing, memory),
             None => {
@@ -1346,10 +1346,10 @@ pub(crate) fn refresh_current_materialized_events(snapshot: &mut BrainRepoSnapsh
         snapshot.workspace_id
     );
     snapshot.events.retain(|event| {
-        !(event.event_type == BrainEventKind::GraphMaterialized
+        !((event.event_type == BrainEventKind::GraphMaterialized
             && event.operation_type.as_deref() == Some("graph_materialized"))
-            && !(event.event_type == BrainEventKind::WikiMaterialized
-                && event.operation_type.as_deref() == Some("wiki_materialized"))
+            || (event.event_type == BrainEventKind::WikiMaterialized
+                && event.operation_type.as_deref() == Some("wiki_materialized")))
     });
     snapshot.events.push(final_graph_materialized_event(
         snapshot,
