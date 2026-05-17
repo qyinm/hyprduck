@@ -18,22 +18,21 @@ use hyprduck_engine_types::{
     ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
     CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef,
     GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
-    GetContextPackResponseData, GraphHistoryEntry, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, GraphRollbackTarget, IngestStatus, KnowledgeProject,
-    ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadProjectRequest,
-    LoadProjectResponseData, MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
-    ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData, ReadGraphHistoryRequest,
-    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReconstructBrainRequest, ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary,
-    RelationKind, ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
-    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
-    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
+    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
+    GraphNodeSummary, IngestStatus, KnowledgeProject, ListBrainReviewItemsRequest,
+    ListBrainReviewItemsResponseData, LoadProjectRequest, LoadProjectResponseData, MemoryRecord,
+    PageArtifact, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData, ParseResult,
+    ParsedPage, ProjectOverview, ProjectStatus, ProposeBrainUpdateRequest,
+    ProposeBrainUpdateResponseData, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, ResolveBrainReviewItemRequest,
+    ResolveBrainReviewItemResponseData, SearchBrainRequest, SearchBrainResponseData,
+    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceSummary,
+    StructuredExtractionArtifact, StructuredExtractionClaim, StructuredExtractionEntity,
+    StructuredExtractionMemoryCandidate, StructuredExtractionPageRef, StructuredExtractionRelation,
+    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
+    WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
@@ -45,9 +44,11 @@ use uuid::Uuid;
 
 mod commands;
 mod domains;
+mod graph_history;
 mod infra;
 mod run_artifacts;
 pub mod runtime;
+mod search_context;
 
 mod agent_workflow {
     pub(crate) use crate::domains::agent_workflow::*;
@@ -109,6 +110,11 @@ use domains::ingest::output_package::{
     build_markdown, build_source_id, export_output_package, load_source_manifest,
     resolved_source_ids, source_summary_from_manifest, write_source_manifest,
 };
+#[allow(unused_imports)]
+pub(crate) use graph_history::{
+    event_matches_recent_events_request, graph_snapshot_source_ingest_id,
+    handle_read_graph_history, handle_read_graph_snapshot, latest_graph_materialized_event,
+};
 use import_context::{
     build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
 };
@@ -120,6 +126,11 @@ use provider::EngineConfig;
 use provider::EngineConfigStore;
 use run_artifacts::queued_proposal_provider_response_value;
 pub(crate) use runtime::emit_event;
+#[allow(unused_imports)]
+pub(crate) use search_context::{
+    best_snippet, context_pack_warnings, evidence_snippet, match_score,
+    normalize_search_token, search_terms, search_token_frequencies, trim_context_pack_to_budget,
+};
 use source_index::{chunk_source_markdown, read_workspace_source_chunks, upsert_source_chunks};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
@@ -686,351 +697,6 @@ fn handle_read_recent_events(
     Ok(ReadRecentEventsResponseData {
         events: reader.recent_events(&request),
     })
-}
-
-fn handle_read_graph_history(
-    request: ReadGraphHistoryRequest,
-) -> Result<ReadGraphHistoryResponseData> {
-    let reader = BrainReader::open(&request.scope)?;
-    let mut states = reader
-        .events
-        .iter()
-        .filter(|event| {
-            event.workspace_id == request.scope.workspace_id
-                && is_completed_graph_materialized_event(event)
-        })
-        .cloned()
-        .map(|event| graph_history_entry_from_event(reader.root(), event))
-        .collect::<Result<Vec<_>>>()?;
-    states.sort_by(|left, right| {
-        right
-            .materialized_at
-            .cmp(&left.materialized_at)
-            .then_with(|| right.event_id.cmp(&left.event_id))
-    });
-    if let Some(limit) = request.limit {
-        states.truncate(limit);
-    }
-    Ok(ReadGraphHistoryResponseData { states })
-}
-
-fn handle_read_graph_snapshot(
-    request: ReadGraphSnapshotRequest,
-) -> Result<ReadGraphSnapshotResponseData> {
-    let reader = BrainReader::open(&request.scope)?;
-    let marker = read_latest_readable_graph_snapshot_marker(reader.root())?;
-    let marker_event = marker.as_ref().and_then(|marker| {
-        (marker.workspace_id == request.scope.workspace_id).then(|| {
-            reader.events.iter().find(|event| {
-                event.workspace_id == request.scope.workspace_id
-                    && is_completed_graph_materialized_event(event)
-                    && event.event_id == marker.event_id
-            })
-        })?
-    });
-    let latest = marker_event
-        .or_else(|| latest_graph_materialized_event(&reader.events, &request.scope.workspace_id));
-    let materialized_at = latest
-        .and_then(|event| event.causality.materialized_version)
-        .unwrap_or(reader.snapshot.generated_at);
-    let created_at = latest
-        .map(|event| event.created_at)
-        .unwrap_or(reader.snapshot.generated_at);
-    let snapshot_id = latest
-        .and_then(|event| event.causality.snapshot_id.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "snapshot-{}-{}",
-                reader.snapshot.workspace_id, materialized_at
-            )
-        });
-    let source_ingest_id = latest
-        .map(graph_snapshot_source_ingest_id)
-        .unwrap_or_else(|| format!("materialized://{}", reader.snapshot.workspace_id));
-    let materialized_paths = marker
-        .as_ref()
-        .filter(|_| marker_event.is_some())
-        .map(|marker| marker.materialized_files.clone())
-        .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
-
-    Ok(ReadGraphSnapshotResponseData {
-        snapshot_id,
-        source_ingest_id,
-        workspace_id: reader.snapshot.workspace_id.clone(),
-        source_of_truth_path: "events/brain_events.jsonl".into(),
-        latest_readable_snapshot_path: LATEST_READABLE_SNAPSHOT_PATH.into(),
-        created_at,
-        materialized_at,
-        materialized_paths,
-        source_paths: graph_snapshot_source_paths(&reader.snapshot),
-        nodes: reader.snapshot.nodes.clone(),
-        edges: reader.snapshot.relations.clone(),
-        claims: reader.snapshot.claims.clone(),
-        memory_refs: reader
-            .snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        wiki_pages: reader.read_all_wiki_pages()?,
-    })
-}
-
-fn graph_snapshot_source_ingest_id(event: &BrainEvent) -> String {
-    event
-        .source_refs
-        .first()
-        .cloned()
-        .or_else(|| event.causality.caused_by_source_ids.first().cloned())
-        .unwrap_or_else(|| event.event_id.clone())
-}
-
-fn latest_graph_materialized_event<'a>(
-    events: &'a [BrainEvent],
-    workspace_id: &str,
-) -> Option<&'a BrainEvent> {
-    events
-        .iter()
-        .filter(|event| {
-            event.workspace_id == workspace_id && is_completed_graph_materialized_event(event)
-        })
-        .max_by(|left, right| {
-            left.causality
-                .materialized_version
-                .unwrap_or(left.created_at)
-                .cmp(
-                    &right
-                        .causality
-                        .materialized_version
-                        .unwrap_or(right.created_at),
-                )
-                .then_with(|| left.event_id.cmp(&right.event_id))
-        })
-}
-
-fn is_completed_graph_materialized_event(event: &BrainEvent) -> bool {
-    event.event_type == BrainEventKind::GraphMaterialized
-        && event.causality.materialized_version.is_some()
-        && !matches!(
-            event.policy_result.as_str(),
-            "failed" | "stale" | "in_progress" | "ingest_in_progress"
-        )
-}
-
-fn graph_snapshot_source_paths(snapshot: &BrainRepoSnapshot) -> Vec<String> {
-    snapshot
-        .sources
-        .iter()
-        .flat_map(|source| [source.source_path.clone(), source.markdown_path.clone()])
-        .filter(|path| !path.trim().is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<GraphHistoryEntry> {
-    let snapshot_id = event
-        .causality
-        .snapshot_id
-        .clone()
-        .unwrap_or_else(|| format!("snapshot-{}-{}", event.workspace_id, event.created_at));
-    let materialized_at = event
-        .causality
-        .materialized_version
-        .unwrap_or(event.created_at);
-    let payload = serde_json::from_str::<MaterializedGraphEventPayload>(&event.payload_json).ok();
-    let fallback_payload =
-        serde_json::from_str::<Value>(&event.payload_json).unwrap_or(Value::Null);
-    let graph = payload.and_then(|payload| payload.materialized_graph);
-
-    Ok(GraphHistoryEntry {
-        snapshot_id: snapshot_id.clone(),
-        materialized_at,
-        event_id: event.event_id.clone(),
-        rollback_target: graph_rollback_target(&snapshot_id, &event.event_id, materialized_at),
-        operation_type: event.operation_type.clone(),
-        source_run_ids: graph_history_source_run_ids(&event),
-        source_markdown_refs: event.source_markdown_refs.clone(),
-        storage_locations: graph_history_storage_locations(
-            root,
-            &snapshot_id,
-            &event.event_id,
-            materialized_at,
-        ),
-        node_count: graph
-            .as_ref()
-            .map(|graph| graph.nodes.len())
-            .or_else(|| json_usize(&fallback_payload, "nodeCount"))
-            .unwrap_or(event.node_refs.len()),
-        edge_count: graph
-            .as_ref()
-            .map(|graph| graph.relations.len())
-            .or_else(|| json_usize(&fallback_payload, "relationCount"))
-            .unwrap_or(event.relation_refs.len()),
-        claim_count: graph
-            .as_ref()
-            .map(|graph| graph.claims.len())
-            .or_else(|| json_usize(&fallback_payload, "claimCount"))
-            .unwrap_or(event.claim_refs.len()),
-        memory_count: graph
-            .as_ref()
-            .map(|graph| graph.memories.len())
-            .or_else(|| json_usize(&fallback_payload, "memoryCount"))
-            .unwrap_or(event.memory_refs.len()),
-        wiki_page_count: graph
-            .as_ref()
-            .map(|graph| graph.wiki_pages.len())
-            .or_else(|| json_usize(&fallback_payload, "wikiPageCount"))
-            .unwrap_or(0),
-    })
-}
-
-fn graph_rollback_target(
-    snapshot_id: &str,
-    event_id: &str,
-    materialized_version: u64,
-) -> GraphRollbackTarget {
-    GraphRollbackTarget {
-        snapshot_id: snapshot_id.to_string(),
-        event_id: event_id.to_string(),
-        materialized_version,
-        replay_selector: format!("--event {event_id}"),
-    }
-}
-
-fn graph_history_source_run_ids(event: &BrainEvent) -> Vec<String> {
-    let mut ids = BTreeSet::new();
-    ids.extend(event.source_refs.iter().cloned());
-    ids.extend(event.causality.caused_by_source_ids.iter().cloned());
-    ids.extend(event.causality.caused_by_event_ids.iter().cloned());
-    ids.into_iter().collect()
-}
-
-fn graph_history_storage_locations(
-    root: &Path,
-    snapshot_id: &str,
-    event_id: &str,
-    materialized_at: u64,
-) -> Vec<String> {
-    let mut locations = vec![
-        format!("events/brain_events.jsonl#{event_id}"),
-        format!("replay://up_to_event_id={event_id}"),
-        format!("replay://up_to_materialized_version={materialized_at}"),
-    ];
-    let snapshot_files = root.join("snapshots").join(snapshot_id).join("files");
-    if snapshot_files.exists() {
-        locations.push(format!("snapshots/{snapshot_id}/files"));
-    }
-    locations.extend([
-        "brain-manifest.json".to_string(),
-        "graph/nodes.json".to_string(),
-        "graph/edges.json".to_string(),
-        "graph/claims.json".to_string(),
-        "memory/records.json".to_string(),
-        "wiki/index.md".to_string(),
-    ]);
-    locations
-}
-
-fn json_usize(value: &Value, key: &str) -> Option<usize> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-}
-
-fn event_matches_recent_events_request(
-    event: &BrainEvent,
-    request: &ReadRecentEventsRequest,
-) -> bool {
-    if let Some(run_id) = request.run_id.as_deref() {
-        if !event_matches_run_id(event, run_id) {
-            return false;
-        }
-    }
-    if let Some(source_ref) = request.source_ref.as_deref() {
-        if !event.source_refs.iter().any(|value| value == source_ref)
-            && !event
-                .source_markdown_refs
-                .iter()
-                .any(|value| value == source_ref)
-            && !event
-                .causality
-                .caused_by_source_ids
-                .iter()
-                .any(|value| value == source_ref)
-        {
-            return false;
-        }
-    }
-    if let Some(node_id) = request.node_id.as_deref() {
-        if !event.node_refs.iter().any(|value| value == node_id)
-            && !event.target_node_ids.iter().any(|value| value == node_id)
-        {
-            return false;
-        }
-    }
-    if let Some(edge_id) = request.edge_id.as_deref() {
-        if !event.relation_refs.iter().any(|value| value == edge_id)
-            && !event.target_edge_ids.iter().any(|value| value == edge_id)
-        {
-            return false;
-        }
-    }
-    if let Some(claim_id) = request.claim_id.as_deref() {
-        if !event.claim_refs.iter().any(|value| value == claim_id)
-            && !event.target_claim_ids.iter().any(|value| value == claim_id)
-        {
-            return false;
-        }
-    }
-    if let Some(memory_id) = request.memory_id.as_deref() {
-        if !event.memory_refs.iter().any(|value| value == memory_id)
-            && !event
-                .target_memory_ids
-                .iter()
-                .any(|value| value == memory_id)
-        {
-            return false;
-        }
-    }
-    if let Some(change_type) = request.change_type.as_deref() {
-        if !event_matches_change_type(event, change_type) {
-            return false;
-        }
-    }
-    true
-}
-
-fn event_matches_run_id(event: &BrainEvent, run_id: &str) -> bool {
-    graph_history_source_run_ids(event)
-        .iter()
-        .any(|value| value == run_id)
-        || event_payload_string(event, "runId").as_deref() == Some(run_id)
-}
-
-fn event_matches_change_type(event: &BrainEvent, change_type: &str) -> bool {
-    event.operation_type.as_deref() == Some(change_type)
-        || serialized_event_type(event).as_deref() == Some(change_type)
-        || event_payload_string(event, "changeType").as_deref() == Some(change_type)
-        || event_payload_string(event, "operationType").as_deref() == Some(change_type)
-}
-
-fn serialized_event_type(event: &BrainEvent) -> Option<String> {
-    serde_json::to_value(event.event_type)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-}
-
-fn event_payload_string(event: &BrainEvent, key: &str) -> Option<String> {
-    serde_json::from_str::<Value>(&event.payload_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .get(key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
 }
 
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
@@ -1735,7 +1401,7 @@ fn repair_missing_materialized_wiki_stubs(
                 title: stub.title.clone(),
                 body: existing_body.unwrap_or_else(|| missing_wiki_stub_body(stub)),
                 node_refs: merge_string_refs(&stub.node_refs, &[]),
-                source_refs: merge_string_refs(&stub.source_refs, &[stub.path.clone()]),
+                source_refs: merge_string_refs(&stub.source_refs, std::slice::from_ref(&stub.path)),
                 evidence_refs: merge_string_refs(&stub.evidence_refs, &[]),
                 updated_at,
             });
@@ -2216,7 +1882,7 @@ fn validate_brain_update_proposal(request: &ProposeBrainUpdateRequest) -> Result
                 );
             }
             if request.node_refs.is_empty()
-                && !payload_edge.is_some_and(|edge| !edge.source_node_id.trim().is_empty())
+                && payload_edge.is_none_or(|edge| edge.source_node_id.trim().is_empty())
             {
                 push_agent_proposal_issue(
                     &mut issues,
@@ -3850,7 +3516,7 @@ fn relation_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainR
         label: payload_edge
             .map(|edge| edge.label.trim())
             .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| proposal.title.as_str())
+            .unwrap_or(proposal.title.as_str())
             .to_string(),
         evidence_ids,
         confidence: None,
@@ -4721,139 +4387,6 @@ fn normalize_wiki_path(path: &str) -> Result<String> {
     Ok(normalized)
 }
 
-fn search_terms(query: &str) -> Vec<String> {
-    query
-        .split(|char: char| !char.is_ascii_alphanumeric())
-        .filter_map(normalize_search_token)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn match_score(terms: &[String], haystack: &str) -> Option<usize> {
-    let frequencies = search_token_frequencies(haystack);
-    let mut matched_terms = 0usize;
-    let mut score = 0usize;
-    for term in terms {
-        if let Some(frequency) = frequencies.get(term) {
-            matched_terms += 1;
-            score += 8 + frequency.saturating_mul(2);
-            continue;
-        }
-        if term.len() > 3
-            && frequencies
-                .keys()
-                .any(|token| token.starts_with(term) || term.starts_with(token))
-        {
-            matched_terms += 1;
-            score += 3;
-        }
-    }
-    score += matched_terms.saturating_mul(matched_terms);
-    if matched_terms == terms.len() {
-        score += 10;
-    }
-    (score > 0).then_some(score)
-}
-
-fn evidence_snippet(evidence_ids: &[String]) -> String {
-    if evidence_ids.is_empty() {
-        return "evidence: none".into();
-    }
-    format!("evidence: {}", evidence_ids.join(", "))
-}
-
-fn search_token_frequencies(text: &str) -> BTreeMap<String, usize> {
-    let mut frequencies = BTreeMap::new();
-    for token in text
-        .split(|char: char| !char.is_ascii_alphanumeric())
-        .filter_map(normalize_search_token)
-    {
-        *frequencies.entry(token).or_insert(0) += 1;
-    }
-    frequencies
-}
-
-fn normalize_search_token(raw: &str) -> Option<String> {
-    let mut token = raw.trim().to_ascii_lowercase();
-    if token.len() <= 1 {
-        return None;
-    }
-    if token.ends_with("ies") && token.len() > 4 {
-        token.truncate(token.len() - 3);
-        token.push('y');
-    } else if token.ends_with("ing") && token.len() > 5 {
-        token.truncate(token.len() - 3);
-    } else if token.ends_with("ed") && token.len() > 4 {
-        token.truncate(token.len() - 2);
-    } else if token.ends_with("es") && token.len() > 4 && !token.ends_with("ses") {
-        token.truncate(token.len() - 2);
-    } else if token.ends_with('s')
-        && token.len() > 4
-        && !token.ends_with("ss")
-        && !token.ends_with("us")
-    {
-        token.truncate(token.len() - 1);
-    }
-    (token.len() > 1).then_some(token)
-}
-
-fn best_snippet(text: &str, terms: &[String]) -> String {
-    let lower = text.to_ascii_lowercase();
-    let start = terms
-        .iter()
-        .filter_map(|term| lower.find(term))
-        .min()
-        .unwrap_or(0)
-        .saturating_sub(48);
-    text.chars().skip(start).take(180).collect()
-}
-
-fn context_pack_warnings(
-    nodes: &[BrainNodeRecord],
-    evidence: &[EvidenceRef],
-    budget: usize,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
-    if nodes.is_empty() {
-        warnings.push(
-            "No graph nodes matched the query; pack falls back to workspace wiki pages.".into(),
-        );
-    }
-    if evidence.is_empty() {
-        warnings.push("No direct evidence refs matched the query.".into());
-    }
-    if nodes
-        .iter()
-        .any(|node| node.confidence.unwrap_or(1.0) < 0.6)
-    {
-        warnings.push("Some selected nodes have low confidence.".into());
-    }
-    if budget < 2000 {
-        warnings.push("Small budget may omit relevant wiki pages or graph context.".into());
-    }
-    warnings
-}
-
-fn trim_context_pack_to_budget(
-    budget: usize,
-    wiki_pages: &mut [WikiPage],
-    nodes: &mut Vec<BrainNodeRecord>,
-) {
-    let mut remaining_chars = budget.saturating_mul(4);
-    for page in wiki_pages.iter_mut() {
-        if page.body.len() > remaining_chars {
-            page.body = page.body.chars().take(remaining_chars).collect();
-            remaining_chars = 0;
-        } else {
-            remaining_chars = remaining_chars.saturating_sub(page.body.len());
-        }
-    }
-    if remaining_chars == 0 {
-        nodes.truncate(nodes.len().min(3));
-    }
-}
-
 fn load_answerable_project(
     store: &KnowledgeProjectStore,
     project_id: &str,
@@ -5067,7 +4600,7 @@ fn decode_source_manifest_snapshot(encoded: &str) -> Result<SourceArtifactManife
 }
 
 fn decode_sqlite_hex_text(value: &str) -> Result<String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         bail!("sqlite hex text had an odd byte count");
     }
     let bytes = (0..value.len())
@@ -5128,9 +4661,7 @@ fn document_format_from_slug(value: &str) -> Result<DocumentFormat> {
 
 fn sanitize_name(value: &str) -> String {
     let sanitized = value
-        .replace('/', "-")
-        .replace('\\', "-")
-        .replace(':', "-")
+        .replace(['/', '\\', ':'], "-")
         .replace("..", "-")
         .trim()
         .chars()
@@ -5611,7 +5142,7 @@ impl KnowledgeProjectStore {
             );
         }
 
-        Ok(String::from_utf8(output.stdout).context("sqlite3 output was not valid UTF-8")?)
+        String::from_utf8(output.stdout).context("sqlite3 output was not valid UTF-8")
     }
 }
 
