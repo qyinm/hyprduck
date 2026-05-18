@@ -172,6 +172,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         }),
     );
     let snapshot_resource = read_message(&mut reader);
+    assert_eq!(
+        snapshot_resource["result"]["contents"][0]["uri"],
+        "hyprduck://brain/default/graph/snapshot"
+    );
     let snapshot_text = snapshot_resource["result"]["contents"][0]["text"]
         .as_str()
         .expect("snapshot text");
@@ -183,6 +187,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
     );
     assert_eq!(snapshot["nodes"][0]["nodeId"], "node-mcp-readable");
     assert_eq!(snapshot["wikiPages"][0]["body"], "# MCP Snapshot\n");
+    assert_eq!(snapshot["sourcePaths"][0], "[redacted-local-path]");
 
     write_message(
         &mut stdin,
@@ -196,6 +201,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         }),
     );
     let wiki_resource = read_message(&mut reader);
+    assert_eq!(
+        wiki_resource["result"]["contents"][0]["uri"],
+        "hyprduck://brain/default/wiki/index.md"
+    );
     assert_eq!(
         wiki_resource["result"]["contents"][0]["mimeType"],
         "text/markdown"
@@ -283,7 +292,64 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 26,
+            "id": 28,
+            "method": "tools/call",
+            "params": {
+                "name": "read_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp"
+                }
+            }
+        }),
+    );
+    let redacted_source_tool = read_message(&mut reader);
+    let text = redacted_source_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("redacted source text");
+    let redacted_source: Value = serde_json::from_str(text).expect("redacted source payload");
+    assert_eq!(
+        redacted_source["source"]["sourcePath"],
+        "[redacted-local-path]"
+    );
+    assert_eq!(
+        redacted_source["evidence"][0]["markdownPath"],
+        "[redacted-local-path]"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 29,
+            "method": "tools/call",
+            "params": {
+                "name": "read_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "includeLocalPaths": true
+                }
+            }
+        }),
+    );
+    let unredacted_source_tool = read_message(&mut reader);
+    let text = unredacted_source_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("unredacted source text");
+    let unredacted_source: Value = serde_json::from_str(text).expect("unredacted source payload");
+    assert!(unredacted_source["source"]["sourcePath"]
+        .as_str()
+        .expect("source path")
+        .contains(root_dir_arg.as_str()));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 30,
             "method": "tools/call",
             "params": {
                 "name": "read_graph_snapshot",
@@ -309,7 +375,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 27,
+            "id": 31,
             "method": "tools/call",
             "params": {
                 "name": "read_wiki_page",
@@ -348,7 +414,10 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::create_dir_all(workspace.join("wiki")).expect("wiki dir");
     fs::write(
         workspace.join("brain-manifest.json"),
-        r##"{"workspaceId":"default","generatedAt":42,"sources":[],"nodes":[{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":[],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}],"relations":[],"evidence":[],"memories":[],"wikiPages":[{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":[],"updatedAt":42}],"entities":[],"claims":[],"extractions":[],"events":[]}"##,
+        format!(
+            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
+            root = workspace.display()
+        ),
     )
     .expect("manifest");
     fs::write(
@@ -357,7 +426,14 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     )
     .expect("nodes");
     fs::write(workspace.join("graph/edges.json"), "[]").expect("edges");
-    fs::write(workspace.join("graph/evidence.json"), "[]").expect("evidence");
+    fs::write(
+        workspace.join("graph/evidence.json"),
+        format!(
+            r#"[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}]"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("evidence");
     fs::write(workspace.join("graph/claims.json"), "[]").expect("claims");
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
     fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");

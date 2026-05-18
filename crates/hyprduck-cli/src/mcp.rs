@@ -123,14 +123,36 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
         }
         None => return error_response(id, -32602, "Invalid params: missing arguments"),
     };
+    let include_local_paths = match optional_bool(arguments, "includeLocalPaths") {
+        Ok(value) => value.unwrap_or(false),
+        Err(error) => {
+            return success_response(
+                id,
+                json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": error.to_string()
+                        }
+                    ],
+                    "isError": true
+                }),
+            )
+        }
+    };
 
     let result = match call_tool(client, name, arguments) {
         Ok(tool_result) => {
+            let value = if include_local_paths {
+                tool_result.value
+            } else {
+                redact_local_paths(tool_result.value)
+            };
             let mut result = json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": serde_json::to_string_pretty(&tool_result.value)
+                        "text": serde_json::to_string_pretty(&value)
                             .unwrap_or_else(|_| "{}".into())
                     }
                 ],
@@ -178,10 +200,11 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
             let snapshot = client.read_graph_snapshot(ReadGraphSnapshotRequest {
                 scope: resource.scope,
             })?;
+            let snapshot = redact_local_paths(serde_json::to_value(snapshot)?);
             Ok(json!({
                 "contents": [
                     {
-                        "uri": uri,
+                        "uri": public_resource_uri(uri),
                         "mimeType": "application/json",
                         "text": serde_json::to_string_pretty(&snapshot)?
                     }
@@ -196,7 +219,7 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
             Ok(json!({
                 "contents": [
                     {
-                        "uri": uri,
+                        "uri": public_resource_uri(uri),
                         "mimeType": "text/markdown",
                         "text": page.page.body
                     }
@@ -204,6 +227,10 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
             }))
         }
     }
+}
+
+fn public_resource_uri(uri: &str) -> &str {
+    uri.split_once('?').map_or(uri, |(path, _)| path)
 }
 
 #[derive(Debug)]
@@ -496,6 +523,38 @@ fn optional_usize(arguments: &Map<String, Value>, name: &str) -> Result<Option<u
     }
 }
 
+fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bool>> {
+    match arguments.get(name) {
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(anyhow!("argument {name} must be a boolean")),
+        None => Ok(None),
+    }
+}
+
+fn redact_local_paths(value: Value) -> Value {
+    match value {
+        Value::String(value) if is_absolute_local_path(&value) => {
+            Value::String("[redacted-local-path]".into())
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(redact_local_paths).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, redact_local_paths(value)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn is_absolute_local_path(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with("~/")
+        || value
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':')
+}
+
 fn success_response(id: Value, result: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -663,6 +722,13 @@ fn tool_definition(
         json!({
             "type": "string",
             "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 is set."
+        }),
+    );
+    merged_properties.insert(
+        "includeLocalPaths".into(),
+        json!({
+            "type": "boolean",
+            "description": "Include absolute local filesystem paths in responses. Defaults to false; keep false for agent-facing calls."
         }),
     );
 
