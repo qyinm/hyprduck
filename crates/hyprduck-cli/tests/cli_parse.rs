@@ -66,6 +66,21 @@ fn documents_search_alias_keeps_brain_search_compatibility() {
 }
 
 #[test]
+fn ingest_alias_reaches_parse_format_validation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["ingest", "fixture.unsupported"])
+        .output()
+        .expect("ingest alias should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported input format: unsupported"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn mcp_install_claude_code_writes_production_server_entry() {
     let home = unique_temp_dir("hyprduck-cli-mcp-install");
     let config_dir = home.join(".config/claude-code");

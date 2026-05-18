@@ -40,10 +40,10 @@ impl Cli {
                     _ => return Err(anyhow!("unknown mcp subcommand: {subcommand}")),
                 }
             }
-            Some("parse") => {
+            Some(command @ ("parse" | "ingest")) => {
                 let input = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck parse <input>"))?;
+                    .ok_or_else(|| anyhow!("usage: hyprduck {command} <input>"))?;
                 Some(Commands::Parse { input })
             }
             Some("engines") => {
