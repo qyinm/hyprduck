@@ -1098,15 +1098,20 @@ async function legacyPayloadFromPlist(plistPath) {
     return null;
   }
 
-  const provider = engineProviderSlug(legacyProvider.providerType) ?? "open_router";
+  const provider = engineProviderSlug(legacyProvider.providerType);
+  const supportedProvider = provider ?? "open_router";
   const promptTemplate = templateBlob ? parseLegacyTemplateBlob(templateBlob) : "General";
-  const apiKey = await selectLegacyApiKey(plistPath, provider, legacyProvider.apiKey);
+  const apiKey = provider
+    ? await selectLegacyApiKey(plistPath, provider, legacyProvider.apiKey)
+    : "";
 
   return {
-    provider,
-    model_id: legacyProvider.modelId ?? defaultModelForProvider(provider),
+    provider: supportedProvider,
+    model_id: provider
+      ? legacyProvider.modelId ?? defaultModelForProvider(provider)
+      : defaultModelForProvider(supportedProvider),
     api_key: apiKey,
-    base_url: legacyProvider.baseUrl ?? null,
+    base_url: provider ? legacyProvider.baseUrl ?? null : null,
     prompt_template: promptTemplate,
     provider_options: [],
     model_options: [],
@@ -1185,10 +1190,6 @@ function engineProviderSlug(value) {
   switch (value) {
     case "OpenRouter":
       return "open_router";
-    case "OpenAI":
-      return "open_ai";
-    case "Anthropic":
-      return "anthropic";
     case "Ollama":
       return "ollama";
     default:
@@ -1200,10 +1201,6 @@ function defaultModelForProvider(providerSlug) {
   switch (providerSlug) {
     case "ollama":
       return "qwen3-vl:8b";
-    case "open_ai":
-      return "gpt-4.1-mini";
-    case "anthropic":
-      return "claude-3-5-sonnet-20241022";
     default:
       return "openai/gpt-4.1-mini";
   }

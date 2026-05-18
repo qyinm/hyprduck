@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
@@ -13,18 +13,18 @@ use hyprduck_engine_types::{
     BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthStatus,
     BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord,
     BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord,
-    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef, GetBrainHealthRequest,
-    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    LoadProjectRequest, LoadProjectResponseData, MemoryRecord, PageArtifact, ParseEvent,
-    ParseMetadata, ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview,
-    ProjectStatus, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    CompileProjectRequest, CompileProjectResponseData, ContextPackSourceMetadataV0,
+    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
+    EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
+    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
+    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
+    MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData,
+    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest, ReadNodeResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
+    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
     StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
     StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
     WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
@@ -204,7 +204,7 @@ fn handle_parse(
         failed_count: parse.failed_count,
     };
 
-    let source_manifest = export_output_package(&request, &result)?;
+    let source_manifest = export_output_package(&request, &result, &config)?;
     let saved_output_path = source_manifest
         .as_ref()
         .map(|manifest| manifest.markdown_path.clone());
@@ -702,23 +702,151 @@ fn handle_read_recent_events(
 
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
     let reader = BrainReader::open(&request.scope)?;
+    let context_pack = reader.context_pack(&request.query, request.budget.unwrap_or(8000))?;
+    let source_metadata = build_context_pack_source_metadata(reader.root(), &context_pack.sources);
+    let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
+        &context_pack,
+        format!("ctx_{}", uuid::Uuid::now_v7().simple()),
+        current_iso_timestamp_utc(),
+        &source_metadata,
+    );
+    let persisted_context_pack_path = if request.persist {
+        Some(persist_context_pack_v0(&request.scope, &context_pack_v0)?)
+    } else {
+        None
+    };
     Ok(GetContextPackResponseData {
-        context_pack: reader.context_pack(&request.query, request.budget.unwrap_or(8000))?,
+        context_pack,
+        context_pack_v0,
+        persisted_context_pack_path,
     })
+}
+
+fn persist_context_pack_v0(
+    scope: &BrainReadScope,
+    context_pack: &hyprduck_engine_types::ContextPackV0,
+) -> Result<String> {
+    let workspace_root = resolve_brain_workspace_root(scope)?;
+    let history_dir = workspace_root.join("context_packs");
+    fs::create_dir_all(&history_dir)
+        .with_context(|| format!("failed creating {}", history_dir.display()))?;
+    let json =
+        serde_json::to_string_pretty(context_pack).context("failed encoding context pack v0")?;
+    let history_path = history_dir.join(format!("{}.json", context_pack.pack_id));
+    fs::write(&history_path, &json)
+        .with_context(|| format!("failed writing {}", history_path.display()))?;
+    let latest_path = workspace_root.join("context_pack.json");
+    fs::write(&latest_path, json)
+        .with_context(|| format!("failed writing {}", latest_path.display()))?;
+    Ok(latest_path.display().to_string())
+}
+
+fn build_context_pack_source_metadata(
+    workspace_root: &Path,
+    sources: &[SourceRecord],
+) -> BTreeMap<SourceId, ContextPackSourceMetadataV0> {
+    let Ok(canonical_workspace_root) = workspace_root.canonicalize() else {
+        return BTreeMap::new();
+    };
+    sources
+        .iter()
+        .filter_map(|source| {
+            let content = read_context_pack_source_bytes(
+                &canonical_workspace_root,
+                [&source.source_path, &source.markdown_path],
+            )?;
+            Some((
+                source.source_id.clone(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: format!("fnv64:{:016x}", fnv1a64(&content)),
+                    provider_route: "unknown".into(),
+                    local_only: false,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn read_context_pack_source_bytes<'a>(
+    canonical_workspace_root: &Path,
+    candidate_paths: impl IntoIterator<Item = &'a String>,
+) -> Option<Vec<u8>> {
+    for candidate in candidate_paths {
+        let path = Path::new(candidate);
+        if !path.exists() {
+            continue;
+        }
+        let Ok(canonical_path) = path.canonicalize() else {
+            continue;
+        };
+        if !canonical_path.starts_with(canonical_workspace_root) {
+            continue;
+        }
+        if let Ok(content) = fs::read(&canonical_path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn current_iso_timestamp_utc() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    unix_seconds_to_iso_utc(seconds)
+}
+
+fn unix_seconds_to_iso_utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m as u32, d as u32)
 }
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
-    if !root.join("brain-manifest.json").exists() {
+    let repo = BrainArtifactRepository::new(root.clone());
+    if !repo.brain_manifest_path().exists() {
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
             recent_events: Vec::new(),
         });
     }
-    let report = run_brain_maintenance(&request.scope)?;
-    let attention_count = report.issue_count;
-    let mut recent_events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    let snapshot = read_materialized_brain_snapshot(&root, &request.scope.workspace_id)?;
+    let mut report = lint_brain_snapshot(&snapshot);
+    report
+        .issues
+        .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
+    let attention_count = report.issues.len();
+    let mut recent_events = repo.read_brain_events()?;
     recent_events.sort_by(|left, right| {
         right
             .created_at
@@ -1792,20 +1920,69 @@ fn join_or_none(values: &[String]) -> String {
 }
 
 fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
+    validate_workspace_id(&scope.workspace_id)?;
     if let Some(root_dir) = &scope.root_dir {
-        return Ok(PathBuf::from(root_dir).join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id);
     }
     if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
-        return Ok(PathBuf::from(output_root).join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id);
     }
     if let Some(application_support_root) = dirs::data_local_dir() {
-        return Ok(application_support_root
-            .join("HyprDuck")
-            .join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(
+            &application_support_root.join("HyprDuck"),
+            &scope.workspace_id,
+        );
     }
-    Ok(std::env::temp_dir()
-        .join("HyprDuck")
-        .join(&scope.workspace_id))
+    resolve_workspace_root_from_base(&std::env::temp_dir().join("HyprDuck"), &scope.workspace_id)
+}
+
+fn validate_workspace_id(workspace_id: &str) -> Result<()> {
+    if workspace_id.trim().is_empty()
+        || workspace_id == "."
+        || workspace_id == ".."
+        || workspace_id.contains('/')
+        || workspace_id.contains('\\')
+    {
+        bail!("invalid workspaceId: workspace IDs must be single path segments");
+    }
+    Ok(())
+}
+
+fn resolve_workspace_root_from_base(base_root: &Path, workspace_id: &str) -> Result<PathBuf> {
+    let canonical_base = canonicalize_existing_or_parent(base_root)?;
+    let workspace_root = canonical_base.join(workspace_id);
+    if workspace_root.exists() {
+        let canonical_workspace = workspace_root
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", workspace_root.display()))?;
+        if !canonical_workspace.starts_with(&canonical_base) {
+            bail!(
+                "workspace root {} escapes allowed root {}",
+                canonical_workspace.display(),
+                canonical_base.display()
+            );
+        }
+        Ok(canonical_workspace)
+    } else {
+        Ok(workspace_root)
+    }
+}
+
+fn canonicalize_existing_or_parent(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return path
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", path.display()));
+    }
+    if let Some(parent) = path.parent().filter(|parent| parent.exists()) {
+        let canonical_parent = parent
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", parent.display()))?;
+        if let Some(name) = path.file_name() {
+            return Ok(canonical_parent.join(name));
+        }
+    }
+    Ok(path.to_path_buf())
 }
 
 #[derive(Debug, Clone, Default)]

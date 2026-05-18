@@ -8,11 +8,14 @@ use serde_json::{json, Value};
 fn mcp_server_exposes_read_only_brain_tools() {
     let root_dir = std::env::temp_dir().join(format!("hyprduck-mcp-empty-{}", std::process::id()));
     let root_dir_arg = root_dir.to_string_lossy().to_string();
+    let _ = fs::remove_dir_all(&root_dir);
     fs::create_dir_all(&root_dir).expect("temp root");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -67,9 +70,11 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert_eq!(
         names,
         vec![
-            "search_brain",
             "get_context_pack",
+            "search_documents",
+            "search_brain",
             "read_source",
+            "read_page_evidence",
             "read_wiki_page",
             "read_node",
             "read_recent_events",
@@ -78,6 +83,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "read_health",
         ]
     );
+    assert_eq!(tools[0]["name"], "get_context_pack");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
     assert!(tools
         .iter()
@@ -85,6 +91,30 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": {
+                "name": "read_page_evidence",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "page": 0
+                }
+            }
+        }),
+    );
+    let invalid_page = read_message(&mut reader);
+    assert_eq!(invalid_page["result"]["isError"], true);
+    assert!(invalid_page["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text")
+        .contains("positive 1-based"));
 
     write_message(
         &mut stdin,
@@ -142,6 +172,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         }),
     );
     let snapshot_resource = read_message(&mut reader);
+    assert_eq!(
+        snapshot_resource["result"]["contents"][0]["uri"],
+        "hyprduck://brain/default/graph/snapshot"
+    );
     let snapshot_text = snapshot_resource["result"]["contents"][0]["text"]
         .as_str()
         .expect("snapshot text");
@@ -153,6 +187,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
     );
     assert_eq!(snapshot["nodes"][0]["nodeId"], "node-mcp-readable");
     assert_eq!(snapshot["wikiPages"][0]["body"], "# MCP Snapshot\n");
+    assert_eq!(snapshot["sourcePaths"][0], "[redacted-local-path]");
 
     write_message(
         &mut stdin,
@@ -167,6 +202,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
     );
     let wiki_resource = read_message(&mut reader);
     assert_eq!(
+        wiki_resource["result"]["contents"][0]["uri"],
+        "hyprduck://brain/default/wiki/index.md"
+    );
+    assert_eq!(
         wiki_resource["result"]["contents"][0]["mimeType"],
         "text/markdown"
     );
@@ -175,13 +214,6 @@ fn mcp_server_exposes_read_only_brain_tools() {
         "# MCP Snapshot\n"
     );
 
-    let source_dir = root_dir.join("default/sources");
-    fs::create_dir_all(&source_dir).expect("source dir");
-    fs::write(
-        source_dir.join("agent-cache-refresh.md"),
-        "# Agent Cache Refresh\n\n## Page 1\n\nMCP read paths refresh graph and wiki state after markdown ingest.\n",
-    )
-    .expect("markdown source");
     write_message(
         &mut stdin,
         json!({
@@ -197,29 +229,27 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_health = read_message(&mut reader);
+    let snapshot_health = read_message(&mut reader);
     assert_eq!(
-        refreshed_health["result"]["isError"], false,
-        "{refreshed_health:#?}"
+        snapshot_health["result"]["isError"], false,
+        "{snapshot_health:#?}"
     );
     assert_eq!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["invalidated"], true,
-        "{refreshed_health:#?}"
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["invalidated"], false,
+        "{snapshot_health:#?}"
     );
-    assert_ne!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]["snapshotId"],
+    assert_eq!(
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]["snapshotId"],
         "snapshot-mcp-readable"
     );
     assert_eq!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]
             ["latestReadableSnapshotPath"],
         "state/latest-readable-snapshot.json"
     );
-    let refreshed_snapshot_id = refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]
-        ["current"]["snapshotId"]
-        .as_str()
-        .expect("refreshed snapshot id")
-        .to_string();
+    assert!(!root_dir
+        .join("default/state/maintenance-latest.json")
+        .exists());
 
     write_message(
         &mut stdin,
@@ -232,35 +262,14 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_snapshot_resource = read_message(&mut reader);
-    let refreshed_snapshot_text = refreshed_snapshot_resource["result"]["contents"][0]["text"]
+    let snapshot_resource_after_health = read_message(&mut reader);
+    let snapshot_text_after_health = snapshot_resource_after_health["result"]["contents"][0]
+        ["text"]
         .as_str()
-        .expect("refreshed snapshot text");
-    let refreshed_snapshot: Value =
-        serde_json::from_str(refreshed_snapshot_text).expect("refreshed snapshot payload");
-    assert_eq!(refreshed_snapshot["snapshotId"], refreshed_snapshot_id);
-    assert!(refreshed_snapshot["sourcePaths"]
-        .as_array()
-        .expect("source paths")
-        .iter()
-        .any(|path| path
-            .as_str()
-            .is_some_and(|path| path.ends_with("/sources/agent-cache-refresh.md"))));
-    assert!(refreshed_snapshot["nodes"]
-        .as_array()
-        .expect("nodes")
-        .iter()
-        .any(|node| node["kind"] == "source"
-            && node["label"]
-                .as_str()
-                .is_some_and(|label| label.contains("agent-cache-refresh"))));
-    assert!(refreshed_snapshot["wikiPages"]
-        .as_array()
-        .expect("wiki pages")
-        .iter()
-        .any(|page| page["body"]
-            .as_str()
-            .is_some_and(|body| body.contains("agent-cache-refresh.md"))));
+        .expect("snapshot text after health");
+    let snapshot_after_health: Value =
+        serde_json::from_str(snapshot_text_after_health).expect("snapshot payload after health");
+    assert_eq!(snapshot_after_health["snapshotId"], "snapshot-mcp-readable");
 
     write_message(
         &mut stdin,
@@ -273,18 +282,74 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_wiki_resource = read_message(&mut reader);
-    let refreshed_wiki_text = refreshed_wiki_resource["result"]["contents"][0]["text"]
+    let wiki_resource_after_health = read_message(&mut reader);
+    let wiki_text_after_health = wiki_resource_after_health["result"]["contents"][0]["text"]
         .as_str()
-        .expect("refreshed wiki text");
-    assert_ne!(refreshed_wiki_text, "# MCP Snapshot\n");
-    assert!(refreshed_wiki_text.contains("source-"));
+        .expect("wiki text after health");
+    assert_eq!(wiki_text_after_health, "# MCP Snapshot\n");
 
     write_message(
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 26,
+            "id": 28,
+            "method": "tools/call",
+            "params": {
+                "name": "read_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp"
+                }
+            }
+        }),
+    );
+    let redacted_source_tool = read_message(&mut reader);
+    let text = redacted_source_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("redacted source text");
+    let redacted_source: Value = serde_json::from_str(text).expect("redacted source payload");
+    assert_eq!(
+        redacted_source["source"]["sourcePath"],
+        "[redacted-local-path]"
+    );
+    assert_eq!(
+        redacted_source["evidence"][0]["markdownPath"],
+        "[redacted-local-path]"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 29,
+            "method": "tools/call",
+            "params": {
+                "name": "read_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "includeLocalPaths": true
+                }
+            }
+        }),
+    );
+    let unredacted_source_tool = read_message(&mut reader);
+    let text = unredacted_source_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("unredacted source text");
+    let unredacted_source: Value = serde_json::from_str(text).expect("unredacted source payload");
+    assert!(unredacted_source["source"]["sourcePath"]
+        .as_str()
+        .expect("source path")
+        .contains(root_dir_arg.as_str()));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 30,
             "method": "tools/call",
             "params": {
                 "name": "read_graph_snapshot",
@@ -304,27 +369,13 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .as_str()
         .expect("tool text");
     let tool_snapshot: Value = serde_json::from_str(text).expect("tool snapshot payload");
-    assert_eq!(tool_snapshot["snapshotId"], refreshed_snapshot_id);
-    assert!(tool_snapshot["sourcePaths"]
-        .as_array()
-        .expect("tool source paths")
-        .iter()
-        .any(|path| path
-            .as_str()
-            .is_some_and(|path| path.ends_with("/sources/agent-cache-refresh.md"))));
-    assert!(tool_snapshot["wikiPages"]
-        .as_array()
-        .expect("tool wiki pages")
-        .iter()
-        .any(|page| page["body"]
-            .as_str()
-            .is_some_and(|body| body.contains("source-"))));
+    assert_eq!(tool_snapshot["snapshotId"], "snapshot-mcp-readable");
 
     write_message(
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 27,
+            "id": 31,
             "method": "tools/call",
             "params": {
                 "name": "read_wiki_page",
@@ -346,11 +397,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .expect("wiki tool text");
     let tool_wiki: Value = serde_json::from_str(text).expect("wiki tool payload");
     assert_eq!(tool_wiki["page"]["path"], "wiki/index.md");
-    assert_ne!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
-    assert!(tool_wiki["page"]["body"]
-        .as_str()
-        .expect("wiki body")
-        .contains("source-"));
+    assert_eq!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
 
     drop(stdin);
     let status = child.wait().expect("server exit");
@@ -367,7 +414,10 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::create_dir_all(workspace.join("wiki")).expect("wiki dir");
     fs::write(
         workspace.join("brain-manifest.json"),
-        r##"{"workspaceId":"default","generatedAt":42,"sources":[],"nodes":[{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":[],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}],"relations":[],"evidence":[],"memories":[],"wikiPages":[{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":[],"updatedAt":42}],"entities":[],"claims":[],"extractions":[],"events":[]}"##,
+        format!(
+            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
+            root = workspace.display()
+        ),
     )
     .expect("manifest");
     fs::write(
@@ -376,7 +426,14 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     )
     .expect("nodes");
     fs::write(workspace.join("graph/edges.json"), "[]").expect("edges");
-    fs::write(workspace.join("graph/evidence.json"), "[]").expect("evidence");
+    fs::write(
+        workspace.join("graph/evidence.json"),
+        format!(
+            r#"[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}]"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("evidence");
     fs::write(workspace.join("graph/claims.json"), "[]").expect("claims");
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
     fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");

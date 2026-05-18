@@ -1,6 +1,6 @@
-# MCP Brain Server
+# MCP Context Server
 
-HyprDuck exposes the local brain through an MCP stdio server:
+HyprDuck exposes local document context artifacts through an MCP stdio server:
 
 ```bash
 hyprduck mcp serve
@@ -41,20 +41,31 @@ Example MCP client entry:
 
 ## Read Tools
 
-All tools accept optional `workspaceId` and `rootDir` arguments. If omitted,
-`workspaceId` defaults to `default` and the engine resolves the local HyprDuck
-brain root.
+All tools accept an optional `workspaceId` argument. If omitted, `workspaceId`
+defaults to `default` and the engine resolves the local HyprDuck workspace root.
+
+`rootDir` is a development-only escape hatch for tests and local fixtures. It is
+rejected unless the MCP server process is started with
+`HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`. Production clients should pass `workspaceId`
+and let HyprDuck resolve the canonical workspace root.
+
+Tool responses redact absolute local filesystem paths by default. Debug clients
+can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
+paths.
 
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
-| `search_brain` | `query` | Return ranked source-backed brain IDs. |
-| `get_context_pack` | `query` | Build an agent-ready pack with memories, claims, entities, relations, sources, evidence, and recent events. |
+| `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
+| `search_documents` | `query` | Return ranked source-backed document context IDs. |
+| `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
+| `read_page_evidence` | `sourceId` | Read source evidence refs, optionally narrowed by 1-based `page`. |
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
 | `read_node` | `nodeId` | Read a graph node with evidence and adjacent relations. |
-| `read_recent_events` | none | Read append-only brain event history. |
+| `read_recent_events` | none | Read append-only document context event history. |
+| `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
-| `read_health` | none | Read brain health. |
+| `read_health` | none | Read workspace context readiness. |
 
 ## Read Resources
 
@@ -66,8 +77,11 @@ tool calls:
 | `hyprduck://brain/default/graph/snapshot` | `application/json` | Latest resolved materialized graph/wiki snapshot. |
 | `hyprduck://brain/default/wiki/index.md` | `text/markdown` | Current materialized wiki index. |
 
-Resource URIs may include `?rootDir=/path/to/brain-root` when a client needs to
-read a specific materialized workspace root.
+Resource URIs may include `?rootDir=/path/to/workspace-root` only in the same
+explicit development mode described above. By default, resource reads resolve
+inside the application-supported HyprDuck workspace root and do not require full
+local paths. Resource responses return public HyprDuck resource URIs without
+`rootDir` query parameters.
 
 ## Materialized Snapshot Read Path
 
@@ -104,9 +118,29 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_brain","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
 ```
 
 Tool results return JSON as text content so MCP clients can pass the complete
 source, evidence, node, claim, relation, memory, and event IDs back to agents.
+
+## Security Notes
+
+- MCP is read-only by default; the default `tools/list` exposes no proposal,
+  review, write, rollback, or mutation tools.
+- Workspace IDs must be single path segments. The engine rejects `..`, absolute
+  path components, and symlink escapes after canonicalization.
+- Existing materialized artifact reads are canonicalized under the workspace
+  root before the engine reads them.
+- MCP tool responses redact absolute local filesystem paths unless
+  `includeLocalPaths: true` is explicitly provided. MCP resource responses omit
+  `rootDir` query parameters from returned `contents[].uri` values.
+- Context packs include provider-route fields, but they may currently be
+  `unknown` when the source artifact does not expose an effective route. Source
+  Pack and Evidence Index artifacts carry the import-time provider route.
+- Imported documents can contain prompt-injection text. Agents should treat
+  document content as untrusted source material and rely on selected evidence,
+  page refs, content hashes, and warnings rather than following instructions
+  embedded in imported documents.

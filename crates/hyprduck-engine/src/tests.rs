@@ -782,6 +782,16 @@ fn sample_parse_request(temp: &tempfile::TempDir) -> ParseRequest {
     }
 }
 
+fn sample_engine_config() -> EngineConfig {
+    EngineConfig {
+        provider: ProviderKind::OpenRouter,
+        model_id: "openai/gpt-4.1-mini".into(),
+        api_key: String::new(),
+        base_url: None,
+        prompt_template: "General".into(),
+    }
+}
+
 fn sample_manifest(temp: &tempfile::TempDir) -> SourceArtifactManifest {
     sample_manifest_with_source(temp, "source-test", "source", 2)
 }
@@ -910,9 +920,24 @@ fn brain_maintenance_preserves_existing_wiki_page_when_adding_missing_manifest_r
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().display().to_string()),
     };
-    let health =
-        handle_get_brain_health(GetBrainHealthRequest { scope }).expect("health runs maintenance");
-    assert_eq!(health.status, BrainHealthStatus::Clean);
+    let read_only_health = handle_get_brain_health(GetBrainHealthRequest {
+        scope: scope.clone(),
+    })
+    .expect("read-only health");
+    assert_eq!(read_only_health.status, BrainHealthStatus::AttentionNeeded);
+    assert!(!workspace_root
+        .join("state/maintenance-latest.json")
+        .exists());
+    let still_broken_snapshot =
+        read_json_artifact::<BrainRepoSnapshot>(&workspace_root.join("brain-manifest.json"))
+            .expect("read manifest after health");
+    assert!(!still_broken_snapshot
+        .wiki_pages
+        .iter()
+        .any(|page| page.path == existing_wiki_path));
+
+    let report = run_brain_maintenance(&scope).expect("maintenance runs");
+    assert_eq!(report.issue_count, 0);
     let report: BrainMaintenanceReport =
         read_json_artifact(&workspace_root.join("state/maintenance-latest.json"))
             .expect("read maintenance report");
@@ -1066,6 +1091,204 @@ fn brain_writer_uses_directory_lock_without_pid_file() {
 
     assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
     assert!(workspace_root.join("brain.lock").exists());
+}
+
+#[test]
+fn context_pack_source_metadata_hashes_available_source_content() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let source_path = workspace_root.join("source.pdf");
+    let markdown_path = workspace_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.pdf".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::pdf(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let source = metadata.get("src-context").expect("source metadata");
+    assert!(source.content_hash.starts_with("fnv64:"));
+    assert_eq!(source.provider_route, "unknown");
+    assert!(!source.local_only);
+}
+
+#[test]
+fn context_pack_source_metadata_skips_paths_outside_workspace_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let outside_path = temp.path().join("outside.md");
+    fs::write(&outside_path, b"outside bytes").expect("outside");
+
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-outside".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "outside.md".into(),
+            source_path: outside_path.display().to_string(),
+            markdown_path: outside_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(!metadata.contains_key("src-outside"));
+}
+
+#[test]
+#[cfg(unix)]
+fn context_pack_source_metadata_skips_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let outside_path = temp.path().join("outside.md");
+    let symlink_path = workspace_root.join("source.md");
+    fs::write(&outside_path, b"outside bytes").expect("outside");
+    std::os::unix::fs::symlink(&outside_path, &symlink_path).expect("symlink");
+
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-symlink".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: symlink_path.display().to_string(),
+            markdown_path: symlink_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(!metadata.contains_key("src-symlink"));
+}
+
+#[test]
+fn context_pack_v0_persistence_writes_latest_and_history_files() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().to_string_lossy().into_owned()),
+    };
+    let context_pack = hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: "ctx_test_pack".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![],
+        selected_evidence: vec![],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: "test".into(),
+            chunks_considered: 0,
+            chunks_selected: 0,
+            budget_requested: 4000,
+            budget_used: 0,
+        },
+        suggested_next_reads: vec![],
+    };
+
+    let path = persist_context_pack_v0(&scope, &context_pack).expect("persist context pack");
+    assert!(path.ends_with("default/context_pack.json"));
+    let latest = temp.path().join("default/context_pack.json");
+    let history = temp.path().join("default/context_packs/ctx_test_pack.json");
+    assert!(latest.exists());
+    assert!(history.exists());
+    let decoded: hyprduck_engine_types::ContextPackV0 =
+        serde_json::from_str(&fs::read_to_string(latest).expect("latest context pack"))
+            .expect("context pack json");
+    assert_eq!(decoded.pack_id, "ctx_test_pack");
+}
+
+#[test]
+fn resolve_brain_workspace_root_rejects_workspace_path_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: "../outside".into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+
+    let error = resolve_brain_workspace_root(&scope).expect_err("workspace escape rejected");
+    assert!(error.to_string().contains("invalid workspaceId"));
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_brain_workspace_root_rejects_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&root).expect("root");
+    fs::create_dir_all(&outside).expect("outside");
+    std::os::unix::fs::symlink(&outside, root.join("default")).expect("symlink");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(root.display().to_string()),
+    };
+
+    let error = resolve_brain_workspace_root(&scope).expect_err("symlink escape rejected");
+    assert!(error.to_string().contains("escapes allowed root"));
+}
+
+#[test]
+#[cfg(unix)]
+fn brain_reader_rejects_wiki_artifact_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("root/default");
+    let outside = temp.path().join("outside.md");
+    fs::create_dir_all(root.join("events")).expect("events");
+    fs::create_dir_all(root.join("graph")).expect("graph");
+    fs::create_dir_all(root.join("memory")).expect("memory");
+    fs::create_dir_all(root.join("wiki")).expect("wiki");
+    fs::write(&outside, "# Outside\n").expect("outside");
+    std::os::unix::fs::symlink(&outside, root.join("wiki/index.md")).expect("wiki symlink");
+    fs::write(
+        root.join("brain-manifest.json"),
+        r#"{"workspaceId":"default","generatedAt":1,"sources":[],"nodes":[],"relations":[],"evidence":[],"memories":[],"wikiPages":[{"pageId":"wiki-index","workspaceId":"default","path":"wiki/index.md","title":"Index","body":"","nodeRefs":[],"sourceRefs":[],"evidenceRefs":[],"updatedAt":1}],"entities":[],"claims":[],"extractions":[],"events":[]}"#,
+    )
+    .expect("manifest");
+    fs::write(root.join("graph/nodes.json"), "[]").expect("nodes");
+    fs::write(root.join("graph/edges.json"), "[]").expect("edges");
+    fs::write(root.join("graph/evidence.json"), "[]").expect("evidence");
+    fs::write(root.join("memory/records.json"), "[]").expect("memories");
+    fs::write(root.join("events/brain_events.jsonl"), "").expect("events");
+
+    let reader = BrainReader::open(&BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().join("root").display().to_string()),
+    })
+    .expect("reader");
+    let error = reader
+        .read_wiki_page("wiki/index.md")
+        .expect_err("wiki symlink escape rejected");
+    assert!(error.to_string().contains("escapes workspace root"));
 }
 
 #[test]
@@ -3839,6 +4062,7 @@ fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         "123",
         &request,
         &sample_parse_result(),
+        &sample_engine_config(),
     )
     .expect("fallback output manifest");
 
@@ -3853,6 +4077,37 @@ fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         .markdown_path
         .as_deref()
         .is_some_and(|path| Path::new(path).exists()));
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    assert!(source_pack_path.exists());
+    assert!(evidence_index_path.exists());
+
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    assert_eq!(
+        source_pack.schema_version,
+        hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+    );
+    assert_eq!(source_pack.source_id, manifest.source_id);
+    assert_eq!(source_pack.page_count, 1);
+    assert!(source_pack.content_hash.starts_with("fnv64:"));
+
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+    assert_eq!(
+        evidence_index.schema_version,
+        hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+    );
+    assert_eq!(evidence_index.source_id, manifest.source_id);
+    assert_eq!(evidence_index.content_hash, source_pack.content_hash);
+    assert_eq!(evidence_index.evidence.len(), 1);
+    assert_eq!(evidence_index.evidence[0].page, 1);
+    assert!(evidence_index.evidence[0]
+        .quoted_text
+        .contains("Grounded evidence"));
 }
 
 #[test]
@@ -3873,6 +4128,7 @@ fn output_packaging_uses_requested_workspace_and_source_ids() {
         "123",
         &request,
         &sample_parse_result(),
+        &sample_engine_config(),
     )
     .expect("output manifest");
 
@@ -3884,6 +4140,155 @@ fn output_packaging_uses_requested_workspace_and_source_ids() {
     assert!(manifest
         .source_path
         .contains("/workspace-alpha/sources/source-alpha"));
+}
+
+#[test]
+fn output_packaging_records_partial_import_warnings_in_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.pages.push(ParsedPage {
+        index: 1,
+        markdown: None,
+        plain_text: None,
+        svg: None,
+        image_asset_path: Some("images/page_2.png".into()),
+        error_message: Some("provider unavailable".into()),
+    });
+    result.failed_count = 1;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("partial output manifest");
+
+    assert_eq!(manifest.status, IngestStatus::Partial);
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.warnings.len(), 1);
+    assert_eq!(source_pack.warnings[0].warning_type, "page_parse_failed");
+    assert_eq!(source_pack.warnings[0].page, Some(2));
+    assert_eq!(evidence_index.warnings, source_pack.warnings);
+    assert_eq!(evidence_index.evidence.len(), 1);
+}
+
+#[test]
+fn output_packaging_records_ollama_as_local_provider() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: None,
+        prompt_template: "General".into(),
+    };
+
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(source_pack.local_only);
+    assert_eq!(evidence_index.provider_route, "ollama");
+    assert!(evidence_index.local_only);
+}
+
+#[test]
+fn output_packaging_marks_remote_ollama_as_not_local_only() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: Some("http://192.168.1.10:11434".into()),
+        prompt_template: "General".into(),
+    };
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(!source_pack.local_only);
+    assert_eq!(evidence_index.provider_route, "ollama");
+    assert!(!evidence_index.local_only);
+}
+
+#[test]
+fn output_packaging_does_not_treat_loopback_prefix_domains_as_local() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: Some("http://localhost.example.com:11434".into()),
+        prompt_template: "General".into(),
+    };
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(!source_pack.local_only);
 }
 
 #[test]

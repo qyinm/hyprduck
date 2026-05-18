@@ -40,10 +40,10 @@ impl Cli {
                     _ => return Err(anyhow!("unknown mcp subcommand: {subcommand}")),
                 }
             }
-            Some("parse") => {
+            Some(command @ ("parse" | "ingest")) => {
                 let input = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck parse <input>"))?;
+                    .ok_or_else(|| anyhow!("usage: hyprduck {command} <input>"))?;
                 Some(Commands::Parse { input })
             }
             Some("engines") => {
@@ -57,6 +57,9 @@ impl Cli {
                     _ => return Err(anyhow!("unknown engines subcommand: {subcommand}")),
                 }
             }
+            Some("demo") => Some(Commands::Demo {
+                command: parse_demo_command(args.collect())?,
+            }),
             Some("eval") => {
                 let subcommand = args
                     .next()
@@ -73,11 +76,53 @@ impl Cli {
                     command: parse_brain_command(subcommand, args.collect())?,
                 })
             }
+            Some("context") | Some("context-pack") => Some(Commands::Brain {
+                command: parse_brain_command("context-pack".into(), args.collect())?,
+            }),
+            Some("documents") | Some("docs") => {
+                let subcommand = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: hyprduck documents <search>"))?;
+                match subcommand.as_str() {
+                    "search" => Some(Commands::Brain {
+                        command: parse_brain_command("search".into(), args.collect())?,
+                    }),
+                    _ => return Err(anyhow!("unknown documents subcommand: {subcommand}")),
+                }
+            }
             Some(other) => return Err(anyhow!("unknown command: {other}")),
         };
 
         Ok(Self { command })
     }
+}
+
+fn parse_demo_command(args: Vec<String>) -> Result<DemoCommand> {
+    let mut root_dir = None;
+    let mut query = "What does the demo document say an agent should cite?".to_string();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                index += 1;
+                root_dir = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--root needs a value"))?,
+                );
+            }
+            "--query" => {
+                index += 1;
+                query = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("--query needs a value"))?;
+            }
+            value => return Err(anyhow!("unknown demo option: {value}")),
+        }
+        index += 1;
+    }
+    Ok(DemoCommand { root_dir, query })
 }
 
 fn parse_eval_command(subcommand: String, args: Vec<String>) -> Result<EvalCommand> {
@@ -117,6 +162,7 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
     let mut workspace = "default".to_string();
     let mut root_dir = None;
     let mut budget = None;
+    let mut persist_context_pack = false;
     let mut limit = None;
     let mut target_node_id = None;
     let mut run_id = None;
@@ -158,6 +204,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                     raw.parse()
                         .map_err(|_| anyhow!("invalid --budget: {raw}"))?,
                 );
+            }
+            "--write-context-pack" => {
+                persist_context_pack = true;
             }
             "--limit" => {
                 index += 1;
@@ -288,6 +337,7 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 root_dir,
                 query,
                 budget,
+                persist: persist_context_pack,
             })
         }
         "event-history" | "events" => Ok(BrainCommand::EventHistory {
@@ -388,6 +438,7 @@ pub enum Commands {
     Serve,
     Mcp { command: McpCommand },
     Parse { input: String },
+    Demo { command: DemoCommand },
     Engines { command: EnginesCommand },
     Brain { command: BrainCommand },
     Eval { command: EvalCommand },
@@ -414,6 +465,12 @@ pub enum EvalCommand {
 }
 
 #[derive(Debug)]
+pub struct DemoCommand {
+    pub root_dir: Option<String>,
+    pub query: String,
+}
+
+#[derive(Debug)]
 pub enum BrainCommand {
     Search {
         workspace: String,
@@ -425,6 +482,7 @@ pub enum BrainCommand {
         root_dir: Option<String>,
         query: String,
         budget: Option<usize>,
+        persist: bool,
     },
     EventHistory {
         request: ReadRecentEventsRequest,

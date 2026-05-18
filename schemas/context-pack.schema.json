@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/context-pack.schema.json",
+  "title": "HyprDuck Context Pack v0",
+  "description": "Stable external agent-facing contract for query-time cited local context packs. Internal brain records may change without requiring agents to reverse-engineer them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packId",
+    "workspaceId",
+    "query",
+    "generatedAt",
+    "sourceSet",
+    "selectedEvidence",
+    "findings",
+    "warnings",
+    "retrievalTrace",
+    "suggestedNextReads"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "hyprduck.context_pack.v0"
+    },
+    "packId": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "query": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceSet": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "selectedEvidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "retrievalTrace": {
+      "$ref": "#/$defs/retrievalTrace"
+    },
+    "suggestedNextReads": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/suggestedNextRead" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nullableNonEmptyString": {
+      "anyOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "type": "null" }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "originalFilename",
+        "contentHash",
+        "pageCount",
+        "ingestionStatus",
+        "staleness",
+        "providerRoute",
+        "localOnly"
+      ],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "originalFilename": { "$ref": "#/$defs/nonEmptyString" },
+        "contentHash": { "$ref": "#/$defs/nonEmptyString" },
+        "pageCount": { "type": "integer", "minimum": 0 },
+        "ingestionStatus": { "$ref": "#/$defs/nonEmptyString" },
+        "staleness": {
+          "enum": ["current", "stale", "unknown"]
+        },
+        "providerRoute": { "$ref": "#/$defs/nonEmptyString" },
+        "localOnly": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceRef",
+        "sourceId",
+        "page",
+        "region",
+        "span",
+        "quotedText",
+        "parseConfidence",
+        "selectionReason",
+        "contentHash"
+      ],
+      "properties": {
+        "evidenceRef": { "$ref": "#/$defs/nonEmptyString" },
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "page": { "type": "integer", "minimum": 1 },
+        "region": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "span": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "quotedText": { "$ref": "#/$defs/nonEmptyString" },
+        "parseConfidence": {
+          "enum": ["high", "medium", "low", "unknown"]
+        },
+        "selectionReason": { "$ref": "#/$defs/nonEmptyString" },
+        "contentHash": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "region": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        {
+          "properties": {
+            "span": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "findingId",
+        "statement",
+        "status",
+        "statementConfidence",
+        "derivedFrom",
+        "relevanceReason"
+      ],
+      "properties": {
+        "findingId": { "$ref": "#/$defs/nonEmptyString" },
+        "statement": { "$ref": "#/$defs/nonEmptyString" },
+        "status": {
+          "const": "derived_summary"
+        },
+        "statementConfidence": {
+          "enum": ["high", "medium", "low", "unknown"]
+        },
+        "derivedFrom": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "relevanceReason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "pageRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "page"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "page": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "severity", "message", "pageRefs"],
+      "properties": {
+        "type": { "$ref": "#/$defs/nonEmptyString" },
+        "severity": {
+          "enum": ["low", "medium", "high"]
+        },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "pageRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pageRef" }
+        }
+      }
+    },
+    "retrievalTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "chunksConsidered",
+        "chunksSelected",
+        "budgetRequested",
+        "budgetUsed"
+      ],
+      "properties": {
+        "strategy": { "$ref": "#/$defs/nonEmptyString" },
+        "chunksConsidered": { "type": "integer", "minimum": 0 },
+        "chunksSelected": { "type": "integer", "minimum": 0 },
+        "budgetRequested": { "type": "integer", "minimum": 0 },
+        "budgetUsed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "suggestedNextRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "page", "reason"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "page": { "type": "integer", "minimum": 1 },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}

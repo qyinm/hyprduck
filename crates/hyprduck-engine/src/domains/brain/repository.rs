@@ -34,8 +34,9 @@ impl BrainArtifactRepository {
         append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
     }
 
+    #[cfg(test)]
     pub(crate) fn read_memory_records(&self) -> Result<Vec<MemoryRecord>> {
-        read_memory_records(&self.root)
+        self.read_optional_json_artifact("memory/records.json")
     }
 
     #[cfg(test)]
@@ -48,11 +49,78 @@ impl BrainArtifactRepository {
     }
 
     pub(crate) fn read_brain_manifest(&self) -> Result<BrainRepoSnapshot> {
-        read_json_artifact(&self.brain_manifest_path())
+        self.read_json_artifact("brain-manifest.json")
     }
 
     pub(crate) fn read_brain_events(&self) -> Result<Vec<BrainEvent>> {
-        read_brain_events_jsonl(&self.root.join("events/brain_events.jsonl"))
+        self.read_brain_events_jsonl("events/brain_events.jsonl")
+    }
+
+    pub(crate) fn read_json_artifact<T: serde::de::DeserializeOwned>(
+        &self,
+        relative_path: &str,
+    ) -> Result<T> {
+        let path = self.safe_existing_artifact_path(relative_path)?;
+        read_json_artifact(&path)
+    }
+
+    pub(crate) fn read_optional_json_artifact<T: serde::de::DeserializeOwned + Default>(
+        &self,
+        relative_path: &str,
+    ) -> Result<T> {
+        let path = self.safe_artifact_path(relative_path)?;
+        if !path.exists() {
+            return Ok(T::default());
+        }
+        let path = self.safe_existing_artifact_path(relative_path)?;
+        read_json_artifact(&path)
+    }
+
+    pub(crate) fn read_text_artifact(&self, relative_path: &str) -> Result<String> {
+        let path = self.safe_existing_artifact_path(relative_path)?;
+        fs::read_to_string(&path).with_context(|| format!("failed reading {}", path.display()))
+    }
+
+    fn read_brain_events_jsonl(&self, relative_path: &str) -> Result<Vec<BrainEvent>> {
+        let path = self.safe_artifact_path(relative_path)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        read_brain_events_jsonl(&self.safe_existing_artifact_path(relative_path)?)
+    }
+
+    fn safe_artifact_path(&self, relative_path: &str) -> Result<PathBuf> {
+        let relative = Path::new(relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("artifact path must be workspace-relative: {relative_path}");
+        }
+        Ok(self.root.join(relative))
+    }
+
+    fn safe_existing_artifact_path(&self, relative_path: &str) -> Result<PathBuf> {
+        let path = self.safe_artifact_path(relative_path)?;
+        if path.exists() {
+            let canonical_root = self
+                .root
+                .canonicalize()
+                .with_context(|| format!("failed canonicalizing {}", self.root.display()))?;
+            let canonical_path = path
+                .canonicalize()
+                .with_context(|| format!("failed canonicalizing {}", path.display()))?;
+            if !canonical_path.starts_with(&canonical_root) {
+                bail!(
+                    "artifact path {} escapes workspace root {}",
+                    canonical_path.display(),
+                    canonical_root.display()
+                );
+            }
+            return Ok(canonical_path);
+        }
+        Ok(path)
     }
 }
 

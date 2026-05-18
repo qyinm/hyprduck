@@ -551,6 +551,8 @@ pub struct GetContextPackRequest {
     pub query: String,
     #[serde(default)]
     pub budget: Option<usize>,
+    #[serde(default)]
+    pub persist: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -582,10 +584,397 @@ pub struct BrainContextPack {
     pub warnings: Vec<String>,
 }
 
+pub const CONTEXT_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.context_pack.v0";
+pub const SOURCE_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.source_pack.v0";
+pub const EVIDENCE_INDEX_V0_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v0";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackStaleness {
+    Current,
+    Stale,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackParseConfidence {
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackFindingStatus {
+    DerivedSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackWarningSeverity {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackSourceV0 {
+    pub source_id: SourceId,
+    pub original_filename: String,
+    pub content_hash: String,
+    pub page_count: usize,
+    pub ingestion_status: String,
+    pub staleness: ContextPackStaleness,
+    pub provider_route: String,
+    pub local_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceV0 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub selection_reason: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackFindingV0 {
+    pub finding_id: String,
+    pub statement: String,
+    pub status: ContextPackFindingStatus,
+    pub statement_confidence: ContextPackParseConfidence,
+    pub derived_from: Vec<String>,
+    pub relevance_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackPageRefV0 {
+    pub source_id: SourceId,
+    pub page: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackWarningV0 {
+    #[serde(rename = "type")]
+    pub warning_type: String,
+    pub severity: ContextPackWarningSeverity,
+    pub message: String,
+    #[serde(default)]
+    pub page_refs: Vec<ContextPackPageRefV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackRetrievalTraceV0 {
+    pub strategy: String,
+    pub chunks_considered: usize,
+    pub chunks_selected: usize,
+    pub budget_requested: usize,
+    pub budget_used: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackSuggestedNextReadV0 {
+    pub source_id: SourceId,
+    pub page: usize,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackPageV0 {
+    pub page: usize,
+    pub label: String,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub plain_text_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackWarningV0 {
+    #[serde(rename = "type")]
+    pub warning_type: String,
+    pub severity: ContextPackWarningSeverity,
+    pub message: String,
+    #[serde(default)]
+    pub page: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackV0 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_filename: String,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub artifact_root: String,
+    pub content_hash: String,
+    pub format: DocumentFormat,
+    pub page_count: usize,
+    pub ingestion_status: IngestStatus,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub pages: Vec<SourcePackPageV0>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexItemV0 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexV0 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub content_hash: String,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub evidence: Vec<EvidenceIndexItemV0>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub generated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackV0 {
+    pub schema_version: String,
+    pub pack_id: String,
+    pub workspace_id: WorkspaceId,
+    pub query: String,
+    pub generated_at: String,
+    pub source_set: Vec<ContextPackSourceV0>,
+    pub selected_evidence: Vec<ContextPackEvidenceV0>,
+    pub findings: Vec<ContextPackFindingV0>,
+    pub warnings: Vec<ContextPackWarningV0>,
+    pub retrieval_trace: ContextPackRetrievalTraceV0,
+    pub suggested_next_reads: Vec<ContextPackSuggestedNextReadV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackSourceMetadataV0 {
+    pub content_hash: String,
+    pub provider_route: String,
+    pub local_only: bool,
+}
+
+impl ContextPackV0 {
+    pub fn from_brain_context_pack(
+        pack: &BrainContextPack,
+        pack_id: impl Into<String>,
+        generated_at: impl Into<String>,
+        source_metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+    ) -> Self {
+        let source_set = pack
+            .sources
+            .iter()
+            .filter(|source| source_metadata.contains_key(&source.source_id))
+            .map(|source| ContextPackSourceV0::from_source_record(source, source_metadata))
+            .collect::<Vec<_>>();
+        let source_set_ids = source_set
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let selected_evidence = pack
+            .evidence
+            .iter()
+            .filter_map(|evidence| {
+                ContextPackEvidenceV0::from_evidence_ref(evidence, source_metadata, &source_set_ids)
+            })
+            .collect::<Vec<_>>();
+        let selected_evidence_ids = selected_evidence
+            .iter()
+            .map(|evidence| evidence.evidence_ref.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let findings = pack
+            .claims
+            .iter()
+            .filter_map(|claim| {
+                let derived_from = claim
+                    .evidence_refs
+                    .iter()
+                    .filter(|evidence_ref| selected_evidence_ids.contains(*evidence_ref))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if derived_from.is_empty() {
+                    return None;
+                }
+                Some(ContextPackFindingV0 {
+                    finding_id: claim.claim_id.clone(),
+                    statement: claim.statement.clone(),
+                    status: ContextPackFindingStatus::DerivedSummary,
+                    statement_confidence: ContextPackParseConfidence::Unknown,
+                    derived_from,
+                    relevance_reason: "Selected from the internal context pack for this query."
+                        .into(),
+                })
+            })
+            .collect();
+
+        Self {
+            schema_version: CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+            pack_id: pack_id.into(),
+            workspace_id: pack.workspace_id.clone(),
+            query: pack.query.clone(),
+            generated_at: generated_at.into(),
+            source_set,
+            selected_evidence,
+            findings,
+            warnings: pack
+                .warnings
+                .iter()
+                .map(|warning| ContextPackWarningV0 {
+                    warning_type: "internal_context_warning".into(),
+                    severity: ContextPackWarningSeverity::Medium,
+                    message: warning.clone(),
+                    page_refs: Vec::new(),
+                })
+                .chain(
+                    pack.evidence
+                        .iter()
+                        .filter(|evidence| match evidence.source_id.as_ref() {
+                            Some(source_id) => {
+                                !source_metadata.contains_key(source_id)
+                                    || !source_set_ids.contains(source_id)
+                            }
+                            None => true,
+                        })
+                        .map(|evidence| ContextPackWarningV0 {
+                            warning_type: "evidence_missing_content_hash".into(),
+                            severity: ContextPackWarningSeverity::High,
+                            message: format!(
+                                "Evidence {} was omitted from Context Pack v0 because its source content hash or provider route is unavailable.",
+                                evidence.id
+                            ),
+                            page_refs: evidence.source_id.clone().map_or_else(Vec::new, |source_id| {
+                                vec![ContextPackPageRefV0 {
+                                    source_id,
+                                    page: evidence.page_index.unwrap_or(0) + 1,
+                                }]
+                            }),
+                        }),
+                )
+                .collect(),
+            retrieval_trace: ContextPackRetrievalTraceV0 {
+                strategy: "internal-brain-context-pack".into(),
+                chunks_considered: pack.evidence.len(),
+                chunks_selected: selected_evidence_ids.len(),
+                budget_requested: pack.token_budget,
+                budget_used: pack.summary.len(),
+            },
+            suggested_next_reads: Vec::new(),
+        }
+    }
+}
+
+impl ContextPackSourceV0 {
+    fn from_source_record(
+        source: &SourceRecord,
+        metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+    ) -> Self {
+        let metadata = metadata.get(&source.source_id).unwrap_or_else(|| {
+            panic!(
+                "source metadata missing for Context Pack v0 source {}",
+                source.source_id
+            )
+        });
+        Self {
+            source_id: source.source_id.clone(),
+            original_filename: std::path::Path::new(&source.original_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(source.original_path.as_str())
+                .into(),
+            content_hash: metadata.content_hash.clone(),
+            page_count: source.page_count,
+            ingestion_status: source.status.to_string(),
+            staleness: if source.status == SourceStatus::stale() {
+                ContextPackStaleness::Stale
+            } else {
+                ContextPackStaleness::Current
+            },
+            provider_route: metadata.provider_route.clone(),
+            local_only: metadata.local_only,
+        }
+    }
+}
+
+impl ContextPackEvidenceV0 {
+    fn from_evidence_ref(
+        evidence: &EvidenceRef,
+        source_metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+        source_set_ids: &std::collections::BTreeSet<SourceId>,
+    ) -> Option<Self> {
+        let source_id = evidence.source_id.clone()?;
+        if !source_set_ids.contains(&source_id) {
+            return None;
+        }
+        let source = source_metadata.get(&source_id)?;
+        let page = evidence.page_index.unwrap_or(0) + 1;
+        Some(Self {
+            evidence_ref: evidence.id.clone(),
+            source_id,
+            page,
+            region: Some(format!("page:{}", evidence.page_label)),
+            span: None,
+            quoted_text: evidence.snippet.clone(),
+            parse_confidence: ContextPackParseConfidence::Unknown,
+            selection_reason: "Selected from the internal context pack for this query.".into(),
+            content_hash: source.content_hash.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetContextPackResponseData {
     pub context_pack: BrainContextPack,
+    pub context_pack_v0: ContextPackV0,
+    #[serde(default)]
+    pub persisted_context_pack_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -900,18 +1289,6 @@ pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
             "google/gemini-2.5-flash-lite",
             "google/gemini-2.5-flash",
             "moonshotai/kimi-k2.5",
-        ],
-        "open_ai" => vec![
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-4o",
-            "gpt-4o-mini",
-        ],
-        "anthropic" => vec![
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
         ],
         "ollama" => vec![
             "gemma4:latest",
@@ -1302,6 +1679,7 @@ mod tests {
                 scope: scope.clone(),
                 query: "agent context".into(),
                 budget: Some(8000),
+                persist: false,
             }),
             EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
         ];
@@ -1330,6 +1708,387 @@ mod tests {
         assert_eq!(
             decoded.data.results[0].kind,
             BrainSearchResultKind::WikiPage
+        );
+    }
+
+    #[test]
+    fn context_pack_v0_schema_requires_agent_facing_fields() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/context-pack.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", schema_path.display())),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema["properties"]["schemaVersion"]["const"],
+            CONTEXT_PACK_V0_SCHEMA_VERSION
+        );
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema must define top-level required fields");
+        for field in [
+            "schemaVersion",
+            "packId",
+            "workspaceId",
+            "query",
+            "generatedAt",
+            "sourceSet",
+            "selectedEvidence",
+            "findings",
+            "warnings",
+            "retrievalTrace",
+            "suggestedNextReads",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "schema must require {field}"
+            );
+        }
+
+        let finding_required = schema
+            .pointer("/$defs/finding/required")
+            .and_then(Value::as_array)
+            .expect("finding must define required fields");
+        assert!(finding_required
+            .iter()
+            .any(|value| value.as_str() == Some("derivedFrom")));
+        assert_eq!(
+            schema.pointer("/$defs/finding/properties/status/const"),
+            Some(&Value::String("derived_summary".into()))
+        );
+    }
+
+    #[test]
+    fn source_pack_and_evidence_index_schemas_require_import_artifact_fields() {
+        let source_pack_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/source-pack.schema.json");
+        let source_pack_schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(&source_pack_path).unwrap_or_else(
+                |err| panic!("failed to read {}: {err}", source_pack_path.display()),
+            ))
+            .unwrap();
+        assert_eq!(
+            source_pack_schema["properties"]["schemaVersion"]["const"],
+            SOURCE_PACK_V0_SCHEMA_VERSION
+        );
+        for field in ["sourceId", "contentHash", "pages", "warnings"] {
+            assert!(source_pack_schema["required"]
+                .as_array()
+                .expect("source pack required")
+                .iter()
+                .any(|value| value.as_str() == Some(field)));
+        }
+
+        let evidence_index_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/evidence-index.schema.json");
+        let evidence_index_schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&evidence_index_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", evidence_index_path.display())
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence_index_schema["properties"]["schemaVersion"]["const"],
+            EVIDENCE_INDEX_V0_SCHEMA_VERSION
+        );
+        let evidence_required = evidence_index_schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("evidence required");
+        for field in [
+            "evidenceRef",
+            "sourceId",
+            "page",
+            "region",
+            "quotedText",
+            "contentHash",
+        ] {
+            assert!(evidence_required
+                .iter()
+                .any(|value| value.as_str() == Some(field)));
+        }
+    }
+
+    #[test]
+    fn source_pack_and_evidence_index_round_trip() {
+        let warning = SourcePackWarningV0 {
+            warning_type: "page_parse_failed".into(),
+            severity: ContextPackWarningSeverity::High,
+            message: "Page failed".into(),
+            page: Some(2),
+        };
+        let source_pack = SourcePackV0 {
+            schema_version: SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            original_filename: "sample.pdf".into(),
+            original_path: "/tmp/sample.pdf".into(),
+            source_path: "/tmp/HyprDuck/default/sources/source-alpha/sample.pdf".into(),
+            markdown_path: "/tmp/HyprDuck/default/artifacts/source-alpha/sample.md".into(),
+            artifact_root: "/tmp/HyprDuck/default/artifacts/source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            format: DocumentFormat::Pdf,
+            page_count: 2,
+            ingestion_status: IngestStatus::Partial,
+            provider_route: "unknown".into(),
+            local_only: false,
+            pages: vec![SourcePackPageV0 {
+                page: 1,
+                label: "Page 1".into(),
+                image_path: Some("/tmp/page_1.png".into()),
+                markdown_path: Some("/tmp/page_1.md".into()),
+                plain_text_path: None,
+                error_message: None,
+            }],
+            warnings: vec![warning.clone()],
+            created_at: 1,
+            updated_at: 2,
+        };
+        let decoded: SourcePackV0 =
+            serde_json::from_str(&serde_json::to_string(&source_pack).unwrap()).unwrap();
+        assert_eq!(decoded, source_pack);
+
+        let evidence_index = EvidenceIndexV0 {
+            schema_version: EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            provider_route: "unknown".into(),
+            local_only: false,
+            evidence: vec![EvidenceIndexItemV0 {
+                evidence_ref: "ev-source-alpha-source-1".into(),
+                source_id: "source-alpha".into(),
+                page: 1,
+                region: "page:Page 1".into(),
+                span: Some("page".into()),
+                quoted_text: "Evidence text.".into(),
+                parse_confidence: ContextPackParseConfidence::Unknown,
+                content_hash: "fnv64:abc123".into(),
+                markdown_path: Some("/tmp/page_1.md".into()),
+                image_path: Some("/tmp/page_1.png".into()),
+            }],
+            warnings: vec![warning],
+            generated_at: 3,
+        };
+        let decoded: EvidenceIndexV0 =
+            serde_json::from_str(&serde_json::to_string(&evidence_index).unwrap()).unwrap();
+        assert_eq!(decoded, evidence_index);
+    }
+
+    #[test]
+    fn context_pack_v0_round_trip_preserves_evidence_backed_findings() {
+        let pack = ContextPackV0 {
+            schema_version: CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+            pack_id: "ctx_20260518_0001".into(),
+            workspace_id: "default".into(),
+            query: "What does the document say about agent reuse?".into(),
+            generated_at: "2026-05-18T09:00:00Z".into(),
+            source_set: vec![ContextPackSourceV0 {
+                source_id: "src_agent_context".into(),
+                original_filename: "agent-context.pdf".into(),
+                content_hash: "sha256:abc123".into(),
+                page_count: 2,
+                ingestion_status: "ingested".into(),
+                staleness: ContextPackStaleness::Current,
+                provider_route: "ollama".into(),
+                local_only: true,
+            }],
+            selected_evidence: vec![ContextPackEvidenceV0 {
+                evidence_ref: "ev_src_agent_context_p1_b1".into(),
+                source_id: "src_agent_context".into(),
+                page: 1,
+                region: Some("p1-block1".into()),
+                span: Some("char:0-42".into()),
+                quoted_text: "Context packs are reusable by coding agents.".into(),
+                parse_confidence: ContextPackParseConfidence::High,
+                selection_reason: "Directly answers the reuse question.".into(),
+                content_hash: "sha256:abc123".into(),
+            }],
+            findings: vec![ContextPackFindingV0 {
+                finding_id: "f_agent_reuse".into(),
+                statement: "The document says context packs can be reused by coding agents.".into(),
+                status: ContextPackFindingStatus::DerivedSummary,
+                statement_confidence: ContextPackParseConfidence::High,
+                derived_from: vec!["ev_src_agent_context_p1_b1".into()],
+                relevance_reason: "Directly answers the query.".into(),
+            }],
+            warnings: vec![ContextPackWarningV0 {
+                warning_type: "visual_content_not_fully_parsed".into(),
+                severity: ContextPackWarningSeverity::Medium,
+                message: "A diagram may need visual inspection.".into(),
+                page_refs: vec![ContextPackPageRefV0 {
+                    source_id: "src_agent_context".into(),
+                    page: 2,
+                }],
+            }],
+            retrieval_trace: ContextPackRetrievalTraceV0 {
+                strategy: "local-text-search+evidence-expansion".into(),
+                chunks_considered: 4,
+                chunks_selected: 1,
+                budget_requested: 4000,
+                budget_used: 1200,
+            },
+            suggested_next_reads: vec![ContextPackSuggestedNextReadV0 {
+                source_id: "src_agent_context".into(),
+                page: 2,
+                reason: "Related diagram.".into(),
+            }],
+        };
+
+        let json = serde_json::to_string(&pack).unwrap();
+        assert!(json.contains("\"schemaVersion\":\"hyprduck.context_pack.v0\""));
+        assert!(json.contains("\"selectedEvidence\""));
+        assert!(json.contains("\"derivedFrom\""));
+        let decoded: ContextPackV0 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, pack);
+
+        let selected = decoded
+            .selected_evidence
+            .iter()
+            .map(|evidence| evidence.evidence_ref.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(decoded.findings.iter().all(|finding| finding
+            .derived_from
+            .iter()
+            .all(|evidence_ref| selected.contains(evidence_ref.as_str()))));
+    }
+
+    #[test]
+    fn context_pack_v0_can_project_internal_brain_context_pack() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "agent reuse".into(),
+            token_budget: 4000,
+            summary: "Agent context reuse summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "src_agent_context".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/agent-context.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/src_agent_context.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/sources/src_agent_context.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 2,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_agent_reuse".into(),
+                workspace_id: "default".into(),
+                statement: "Context packs can be reused by agents.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_agent_context".into()],
+                evidence_refs: vec!["ev_src_agent_context_p1_b1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_src_agent_context_p1_b1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Context packs are reusable by coding agents.".into(),
+                source_path: None,
+                source_id: Some("src_agent_context".into()),
+                markdown_path: Some("/tmp/HyprDuck/default/sources/src_agent_context.md".into()),
+                image_path: Some("/tmp/HyprDuck/default/artifacts/page_1.png".into()),
+                provenance: Some("markdown_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec!["budget truncated context pack".into()],
+        };
+
+        let source_metadata = BTreeMap::from([(
+            "src_agent_context".into(),
+            ContextPackSourceMetadataV0 {
+                content_hash: "sha256:abc123".into(),
+                provider_route: "ollama".into(),
+                local_only: true,
+            },
+        )]);
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &source_metadata,
+        );
+        assert_eq!(external.schema_version, CONTEXT_PACK_V0_SCHEMA_VERSION);
+        assert_eq!(
+            external.source_set[0].original_filename,
+            "agent-context.pdf"
+        );
+        assert_eq!(external.source_set[0].content_hash, "sha256:abc123");
+        assert_eq!(external.source_set[0].provider_route, "ollama");
+        assert_eq!(external.selected_evidence[0].page, 1);
+        assert_eq!(external.selected_evidence[0].content_hash, "sha256:abc123");
+        assert_eq!(
+            external.findings[0].derived_from,
+            vec!["ev_src_agent_context_p1_b1"]
+        );
+        assert_eq!(
+            external.warnings[0].warning_type,
+            "internal_context_warning"
+        );
+    }
+
+    #[test]
+    fn context_pack_v0_projection_warns_instead_of_emitting_unhashed_evidence() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "agent reuse".into(),
+            token_budget: 4000,
+            summary: "Agent context reuse summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_agent_reuse".into(),
+                workspace_id: "default".into(),
+                statement: "Context packs can be reused by agents.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_agent_context".into()],
+                evidence_refs: vec!["ev_src_agent_context_p1_b1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_src_agent_context_p1_b1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Context packs are reusable by coding agents.".into(),
+                source_path: None,
+                source_id: Some("src_agent_context".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: Some("markdown_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &BTreeMap::new(),
+        );
+        assert!(external.selected_evidence.is_empty());
+        assert!(external.findings.is_empty());
+        assert_eq!(
+            external.warnings[0].warning_type,
+            "evidence_missing_content_hash"
         );
     }
 

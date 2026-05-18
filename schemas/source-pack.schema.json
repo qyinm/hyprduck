@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/source-pack.schema.json",
+  "title": "HyprDuck Source Pack v0",
+  "description": "Import-time artifact describing one local source and its page artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "workspaceId",
+    "sourceId",
+    "originalFilename",
+    "originalPath",
+    "sourcePath",
+    "markdownPath",
+    "artifactRoot",
+    "contentHash",
+    "format",
+    "pageCount",
+    "ingestionStatus",
+    "providerRoute",
+    "localOnly",
+    "pages",
+    "warnings",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "hyprduck.source_pack.v0" },
+    "workspaceId": { "$ref": "#/$defs/nonEmptyString" },
+    "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+    "originalFilename": { "$ref": "#/$defs/nonEmptyString" },
+    "originalPath": { "$ref": "#/$defs/nonEmptyString" },
+    "sourcePath": { "$ref": "#/$defs/nonEmptyString" },
+    "markdownPath": { "$ref": "#/$defs/nonEmptyString" },
+    "artifactRoot": { "$ref": "#/$defs/nonEmptyString" },
+    "contentHash": { "$ref": "#/$defs/nonEmptyString" },
+    "format": { "enum": ["pdf", "docx", "doc", "image", "markdown"] },
+    "pageCount": { "type": "integer", "minimum": 0 },
+    "ingestionStatus": {
+      "enum": ["added", "rendering", "ingesting", "ingested", "partial", "failed", "stale"]
+    },
+    "providerRoute": { "$ref": "#/$defs/nonEmptyString" },
+    "localOnly": { "type": "boolean" },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/page" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "createdAt": { "type": "integer", "minimum": 0 },
+    "updatedAt": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nullableNonEmptyString": {
+      "anyOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "type": "null" }
+      ]
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page", "label", "imagePath", "markdownPath", "plainTextPath", "errorMessage"],
+      "properties": {
+        "page": { "type": "integer", "minimum": 1 },
+        "label": { "$ref": "#/$defs/nonEmptyString" },
+        "imagePath": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "markdownPath": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "plainTextPath": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "errorMessage": { "$ref": "#/$defs/nullableNonEmptyString" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "severity", "message", "page"],
+      "properties": {
+        "type": { "$ref": "#/$defs/nonEmptyString" },
+        "severity": { "enum": ["low", "medium", "high"] },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "page": {
+          "anyOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

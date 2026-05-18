@@ -103,10 +103,10 @@ fn initialize_result(message: &Value) -> Value {
         },
         "serverInfo": {
             "name": "hyprduck",
-            "title": "HyprDuck Local Brain",
+            "title": "HyprDuck Local Context",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "HyprDuck exposes local brain artifacts through read, search, context-pack, snapshot, and health tools. Use search_brain and get_context_pack first, then open cited sources, wiki pages, nodes, or event history as needed."
+        "instructions": "HyprDuck exposes local document context artifacts through read, search, context-pack, snapshot, and health tools. Use get_context_pack first, then search_documents or open cited sources, page evidence, wiki pages, nodes, or event history as needed."
     })
 }
 
@@ -123,14 +123,36 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
         }
         None => return error_response(id, -32602, "Invalid params: missing arguments"),
     };
+    let include_local_paths = match optional_bool(arguments, "includeLocalPaths") {
+        Ok(value) => value.unwrap_or(false),
+        Err(error) => {
+            return success_response(
+                id,
+                json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": error.to_string()
+                        }
+                    ],
+                    "isError": true
+                }),
+            )
+        }
+    };
 
     let result = match call_tool(client, name, arguments) {
         Ok(tool_result) => {
+            let value = if include_local_paths {
+                tool_result.value
+            } else {
+                redact_local_paths(tool_result.value)
+            };
             let mut result = json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": serde_json::to_string_pretty(&tool_result.value)
+                        "text": serde_json::to_string_pretty(&value)
                             .unwrap_or_else(|_| "{}".into())
                     }
                 ],
@@ -178,10 +200,11 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
             let snapshot = client.read_graph_snapshot(ReadGraphSnapshotRequest {
                 scope: resource.scope,
             })?;
+            let snapshot = redact_local_paths(serde_json::to_value(snapshot)?);
             Ok(json!({
                 "contents": [
                     {
-                        "uri": uri,
+                        "uri": public_resource_uri(uri),
                         "mimeType": "application/json",
                         "text": serde_json::to_string_pretty(&snapshot)?
                     }
@@ -196,7 +219,7 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
             Ok(json!({
                 "contents": [
                     {
-                        "uri": uri,
+                        "uri": public_resource_uri(uri),
                         "mimeType": "text/markdown",
                         "text": page.page.body
                     }
@@ -206,11 +229,17 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
     }
 }
 
+fn public_resource_uri(uri: &str) -> &str {
+    uri.split_once('?').map_or(uri, |(path, _)| path)
+}
+
+#[derive(Debug)]
 struct BrainResource {
     scope: BrainReadScope,
     kind: BrainResourceKind,
 }
 
+#[derive(Debug)]
 enum BrainResourceKind {
     GraphSnapshot,
     WikiPage { path: String },
@@ -228,12 +257,18 @@ fn parse_resource_uri(uri: &str) -> Result<BrainResource> {
         return Err(anyhow!("HyprDuck resource uri workspace cannot be empty"));
     }
     let query = parse_resource_query(query)?;
+    let root_dir = query
+        .get("rootDir")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if root_dir.is_some() && !root_dir_argument_allowed() {
+        return Err(anyhow!(
+            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
+        ));
+    }
     let scope = BrainReadScope {
         workspace_id: percent_decode(workspace_id)?,
-        root_dir: query
-            .get("rootDir")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        root_dir,
     };
     let kind = if resource_path == "graph/snapshot" {
         BrainResourceKind::GraphSnapshot
@@ -298,7 +333,7 @@ fn call_tool(
         .flatten();
 
     let value = match name {
-        "search_brain" => {
+        "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
             let limit = optional_usize(arguments, "limit")?;
             serde_json::to_value(client.search_brain(SearchBrainRequest {
@@ -314,11 +349,31 @@ fn call_tool(
                 scope,
                 query,
                 budget,
+                persist: false,
             })?)?
         }
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
             serde_json::to_value(client.read_source(ReadSourceRequest { scope, source_id })?)?
+        }
+        "read_page_evidence" => {
+            let source_id = required_string(arguments, "sourceId")?;
+            let page = optional_usize(arguments, "page")?;
+            if page == Some(0) {
+                return Err(anyhow!("argument page must be a positive 1-based integer"));
+            }
+            let source = client.read_source(ReadSourceRequest { scope, source_id })?;
+            let evidence = source
+                .evidence
+                .into_iter()
+                .filter(|evidence| {
+                    page.is_none_or(|page| evidence.page_index == Some(page.saturating_sub(1)))
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_value(json!({
+                "source": source.source,
+                "evidence": evidence
+            }))?
         }
         "read_wiki_page" => {
             let path = required_string(arguments, "path")?;
@@ -423,11 +478,21 @@ fn read_graph_wiki_cache_state(
 }
 
 fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
+    let root_dir = optional_string(arguments, "rootDir")?;
+    if root_dir.is_some() && !root_dir_argument_allowed() {
+        return Err(anyhow!(
+            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
+        ));
+    }
     Ok(BrainReadScope {
         workspace_id: optional_string(arguments, "workspaceId")?
             .unwrap_or_else(|| "default".into()),
-        root_dir: optional_string(arguments, "rootDir")?,
+        root_dir,
     })
+}
+
+fn root_dir_argument_allowed() -> bool {
+    std::env::var("HYPRDUCK_MCP_ALLOW_ROOT_DIR").is_ok_and(|value| value == "1")
 }
 
 fn required_string(arguments: &Map<String, Value>, name: &str) -> Result<String> {
@@ -456,6 +521,38 @@ fn optional_usize(arguments: &Map<String, Value>, name: &str) -> Result<Option<u
         Some(_) => Err(anyhow!("argument {name} must be a positive integer")),
         None => Ok(None),
     }
+}
+
+fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bool>> {
+    match arguments.get(name) {
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(anyhow!("argument {name} must be a boolean")),
+        None => Ok(None),
+    }
+}
+
+fn redact_local_paths(value: Value) -> Value {
+    match value {
+        Value::String(value) if is_absolute_local_path(&value) => {
+            Value::String("[redacted-local-path]".into())
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(redact_local_paths).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, redact_local_paths(value)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn is_absolute_local_path(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with("~/")
+        || value
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':')
 }
 
 fn success_response(id: Value, result: Value) -> Value {
@@ -497,18 +594,8 @@ fn resource_definitions() -> Vec<Value> {
 fn tool_definitions() -> Vec<Value> {
     vec![
         tool_definition(
-            "search_brain",
-            "Search local HyprDuck brain artifacts and return ranked evidence-backed IDs.",
-            json!({
-                "query": { "type": "string", "description": "Search query." },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
-            }),
-            vec!["query"],
-            true,
-        ),
-        tool_definition(
             "get_context_pack",
-            "Build an agent-ready context pack with relevant memories, claims, entities, relations, sources, evidence, and recent events.",
+            "Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace.",
             json!({
                 "query": { "type": "string", "description": "Task or question to build context for." },
                 "budget": { "type": "integer", "minimum": 1, "description": "Approximate token budget." },
@@ -517,10 +604,40 @@ fn tool_definitions() -> Vec<Value> {
             true,
         ),
         tool_definition(
+            "search_documents",
+            "Search local HyprDuck document context artifacts and return ranked evidence-backed IDs.",
+            json!({
+                "query": { "type": "string", "description": "Search query." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
+            }),
+            vec!["query"],
+            true,
+        ),
+        tool_definition(
+            "search_brain",
+            "Compatibility alias for search_documents.",
+            json!({
+                "query": { "type": "string", "description": "Search query." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
+            }),
+            vec!["query"],
+            true,
+        ),
+        tool_definition(
             "read_source",
             "Read an immutable source record with adjacent wiki and evidence refs.",
             json!({
-                "sourceId": { "type": "string", "description": "Source ID returned by search_brain or get_context_pack." },
+                "sourceId": { "type": "string", "description": "Source ID returned by search_documents or get_context_pack." },
+            }),
+            vec!["sourceId"],
+            true,
+        ),
+        tool_definition(
+            "read_page_evidence",
+            "Read source evidence refs for a source, optionally narrowed to one 1-based page.",
+            json!({
+                "sourceId": { "type": "string", "description": "Source ID returned by search_documents or get_context_pack." },
+                "page": { "type": "integer", "minimum": 1, "description": "Optional 1-based page number." },
             }),
             vec!["sourceId"],
             true,
@@ -604,7 +721,14 @@ fn tool_definition(
         "rootDir".into(),
         json!({
             "type": "string",
-            "description": "Optional materialized brain repo root."
+            "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 is set."
+        }),
+    );
+    merged_properties.insert(
+        "includeLocalPaths".into(),
+        json!({
+            "type": "boolean",
+            "description": "Include absolute local filesystem paths in responses. Defaults to false; keep false for agent-facing calls."
         }),
     );
 
@@ -642,4 +766,62 @@ fn title_case_tool_name(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
+
+    #[test]
+    fn read_scope_rejects_root_dir_without_dev_env() {
+        std::env::remove_var(ROOT_DIR_ENV);
+        let mut arguments = Map::new();
+        arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
+
+        let error = read_scope(&arguments).expect_err("rootDir should be disabled by default");
+        assert!(error.to_string().contains("rootDir is disabled"));
+    }
+
+    #[test]
+    fn read_scope_rejects_root_dir_when_dev_env_is_not_one() {
+        let mut arguments = Map::new();
+        arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
+
+        std::env::set_var(ROOT_DIR_ENV, "0");
+        let zero_error = read_scope(&arguments).expect_err("rootDir=0 should stay disabled");
+        assert!(zero_error.to_string().contains("rootDir is disabled"));
+
+        std::env::set_var(ROOT_DIR_ENV, "");
+        let empty_error =
+            read_scope(&arguments).expect_err("empty rootDir env should stay disabled");
+        assert!(empty_error.to_string().contains("rootDir is disabled"));
+
+        std::env::remove_var(ROOT_DIR_ENV);
+    }
+
+    #[test]
+    fn resource_uri_rejects_root_dir_without_dev_env() {
+        std::env::remove_var(ROOT_DIR_ENV);
+
+        let error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("resource rootDir should be disabled by default");
+        assert!(error.to_string().contains("rootDir is disabled"));
+    }
+
+    #[test]
+    fn resource_uri_rejects_root_dir_when_dev_env_is_not_one() {
+        std::env::set_var(ROOT_DIR_ENV, "0");
+        let zero_error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("rootDir=0 should stay disabled for resources");
+        assert!(zero_error.to_string().contains("rootDir is disabled"));
+
+        std::env::set_var(ROOT_DIR_ENV, "");
+        let empty_error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("empty rootDir env should stay disabled for resources");
+        assert!(empty_error.to_string().contains("rootDir is disabled"));
+
+        std::env::remove_var(ROOT_DIR_ENV);
+    }
 }

@@ -9,17 +9,17 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
-    ApplyCorrectionResponseData, BrainContextPack, CheckReadinessRequest, CompileProjectRequest,
+    ApplyCorrectionResponseData, CheckReadinessRequest, CompileProjectRequest,
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, KnowledgeProject,
-    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress,
-    ParseRequest, ParseResponseData, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
-    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData,
-    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
-    ReconstructBrainResponseData, RuntimeReadinessResponseData, SaveConfigRequest,
-    SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData, ValidateProviderRequest,
-    ValidateProviderResponseData,
+    EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackResponseData,
+    KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent,
+    ParseProgress, ParseRequest, ParseResponseData, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
+    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
+    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ReconstructBrainRequest, ReconstructBrainResponseData, RuntimeReadinessResponseData,
+    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
+    ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -57,7 +57,7 @@ pub trait EngineClient {
     fn get_context_pack(
         &self,
         request: hyprduck_engine_types::GetContextPackRequest,
-    ) -> Result<BrainContextPack>;
+    ) -> Result<GetContextPackResponseData>;
     fn get_brain_health(
         &self,
         request: GetBrainHealthRequest,
@@ -356,7 +356,7 @@ impl EngineClient for SubprocessEngineClient {
     fn get_context_pack(
         &self,
         request: hyprduck_engine_types::GetContextPackRequest,
-    ) -> Result<BrainContextPack> {
+    ) -> Result<GetContextPackResponseData> {
         let response = self.run_command::<
             hyprduck_engine_types::GetContextPackResponseData,
             hyprduck_engine_types::GetContextPackResponseData,
@@ -365,7 +365,7 @@ impl EngineClient for SubprocessEngineClient {
             EngineCommand::GetContextPack,
             None,
         )?;
-        Ok(response.context_pack)
+        Ok(response)
     }
 
     fn get_brain_health(
