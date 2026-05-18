@@ -19,8 +19,9 @@ use hyprduck_engine_types::{
     GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
     GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
-    MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest, ReadNodeResponseData,
+    MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
+    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest,
+    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
     ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
     ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
     ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
@@ -654,6 +655,59 @@ fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseDa
     })
 }
 
+fn handle_read_page_evidence(
+    request: ReadPageEvidenceRequest,
+) -> Result<ReadPageEvidenceResponseData> {
+    if request.page == Some(0) {
+        bail!("argument page must be a positive 1-based integer");
+    }
+
+    let reader = BrainReader::open(&request.scope)?;
+    let source = reader
+        .snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == request.source_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("source {} was not found", request.source_id))?;
+
+    let artifact_metadata =
+        build_context_pack_artifact_metadata(reader.root(), std::slice::from_ref(&source));
+    let mut evidence = artifact_metadata
+        .evidence
+        .get(&source.source_id)
+        .into_iter()
+        .flat_map(|source_evidence| source_evidence.iter())
+        .filter(|(_, metadata)| request.page.map_or(true, |page| metadata.page == page))
+        .map(|(evidence_ref, metadata)| PageEvidenceV0 {
+            evidence_ref: evidence_ref.clone(),
+            source_id: metadata.source_id.clone(),
+            page: metadata.page,
+            region: metadata
+                .region
+                .clone()
+                .unwrap_or_else(|| format!("page:{}", metadata.page)),
+            span: metadata.span.clone(),
+            quoted_text: metadata.quoted_text.clone(),
+            parse_confidence: metadata.parse_confidence.clone(),
+            content_hash: metadata.content_hash.clone(),
+            markdown_path: metadata.markdown_path.clone(),
+            image_path: metadata.image_path.clone(),
+        })
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.page
+            .cmp(&right.page)
+            .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
+    });
+
+    Ok(ReadPageEvidenceResponseData {
+        source,
+        evidence,
+        warnings: artifact_metadata.warnings,
+    })
+}
+
 fn handle_read_wiki_page(request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
     let reader = BrainReader::open(&request.scope)?;
     let page = reader.read_wiki_page(&request.path)?;
@@ -1017,6 +1071,8 @@ fn build_context_pack_artifact_metadata(
                     quoted_text: evidence.quoted_text,
                     parse_confidence: evidence.parse_confidence,
                     content_hash: evidence.content_hash,
+                    markdown_path: evidence.markdown_path,
+                    image_path: evidence.image_path,
                 },
             );
         }

@@ -1664,6 +1664,169 @@ fn context_pack_artifact_metadata_propagates_artifact_warnings_once() {
 }
 
 #[test]
+fn read_page_evidence_resolves_source_evidence_index_metadata() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-page-evidence");
+    let source_root = workspace_root.join("sources/src-page-evidence");
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(workspace_root.join("memory")).expect("memory dir");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("pages/page_1.md");
+    let image_path = artifact_root.join("images/page_1.png");
+    fs::create_dir_all(markdown_path.parent().expect("markdown parent")).expect("pages dir");
+    fs::create_dir_all(image_path.parent().expect("image parent")).expect("images dir");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(&image_path, b"image bytes").expect("write image");
+    let source = SourceRecord {
+        source_id: "src-page-evidence".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "source.md".into(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        format: hyprduck_engine_types::SourceFormat::markdown(),
+        status: hyprduck_engine_types::SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: vec![source.clone()],
+        evidence: vec![EvidenceRef {
+            id: "ev-src-page-evidence-source-1".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Fallback internal snippet should not be returned.".into(),
+            source_path: Some(source_path.display().to_string()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(markdown_path.display().to_string()),
+            image_path: Some(image_path.display().to_string()),
+            provenance: None,
+        }],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("brain manifest");
+    write_json_pretty(
+        &workspace_root.join("graph/nodes.json"),
+        &Vec::<BrainNodeRecord>::new(),
+    )
+    .expect("nodes");
+    write_json_pretty(
+        &workspace_root.join("graph/edges.json"),
+        &Vec::<BrainRelationRecord>::new(),
+    )
+    .expect("edges");
+    write_json_pretty(
+        &workspace_root.join("graph/evidence.json"),
+        &snapshot.evidence,
+    )
+    .expect("evidence");
+    write_json_pretty(
+        &workspace_root.join("memory/records.json"),
+        &Vec::<MemoryRecord>::new(),
+    )
+    .expect("memories");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-page-evidence",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:page-evidence",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-page-evidence",
+            "contentHash": "fnv64:page-evidence",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-src-page-evidence-source-1",
+                "sourceId": "src-page-evidence",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Indexed page evidence quote.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:page-evidence",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": image_path.display().to_string()
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let response = handle_read_page_evidence(ReadPageEvidenceRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+        source_id: source.source_id,
+        page: Some(1),
+    })
+    .expect("page evidence");
+
+    assert_eq!(response.evidence.len(), 1);
+    assert_eq!(
+        response.evidence[0].evidence_ref,
+        "ev-src-page-evidence-source-1"
+    );
+    assert_eq!(
+        response.evidence[0].quoted_text,
+        "Indexed page evidence quote."
+    );
+    assert_eq!(
+        response.evidence[0].parse_confidence,
+        hyprduck_engine_types::ContextPackParseConfidence::High
+    );
+    assert_eq!(response.evidence[0].content_hash, "fnv64:page-evidence");
+    let expected_markdown_path = markdown_path.display().to_string();
+    assert_eq!(
+        response.evidence[0].markdown_path.as_deref(),
+        Some(expected_markdown_path.as_str())
+    );
+    assert!(response.warnings.is_empty());
+}
+
+#[test]
 fn context_pack_source_metadata_skips_paths_outside_workspace_root() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);

@@ -27,6 +27,7 @@ pub enum EngineCommand {
     AnswerProject,
     SearchBrain,
     ReadSource,
+    ReadPageEvidence,
     ReadWikiPage,
     ReadNode,
     ReadRecentEvents,
@@ -379,6 +380,41 @@ pub struct ReadSourceResponseData {
     pub wiki_page: Option<WikiPage>,
     #[serde(default)]
     pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPageEvidenceRequest {
+    pub scope: BrainReadScope,
+    pub source_id: SourceId,
+    #[serde(default)]
+    pub page: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageEvidenceV0 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPageEvidenceResponseData {
+    pub source: SourceRecord,
+    pub evidence: Vec<PageEvidenceV0>,
+    pub warnings: Vec<ContextPackWarningV0>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -812,6 +848,10 @@ pub struct ContextPackEvidenceMetadataV0 {
     pub quoted_text: String,
     pub parse_confidence: ContextPackParseConfidence,
     pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1202,6 +1242,7 @@ pub enum EngineRequest {
     AnswerProject(AnswerProjectRequest),
     SearchBrain(SearchBrainRequest),
     ReadSource(ReadSourceRequest),
+    ReadPageEvidence(ReadPageEvidenceRequest),
     ReadWikiPage(ReadWikiPageRequest),
     ReadNode(ReadNodeRequest),
     ReadRecentEvents(ReadRecentEventsRequest),
@@ -1710,6 +1751,11 @@ mod tests {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
             }),
+            EngineRequest::ReadPageEvidence(ReadPageEvidenceRequest {
+                scope: scope.clone(),
+                source_id: "source-123".into(),
+                page: Some(1),
+            }),
             EngineRequest::ReadWikiPage(ReadWikiPageRequest {
                 scope: scope.clone(),
                 path: "wiki/index.md".into(),
@@ -2091,6 +2137,8 @@ mod tests {
                     quoted_text: "Indexed source evidence quote.".into(),
                     parse_confidence: ContextPackParseConfidence::High,
                     content_hash: "sha256:abc123".into(),
+                    markdown_path: None,
+                    image_path: None,
                 },
             );
 
@@ -2279,6 +2327,8 @@ mod tests {
                     quoted_text: "Wrong alpha quote.".into(),
                     parse_confidence: ContextPackParseConfidence::High,
                     content_hash: "fnv64:alpha".into(),
+                    markdown_path: None,
+                    image_path: None,
                 },
             );
         artifact_metadata
@@ -2295,6 +2345,8 @@ mod tests {
                     quoted_text: "Correct beta quote.".into(),
                     parse_confidence: ContextPackParseConfidence::High,
                     content_hash: "fnv64:beta".into(),
+                    markdown_path: None,
+                    image_path: None,
                 },
             );
 

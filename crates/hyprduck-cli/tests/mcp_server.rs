@@ -352,6 +352,43 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "id": 30,
             "method": "tools/call",
             "params": {
+                "name": "read_page_evidence",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "page": 1
+                }
+            }
+        }),
+    );
+    let page_evidence_tool = read_message(&mut reader);
+    assert_eq!(
+        page_evidence_tool["result"]["isError"], false,
+        "{page_evidence_tool:#?}"
+    );
+    let text = page_evidence_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("page evidence tool text");
+    let page_evidence: Value = serde_json::from_str(text).expect("page evidence payload");
+    assert_eq!(page_evidence["evidence"][0]["evidenceRef"], "evidence-mcp");
+    assert_eq!(
+        page_evidence["evidence"][0]["quotedText"],
+        "Indexed MCP page evidence"
+    );
+    assert_eq!(page_evidence["evidence"][0]["parseConfidence"], "high");
+    assert_eq!(
+        page_evidence["evidence"][0]["markdownPath"],
+        "[redacted-local-path]"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {
                 "name": "read_graph_snapshot",
                 "arguments": {
                     "workspaceId": "default",
@@ -375,7 +412,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 31,
+            "id": 32,
             "method": "tools/call",
             "params": {
                 "name": "read_wiki_page",
@@ -412,6 +449,29 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::create_dir_all(workspace.join("memory")).expect("memory dir");
     fs::create_dir_all(workspace.join("state")).expect("state dir");
     fs::create_dir_all(workspace.join("wiki")).expect("wiki dir");
+    fs::create_dir_all(workspace.join("sources/source-mcp")).expect("source dir");
+    fs::create_dir_all(workspace.join("artifacts/source-mcp/pages")).expect("pages dir");
+    fs::create_dir_all(workspace.join("artifacts/source-mcp/images")).expect("images dir");
+    fs::write(
+        workspace.join("sources/source-mcp/source.pdf"),
+        b"source bytes",
+    )
+    .expect("source file");
+    fs::write(
+        workspace.join("artifacts/source-mcp/source.md"),
+        "# MCP source\n",
+    )
+    .expect("source markdown");
+    fs::write(
+        workspace.join("artifacts/source-mcp/pages/page_1.md"),
+        "# MCP page\n",
+    )
+    .expect("page markdown");
+    fs::write(
+        workspace.join("artifacts/source-mcp/images/page_1.png"),
+        b"image bytes",
+    )
+    .expect("page image");
     fs::write(
         workspace.join("brain-manifest.json"),
         format!(
@@ -437,6 +497,22 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(workspace.join("graph/claims.json"), "[]").expect("claims");
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
     fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");
+    fs::write(
+        workspace.join("artifacts/source-mcp/source_pack.json"),
+        format!(
+            r#"{{"schemaVersion":"hyprduck.source_pack.v0","workspaceId":"default","sourceId":"source-mcp","originalFilename":"source.pdf","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","artifactRoot":"{root}/artifacts/source-mcp","contentHash":"fnv64:mcp-source","format":"pdf","pageCount":1,"ingestionStatus":"ingested","providerRoute":"local_demo","localOnly":true,"pages":[],"warnings":[],"createdAt":42,"updatedAt":42}}"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("source pack");
+    fs::write(
+        workspace.join("artifacts/source-mcp/evidence_index.json"),
+        format!(
+            r#"{{"schemaVersion":"hyprduck.evidence_index.v0","workspaceId":"default","sourceId":"source-mcp","contentHash":"fnv64:mcp-source","providerRoute":"local_demo","localOnly":true,"evidence":[{{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","contentHash":"fnv64:mcp-source","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png"}}],"warnings":[],"generatedAt":42}}"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("evidence index");
     fs::write(
         workspace.join("events/brain_events.jsonl"),
         concat!(

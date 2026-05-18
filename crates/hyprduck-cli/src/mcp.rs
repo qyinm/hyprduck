@@ -4,8 +4,8 @@ use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadGraphHistoryRequest,
-    ReadGraphSnapshotRequest, ReadNodeRequest, ReadRecentEventsRequest, ReadSourceRequest,
-    ReadWikiPageRequest, SearchBrainRequest,
+    ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest, ReadRecentEventsRequest,
+    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -362,18 +362,11 @@ fn call_tool(
             if page == Some(0) {
                 return Err(anyhow!("argument page must be a positive 1-based integer"));
             }
-            let source = client.read_source(ReadSourceRequest { scope, source_id })?;
-            let evidence = source
-                .evidence
-                .into_iter()
-                .filter(|evidence| {
-                    page.is_none_or(|page| evidence.page_index == Some(page.saturating_sub(1)))
-                })
-                .collect::<Vec<_>>();
-            serde_json::to_value(json!({
-                "source": source.source,
-                "evidence": evidence
-            }))?
+            serde_json::to_value(client.read_page_evidence(ReadPageEvidenceRequest {
+                scope,
+                source_id,
+                page,
+            })?)?
         }
         "read_wiki_page" => {
             let path = required_string(arguments, "path")?;

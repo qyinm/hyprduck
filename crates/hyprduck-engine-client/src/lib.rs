@@ -15,11 +15,12 @@ use hyprduck_engine_types::{
     KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent,
     ParseProgress, ParseRequest, ParseResponseData, ReadGraphHistoryRequest,
     ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReconstructBrainRequest, ReconstructBrainResponseData, RuntimeReadinessResponseData,
-    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
-    ValidateProviderRequest, ValidateProviderResponseData,
+    ReadNodeRequest, ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RuntimeReadinessResponseData, SaveConfigRequest,
+    SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData, ValidateProviderRequest,
+    ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -36,6 +37,10 @@ pub trait EngineClient {
     fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
     fn search_brain(&self, request: SearchBrainRequest) -> Result<SearchBrainResponseData>;
     fn read_source(&self, request: ReadSourceRequest) -> Result<ReadSourceResponseData>;
+    fn read_page_evidence(
+        &self,
+        request: ReadPageEvidenceRequest,
+    ) -> Result<ReadPageEvidenceResponseData>;
     fn read_wiki_page(&self, request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData>;
     fn read_node(&self, request: ReadNodeRequest) -> Result<ReadNodeResponseData>;
     fn read_recent_events(
@@ -289,6 +294,17 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<ReadSourceResponseData, ReadSourceResponseData>(
             EngineRequest::ReadSource(request),
             EngineCommand::ReadSource,
+            None,
+        )
+    }
+
+    fn read_page_evidence(
+        &self,
+        request: ReadPageEvidenceRequest,
+    ) -> Result<ReadPageEvidenceResponseData> {
+        self.run_command::<ReadPageEvidenceResponseData, ReadPageEvidenceResponseData>(
+            EngineRequest::ReadPageEvidence(request),
+            EngineCommand::ReadPageEvidence,
             None,
         )
     }

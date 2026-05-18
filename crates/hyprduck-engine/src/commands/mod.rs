@@ -41,6 +41,10 @@ pub(crate) fn encode_success_response(
             EngineCommand::ReadSource,
             crate::handle_read_source(request)?,
         )),
+        EngineRequest::ReadPageEvidence(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadPageEvidence,
+            crate::handle_read_page_evidence(request)?,
+        )),
         EngineRequest::ReadWikiPage(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadWikiPage,
             crate::handle_read_wiki_page(request)?,
@@ -122,6 +126,7 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::AnswerProject(_) => EngineCommand::AnswerProject,
         EngineRequest::SearchBrain(_) => EngineCommand::SearchBrain,
         EngineRequest::ReadSource(_) => EngineCommand::ReadSource,
+        EngineRequest::ReadPageEvidence(_) => EngineCommand::ReadPageEvidence,
         EngineRequest::ReadWikiPage(_) => EngineCommand::ReadWikiPage,
         EngineRequest::ReadNode(_) => EngineCommand::ReadNode,
         EngineRequest::ReadRecentEvents(_) => EngineCommand::ReadRecentEvents,
