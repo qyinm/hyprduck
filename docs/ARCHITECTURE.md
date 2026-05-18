@@ -87,8 +87,8 @@ flowchart TB
 
 - `ingest`: copies source files, renders pages, runs parsing, and writes output
   packages.
-- `provider`: loads AI configuration and calls OpenRouter, OpenAI, Anthropic,
-  or Ollama-compatible endpoints.
+- `provider`: loads AI configuration and calls OpenRouter-hosted models or
+  Ollama-compatible local endpoints through the OpenAI-compatible chat client.
 - `retrieval`: builds local source indexes and import context.
 - `knowledge`: compiles source-backed project views, applies corrections, and
   answers workspace questions using citations.

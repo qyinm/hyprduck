@@ -204,18 +204,6 @@ const WEB_MOCK_PROVIDER_OPTIONS: ProviderOption[] = [
     supports_base_url: true,
   },
   {
-    id: "openai",
-    label: "OpenAI",
-    requires_api_key: true,
-    supports_base_url: false,
-  },
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    requires_api_key: true,
-    supports_base_url: false,
-  },
-  {
     id: "ollama",
     label: "Ollama",
     requires_api_key: false,
@@ -230,7 +218,7 @@ const WEB_MOCK_CONFIG: EngineConfigPayload = {
   base_url: "http://localhost:11434",
   prompt_template: "General",
   provider_options: WEB_MOCK_PROVIDER_OPTIONS,
-  model_options: ["llama3.1", "llava:latest", "gpt-4o-mini"],
+  model_options: ["llama3.1", "llava:latest", "qwen2.5vl"],
   prompt_template_options: [
     "General",
     "Tutorial",
@@ -275,8 +263,6 @@ const WEB_MOCK_BASE_SNAPSHOT: UiSnapshot = {
 
 const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
   open_router: ["gpt-4o", "claude-3.5-sonnet", "llama-3.1-70b"],
-  openai: ["gpt-4o-mini", "gpt-4.1-mini"],
-  anthropic: ["claude-3.5-sonnet", "claude-3.7-sonnet"],
   ollama: ["llama3.1", "llava:latest", "qwen2.5vl"],
 };
 
