@@ -15,6 +15,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
         .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
         .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

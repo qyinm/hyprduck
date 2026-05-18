@@ -1,4 +1,5 @@
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
@@ -10,6 +11,8 @@ use hyprduck_engine_types::{
 use serde_json::{json, Map, Value};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
+const ROOT_DIR_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_ROOTS";
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
@@ -260,12 +263,8 @@ fn parse_resource_uri(uri: &str) -> Result<BrainResource> {
     let root_dir = query
         .get("rootDir")
         .and_then(Value::as_str)
-        .map(str::to_string);
-    if root_dir.is_some() && !root_dir_argument_allowed() {
-        return Err(anyhow!(
-            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
-        ));
-    }
+        .map(validate_root_dir_argument)
+        .transpose()?;
     let scope = BrainReadScope {
         workspace_id: percent_decode(workspace_id)?,
         root_dir,
@@ -478,11 +477,10 @@ fn read_graph_wiki_cache_state(
 
 fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
     let root_dir = optional_string(arguments, "rootDir")?;
-    if root_dir.is_some() && !root_dir_argument_allowed() {
-        return Err(anyhow!(
-            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
-        ));
-    }
+    let root_dir = root_dir
+        .as_deref()
+        .map(validate_root_dir_argument)
+        .transpose()?;
     Ok(BrainReadScope {
         workspace_id: optional_string(arguments, "workspaceId")?
             .unwrap_or_else(|| "default".into()),
@@ -490,8 +488,50 @@ fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
     })
 }
 
+fn validate_root_dir_argument(root_dir: &str) -> Result<String> {
+    if !root_dir_argument_allowed() {
+        return Err(anyhow!(
+            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 and HYPRDUCK_MCP_ALLOWED_ROOTS for development roots"
+        ));
+    }
+    let canonical_root_dir = canonicalize_mcp_root(root_dir)?;
+    let allowed_roots = allowed_root_dirs()?;
+    if allowed_roots
+        .iter()
+        .any(|allowed_root| canonical_root_dir.starts_with(allowed_root))
+    {
+        return canonical_root_dir
+            .into_os_string()
+            .into_string()
+            .map_err(|_| anyhow!("rootDir must be valid UTF-8 after canonicalization"));
+    }
+    Err(anyhow!("rootDir is not in HYPRDUCK_MCP_ALLOWED_ROOTS"))
+}
+
 fn root_dir_argument_allowed() -> bool {
-    std::env::var("HYPRDUCK_MCP_ALLOW_ROOT_DIR").is_ok_and(|value| value == "1")
+    std::env::var(ROOT_DIR_ENV).is_ok_and(|value| value == "1")
+}
+
+fn allowed_root_dirs() -> Result<Vec<PathBuf>> {
+    let raw = std::env::var_os(ROOT_DIR_ALLOWED_ROOTS_ENV).ok_or_else(|| {
+        anyhow!("rootDir requires HYPRDUCK_MCP_ALLOWED_ROOTS to name approved roots")
+    })?;
+    let roots = std::env::split_paths(&raw)
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| canonicalize_mcp_root(path))
+        .collect::<Result<Vec<_>>>()?;
+    if roots.is_empty() {
+        return Err(anyhow!(
+            "rootDir requires HYPRDUCK_MCP_ALLOWED_ROOTS to name approved roots"
+        ));
+    }
+    Ok(roots)
+}
+
+fn canonicalize_mcp_root(path: impl AsRef<Path>) -> Result<PathBuf> {
+    path.as_ref()
+        .canonicalize()
+        .map_err(|_| anyhow!("rootDir must exist and be canonicalizable"))
 }
 
 fn required_string(arguments: &Map<String, Value>, name: &str) -> Result<String> {
@@ -729,7 +769,7 @@ fn tool_definition(
         "rootDir".into(),
         json!({
             "type": "string",
-            "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 is set."
+            "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 and HYPRDUCK_MCP_ALLOWED_ROOTS allow it."
         }),
     );
     merged_properties.insert(
@@ -780,20 +820,42 @@ fn title_case_tool_name(name: &str) -> String {
 mod tests {
     use super::*;
 
-    const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_root_dir_env() {
+        std::env::remove_var(ROOT_DIR_ENV);
+        std::env::remove_var(ROOT_DIR_ALLOWED_ROOTS_ENV);
+    }
+
+    fn set_allowed_roots(paths: &[&Path]) {
+        let joined = std::env::join_paths(paths).expect("join allowed roots");
+        std::env::set_var(ROOT_DIR_ALLOWED_ROOTS_ENV, joined);
+    }
+
+    fn canonical_path_string(path: &Path) -> String {
+        path.canonicalize()
+            .expect("canonical path")
+            .into_os_string()
+            .into_string()
+            .expect("utf-8 canonical path")
+    }
 
     #[test]
     fn read_scope_rejects_root_dir_without_dev_env() {
-        std::env::remove_var(ROOT_DIR_ENV);
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
         let mut arguments = Map::new();
         arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
 
         let error = read_scope(&arguments).expect_err("rootDir should be disabled by default");
         assert!(error.to_string().contains("rootDir is disabled"));
+        clear_root_dir_env();
     }
 
     #[test]
     fn read_scope_rejects_root_dir_when_dev_env_is_not_one() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
         let mut arguments = Map::new();
         arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
 
@@ -806,20 +868,128 @@ mod tests {
             read_scope(&arguments).expect_err("empty rootDir env should stay disabled");
         assert!(empty_error.to_string().contains("rootDir is disabled"));
 
-        std::env::remove_var(ROOT_DIR_ENV);
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn read_scope_rejects_root_dir_without_allowed_roots() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut arguments = Map::new();
+        arguments.insert(
+            "rootDir".into(),
+            Value::String(temp.path().display().to_string()),
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        let error = read_scope(&arguments).expect_err("allowlist should be required");
+        assert!(error.to_string().contains("HYPRDUCK_MCP_ALLOWED_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn read_scope_accepts_allowlisted_root_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut arguments = Map::new();
+        arguments.insert(
+            "rootDir".into(),
+            Value::String(temp.path().display().to_string()),
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[temp.path()]);
+        let scope = read_scope(&arguments).expect("allowlisted rootDir");
+        let expected_root_dir = canonical_path_string(temp.path());
+        assert_eq!(scope.root_dir.as_deref(), Some(expected_root_dir.as_str()));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_scope_stores_canonical_root_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let actual = temp.path().join("actual");
+        let symlink = temp.path().join("linked-root");
+        std::fs::create_dir_all(&actual).expect("actual dir");
+        std::os::unix::fs::symlink(&actual, &symlink).expect("symlink");
+        let mut arguments = Map::new();
+        arguments.insert(
+            "rootDir".into(),
+            Value::String(symlink.display().to_string()),
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[actual.as_path()]);
+        let scope = read_scope(&arguments).expect("allowlisted symlink rootDir");
+        let expected_root_dir = canonical_path_string(actual.as_path());
+        assert_eq!(scope.root_dir.as_deref(), Some(expected_root_dir.as_str()));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn read_scope_rejects_root_dir_outside_allowed_roots() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let mut arguments = Map::new();
+        arguments.insert(
+            "rootDir".into(),
+            Value::String(outside.path().display().to_string()),
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[allowed.path()]);
+        let error = read_scope(&arguments).expect_err("outside rootDir rejected");
+        assert!(error.to_string().contains("HYPRDUCK_MCP_ALLOWED_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_scope_rejects_symlinked_root_dir_outside_allowed_roots() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let allowed = temp.path().join("allowed");
+        let outside = temp.path().join("outside");
+        let symlink = temp.path().join("linked-root");
+        std::fs::create_dir_all(&allowed).expect("allowed dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::os::unix::fs::symlink(&outside, &symlink).expect("symlink");
+        let mut arguments = Map::new();
+        arguments.insert(
+            "rootDir".into(),
+            Value::String(symlink.display().to_string()),
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[allowed.as_path()]);
+        let error = read_scope(&arguments).expect_err("symlink escape rejected");
+        assert!(error.to_string().contains("HYPRDUCK_MCP_ALLOWED_ROOTS"));
+        clear_root_dir_env();
     }
 
     #[test]
     fn resource_uri_rejects_root_dir_without_dev_env() {
-        std::env::remove_var(ROOT_DIR_ENV);
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
 
         let error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
             .expect_err("resource rootDir should be disabled by default");
         assert!(error.to_string().contains("rootDir is disabled"));
+        clear_root_dir_env();
     }
 
     #[test]
     fn resource_uri_rejects_root_dir_when_dev_env_is_not_one() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
         std::env::set_var(ROOT_DIR_ENV, "0");
         let zero_error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
             .expect_err("rootDir=0 should stay disabled for resources");
@@ -830,6 +1000,53 @@ mod tests {
             .expect_err("empty rootDir env should stay disabled for resources");
         assert!(empty_error.to_string().contains("rootDir is disabled"));
 
-        std::env::remove_var(ROOT_DIR_ENV);
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn resource_uri_accepts_allowlisted_root_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let uri = format!(
+            "hyprduck://brain/default/wiki/index.md?rootDir={}",
+            temp.path().display()
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[temp.path()]);
+        let resource = parse_resource_uri(&uri).expect("allowlisted resource rootDir");
+        let expected_root_dir = canonical_path_string(temp.path());
+        assert_eq!(
+            resource.scope.root_dir.as_deref(),
+            Some(expected_root_dir.as_str())
+        );
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resource_uri_stores_canonical_root_dir() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let actual = temp.path().join("actual");
+        let symlink = temp.path().join("linked-root");
+        std::fs::create_dir_all(&actual).expect("actual dir");
+        std::os::unix::fs::symlink(&actual, &symlink).expect("symlink");
+        let uri = format!(
+            "hyprduck://brain/default/wiki/index.md?rootDir={}",
+            symlink.display()
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[actual.as_path()]);
+        let resource = parse_resource_uri(&uri).expect("allowlisted resource rootDir");
+        let expected_root_dir = canonical_path_string(actual.as_path());
+        assert_eq!(
+            resource.scope.root_dir.as_deref(),
+            Some(expected_root_dir.as_str())
+        );
+        clear_root_dir_env();
     }
 }
