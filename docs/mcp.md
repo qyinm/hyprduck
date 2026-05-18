@@ -139,8 +139,8 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
 
 ## Security Notes
 
-- MCP is read-only by default; the default `tools/list` exposes no proposal,
-  review, write, rollback, or mutation tools.
+- MCP is read-only by default; the default `tools/list` exposes only
+  read/search/inspect tools and no mutation tools.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
 - `rootDir` is disabled by default and, when explicitly enabled for development,

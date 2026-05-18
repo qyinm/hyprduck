@@ -198,7 +198,7 @@ losing page evidence.
 - [x] A sample query writes schema-valid `context_pack.json`.
 - [ ] One MCP client can answer with source/page/evidence citations.
 - [ ] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
-- [ ] Default docs and tool lists contain no retired trust-layer UX language.
+- [x] Default docs and tool lists contain no retired trust-layer UX language.
 - [x] Missing provider and partial import failures produce specific warnings.
 
 **Effort:** L

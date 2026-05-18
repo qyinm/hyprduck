@@ -37,7 +37,7 @@ private document
   -> same local context is reused in the next task
 ```
 
-HyprDuck is not a generic document chatbot, a memory OS, or a governance
+HyprDuck is not a generic document chatbot, a memory OS, or an approval
 dashboard. The product is built around durable local artifacts, visible
 provenance, and agent-readable context.
 

@@ -93,6 +93,29 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
+    let retired_surface_terms = [
+        "trust console",
+        "review queue",
+        "proposed-write",
+        "proposal",
+        "governance",
+        "write tool",
+        "rollback",
+    ];
+    for tool in tools {
+        let text = format!(
+            "{} {}",
+            tool["name"].as_str().unwrap_or_default(),
+            tool["description"].as_str().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        for retired_term in retired_surface_terms {
+            assert!(
+                !text.contains(retired_term),
+                "retired MCP surface term {retired_term:?} leaked through tool metadata: {text}"
+            );
+        }
+    }
 
     write_message(
         &mut stdin,
