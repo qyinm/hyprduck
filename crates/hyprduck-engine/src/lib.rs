@@ -911,6 +911,7 @@ fn build_context_pack_artifact_metadata(
         let valid_source_pack = source_pack.as_ref().filter(|pack| {
             pack.schema_version == hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
                 && pack.source_id == source.source_id
+                && pack.workspace_id == source.workspace_id
         });
         if let Some(pack) = source_pack.as_ref() {
             if pack.schema_version != hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION {
@@ -935,6 +936,20 @@ fn build_context_pack_artifact_metadata(
                         format!(
                             "Source Pack for {} was ignored because it declares sourceId {}.",
                             source.source_id, pack.source_id
+                        ),
+                        &source.source_id,
+                        None,
+                    ),
+                );
+            }
+            if pack.workspace_id != source.workspace_id {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "source_pack_workspace_mismatch",
+                        format!(
+                            "Source Pack for {} was ignored because it declares workspaceId {}.",
+                            source.source_id, pack.workspace_id
                         ),
                         &source.source_id,
                         None,
@@ -1031,6 +1046,21 @@ fn build_context_pack_artifact_metadata(
                     format!(
                         "Evidence Index for {} was ignored because it declares sourceId {}.",
                         source.source_id, evidence_index.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+        if evidence_index.workspace_id != source.workspace_id {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_workspace_mismatch",
+                    format!(
+                        "Evidence Index for {} was ignored because it declares workspaceId {}.",
+                        source.source_id, evidence_index.workspace_id
                     ),
                     &source.source_id,
                     None,

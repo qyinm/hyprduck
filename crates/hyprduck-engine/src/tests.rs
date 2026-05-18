@@ -1690,6 +1690,112 @@ fn context_pack_artifact_metadata_prefers_source_pack_and_evidence_index() {
 }
 
 #[test]
+fn context_pack_artifact_metadata_rejects_cross_workspace_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-cross-workspace");
+    let source_root = workspace_root.join("sources/src-cross-workspace");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": "other-workspace",
+            "sourceId": "src-cross-workspace",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:cross-workspace-pack",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": "other-workspace",
+            "sourceId": "src-cross-workspace",
+            "contentHash": "fnv64:cross-workspace-pack",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-cross-workspace",
+                "sourceId": "src-cross-workspace",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Cross-workspace evidence must not be trusted.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:cross-workspace-pack",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-cross-workspace".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let source = metadata
+        .sources
+        .get("src-cross-workspace")
+        .expect("fallback source metadata");
+    assert_eq!(
+        source.content_hash,
+        format!("fnv64:{:016x}", fnv1a64(b"source bytes"))
+    );
+    assert_eq!(source.provider_route, "unknown");
+    assert!(metadata
+        .evidence
+        .get("src-cross-workspace")
+        .map_or(true, |source_evidence| source_evidence.is_empty()));
+    assert!(metadata
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "source_pack_workspace_mismatch"));
+    assert!(metadata
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "evidence_index_workspace_mismatch"));
+}
+
+#[test]
 fn context_pack_artifact_metadata_warns_and_skips_stale_evidence_index() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
@@ -2134,6 +2240,109 @@ fn read_page_evidence_resolves_source_evidence_index_metadata() {
         Some(expected_markdown_path.as_str())
     );
     assert!(response.warnings.is_empty());
+}
+
+#[test]
+fn read_page_evidence_rejects_cross_workspace_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-page-cross-workspace");
+    let source_root = workspace_root.join("sources/src-page-cross-workspace");
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("pages/page_1.md");
+    fs::create_dir_all(markdown_path.parent().expect("markdown parent")).expect("pages dir");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    let source = SourceRecord {
+        source_id: "src-page-cross-workspace".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "source.md".into(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        format: hyprduck_engine_types::SourceFormat::markdown(),
+        status: hyprduck_engine_types::SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    write_health_test_snapshot(&workspace_root, source.clone());
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": "other-workspace",
+            "sourceId": "src-page-cross-workspace",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:page-cross-workspace",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": "other-workspace",
+            "sourceId": "src-page-cross-workspace",
+            "contentHash": "fnv64:page-cross-workspace",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-src-page-cross-workspace-source-1",
+                "sourceId": "src-page-cross-workspace",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Cross-workspace page evidence must not be returned.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:page-cross-workspace",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let response = handle_read_page_evidence(ReadPageEvidenceRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+        source_id: source.source_id,
+        page: Some(1),
+    })
+    .expect("page evidence");
+
+    assert!(response.evidence.is_empty());
+    assert!(response
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "source_pack_workspace_mismatch"));
+    assert!(response
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "evidence_index_workspace_mismatch"));
 }
 
 #[test]
