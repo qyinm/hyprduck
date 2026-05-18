@@ -1112,7 +1112,26 @@ pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
     #[serde(default)]
+    pub source_reports: Vec<BrainHealthSourceReport>,
+    #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainHealthSourceReport {
+    pub source_id: SourceId,
+    pub status: SourceStatus,
+    pub page_count: usize,
+    pub failed_page_count: usize,
+    pub provider_route: String,
+    #[serde(default)]
+    pub local_only: Option<bool>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    pub content_hash_status: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

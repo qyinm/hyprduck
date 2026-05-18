@@ -10,10 +10,10 @@ use base64::Engine;
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthStatus,
-    BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord,
-    CompileProjectRequest, CompileProjectResponseData, ContextPackArtifactMetadataV0,
+    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
+    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
+    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, ContextPackArtifactMetadataV0,
     ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0, CorrectionAction, CorrectionKind,
     DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceIndexV0, EvidenceRef,
     GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
@@ -27,10 +27,11 @@ use hyprduck_engine_types::{
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
     RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
     SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0,
-    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
+    SourceRecord, SourceStatus, SourceSummary, StructuredExtractionArtifact,
+    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
+    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
+    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection, WorkspaceId,
+    BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
@@ -1297,6 +1298,7 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
+            source_reports: Vec::new(),
             recent_events: Vec::new(),
         });
     }
@@ -1305,7 +1307,12 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
     report
         .issues
         .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
-    let attention_count = report.issues.len();
+    let source_reports = brain_health_source_reports(&repo, &snapshot);
+    let source_attention_count: usize = source_reports
+        .iter()
+        .map(|report| report.warnings.len())
+        .sum();
+    let attention_count = report.issues.len() + source_attention_count;
     let mut recent_events = repo.read_brain_events()?;
     recent_events.sort_by(|left, right| {
         right
@@ -1321,8 +1328,190 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             BrainHealthStatus::AttentionNeeded
         },
         attention_count,
+        source_reports,
         recent_events,
     })
+}
+
+fn brain_health_source_reports(
+    repo: &BrainArtifactRepository,
+    snapshot: &BrainRepoSnapshot,
+) -> Vec<BrainHealthSourceReport> {
+    snapshot
+        .sources
+        .iter()
+        .map(|source| brain_health_source_report(repo, source))
+        .collect()
+}
+
+fn brain_health_source_report(
+    repo: &BrainArtifactRepository,
+    source: &SourceRecord,
+) -> BrainHealthSourceReport {
+    let mut warnings = Vec::new();
+    let mut provider_route = "unknown".to_string();
+    let mut local_only = None;
+    let mut content_hash = None;
+    let mut content_hash_status = "unknown".to_string();
+    let mut failed_page_count = 0usize;
+
+    let mut source_pack_read_failed = false;
+    let source_pack = match read_source_pack_v0(repo, &source.source_id) {
+        Ok(source_pack) => source_pack,
+        Err(_error) => {
+            source_pack_read_failed = true;
+            push_health_warning(&mut warnings, "source_pack_unreadable");
+            None
+        }
+    };
+    let valid_source_pack = source_pack.as_ref().filter(|pack| {
+        pack.schema_version == hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+            && pack.source_id == source.source_id
+            && pack.workspace_id == source.workspace_id
+    });
+    match source_pack.as_ref() {
+        Some(pack)
+            if pack.schema_version != hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION =>
+        {
+            push_health_warning(&mut warnings, "source_pack_schema_mismatch");
+        }
+        Some(pack) if pack.source_id != source.source_id => {
+            push_health_warning(&mut warnings, "source_pack_source_mismatch");
+        }
+        Some(pack) if pack.workspace_id != source.workspace_id => {
+            push_health_warning(&mut warnings, "source_pack_workspace_mismatch");
+        }
+        None if !source_pack_read_failed => {
+            push_health_warning(&mut warnings, "source_pack_missing");
+        }
+        _ => {}
+    }
+
+    if let Some(pack) = valid_source_pack {
+        provider_route = pack.provider_route.clone();
+        local_only = Some(pack.local_only);
+        content_hash = Some(pack.content_hash.clone());
+        content_hash_status = "source_pack_only".into();
+        failed_page_count = pack
+            .pages
+            .iter()
+            .filter(|page| page.error_message.is_some())
+            .count();
+        for warning in &pack.warnings {
+            push_health_warning(&mut warnings, source_pack_health_warning_summary(warning));
+        }
+    }
+
+    let mut evidence_index_read_failed = false;
+    let evidence_index = match read_evidence_index_v0(repo, &source.source_id) {
+        Ok(evidence_index) => evidence_index,
+        Err(_error) => {
+            evidence_index_read_failed = true;
+            push_health_warning(&mut warnings, "evidence_index_unreadable");
+            None
+        }
+    };
+    let valid_evidence_index = evidence_index.as_ref().filter(|index| {
+        index.schema_version == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+            && index.source_id == source.source_id
+            && index.workspace_id == source.workspace_id
+    });
+    match evidence_index.as_ref() {
+        Some(index)
+            if index.schema_version != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION =>
+        {
+            push_health_warning(&mut warnings, "evidence_index_schema_mismatch");
+        }
+        Some(index) if index.source_id != source.source_id => {
+            push_health_warning(&mut warnings, "evidence_index_source_mismatch");
+        }
+        Some(index) if index.workspace_id != source.workspace_id => {
+            push_health_warning(&mut warnings, "evidence_index_workspace_mismatch");
+        }
+        None if !evidence_index_read_failed => {
+            push_health_warning(&mut warnings, "evidence_index_missing");
+        }
+        _ => {}
+    }
+
+    if let Some(index) = valid_evidence_index {
+        if provider_route == "unknown" {
+            provider_route = index.provider_route.clone();
+            local_only = Some(index.local_only);
+        }
+        if let Some(pack_hash) = content_hash.as_deref() {
+            if pack_hash == index.content_hash {
+                content_hash_status = "current".into();
+            } else {
+                content_hash_status = "mismatch".into();
+                push_health_warning(&mut warnings, "content_hash_mismatch");
+            }
+        } else {
+            content_hash = Some(index.content_hash.clone());
+            content_hash_status = "evidence_index_only".into();
+        }
+    }
+
+    if source.status == SourceStatus::partial() {
+        push_health_warning(&mut warnings, "partial_import");
+    } else if source.status == SourceStatus::failed() {
+        push_health_warning(&mut warnings, "import_failed");
+    } else if source.status == SourceStatus::stale() {
+        content_hash_status = "stale".into();
+        push_health_warning(&mut warnings, "stale_source");
+    }
+    if failed_page_count > 0 {
+        push_health_warning(
+            &mut warnings,
+            format!("{failed_page_count} page(s) failed during import"),
+        );
+    }
+
+    BrainHealthSourceReport {
+        source_id: source.source_id.clone(),
+        status: source.status.clone(),
+        page_count: source.page_count,
+        failed_page_count,
+        provider_route,
+        local_only,
+        content_hash,
+        content_hash_status,
+        warnings,
+    }
+}
+
+fn source_pack_health_warning_summary(
+    warning: &hyprduck_engine_types::SourcePackWarningV0,
+) -> String {
+    match warning.page {
+        Some(page) => format!(
+            "source_pack_warning:{}:severity:{}:page:{page}",
+            warning.warning_type,
+            warning_severity_slug(&warning.severity)
+        ),
+        None => format!(
+            "source_pack_warning:{}:severity:{}",
+            warning.warning_type,
+            warning_severity_slug(&warning.severity)
+        ),
+    }
+}
+
+fn warning_severity_slug(
+    severity: &hyprduck_engine_types::ContextPackWarningSeverity,
+) -> &'static str {
+    match severity {
+        hyprduck_engine_types::ContextPackWarningSeverity::Low => "low",
+        hyprduck_engine_types::ContextPackWarningSeverity::Medium => "medium",
+        hyprduck_engine_types::ContextPackWarningSeverity::High => "high",
+    }
+}
+
+fn push_health_warning(warnings: &mut Vec<String>, warning: impl Into<String>) {
+    let warning = warning.into();
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -240,9 +240,9 @@ losing page evidence.
 - [x] MCP document-context naming and root hardening
   - Added `search_documents` and `read_page_evidence`.
   - Kept `search_brain` and `hyprduck://brain/...` as compatibility surfaces.
-  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`.
-  - Rejects workspace path and symlink escapes.
-  - Keeps `read_health` read-only.
+  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and a canonical `HYPRDUCK_MCP_ALLOWED_ROOTS` allowlist.
+  - Rejects workspace path, prefix, and symlink escapes.
+  - Keeps `read_health` read-only and adds per-source readiness fields for status, failed pages, content-hash state, and provider route.
 - [x] CLI context aliases
   - Added `hyprduck context` / `hyprduck context-pack`.
   - Added `hyprduck documents search` / `hyprduck docs search`.

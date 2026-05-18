@@ -864,7 +864,317 @@ fn brain_health_is_clean_for_empty_workspace() {
 
     assert_eq!(health.status, BrainHealthStatus::Clean);
     assert_eq!(health.attention_count, 0);
+    assert!(health.source_reports.is_empty());
     assert!(health.recent_events.is_empty());
+}
+
+#[test]
+fn brain_health_reports_source_readiness_metadata() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+    fs::create_dir_all(workspace_root.join("artifacts/src-partial")).expect("artifact dir");
+
+    let source = SourceRecord {
+        source_id: "src-partial".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/private/docs/partial.pdf".into(),
+        source_path: "/private/hyprduck/sources/src-partial/partial.pdf".into(),
+        markdown_path: "/private/hyprduck/artifacts/src-partial/partial.md".into(),
+        format: hyprduck_engine_types::SourceFormat::pdf(),
+        status: SourceStatus::partial(),
+        page_count: 2,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 20,
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 20,
+        sources: vec![source],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty::<Vec<EvidenceRef>>(&workspace_root.join("graph/evidence.json"), &vec![])
+        .expect("write evidence");
+
+    let source_pack = SourcePackV0 {
+        schema_version: hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        source_id: "src-partial".into(),
+        original_filename: "partial.pdf".into(),
+        original_path: "/private/docs/partial.pdf".into(),
+        source_path: "/private/hyprduck/sources/src-partial/partial.pdf".into(),
+        markdown_path: "/private/hyprduck/artifacts/src-partial/partial.md".into(),
+        artifact_root: "/private/hyprduck/artifacts/src-partial".into(),
+        content_hash: "sha256:source-pack".into(),
+        format: DocumentFormat::Pdf,
+        page_count: 2,
+        ingestion_status: IngestStatus::Partial,
+        provider_route: "openrouter:gpt-4.1".into(),
+        local_only: false,
+        pages: vec![
+            hyprduck_engine_types::SourcePackPageV0 {
+                page: 1,
+                label: "Page 1".into(),
+                image_path: None,
+                markdown_path: Some("artifacts/src-partial/pages/page_1.md".into()),
+                plain_text_path: None,
+                error_message: None,
+            },
+            hyprduck_engine_types::SourcePackPageV0 {
+                page: 2,
+                label: "Page 2".into(),
+                image_path: None,
+                markdown_path: Some("artifacts/src-partial/pages/page_2.md".into()),
+                plain_text_path: None,
+                error_message: Some("page renderer failed".into()),
+            },
+        ],
+        warnings: vec![hyprduck_engine_types::SourcePackWarningV0 {
+            warning_type: "page_parse_failed".into(),
+            severity: hyprduck_engine_types::ContextPackWarningSeverity::High,
+            message: format!("page renderer failed at {}", temp.path().display()),
+            page: Some(2),
+        }],
+        created_at: 10,
+        updated_at: 20,
+    };
+    let evidence_index = EvidenceIndexV0 {
+        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        source_id: "src-partial".into(),
+        content_hash: "sha256:evidence-index".into(),
+        provider_route: "openrouter:gpt-4.1".into(),
+        local_only: false,
+        evidence: Vec::new(),
+        warnings: Vec::new(),
+        generated_at: 20,
+    };
+    write_json_pretty(
+        &workspace_root.join("artifacts/src-partial/source_pack.json"),
+        &source_pack,
+    )
+    .expect("write source pack");
+    write_json_pretty(
+        &workspace_root.join("artifacts/src-partial/evidence_index.json"),
+        &evidence_index,
+    )
+    .expect("write evidence index");
+
+    let health = handle_get_brain_health(GetBrainHealthRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+    })
+    .expect("get health");
+
+    assert_eq!(health.status, BrainHealthStatus::AttentionNeeded);
+    assert!(health.attention_count >= 4);
+    assert_eq!(health.source_reports.len(), 1);
+    let report = &health.source_reports[0];
+    assert_eq!(report.source_id, "src-partial");
+    assert_eq!(report.status, SourceStatus::partial());
+    assert_eq!(report.page_count, 2);
+    assert_eq!(report.failed_page_count, 1);
+    assert_eq!(report.provider_route, "openrouter:gpt-4.1");
+    assert_eq!(report.local_only, Some(false));
+    assert_eq!(report.content_hash.as_deref(), Some("sha256:source-pack"));
+    assert_eq!(report.content_hash_status, "mismatch");
+    assert!(report.warnings.contains(&"partial_import".into()));
+    assert!(report.warnings.contains(&"content_hash_mismatch".into()));
+    assert!(report
+        .warnings
+        .contains(&"1 page(s) failed during import".into()));
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("page_parse_failed")));
+    assert!(!report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains(&temp.path().display().to_string())));
+}
+
+#[test]
+fn brain_health_rejects_cross_workspace_artifact_metadata() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+    fs::create_dir_all(workspace_root.join("artifacts/src-cross")).expect("artifact dir");
+
+    write_health_test_snapshot(
+        &workspace_root,
+        SourceRecord {
+            source_id: "src-cross".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/private/docs/cross.pdf".into(),
+            source_path: "/private/hyprduck/sources/src-cross/cross.pdf".into(),
+            markdown_path: "/private/hyprduck/artifacts/src-cross/cross.md".into(),
+            format: hyprduck_engine_types::SourceFormat::pdf(),
+            status: SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 20,
+        },
+    );
+    let source_pack = SourcePackV0 {
+        schema_version: hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+        workspace_id: "other-workspace".into(),
+        source_id: "src-cross".into(),
+        original_filename: "cross.pdf".into(),
+        original_path: "/private/docs/cross.pdf".into(),
+        source_path: "/private/hyprduck/sources/src-cross/cross.pdf".into(),
+        markdown_path: "/private/hyprduck/artifacts/src-cross/cross.md".into(),
+        artifact_root: "/private/hyprduck/artifacts/src-cross".into(),
+        content_hash: "sha256:foreign-source-pack".into(),
+        format: DocumentFormat::Pdf,
+        page_count: 1,
+        ingestion_status: IngestStatus::Ingested,
+        provider_route: "openrouter:foreign".into(),
+        local_only: false,
+        pages: Vec::new(),
+        warnings: Vec::new(),
+        created_at: 10,
+        updated_at: 20,
+    };
+    let evidence_index = EvidenceIndexV0 {
+        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+        workspace_id: "other-workspace".into(),
+        source_id: "src-cross".into(),
+        content_hash: "sha256:foreign-evidence-index".into(),
+        provider_route: "openrouter:foreign".into(),
+        local_only: false,
+        evidence: Vec::new(),
+        warnings: Vec::new(),
+        generated_at: 20,
+    };
+    write_json_pretty(
+        &workspace_root.join("artifacts/src-cross/source_pack.json"),
+        &source_pack,
+    )
+    .expect("write source pack");
+    write_json_pretty(
+        &workspace_root.join("artifacts/src-cross/evidence_index.json"),
+        &evidence_index,
+    )
+    .expect("write evidence index");
+
+    let health = handle_get_brain_health(GetBrainHealthRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+    })
+    .expect("get health");
+
+    let report = &health.source_reports[0];
+    assert_eq!(report.provider_route, "unknown");
+    assert_eq!(report.local_only, None);
+    assert_eq!(report.content_hash, None);
+    assert_eq!(report.content_hash_status, "unknown");
+    assert!(report
+        .warnings
+        .contains(&"source_pack_workspace_mismatch".into()));
+    assert!(report
+        .warnings
+        .contains(&"evidence_index_workspace_mismatch".into()));
+}
+
+#[test]
+fn brain_health_keeps_unreadable_and_missing_artifacts_distinct() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(workspace_root.join("events")).expect("events dir");
+    fs::create_dir_all(workspace_root.join("artifacts/src-broken")).expect("artifact dir");
+
+    write_health_test_snapshot(
+        &workspace_root,
+        SourceRecord {
+            source_id: "src-broken".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/private/docs/broken.pdf".into(),
+            source_path: "/private/hyprduck/sources/src-broken/broken.pdf".into(),
+            markdown_path: "/private/hyprduck/artifacts/src-broken/broken.md".into(),
+            format: hyprduck_engine_types::SourceFormat::pdf(),
+            status: SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 20,
+        },
+    );
+    fs::write(
+        workspace_root.join("artifacts/src-broken/source_pack.json"),
+        "{not-json",
+    )
+    .expect("write invalid source pack");
+
+    let health = handle_get_brain_health(GetBrainHealthRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+    })
+    .expect("get health");
+
+    let warnings = &health.source_reports[0].warnings;
+    assert!(warnings.contains(&"source_pack_unreadable".into()));
+    assert!(!warnings.contains(&"source_pack_missing".into()));
+    assert!(warnings.contains(&"evidence_index_missing".into()));
+    assert!(!warnings.contains(&"evidence_index_unreadable".into()));
+}
+
+fn write_health_test_snapshot(workspace_root: &Path, source: SourceRecord) {
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 20,
+        sources: vec![source],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty::<Vec<EvidenceRef>>(&workspace_root.join("graph/evidence.json"), &vec![])
+        .expect("write evidence");
 }
 
 #[test]
