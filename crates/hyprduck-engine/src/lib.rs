@@ -204,7 +204,7 @@ fn handle_parse(
         failed_count: parse.failed_count,
     };
 
-    let source_manifest = export_output_package(&request, &result)?;
+    let source_manifest = export_output_package(&request, &result, &config)?;
     let saved_output_path = source_manifest
         .as_ref()
         .map(|manifest| manifest.markdown_path.clone());

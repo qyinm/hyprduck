@@ -583,6 +583,8 @@ pub struct BrainContextPack {
 }
 
 pub const CONTEXT_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.context_pack.v0";
+pub const SOURCE_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.source_pack.v0";
+pub const EVIDENCE_INDEX_V0_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -689,6 +691,87 @@ pub struct ContextPackSuggestedNextReadV0 {
     pub source_id: SourceId,
     pub page: usize,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackPageV0 {
+    pub page: usize,
+    pub label: String,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub plain_text_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackWarningV0 {
+    #[serde(rename = "type")]
+    pub warning_type: String,
+    pub severity: ContextPackWarningSeverity,
+    pub message: String,
+    #[serde(default)]
+    pub page: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackV0 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub original_filename: String,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub artifact_root: String,
+    pub content_hash: String,
+    pub format: DocumentFormat,
+    pub page_count: usize,
+    pub ingestion_status: IngestStatus,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub pages: Vec<SourcePackPageV0>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexItemV0 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexV0 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub content_hash: String,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub evidence: Vec<EvidenceIndexItemV0>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub generated_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1683,6 +1766,123 @@ mod tests {
             schema.pointer("/$defs/finding/properties/status/const"),
             Some(&Value::String("derived_summary".into()))
         );
+    }
+
+    #[test]
+    fn source_pack_and_evidence_index_schemas_require_import_artifact_fields() {
+        let source_pack_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/source-pack.schema.json");
+        let source_pack_schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(&source_pack_path).unwrap_or_else(
+                |err| panic!("failed to read {}: {err}", source_pack_path.display()),
+            ))
+            .unwrap();
+        assert_eq!(
+            source_pack_schema["properties"]["schemaVersion"]["const"],
+            SOURCE_PACK_V0_SCHEMA_VERSION
+        );
+        for field in ["sourceId", "contentHash", "pages", "warnings"] {
+            assert!(source_pack_schema["required"]
+                .as_array()
+                .expect("source pack required")
+                .iter()
+                .any(|value| value.as_str() == Some(field)));
+        }
+
+        let evidence_index_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/evidence-index.schema.json");
+        let evidence_index_schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&evidence_index_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", evidence_index_path.display())
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence_index_schema["properties"]["schemaVersion"]["const"],
+            EVIDENCE_INDEX_V0_SCHEMA_VERSION
+        );
+        let evidence_required = evidence_index_schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("evidence required");
+        for field in [
+            "evidenceRef",
+            "sourceId",
+            "page",
+            "region",
+            "quotedText",
+            "contentHash",
+        ] {
+            assert!(evidence_required
+                .iter()
+                .any(|value| value.as_str() == Some(field)));
+        }
+    }
+
+    #[test]
+    fn source_pack_and_evidence_index_round_trip() {
+        let warning = SourcePackWarningV0 {
+            warning_type: "page_parse_failed".into(),
+            severity: ContextPackWarningSeverity::High,
+            message: "Page failed".into(),
+            page: Some(2),
+        };
+        let source_pack = SourcePackV0 {
+            schema_version: SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            original_filename: "sample.pdf".into(),
+            original_path: "/tmp/sample.pdf".into(),
+            source_path: "/tmp/HyprDuck/default/sources/source-alpha/sample.pdf".into(),
+            markdown_path: "/tmp/HyprDuck/default/artifacts/source-alpha/sample.md".into(),
+            artifact_root: "/tmp/HyprDuck/default/artifacts/source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            format: DocumentFormat::Pdf,
+            page_count: 2,
+            ingestion_status: IngestStatus::Partial,
+            provider_route: "unknown".into(),
+            local_only: false,
+            pages: vec![SourcePackPageV0 {
+                page: 1,
+                label: "Page 1".into(),
+                image_path: Some("/tmp/page_1.png".into()),
+                markdown_path: Some("/tmp/page_1.md".into()),
+                plain_text_path: None,
+                error_message: None,
+            }],
+            warnings: vec![warning.clone()],
+            created_at: 1,
+            updated_at: 2,
+        };
+        let decoded: SourcePackV0 =
+            serde_json::from_str(&serde_json::to_string(&source_pack).unwrap()).unwrap();
+        assert_eq!(decoded, source_pack);
+
+        let evidence_index = EvidenceIndexV0 {
+            schema_version: EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            provider_route: "unknown".into(),
+            local_only: false,
+            evidence: vec![EvidenceIndexItemV0 {
+                evidence_ref: "ev-source-alpha-source-1".into(),
+                source_id: "source-alpha".into(),
+                page: 1,
+                region: "page:Page 1".into(),
+                span: Some("page".into()),
+                quoted_text: "Evidence text.".into(),
+                parse_confidence: ContextPackParseConfidence::Unknown,
+                content_hash: "fnv64:abc123".into(),
+                markdown_path: Some("/tmp/page_1.md".into()),
+                image_path: Some("/tmp/page_1.png".into()),
+            }],
+            warnings: vec![warning],
+            generated_at: 3,
+        };
+        let decoded: EvidenceIndexV0 =
+            serde_json::from_str(&serde_json::to_string(&evidence_index).unwrap()).unwrap();
+        assert_eq!(decoded, evidence_index);
     }
 
     #[test]

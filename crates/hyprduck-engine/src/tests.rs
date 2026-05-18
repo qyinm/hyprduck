@@ -782,6 +782,16 @@ fn sample_parse_request(temp: &tempfile::TempDir) -> ParseRequest {
     }
 }
 
+fn sample_engine_config() -> EngineConfig {
+    EngineConfig {
+        provider: ProviderKind::OpenRouter,
+        model_id: "openai/gpt-4.1-mini".into(),
+        api_key: String::new(),
+        base_url: None,
+        prompt_template: "General".into(),
+    }
+}
+
 fn sample_manifest(temp: &tempfile::TempDir) -> SourceArtifactManifest {
     sample_manifest_with_source(temp, "source-test", "source", 2)
 }
@@ -3868,6 +3878,7 @@ fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         "123",
         &request,
         &sample_parse_result(),
+        &sample_engine_config(),
     )
     .expect("fallback output manifest");
 
@@ -3882,6 +3893,37 @@ fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
         .markdown_path
         .as_deref()
         .is_some_and(|path| Path::new(path).exists()));
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    assert!(source_pack_path.exists());
+    assert!(evidence_index_path.exists());
+
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    assert_eq!(
+        source_pack.schema_version,
+        hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+    );
+    assert_eq!(source_pack.source_id, manifest.source_id);
+    assert_eq!(source_pack.page_count, 1);
+    assert!(source_pack.content_hash.starts_with("fnv64:"));
+
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+    assert_eq!(
+        evidence_index.schema_version,
+        hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+    );
+    assert_eq!(evidence_index.source_id, manifest.source_id);
+    assert_eq!(evidence_index.content_hash, source_pack.content_hash);
+    assert_eq!(evidence_index.evidence.len(), 1);
+    assert_eq!(evidence_index.evidence[0].page, 1);
+    assert!(evidence_index.evidence[0]
+        .quoted_text
+        .contains("Grounded evidence"));
 }
 
 #[test]
@@ -3902,6 +3944,7 @@ fn output_packaging_uses_requested_workspace_and_source_ids() {
         "123",
         &request,
         &sample_parse_result(),
+        &sample_engine_config(),
     )
     .expect("output manifest");
 
@@ -3913,6 +3956,155 @@ fn output_packaging_uses_requested_workspace_and_source_ids() {
     assert!(manifest
         .source_path
         .contains("/workspace-alpha/sources/source-alpha"));
+}
+
+#[test]
+fn output_packaging_records_partial_import_warnings_in_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.pages.push(ParsedPage {
+        index: 1,
+        markdown: None,
+        plain_text: None,
+        svg: None,
+        image_asset_path: Some("images/page_2.png".into()),
+        error_message: Some("provider unavailable".into()),
+    });
+    result.failed_count = 1;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("partial output manifest");
+
+    assert_eq!(manifest.status, IngestStatus::Partial);
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.warnings.len(), 1);
+    assert_eq!(source_pack.warnings[0].warning_type, "page_parse_failed");
+    assert_eq!(source_pack.warnings[0].page, Some(2));
+    assert_eq!(evidence_index.warnings, source_pack.warnings);
+    assert_eq!(evidence_index.evidence.len(), 1);
+}
+
+#[test]
+fn output_packaging_records_ollama_as_local_provider() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: None,
+        prompt_template: "General".into(),
+    };
+
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(source_pack.local_only);
+    assert_eq!(evidence_index.provider_route, "ollama");
+    assert!(evidence_index.local_only);
+}
+
+#[test]
+fn output_packaging_marks_remote_ollama_as_not_local_only() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: Some("http://192.168.1.10:11434".into()),
+        prompt_template: "General".into(),
+    };
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(!source_pack.local_only);
+    assert_eq!(evidence_index.provider_route, "ollama");
+    assert!(!evidence_index.local_only);
+}
+
+#[test]
+fn output_packaging_does_not_treat_loopback_prefix_domains_as_local() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = EngineConfig {
+        provider: ProviderKind::Ollama,
+        model_id: "qwen3-vl:8b".into(),
+        api_key: String::new(),
+        base_url: Some("http://localhost.example.com:11434".into()),
+        prompt_template: "General".into(),
+    };
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &sample_parse_result(),
+        &config,
+    )
+    .expect("output manifest");
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+
+    assert_eq!(source_pack.provider_route, "ollama");
+    assert!(!source_pack.local_only);
 }
 
 #[test]

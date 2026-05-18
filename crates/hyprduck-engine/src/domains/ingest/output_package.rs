@@ -1,3 +1,4 @@
+use crate::provider::{EngineConfig, ProviderKind};
 use crate::*;
 
 pub(crate) fn build_markdown(title: String, pages: &[ParsedPage]) -> String {
@@ -27,6 +28,7 @@ pub(crate) fn build_markdown(title: String, pages: &[ParsedPage]) -> String {
 pub(crate) fn export_output_package(
     request: &ParseRequest,
     result: &ParseResult,
+    config: &EngineConfig,
 ) -> Result<Option<SourceArtifactManifest>> {
     let Some(output) = &request.output else {
         return Ok(None);
@@ -44,8 +46,15 @@ pub(crate) fn export_output_package(
     let safe_name = sanitize_name(&base_name);
     let timestamp = chrono_like_timestamp();
     let output_roots = output_root_candidates(output)?;
-    write_output_package_with_fallback(&output_roots, &safe_name, &timestamp, request, result)
-        .map(Some)
+    write_output_package_with_fallback(
+        &output_roots,
+        &safe_name,
+        &timestamp,
+        request,
+        result,
+        config,
+    )
+    .map(Some)
 }
 
 fn output_root_candidates(
@@ -76,11 +85,19 @@ pub(crate) fn write_output_package_with_fallback(
     timestamp: &str,
     request: &ParseRequest,
     result: &ParseResult,
+    config: &EngineConfig,
 ) -> Result<SourceArtifactManifest> {
     let mut last_error = None;
 
     for output_root in output_roots {
-        match write_output_package_to_root(output_root, safe_name, timestamp, request, result) {
+        match write_output_package_to_root(
+            output_root,
+            safe_name,
+            timestamp,
+            request,
+            result,
+            config,
+        ) {
             Ok(manifest) => return Ok(manifest),
             Err(error) => {
                 eprintln!(
@@ -101,6 +118,7 @@ fn write_output_package_to_root(
     timestamp: &str,
     request: &ParseRequest,
     result: &ParseResult,
+    config: &EngineConfig,
 ) -> Result<SourceArtifactManifest> {
     let workspace_id = request
         .output
@@ -209,6 +227,7 @@ fn write_output_package_to_root(
     let status = ingest_status_for_result(result);
     let now = unix_timestamp_seconds();
     let manifest_path = output_dir.join("source-manifest.json");
+    let content_hash = file_content_hash(&source_path)?;
     let manifest = SourceArtifactManifest {
         workspace_id,
         source_id,
@@ -228,6 +247,7 @@ fn write_output_package_to_root(
         updated_at: now,
     };
     write_source_manifest(&manifest)?;
+    write_source_pack_and_evidence_index(&manifest, &content_hash, now, config)?;
     Ok(manifest)
 }
 
@@ -254,6 +274,202 @@ pub(crate) fn write_source_manifest(manifest: &SourceArtifactManifest) -> Result
     }
     fs::write(&manifest.manifest_path, json)
         .with_context(|| format!("failed writing source manifest {}", manifest.manifest_path))
+}
+
+fn write_source_pack_and_evidence_index(
+    manifest: &SourceArtifactManifest,
+    content_hash: &str,
+    generated_at: u64,
+    config: &EngineConfig,
+) -> Result<()> {
+    let warnings = source_pack_warnings(manifest);
+    let (provider_route, local_only) = provider_disclosure(config);
+    let source_pack = hyprduck_engine_types::SourcePackV0 {
+        schema_version: hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+        workspace_id: manifest.workspace_id.clone(),
+        source_id: manifest.source_id.clone(),
+        original_filename: Path::new(&manifest.original_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(manifest.original_path.as_str())
+            .into(),
+        original_path: manifest.original_path.clone(),
+        source_path: manifest.source_path.clone(),
+        markdown_path: manifest.markdown_path.clone(),
+        artifact_root: manifest.artifact_root.clone(),
+        content_hash: content_hash.to_string(),
+        format: manifest.format.clone(),
+        page_count: manifest.pages.len(),
+        ingestion_status: manifest.status.clone(),
+        provider_route: provider_route.clone(),
+        local_only,
+        pages: manifest
+            .pages
+            .iter()
+            .map(|page| hyprduck_engine_types::SourcePackPageV0 {
+                page: page.index + 1,
+                label: page.label.clone(),
+                image_path: page.image_path.clone(),
+                markdown_path: page.markdown_path.clone(),
+                plain_text_path: page.plain_text_path.clone(),
+                error_message: page.error_message.clone(),
+            })
+            .collect(),
+        warnings: warnings.clone(),
+        created_at: manifest.created_at,
+        updated_at: manifest.updated_at,
+    };
+    let evidence_index = hyprduck_engine_types::EvidenceIndexV0 {
+        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+        workspace_id: manifest.workspace_id.clone(),
+        source_id: manifest.source_id.clone(),
+        content_hash: content_hash.to_string(),
+        provider_route,
+        local_only,
+        evidence: manifest
+            .pages
+            .iter()
+            .filter_map(|page| evidence_index_item(manifest, page, content_hash))
+            .collect(),
+        warnings,
+        generated_at,
+    };
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    fs::write(
+        &source_pack_path,
+        serde_json::to_string_pretty(&source_pack).context("failed to encode source pack")?,
+    )
+    .with_context(|| format!("failed writing source pack {}", source_pack_path.display()))?;
+    fs::write(
+        &evidence_index_path,
+        serde_json::to_string_pretty(&evidence_index).context("failed to encode evidence index")?,
+    )
+    .with_context(|| {
+        format!(
+            "failed writing evidence index {}",
+            evidence_index_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn source_pack_warnings(
+    manifest: &SourceArtifactManifest,
+) -> Vec<hyprduck_engine_types::SourcePackWarningV0> {
+    manifest
+        .pages
+        .iter()
+        .filter_map(|page| {
+            page.error_message
+                .as_ref()
+                .map(|message| hyprduck_engine_types::SourcePackWarningV0 {
+                    warning_type: "page_parse_failed".into(),
+                    severity: hyprduck_engine_types::ContextPackWarningSeverity::High,
+                    message: message.clone(),
+                    page: Some(page.index + 1),
+                })
+        })
+        .collect()
+}
+
+fn evidence_index_item(
+    manifest: &SourceArtifactManifest,
+    page: &PageArtifact,
+    content_hash: &str,
+) -> Option<hyprduck_engine_types::EvidenceIndexItemV0> {
+    if page.error_message.is_some() {
+        return None;
+    }
+    let quoted_text = page
+        .markdown_path
+        .as_ref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .or_else(|| {
+            page.plain_text_path
+                .as_ref()
+                .and_then(|path| fs::read_to_string(path).ok())
+        })?;
+    let quoted_text = excerpt(&quoted_text, 280);
+    if quoted_text.trim().is_empty() {
+        return None;
+    }
+    Some(hyprduck_engine_types::EvidenceIndexItemV0 {
+        evidence_ref: format!("ev-{}-source-{}", manifest.source_id, page.index + 1),
+        source_id: manifest.source_id.clone(),
+        page: page.index + 1,
+        region: format!("page:{}", page.label),
+        span: Some("page".into()),
+        quoted_text,
+        parse_confidence: hyprduck_engine_types::ContextPackParseConfidence::Unknown,
+        content_hash: content_hash.to_string(),
+        markdown_path: page.markdown_path.clone(),
+        image_path: page.image_path.clone(),
+    })
+}
+
+fn file_content_hash(path: &Path) -> Result<String> {
+    let content = fs::read(path).with_context(|| format!("failed reading {}", path.display()))?;
+    Ok(format!("fnv64:{:016x}", fnv1a64(&content)))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn excerpt(text: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for value in text.split_whitespace() {
+        let extra = usize::from(!output.is_empty());
+        if output.len() + extra + value.len() > max_chars {
+            break;
+        }
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(value);
+    }
+    output
+}
+
+fn provider_disclosure(config: &EngineConfig) -> (String, bool) {
+    let provider_route = config.provider.id_slug().to_string();
+    let local_only = matches!(config.provider, ProviderKind::Ollama)
+        && config
+            .base_url
+            .as_deref()
+            .map(is_loopback_url)
+            .unwrap_or(true);
+    (provider_route, local_only)
+}
+
+fn is_loopback_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    let Some(after_scheme) = lower.split_once("://").map(|(_, rest)| rest) else {
+        return false;
+    };
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if host.starts_with('[') {
+        host.split_once(']')
+            .map(|(host, _)| format!("{host}]"))
+            .unwrap_or_else(|| host.to_string())
+    } else {
+        host.split_once(':')
+            .map(|(host, _)| host.to_string())
+            .unwrap_or_else(|| host.to_string())
+    };
+    matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]")
 }
 
 pub(crate) fn load_source_manifest(
