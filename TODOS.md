@@ -199,7 +199,7 @@ losing page evidence.
 - [ ] One MCP client can answer with source/page/evidence citations.
 - [ ] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
 - [ ] Default docs and tool lists contain no retired trust-layer UX language.
-- [ ] Missing provider and partial import failures produce specific warnings.
+- [x] Missing provider and partial import failures produce specific warnings.
 
 **Effort:** L
 **Priority:** P3
