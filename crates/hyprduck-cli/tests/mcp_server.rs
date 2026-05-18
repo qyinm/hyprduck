@@ -67,9 +67,11 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert_eq!(
         names,
         vec![
-            "search_brain",
             "get_context_pack",
+            "search_documents",
+            "search_brain",
             "read_source",
+            "read_page_evidence",
             "read_wiki_page",
             "read_node",
             "read_recent_events",
@@ -78,6 +80,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "read_health",
         ]
     );
+    assert_eq!(tools[0]["name"], "get_context_pack");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
     assert!(tools
         .iter()
@@ -85,6 +88,30 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": {
+                "name": "read_page_evidence",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "page": 0
+                }
+            }
+        }),
+    );
+    let invalid_page = read_message(&mut reader);
+    assert_eq!(invalid_page["result"]["isError"], true);
+    assert!(invalid_page["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text")
+        .contains("positive 1-based"));
 
     write_message(
         &mut stdin,

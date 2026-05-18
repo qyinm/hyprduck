@@ -1,6 +1,6 @@
-# MCP Brain Server
+# MCP Context Server
 
-HyprDuck exposes the local brain through an MCP stdio server:
+HyprDuck exposes local document context artifacts through an MCP stdio server:
 
 ```bash
 hyprduck mcp serve
@@ -43,18 +43,20 @@ Example MCP client entry:
 
 All tools accept optional `workspaceId` and `rootDir` arguments. If omitted,
 `workspaceId` defaults to `default` and the engine resolves the local HyprDuck
-brain root.
+workspace root.
 
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
-| `search_brain` | `query` | Return ranked source-backed brain IDs. |
-| `get_context_pack` | `query` | Build an agent-ready pack with memories, claims, entities, relations, sources, evidence, and recent events. |
+| `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
+| `search_documents` | `query` | Return ranked source-backed document context IDs. |
+| `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
+| `read_page_evidence` | `sourceId` | Read source evidence refs, optionally narrowed by 1-based `page`. |
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
 | `read_node` | `nodeId` | Read a graph node with evidence and adjacent relations. |
-| `read_recent_events` | none | Read append-only brain event history. |
+| `read_recent_events` | none | Read append-only document context event history. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
-| `read_health` | none | Read brain health. |
+| `read_health` | none | Read workspace context readiness. |
 
 ## Read Resources
 
@@ -104,8 +106,9 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_brain","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
 ```
 
 Tool results return JSON as text content so MCP clients can pass the complete

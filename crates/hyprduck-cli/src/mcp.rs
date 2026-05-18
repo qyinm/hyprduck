@@ -103,10 +103,10 @@ fn initialize_result(message: &Value) -> Value {
         },
         "serverInfo": {
             "name": "hyprduck",
-            "title": "HyprDuck Local Brain",
+            "title": "HyprDuck Local Context",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "HyprDuck exposes local brain artifacts through read, search, context-pack, snapshot, and health tools. Use search_brain and get_context_pack first, then open cited sources, wiki pages, nodes, or event history as needed."
+        "instructions": "HyprDuck exposes local document context artifacts through read, search, context-pack, snapshot, and health tools. Use get_context_pack first, then search_documents or open cited sources, page evidence, wiki pages, nodes, or event history as needed."
     })
 }
 
@@ -298,7 +298,7 @@ fn call_tool(
         .flatten();
 
     let value = match name {
-        "search_brain" => {
+        "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
             let limit = optional_usize(arguments, "limit")?;
             serde_json::to_value(client.search_brain(SearchBrainRequest {
@@ -320,6 +320,25 @@ fn call_tool(
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
             serde_json::to_value(client.read_source(ReadSourceRequest { scope, source_id })?)?
+        }
+        "read_page_evidence" => {
+            let source_id = required_string(arguments, "sourceId")?;
+            let page = optional_usize(arguments, "page")?;
+            if page == Some(0) {
+                return Err(anyhow!("argument page must be a positive 1-based integer"));
+            }
+            let source = client.read_source(ReadSourceRequest { scope, source_id })?;
+            let evidence = source
+                .evidence
+                .into_iter()
+                .filter(|evidence| {
+                    page.is_none_or(|page| evidence.page_index == Some(page.saturating_sub(1)))
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_value(json!({
+                "source": source.source,
+                "evidence": evidence
+            }))?
         }
         "read_wiki_page" => {
             let path = required_string(arguments, "path")?;
@@ -498,18 +517,8 @@ fn resource_definitions() -> Vec<Value> {
 fn tool_definitions() -> Vec<Value> {
     vec![
         tool_definition(
-            "search_brain",
-            "Search local HyprDuck brain artifacts and return ranked evidence-backed IDs.",
-            json!({
-                "query": { "type": "string", "description": "Search query." },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
-            }),
-            vec!["query"],
-            true,
-        ),
-        tool_definition(
             "get_context_pack",
-            "Build an agent-ready context pack with relevant memories, claims, entities, relations, sources, evidence, and recent events.",
+            "Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace.",
             json!({
                 "query": { "type": "string", "description": "Task or question to build context for." },
                 "budget": { "type": "integer", "minimum": 1, "description": "Approximate token budget." },
@@ -518,10 +527,40 @@ fn tool_definitions() -> Vec<Value> {
             true,
         ),
         tool_definition(
+            "search_documents",
+            "Search local HyprDuck document context artifacts and return ranked evidence-backed IDs.",
+            json!({
+                "query": { "type": "string", "description": "Search query." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
+            }),
+            vec!["query"],
+            true,
+        ),
+        tool_definition(
+            "search_brain",
+            "Compatibility alias for search_documents.",
+            json!({
+                "query": { "type": "string", "description": "Search query." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum result count." },
+            }),
+            vec!["query"],
+            true,
+        ),
+        tool_definition(
             "read_source",
             "Read an immutable source record with adjacent wiki and evidence refs.",
             json!({
-                "sourceId": { "type": "string", "description": "Source ID returned by search_brain or get_context_pack." },
+                "sourceId": { "type": "string", "description": "Source ID returned by search_documents or get_context_pack." },
+            }),
+            vec!["sourceId"],
+            true,
+        ),
+        tool_definition(
+            "read_page_evidence",
+            "Read source evidence refs for a source, optionally narrowed to one 1-based page.",
+            json!({
+                "sourceId": { "type": "string", "description": "Source ID returned by search_documents or get_context_pack." },
+                "page": { "type": "integer", "minimum": 1, "description": "Optional 1-based page number." },
             }),
             vec!["sourceId"],
             true,
