@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
@@ -13,18 +13,18 @@ use hyprduck_engine_types::{
     BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthStatus,
     BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord,
     BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord,
-    CompileProjectRequest, CompileProjectResponseData, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef, GetBrainHealthRequest,
-    GetBrainHealthResponseData, GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail,
-    GraphNodeKind, GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject,
-    LoadProjectRequest, LoadProjectResponseData, MemoryRecord, PageArtifact, ParseEvent,
-    ParseMetadata, ParseRequest, ParseResponseData, ParseResult, ParsedPage, ProjectOverview,
-    ProjectStatus, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    CompileProjectRequest, CompileProjectResponseData, ContextPackSourceMetadataV0,
+    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
+    EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
+    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
+    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
+    MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData,
+    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest, ReadNodeResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
+    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
     StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
     StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
     WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
@@ -702,9 +702,80 @@ fn handle_read_recent_events(
 
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
     let reader = BrainReader::open(&request.scope)?;
+    let context_pack = reader.context_pack(&request.query, request.budget.unwrap_or(8000))?;
+    let source_metadata = build_context_pack_source_metadata(&context_pack.sources);
+    let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
+        &context_pack,
+        format!("ctx_{}", uuid::Uuid::now_v7().simple()),
+        current_iso_timestamp_utc(),
+        &source_metadata,
+    );
     Ok(GetContextPackResponseData {
-        context_pack: reader.context_pack(&request.query, request.budget.unwrap_or(8000))?,
+        context_pack,
+        context_pack_v0,
     })
+}
+
+fn build_context_pack_source_metadata(
+    sources: &[SourceRecord],
+) -> BTreeMap<SourceId, ContextPackSourceMetadataV0> {
+    sources
+        .iter()
+        .filter_map(|source| {
+            let content = fs::read(&source.source_path)
+                .or_else(|_| fs::read(&source.markdown_path))
+                .ok()?;
+            Some((
+                source.source_id.clone(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: format!("fnv64:{:016x}", fnv1a64(&content)),
+                    provider_route: "unknown".into(),
+                    local_only: false,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn current_iso_timestamp_utc() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    unix_seconds_to_iso_utc(seconds)
+}
+
+fn unix_seconds_to_iso_utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m as u32, d as u32)
 }
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {

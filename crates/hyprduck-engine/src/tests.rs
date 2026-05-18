@@ -1069,6 +1069,35 @@ fn brain_writer_uses_directory_lock_without_pid_file() {
 }
 
 #[test]
+fn context_pack_source_metadata_hashes_available_source_content() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_path = temp.path().join("source.pdf");
+    let markdown_path = temp.path().join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+
+    let metadata = build_context_pack_source_metadata(&[SourceRecord {
+        source_id: "src-context".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "source.pdf".into(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        format: hyprduck_engine_types::SourceFormat::pdf(),
+        status: hyprduck_engine_types::SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    }]);
+
+    let source = metadata.get("src-context").expect("source metadata");
+    assert!(source.content_hash.starts_with("fnv64:"));
+    assert_eq!(source.provider_route, "unknown");
+    assert!(!source.local_only);
+}
+
+#[test]
 fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
     let temp = tempfile::tempdir().expect("temp dir");
     let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";

@@ -197,7 +197,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             query,
             budget,
         } => {
-            let pack = client.get_context_pack(GetContextPackRequest {
+            let response = client.get_context_pack(GetContextPackRequest {
                 scope: BrainReadScope {
                     workspace_id: workspace,
                     root_dir,
@@ -205,10 +205,29 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                 query,
                 budget,
             })?;
+            let context_pack_v0 = &response.context_pack_v0;
+            let pack = response.context_pack;
             println!("{}", pack.summary);
             for warning in &pack.warnings {
                 println!("warning: {warning}");
             }
+            println!("context-pack-v0: {}", context_pack_v0.schema_version);
+            println!(
+                "context-pack-v0-sources: {}",
+                context_pack_v0.source_set.len()
+            );
+            println!(
+                "context-pack-v0-evidence: {}",
+                context_pack_v0.selected_evidence.len()
+            );
+            println!(
+                "context-pack-v0-findings: {}",
+                context_pack_v0.findings.len()
+            );
+            println!(
+                "context-pack-v0-warnings: {}",
+                context_pack_v0.warnings.len()
+            );
             println!("wiki-pages: {}", pack.wiki_pages.len());
             println!("nodes: {}", pack.nodes.len());
             println!("sources: {}", pack.sources.len());
