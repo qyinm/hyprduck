@@ -117,6 +117,7 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
     let mut workspace = "default".to_string();
     let mut root_dir = None;
     let mut budget = None;
+    let mut persist_context_pack = false;
     let mut limit = None;
     let mut target_node_id = None;
     let mut run_id = None;
@@ -158,6 +159,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                     raw.parse()
                         .map_err(|_| anyhow!("invalid --budget: {raw}"))?,
                 );
+            }
+            "--write-context-pack" => {
+                persist_context_pack = true;
             }
             "--limit" => {
                 index += 1;
@@ -288,6 +292,7 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 root_dir,
                 query,
                 budget,
+                persist: persist_context_pack,
             })
         }
         "event-history" | "events" => Ok(BrainCommand::EventHistory {
@@ -425,6 +430,7 @@ pub enum BrainCommand {
         root_dir: Option<String>,
         query: String,
         budget: Option<usize>,
+        persist: bool,
     },
     EventHistory {
         request: ReadRecentEventsRequest,

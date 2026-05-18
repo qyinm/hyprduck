@@ -710,10 +710,35 @@ fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextP
         current_iso_timestamp_utc(),
         &source_metadata,
     );
+    let persisted_context_pack_path = if request.persist {
+        Some(persist_context_pack_v0(&request.scope, &context_pack_v0)?)
+    } else {
+        None
+    };
     Ok(GetContextPackResponseData {
         context_pack,
         context_pack_v0,
+        persisted_context_pack_path,
     })
+}
+
+fn persist_context_pack_v0(
+    scope: &BrainReadScope,
+    context_pack: &hyprduck_engine_types::ContextPackV0,
+) -> Result<String> {
+    let workspace_root = resolve_brain_workspace_root(scope)?;
+    let history_dir = workspace_root.join("context_packs");
+    fs::create_dir_all(&history_dir)
+        .with_context(|| format!("failed creating {}", history_dir.display()))?;
+    let json =
+        serde_json::to_string_pretty(context_pack).context("failed encoding context pack v0")?;
+    let history_path = history_dir.join(format!("{}.json", context_pack.pack_id));
+    fs::write(&history_path, &json)
+        .with_context(|| format!("failed writing {}", history_path.display()))?;
+    let latest_path = workspace_root.join("context_pack.json");
+    fs::write(&latest_path, json)
+        .with_context(|| format!("failed writing {}", latest_path.display()))?;
+    Ok(latest_path.display().to_string())
 }
 
 fn build_context_pack_source_metadata(

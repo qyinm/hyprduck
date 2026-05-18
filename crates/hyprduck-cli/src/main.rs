@@ -196,6 +196,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             root_dir,
             query,
             budget,
+            persist,
         } => {
             let response = client.get_context_pack(GetContextPackRequest {
                 scope: BrainReadScope {
@@ -204,6 +205,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                 },
                 query,
                 budget,
+                persist,
             })?;
             let context_pack_v0 = &response.context_pack_v0;
             let pack = response.context_pack;
@@ -228,6 +230,9 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                 "context-pack-v0-warnings: {}",
                 context_pack_v0.warnings.len()
             );
+            if let Some(path) = &response.persisted_context_pack_path {
+                println!("context-pack-v0-path: {path}");
+            }
             println!("wiki-pages: {}", pack.wiki_pages.len());
             println!("nodes: {}", pack.nodes.len());
             println!("sources: {}", pack.sources.len());

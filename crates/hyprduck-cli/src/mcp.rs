@@ -314,6 +314,7 @@ fn call_tool(
                 scope,
                 query,
                 budget,
+                persist: false,
             })?)?
         }
         "read_source" => {

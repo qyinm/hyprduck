@@ -1108,6 +1108,45 @@ fn context_pack_source_metadata_hashes_available_source_content() {
 }
 
 #[test]
+fn context_pack_v0_persistence_writes_latest_and_history_files() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().to_string_lossy().into_owned()),
+    };
+    let context_pack = hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: "ctx_test_pack".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![],
+        selected_evidence: vec![],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: "test".into(),
+            chunks_considered: 0,
+            chunks_selected: 0,
+            budget_requested: 4000,
+            budget_used: 0,
+        },
+        suggested_next_reads: vec![],
+    };
+
+    let path = persist_context_pack_v0(&scope, &context_pack).expect("persist context pack");
+    assert!(path.ends_with("default/context_pack.json"));
+    let latest = temp.path().join("default/context_pack.json");
+    let history = temp.path().join("default/context_packs/ctx_test_pack.json");
+    assert!(latest.exists());
+    assert!(history.exists());
+    let decoded: hyprduck_engine_types::ContextPackV0 =
+        serde_json::from_str(&fs::read_to_string(latest).expect("latest context pack"))
+            .expect("context pack json");
+    assert_eq!(decoded.pack_id, "ctx_test_pack");
+}
+
+#[test]
 fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
     let temp = tempfile::tempdir().expect("temp dir");
     let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";

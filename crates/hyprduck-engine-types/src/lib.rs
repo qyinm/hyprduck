@@ -551,6 +551,8 @@ pub struct GetContextPackRequest {
     pub query: String,
     #[serde(default)]
     pub budget: Option<usize>,
+    #[serde(default)]
+    pub persist: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -971,6 +973,8 @@ impl ContextPackEvidenceV0 {
 pub struct GetContextPackResponseData {
     pub context_pack: BrainContextPack,
     pub context_pack_v0: ContextPackV0,
+    #[serde(default)]
+    pub persisted_context_pack_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1687,6 +1691,7 @@ mod tests {
                 scope: scope.clone(),
                 query: "agent context".into(),
                 budget: Some(8000),
+                persist: false,
             }),
             EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
         ];
