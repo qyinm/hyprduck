@@ -721,7 +721,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                Select a node or edge to inspect its evidence and trust signals.
+                Select a node or edge to inspect its evidence and provenance.
               </div>
             )}
           </aside>

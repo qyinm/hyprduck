@@ -9,11 +9,9 @@ use anyhow::Result;
 use cli::{Cli, Commands, GraphStateSelector};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    AgentGraphProposalPayload, AgentNewEdgePayload, BrainActor, BrainActorType, BrainProposalKind,
-    BrainReadScope, BrainRelationKind, DocumentFormat, GetContextPackRequest, GraphHistoryEntry,
-    ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
-    ProposeBrainUpdateRequest, ReadRecentEventsRequest, ReconstructBrainResponseData,
-    SearchBrainRequest,
+    BrainReadScope, DocumentFormat, GetContextPackRequest, GraphHistoryEntry, ParseInput,
+    ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest, ReadRecentEventsRequest,
+    ReconstructBrainResponseData, SearchBrainRequest,
 };
 
 fn main() -> Result<()> {
@@ -273,122 +271,8 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             let restored = client.reconstruct_brain(request)?;
             print_graph_rollback_result(&state, restored)?;
         }
-        cli::BrainCommand::ProposeUpdate {
-            workspace,
-            root_dir,
-            kind,
-            title,
-            body,
-            actor,
-            target_node_id,
-            target_source_id,
-            relation_kind,
-            source_refs,
-            node_refs,
-            evidence_refs,
-        } => {
-            let proposal_payload = cli_link_proposal_payload(
-                kind,
-                title.as_str(),
-                target_node_id.as_deref(),
-                relation_kind,
-                &source_refs,
-                &node_refs,
-                &evidence_refs,
-            );
-            let response = client.propose_brain_update(ProposeBrainUpdateRequest {
-                scope: BrainReadScope {
-                    workspace_id: workspace,
-                    root_dir,
-                },
-                kind,
-                title,
-                body,
-                actor: BrainActor {
-                    actor_type: BrainActorType::Agent,
-                    actor_id: actor,
-                },
-                target_node_id,
-                target_source_id,
-                relation_kind,
-                source_description: None,
-                source_user_context: None,
-                source_ingest_instruction: None,
-                source_refs,
-                node_refs,
-                evidence_refs,
-                proposal_payload,
-            })?;
-            println!("proposal: {}", response.proposal.proposal_id);
-            println!("event: {}", response.event.event_id);
-            println!("status: {:?}", response.proposal.status);
-            println!("path: {}", response.proposal_path);
-        }
     }
     Ok(())
-}
-
-fn cli_link_proposal_payload(
-    kind: BrainProposalKind,
-    title: &str,
-    target_node_id: Option<&str>,
-    relation_kind: Option<BrainRelationKind>,
-    source_refs: &[String],
-    node_refs: &[String],
-    evidence_refs: &[String],
-) -> Option<AgentGraphProposalPayload> {
-    if kind != BrainProposalKind::Link {
-        return None;
-    }
-    let source_node_id = target_node_id?.trim();
-    let target_node_id = node_refs.first()?.trim();
-    if source_node_id.is_empty() || target_node_id.is_empty() {
-        return None;
-    }
-    let kind = relation_kind.unwrap_or(BrainRelationKind::RelatedTo);
-    let edge_id = format!(
-        "edge-{}-{}-{}",
-        slug_for_cli_edge_id(source_node_id),
-        slug_for_cli_edge_id(target_node_id),
-        serde_json::to_string(&kind)
-            .unwrap_or_else(|_| "\"related_to\"".into())
-            .trim_matches('"')
-    );
-    Some(AgentGraphProposalPayload::NewEdge {
-        edge: AgentNewEdgePayload {
-            source_node_id: source_node_id.to_string(),
-            target_node_id: target_node_id.to_string(),
-            kind,
-            label: title.trim().to_string(),
-            source_path: "hyprduck-cli".into(),
-            edge_id: Some(edge_id),
-            source_refs: source_refs.to_vec(),
-            evidence_refs: evidence_refs.to_vec(),
-            reason: Some("Created from hyprduck brain propose-link.".into()),
-        },
-    })
-}
-
-fn slug_for_cli_edge_id(value: &str) -> String {
-    let slug = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    if slug.is_empty() {
-        "node".into()
-    } else {
-        slug
-    }
 }
 
 fn print_graph_history(

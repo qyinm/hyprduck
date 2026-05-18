@@ -22,32 +22,12 @@ impl BrainArtifactRepository {
         &self.root
     }
 
-    pub(crate) fn output_root(&self) -> Option<&Path> {
-        self.root.parent()
-    }
-
     pub(crate) fn ensure_workspace_dirs(&self) -> Result<()> {
-        for dir in [
-            self.root.join("events"),
-            self.root.join("memory"),
-            self.root.join("reviews/proposed-updates"),
-        ] {
+        for dir in [self.root.join("events"), self.root.join("memory")] {
             fs::create_dir_all(&dir)
                 .with_context(|| format!("failed creating {}", dir.display()))?;
         }
         Ok(())
-    }
-
-    pub(crate) fn proposal_path(&self, proposal_id: &str) -> PathBuf {
-        self.root
-            .join("reviews/proposed-updates")
-            .join(format!("{proposal_id}.json"))
-    }
-
-    pub(crate) fn write_proposal(&self, proposal: &BrainUpdateProposal) -> Result<PathBuf> {
-        let path = self.proposal_path(&proposal.proposal_id);
-        write_json_pretty(&path, proposal)?;
-        Ok(path)
     }
 
     pub(crate) fn append_event(&self, event: &BrainEvent) -> Result<()> {
@@ -58,6 +38,7 @@ impl BrainArtifactRepository {
         read_memory_records(&self.root)
     }
 
+    #[cfg(test)]
     pub(crate) fn write_memory_records(&self, memories: &[MemoryRecord]) -> Result<()> {
         write_json_pretty(&self.root.join("memory/records.json"), &memories)
     }
@@ -68,10 +49,6 @@ impl BrainArtifactRepository {
 
     pub(crate) fn read_brain_manifest(&self) -> Result<BrainRepoSnapshot> {
         read_json_artifact(&self.brain_manifest_path())
-    }
-
-    pub(crate) fn write_brain_manifest(&self, snapshot: &BrainRepoSnapshot) -> Result<()> {
-        write_json_pretty(&self.brain_manifest_path(), snapshot)
     }
 
     pub(crate) fn read_brain_events(&self) -> Result<Vec<BrainEvent>> {

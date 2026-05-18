@@ -73,7 +73,7 @@ open_slug_type!(SourceStatus {
     rendering => "rendering",
     ingesting => "ingesting",
     ingested => "ingested",
-    needs_review => "needs_review",
+    partial => "partial",
     failed => "failed",
     stale => "stale",
 });
@@ -84,11 +84,8 @@ open_slug_type!(PolicyResult {
     applied => "applied",
     auto_accept => "auto_accept",
     auto_applied => "auto_applied",
-    auto_enqueued => "auto_enqueued",
-    auto_rejected => "auto_rejected",
     idempotent_noop => "idempotent_noop",
     materialized => "materialized",
-    needs_review => "needs_review",
     rollback_applied => "rollback_applied",
 });
 
@@ -403,16 +400,8 @@ pub enum BrainEventKind {
     GraphMaterialized,
     WikiMaterialized,
     CorrectionApplied,
-    NodeProposed,
-    MemoryProposed,
-    ClaimProposed,
-    LinkProposed,
     ObservationAppended,
-    SourceNoteProposed,
-    WikiPageProposed,
     MemoryAccepted,
-    ReviewCreated,
-    ReviewResolved,
     BrainMaintenanceRun,
 }
 
@@ -425,8 +414,6 @@ fn default_brain_event_schema_version() -> u32 {
 pub struct BrainEventCausality {
     #[serde(default)]
     pub caused_by_event_ids: Vec<String>,
-    #[serde(default)]
-    pub caused_by_proposal_id: Option<String>,
     #[serde(default)]
     pub caused_by_source_ids: Vec<String>,
     #[serde(default)]
@@ -443,7 +430,6 @@ impl Default for BrainEventCausality {
     fn default() -> Self {
         Self {
             caused_by_event_ids: Vec::new(),
-            caused_by_proposal_id: None,
             caused_by_source_ids: Vec::new(),
             snapshot_id: None,
             previous_snapshot_id: None,
@@ -800,195 +786,6 @@ pub struct BrainRepoSnapshot {
     pub events: Vec<BrainEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BrainProposalKind {
-    Node,
-    Memory,
-    Claim,
-    Link,
-    Observation,
-    SourceNote,
-    WikiPage,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BrainProposalStatus {
-    PendingReview,
-    Accepted,
-    Rejected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrainUpdateProposal {
-    pub proposal_id: String,
-    pub workspace_id: String,
-    pub kind: BrainProposalKind,
-    pub status: BrainProposalStatus,
-    pub actor: BrainActor,
-    pub scope: BrainScope,
-    pub title: String,
-    pub body: String,
-    #[serde(default)]
-    pub target_node_id: Option<String>,
-    #[serde(default)]
-    pub target_source_id: Option<String>,
-    #[serde(default)]
-    pub relation_kind: Option<BrainRelationKind>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub node_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub proposal_payload: Option<AgentGraphProposalPayload>,
-    pub created_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "changeType", rename_all = "snake_case")]
-pub enum AgentGraphProposalPayload {
-    NewNode { node: AgentNewNodePayload },
-    NewEdge { edge: AgentNewEdgePayload },
-    NewClaim { claim: AgentNewClaimPayload },
-    NewMemory { memory: AgentNewMemoryPayload },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentNewNodePayload {
-    pub label: String,
-    pub kind: BrainNodeKind,
-    pub source_path: String,
-    #[serde(default)]
-    pub node_id: Option<String>,
-    #[serde(default)]
-    pub aliases: Vec<String>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentNewEdgePayload {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub kind: BrainRelationKind,
-    pub label: String,
-    pub source_path: String,
-    #[serde(default)]
-    pub edge_id: Option<String>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentNewClaimPayload {
-    pub statement: String,
-    pub source_path: String,
-    #[serde(default)]
-    pub claim_id: Option<String>,
-    #[serde(default)]
-    pub topic_refs: Vec<String>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentNewMemoryPayload {
-    pub title: String,
-    pub body: String,
-    pub source_path: String,
-    #[serde(default)]
-    pub memory_id: Option<String>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentGraphProposalValidationCode {
-    MissingRequiredField,
-    MissingSourceRefs,
-    MissingEvidenceRefs,
-    MissingNodeRefs,
-    MissingTopicRefs,
-    MissingTargetNode,
-    MissingRelationKind,
-    KindPayloadMismatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentGraphProposalValidationIssue {
-    pub code: AgentGraphProposalValidationCode,
-    pub field: String,
-    pub message: String,
-}
-
-impl AgentGraphProposalValidationIssue {
-    pub fn new(
-        code: AgentGraphProposalValidationCode,
-        field: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            code,
-            field: field.into(),
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentGraphProposalValidationError {
-    pub error: String,
-    pub issues: Vec<AgentGraphProposalValidationIssue>,
-}
-
-impl AgentGraphProposalValidationError {
-    pub fn new(issues: Vec<AgentGraphProposalValidationIssue>) -> Self {
-        Self {
-            error: "invalid_agent_graph_proposal".into(),
-            issues,
-        }
-    }
-}
-
-impl std::fmt::Display for AgentGraphProposalValidationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}:", self.error)?;
-        for issue in &self.issues {
-            write!(formatter, " [{}] {}", issue.field, issue.message)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for AgentGraphProposalValidationError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,7 +811,7 @@ mod tests {
             suggested_actions: vec![SuggestedAction {
                 kind: SuggestedActionKind::InspectEvidence,
                 label: "Inspect evidence".into(),
-                description: "Review the cited snippets before trusting the draft answer.".into(),
+                description: "Inspect the cited snippets before using this draft answer.".into(),
             }],
         };
 
@@ -1112,8 +909,8 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct TestBrainEventPayload {
-        proposal_id: String,
-        accepted: bool,
+        source_id: String,
+        applied: bool,
     }
 
     fn test_brain_event() -> BrainEvent {
@@ -1122,7 +919,7 @@ mod tests {
             schema_version: BRAIN_EVENT_SCHEMA_VERSION,
             workspace_id: "workspace-1".into(),
             scope: BrainScope::Project,
-            event_type: BrainEventKind::ReviewResolved,
+            event_type: BrainEventKind::BrainMaintenanceRun,
             operation_type: None,
             actor: BrainActor {
                 actor_type: BrainActorType::System,
@@ -1151,8 +948,8 @@ mod tests {
     fn brain_event_payload_helpers_round_trip_without_changing_wire_shape() {
         let mut event = test_brain_event();
         let payload = TestBrainEventPayload {
-            proposal_id: "proposal-1".into(),
-            accepted: true,
+            source_id: "source-1".into(),
+            applied: true,
         };
 
         event
@@ -1166,12 +963,12 @@ mod tests {
             payload
         );
         assert_eq!(
-            event.payload_value().expect("deserialize value payload")["proposalId"],
-            "proposal-1"
+            event.payload_value().expect("deserialize value payload")["sourceId"],
+            "source-1"
         );
 
         let encoded = serde_json::to_string(&event).expect("serialize brain event");
-        assert!(encoded.contains("\"payloadJson\":\"{\\\"proposalId\\\":\\\"proposal-1\\\""));
+        assert!(encoded.contains("\"payloadJson\":\"{\\\"sourceId\\\":\\\"source-1\\\""));
     }
 
     #[test]

@@ -534,6 +534,6 @@ mod tests {
             read_json_artifact(&temp.path().join("runs/run-a/validation-report.json"))
                 .expect("read validation report");
         assert_eq!(report["parsedRecordCount"], 3);
-        assert!(report.get("parsedProposalCount").is_none());
+        assert!(report.get("parsedCandidateCount").is_none());
     }
 }

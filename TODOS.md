@@ -2,9 +2,9 @@
 
 ## Direction
 
-HyprDuck is moving from a document parser into a local-first brain repo and trust console for AI agents.
+HyprDuck is moving from a document parser into a local-first brain repo for AI agents.
 
-The parser remains the wedge, but the next product milestone is not "more chat" or "open MCP immediately." The next milestone is making the materialized brain measurable and retrievable: golden-corpus evaluation, local retrieval quality, context-pack hardening, and reviewable save-back.
+The parser remains the wedge, but the next product milestone is not "more chat" or "open MCP immediately." The next milestone is making the materialized brain measurable and retrievable: golden-corpus evaluation, local retrieval quality, context-pack hardening, and graph materialization quality.
 
 Current roadmap order:
 
@@ -18,7 +18,7 @@ Current roadmap order:
 
 **What:** Add a small benchmark corpus and CLI/eval path for extraction, retrieval, and context-pack quality.
 
-**Why:** HyprDuck is making a local-first promise and a trust-console promise. Without a corpus, we cannot tell whether graph/retrieval changes improve agent usefulness or only make the UI look richer.
+**Why:** HyprDuck is making a local-first promise. Without a corpus, we cannot tell whether graph/retrieval changes improve agent usefulness or only make the UI look richer.
 
 **Fixture cases:**
 
@@ -80,11 +80,11 @@ Current roadmap order:
 
 ---
 
-## P1 - Reviewable save-back and correction persistence - Done
+## P1 - Save-back and correction persistence - Done
 
 **What:** Implement durable save-back flows for answers, corrections, and graph edits.
 
-**Why:** The UI already suggests that answers/corrections can become wiki pages, claims, notes, source metadata, or graph updates. Those writes must go through source-backed provenance and reviewable events instead of mutating generated artifacts opaquely.
+**Why:** The UI already suggests that answers/corrections can become wiki pages, claims, notes, source metadata, or graph updates. Those writes must preserve source-backed provenance instead of mutating generated artifacts opaquely.
 
 **Scope:**
 
@@ -110,14 +110,14 @@ Current roadmap order:
 
 ## P1 - Model-task matrix and latency budget - Done
 
-**What:** Measure and document which hosted and local models are good enough for parse, extraction, merge, review, and answer workloads.
+**What:** Measure and document which hosted and local models are good enough for parse, extraction, merge, and answer workloads.
 
 **Why:** Users can pick a weak local model and get a graph that feels broken even when the app works. HyprDuck needs recommended defaults and clear fallbacks for local-first operation.
 
 **Scope:**
 
 - Compare OpenRouter-hosted models and local Ollama models on the golden corpus.
-- Track parse latency, extraction quality, merge quality, answer groundedness, and memory/write proposal quality.
+- Track parse latency, extraction quality, merge quality, answer groundedness, and generated graph quality.
 - Define acceptable latency budgets for local and hosted paths.
 - Document recommended defaults in repo docs and settings copy.
 
@@ -162,70 +162,30 @@ Current roadmap order:
 **Priority:** P2
 **Depends on:** Retrieval baseline, context-pack hardening, stable brain repo schema
 
----
-
-## P2 - Proposed-write MCP and policy engine - Done
-
-**What:** Let agents propose memories, claims, links, observations, and source notes through a policy-controlled write path.
-
-**Why:** HyprDuck should become an agent-maintained brain, but agent writes must stay auditable and reversible. Safe memory writes can be auto-applied; risky claims, links, destructive rewrites, and company-scope updates should require review.
-
-**Initial tools:**
-
-- `propose_memory`
-- `propose_claim`
-- `propose_link`
-- `append_observation`
-- `add_source_note`
-- `request_consolidation`
-
-**Policy defaults:**
-
-- Low-risk personal/project memory can auto-apply.
-- Claims without evidence require review.
-- Typed links that affect entity identity require review.
-- Company-scope memory requires review by default.
-- Destructive rewrites and merges require review.
-
-**Acceptance:**
-
-- [x] Every write proposal creates a brain event.
-- [x] Auto-applied writes are limited to safe categories.
-- [x] Risky writes appear in the Health/Review queue.
-- [x] Review decisions are persisted and auditable.
-- [x] Agents cannot overwrite source truth directly.
-
-**Effort:** L
-**Priority:** P2
-**Depends on:** Read-only MCP v0, reviewable save-back, policy metadata
-
----
-
 ## P3 - Team/company brain governance
 
 **What:** Turn personal/project brain scopes into team/company-ready governance.
 
-**Why:** The desired direction is an agent-maintained personal/company brain. Team/company memory needs source visibility, review authority, audit, rollback, and scope boundaries before it can be trusted.
+**Why:** The desired direction is an agent-maintained personal/company brain. Team/company memory needs source visibility, audit, rollback, and scope boundaries before it can be used confidently.
 
 **Scope:**
 
 - Clarify `personal`, `project`, `team`, and `company` scopes in storage and UI.
-- Add source visibility and write policy per scope.
-- Add audit and rollback paths for accepted agent writes.
+- Add source visibility per scope.
+- Add audit and rollback paths for generated graph and memory records.
 - Add workspace health summaries for company-level memory.
 - Keep local-first operation as the default.
 
 **Acceptance:**
 
 - [ ] Brain objects carry explicit scope.
-- [ ] Team/company writes require stronger review policy than personal/project writes.
 - [ ] Audit log can explain who/what wrote each memory, claim, or relation.
-- [ ] Rollback can undo accepted proposals without touching original sources.
-- [ ] UI copy makes scope and trust level visible.
+- [ ] Rollback can undo generated graph updates without touching original sources.
+- [ ] UI copy makes scope and provenance level visible.
 
 **Effort:** L
 **Priority:** P3
-**Depends on:** Proposed-write MCP, review queue, event log, policy engine
+**Depends on:** Read-only MCP, event log, rollback, scope metadata
 
 ---
 
@@ -235,9 +195,6 @@ Current roadmap order:
 - [x] Brain repo schema and materialization
 - [x] Source metadata persistence from composer intent
 - [x] Read-only brain engine API
-- [x] Proposed brain update queue
-- [x] Safe memory proposal auto-apply
-- [x] Brain review health queue
 - [x] Brain maintenance lint loop
 - [x] README and repository metadata aligned with agent-brain positioning
 - [x] Structured extraction artifact
@@ -245,7 +202,7 @@ Current roadmap order:
   - Re-exported the contract through `hyprduck-engine-types`.
   - Persisted per-source `artifacts/<source_id>/extraction.json`.
   - Marked the current extractor as `extractor=heuristic`.
-  - Prevented evidence-free claims/relations from becoming trusted brain context.
+  - Prevented evidence-free claims/relations from becoming generated graph context.
   - Covered artifact shape and source/evidence round trip in unit tests.
 - [x] Golden corpus and eval harness
   - Added six checked-in benchmark fixtures under `crates/hyprduck-engine/tests/fixtures/brain-corpus`.
@@ -258,9 +215,9 @@ Current roadmap order:
   - Added evidence IDs to search snippets for agent-readable citations.
   - Added CLI context-pack counts for memories, entities, claims, and relations.
   - Covered plural-token retrieval and graph/evidence expansion with a regression test.
-- [x] Reviewable save-back and correction persistence
+- [x] Save-back and correction persistence
   - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
-  - Accepted claim proposals now write durable `graph/claims.json` records.
-  - Accepted link proposals now write durable `graph/edges.json` records.
-  - Accepted wiki-page proposals now write durable `wiki/save-back/*.md` pages.
-  - Accepted save-back proposals are replayed during brain repo materialization.
+  - Claim updates now write durable `graph/claims.json` records.
+  - Link updates now write durable `graph/edges.json` records.
+  - Wiki save-back writes durable `wiki/save-back/*.md` pages.
+  - Save-back records are replayed during brain repo materialization.

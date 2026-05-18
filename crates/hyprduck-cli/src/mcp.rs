@@ -3,10 +3,9 @@ use std::io::{self, BufRead, Write};
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    AgentGraphProposalPayload, BrainActor, BrainActorType, BrainProposalKind, BrainReadScope,
-    BrainRelationKind, GetBrainHealthRequest, GetContextPackRequest, ProposeBrainUpdateRequest,
-    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadRecentEventsRequest,
-    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadGraphHistoryRequest,
+    ReadGraphSnapshotRequest, ReadNodeRequest, ReadRecentEventsRequest, ReadSourceRequest,
+    ReadWikiPageRequest, SearchBrainRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -107,7 +106,7 @@ fn initialize_result(message: &Value) -> Value {
             "title": "HyprDuck Local Brain",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "HyprDuck exposes the local brain through read tools and policy-controlled proposal tools. Use search_brain and get_context_pack first; proposed writes create auditable brain events and never overwrite source truth."
+        "instructions": "HyprDuck exposes local brain artifacts through read, search, context-pack, snapshot, and health tools. Use search_brain and get_context_pack first, then open cited sources, wiki pages, nodes, or event history as needed."
     })
 }
 
@@ -355,19 +354,6 @@ fn call_tool(
         "read_health" => {
             serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
         }
-        "propose_node" => propose_update(client, scope, BrainProposalKind::Node, arguments)?,
-        "propose_memory" => propose_update(client, scope, BrainProposalKind::Memory, arguments)?,
-        "propose_claim" => propose_update(client, scope, BrainProposalKind::Claim, arguments)?,
-        "propose_link" => propose_update(client, scope, BrainProposalKind::Link, arguments)?,
-        "append_observation" => {
-            propose_update(client, scope, BrainProposalKind::Observation, arguments)?
-        }
-        "add_source_note" => {
-            propose_update(client, scope, BrainProposalKind::SourceNote, arguments)?
-        }
-        "request_consolidation" => {
-            propose_update(client, scope, BrainProposalKind::Observation, arguments)?
-        }
         _ => return Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
     };
 
@@ -408,17 +394,7 @@ struct McpGraphWikiCacheToken {
 }
 
 fn cache_sensitive_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "read_health"
-            | "propose_node"
-            | "propose_memory"
-            | "propose_claim"
-            | "propose_link"
-            | "append_observation"
-            | "add_source_note"
-            | "request_consolidation"
-    )
+    matches!(name, "read_health")
 }
 
 fn read_graph_wiki_cache_state(
@@ -444,40 +420,6 @@ fn read_graph_wiki_cache_state(
         }
         Err(error) => Err(error),
     }
-}
-
-fn propose_update(
-    client: &dyn EngineClient,
-    scope: BrainReadScope,
-    kind: BrainProposalKind,
-    arguments: &Map<String, Value>,
-) -> Result<Value> {
-    let mut target_source_id = optional_string(arguments, "targetSourceId")?;
-    if target_source_id.is_none() {
-        target_source_id = optional_string(arguments, "sourceId")?;
-    }
-    let request = ProposeBrainUpdateRequest {
-        scope,
-        kind,
-        title: required_string(arguments, "title")?,
-        body: required_string(arguments, "body")?,
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: optional_string(arguments, "actorId")?
-                .unwrap_or_else(|| "hyprduck-mcp".into()),
-        },
-        target_node_id: optional_string(arguments, "targetNodeId")?,
-        target_source_id,
-        relation_kind: optional_relation_kind(arguments, "relationKind")?,
-        source_description: optional_string(arguments, "sourceDescription")?,
-        source_user_context: optional_string(arguments, "sourceUserContext")?,
-        source_ingest_instruction: optional_string(arguments, "sourceIngestInstruction")?,
-        source_refs: optional_string_array(arguments, "sourceRefs")?,
-        node_refs: optional_string_array(arguments, "nodeRefs")?,
-        evidence_refs: optional_string_array(arguments, "evidenceRefs")?,
-        proposal_payload: optional_agent_proposal_payload(arguments)?,
-    };
-    Ok(serde_json::to_value(client.propose_brain_update(request)?)?)
 }
 
 fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
@@ -513,69 +455,6 @@ fn optional_usize(arguments: &Map<String, Value>, name: &str) -> Result<Option<u
             .map_err(|_| anyhow!("argument {name} must be a positive integer")),
         Some(_) => Err(anyhow!("argument {name} must be a positive integer")),
         None => Ok(None),
-    }
-}
-
-fn optional_string_array(arguments: &Map<String, Value>, name: &str) -> Result<Vec<String>> {
-    match arguments.get(name) {
-        Some(Value::Array(values)) => values
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToString::to_string)
-                    .ok_or_else(|| anyhow!("argument {name} must be an array of non-empty strings"))
-            })
-            .collect(),
-        Some(_) => Err(anyhow!("argument {name} must be an array of strings")),
-        None => Ok(Vec::new()),
-    }
-}
-
-fn optional_relation_kind(
-    arguments: &Map<String, Value>,
-    name: &str,
-) -> Result<Option<BrainRelationKind>> {
-    optional_string(arguments, name)?
-        .map(|value| parse_relation_kind(&value))
-        .transpose()
-}
-
-fn optional_agent_proposal_payload(
-    arguments: &Map<String, Value>,
-) -> Result<Option<AgentGraphProposalPayload>> {
-    let Some(value) = arguments
-        .get("proposalPayload")
-        .or_else(|| arguments.get("proposal_payload"))
-    else {
-        return Ok(None);
-    };
-    serde_json::from_value(value.clone())
-        .context("argument proposalPayload is not a valid agent graph proposal payload")
-}
-
-fn parse_relation_kind(raw: &str) -> Result<BrainRelationKind> {
-    match raw {
-        "mentions" => Ok(BrainRelationKind::Mentions),
-        "supports" => Ok(BrainRelationKind::Supports),
-        "contradicts" => Ok(BrainRelationKind::Contradicts),
-        "supersedes" => Ok(BrainRelationKind::Supersedes),
-        "same_as" => Ok(BrainRelationKind::SameAs),
-        "works_at" => Ok(BrainRelationKind::WorksAt),
-        "founded" => Ok(BrainRelationKind::Founded),
-        "invested_in" => Ok(BrainRelationKind::InvestedIn),
-        "advises" => Ok(BrainRelationKind::Advises),
-        "attended" => Ok(BrainRelationKind::Attended),
-        "owns" => Ok(BrainRelationKind::Owns),
-        "responsible_for" => Ok(BrainRelationKind::ResponsibleFor),
-        "decided" => Ok(BrainRelationKind::Decided),
-        "blocks" => Ok(BrainRelationKind::Blocks),
-        "depends_on" => Ok(BrainRelationKind::DependsOn),
-        "source_of" => Ok(BrainRelationKind::SourceOf),
-        "derived_from" => Ok(BrainRelationKind::DerivedFrom),
-        "related_to" => Ok(BrainRelationKind::RelatedTo),
-        _ => Err(anyhow!("unknown brain relation kind: {raw}")),
     }
 }
 
@@ -698,126 +577,12 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "read_health",
-            "Read brain health and pending review summary without mutating artifacts.",
+            "Read brain health without mutating artifacts.",
             json!({}),
             Vec::new(),
             true,
         ),
-        tool_definition(
-            "propose_node",
-            "Propose a source-backed graph node using a proposalPayload with changeType new_node.",
-            proposal_properties(json!({})),
-            vec!["title", "body", "proposalPayload"],
-            false,
-        ),
-        tool_definition(
-            "propose_memory",
-            "Propose a durable memory. Low-risk project memories are policy auto-applied and still create audit events.",
-            proposal_properties(json!({})),
-            vec!["title", "body"],
-            false,
-        ),
-        tool_definition(
-            "propose_claim",
-            "Propose a source-backed claim. Claims require review before becoming trusted graph state.",
-            proposal_properties(json!({})),
-            vec!["title", "body"],
-            false,
-        ),
-        tool_definition(
-            "propose_link",
-            "Propose a typed graph relation. Link proposals require review before becoming trusted graph state.",
-            proposal_properties(json!({
-                "targetNodeId": { "type": "string", "description": "Primary graph node ID." },
-                "nodeRefs": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Related graph node IDs."
-                },
-                "relationKind": { "type": "string", "description": "Relation kind such as supports, contradicts, same_as, or related_to." }
-            })),
-            vec!["title", "body", "targetNodeId", "nodeRefs", "relationKind"],
-            false,
-        ),
-        tool_definition(
-            "append_observation",
-            "Append an agent observation as safe project memory with source/evidence refs when available.",
-            proposal_properties(json!({})),
-            vec!["title", "body"],
-            false,
-        ),
-        tool_definition(
-            "add_source_note",
-            "Add source metadata notes through the policy path.",
-            proposal_properties(json!({
-                "sourceId": { "type": "string", "description": "Source ID to annotate." },
-                "sourceDescription": { "type": "string", "description": "Optional source description override." },
-                "sourceUserContext": { "type": "string", "description": "Optional user context for future parsing." },
-                "sourceIngestInstruction": { "type": "string", "description": "Optional ingest instruction." }
-            })),
-            vec!["title", "body", "sourceId"],
-            false,
-        ),
-        tool_definition(
-            "request_consolidation",
-            "Request a future maintenance/consolidation pass without directly changing source truth.",
-            proposal_properties(json!({})),
-            vec!["title", "body"],
-            false,
-        ),
     ]
-}
-
-fn proposal_properties(properties: Value) -> Value {
-    let mut merged_properties = properties.as_object().cloned().unwrap_or_default();
-    for (name, schema) in [
-        (
-            "title",
-            json!({ "type": "string", "description": "Short proposal title." }),
-        ),
-        (
-            "body",
-            json!({ "type": "string", "description": "Proposal body or memory text." }),
-        ),
-        (
-            "actorId",
-            json!({ "type": "string", "description": "External agent ID. Defaults to hyprduck-mcp." }),
-        ),
-        (
-            "targetSourceId",
-            json!({ "type": "string", "description": "Optional target source ID." }),
-        ),
-        (
-            "targetNodeId",
-            json!({ "type": "string", "description": "Optional target graph node ID." }),
-        ),
-        (
-            "relationKind",
-            json!({ "type": "string", "description": "Optional typed relation kind." }),
-        ),
-        (
-            "sourceRefs",
-            json!({ "type": "array", "items": { "type": "string" }, "description": "Source IDs supporting this proposal." }),
-        ),
-        (
-            "nodeRefs",
-            json!({ "type": "array", "items": { "type": "string" }, "description": "Node IDs related to this proposal." }),
-        ),
-        (
-            "evidenceRefs",
-            json!({ "type": "array", "items": { "type": "string" }, "description": "Evidence IDs supporting this proposal." }),
-        ),
-        (
-            "proposalPayload",
-            json!({
-                "type": "object",
-                "description": "Typed agent graph change payload, tagged by changeType such as new_node, new_edge, new_claim, or new_memory. See schemas/graph-change-proposal.schema.json."
-            }),
-        ),
-    ] {
-        merged_properties.entry(name).or_insert(schema);
-    }
-    Value::Object(merged_properties)
 }
 
 fn tool_definition(

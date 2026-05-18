@@ -28,7 +28,6 @@ test("app shell exposes only Knowledge and Settings as primary destinations", ()
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
   expect(appSource).toMatch(/History/);
-  expect(appSource).not.toMatch(/Trust Console/);
 });
 
 test("app shell exposes fixed window chrome independent of sidebar", () => {
@@ -47,7 +46,6 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
 test("History panel exposes recent activity without graph review controls", () => {
   expect(appSource).toMatch(/HistoryPanel/);
   expect(historyPanelSource).toMatch(/aria-label="History"/);
-  expect(appSource).not.toMatch(/Trust Console/);
   expect(historyPanelSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
   expect(historyPanelSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
   expect(historyPanelSource).toMatch(/Recent activity/);
@@ -57,7 +55,6 @@ test("History panel exposes recent activity without graph review controls", () =
   expect(historyPanelSource).not.toMatch(/Review Queue/);
   expect(historyPanelSource).not.toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
   expect(historyPanelSource).not.toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
-  expect(historyPanelSource).not.toMatch(/formatProposalKind/);
   expect(appSource).not.toMatch(/brainHealth && brainHealth\.attentionCount > 0/);
   expect(appSource).not.toMatch(/Change proposed|Change resolved/);
   expect(historyPanelSource).toMatch(/formatEventType/);

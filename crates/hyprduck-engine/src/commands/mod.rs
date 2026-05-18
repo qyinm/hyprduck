@@ -69,20 +69,6 @@ pub(crate) fn encode_success_response(
             EngineCommand::GetContextPack,
             crate::handle_get_context_pack(request)?,
         )),
-        EngineRequest::ProposeBrainUpdate(request) => serde_json::to_string(&EngineSuccess::new(
-            EngineCommand::ProposeBrainUpdate,
-            crate::handle_propose_brain_update(*request)?,
-        )),
-        EngineRequest::ListBrainReviewItems(request) => serde_json::to_string(&EngineSuccess::new(
-            EngineCommand::ListBrainReviewItems,
-            crate::handle_list_brain_review_items(request)?,
-        )),
-        EngineRequest::ResolveBrainReviewItem(request) => {
-            serde_json::to_string(&EngineSuccess::new(
-                EngineCommand::ResolveBrainReviewItem,
-                crate::handle_resolve_brain_review_item(request)?,
-            ))
-        }
         EngineRequest::GetBrainHealth(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetBrainHealth,
             crate::handle_get_brain_health(request)?,
@@ -142,9 +128,6 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::ReadGraphHistory(_) => EngineCommand::ReadGraphHistory,
         EngineRequest::ReadGraphSnapshot(_) => EngineCommand::ReadGraphSnapshot,
         EngineRequest::GetContextPack(_) => EngineCommand::GetContextPack,
-        EngineRequest::ProposeBrainUpdate(_) => EngineCommand::ProposeBrainUpdate,
-        EngineRequest::ListBrainReviewItems(_) => EngineCommand::ListBrainReviewItems,
-        EngineRequest::ResolveBrainReviewItem(_) => EngineCommand::ResolveBrainReviewItem,
         EngineRequest::GetBrainHealth(_) => EngineCommand::GetBrainHealth,
         EngineRequest::ReconstructBrain(_) => EngineCommand::ReconstructBrain,
         EngineRequest::LoadConfig(_) => EngineCommand::LoadConfig,

@@ -231,18 +231,18 @@ mod tests {
         let config = test_config(ProviderKind::OpenRouter, None);
         let request = build_chat_completion_request(
             &config,
-            "Return graph proposals.",
+            "Return graph records.",
             None,
             Some(ResponseFormat::JsonSchema {
                 json_schema: ResponseFormatJsonSchema {
-                    name: "graph_proposals".into(),
-                    description: Some("Graph proposals".into()),
+                    name: "graph_records".into(),
+                    description: Some("Graph records".into()),
                     schema: Some(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "proposals": { "type": "array", "items": { "type": "object" } }
+                            "records": { "type": "array", "items": { "type": "object" } }
                         },
-                        "required": ["proposals"],
+                        "required": ["records"],
                         "additionalProperties": false
                     })),
                     strict: Some(false),
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(encoded["response_format"]["type"], "json_schema");
         assert_eq!(
             encoded["response_format"]["json_schema"]["name"],
-            "graph_proposals"
+            "graph_records"
         );
     }
 }

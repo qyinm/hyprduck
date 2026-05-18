@@ -120,7 +120,6 @@ fn write_output_package_to_root(
         &artifacts_root,
         &workspace_root.join("wiki"),
         &workspace_root.join("graph"),
-        &workspace_root.join("reviews"),
     ] {
         fs::create_dir_all(required_dir)
             .with_context(|| format!("failed creating {}", required_dir.display()))?;
@@ -236,7 +235,7 @@ fn ingest_status_for_result(result: &ParseResult) -> IngestStatus {
     if result.success_count == 0 && result.failed_count > 0 {
         IngestStatus::Failed
     } else if result.failed_count > 0 {
-        IngestStatus::NeedsReview
+        IngestStatus::Partial
     } else {
         IngestStatus::Ingested
     }

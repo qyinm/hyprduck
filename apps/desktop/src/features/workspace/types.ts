@@ -6,7 +6,7 @@ export type WorkspaceSourceStatus =
   | "rendering"
   | "ingesting"
   | "ingested"
-  | "needs_review"
+  | "partial"
   | "failed"
   | "stale";
 export type WorkspaceAnswerStatus =
@@ -96,64 +96,6 @@ export interface WorkspaceAnswerProjectRequest {
   nodeId?: string | null;
   question: string;
 }
-
-export interface WorkspaceProposeBrainUpdateRequest {
-  workspaceId?: string | null;
-  kind: "node" | "memory" | "claim" | "link" | "observation" | "source_note";
-  title: string;
-  body: string;
-  targetNodeId?: string | null;
-  targetSourceId?: string | null;
-  relationKind?: WorkspaceRelationKind | null;
-  sourceDescription?: string | null;
-  sourceUserContext?: string | null;
-  sourceIngestInstruction?: string | null;
-  sourceRefs?: string[];
-  nodeRefs?: string[];
-  evidenceRefs?: string[];
-  proposalPayload?: WorkspaceAgentProposalPayload | null;
-}
-
-export type WorkspaceAgentProposalPayload =
-  | {
-      changeType: "new_node";
-      node: {
-        label: string;
-        kind: WorkspaceNodeSummary["kind"];
-        sourcePath: string;
-        nodeId?: string | null;
-        aliases?: string[];
-        sourceRefs?: string[];
-        evidenceRefs?: string[];
-        reason?: string | null;
-      };
-    }
-  | {
-      changeType: "new_claim";
-      claim: {
-        statement: string;
-        sourcePath: string;
-        claimId?: string | null;
-        topicRefs?: string[];
-        sourceRefs?: string[];
-        evidenceRefs?: string[];
-        reason?: string | null;
-      };
-    }
-  | {
-      changeType: "new_edge";
-      edge: {
-        sourceNodeId: string;
-        targetNodeId: string;
-        kind: WorkspaceRelationKind;
-        label: string;
-        sourcePath: string;
-        edgeId?: string | null;
-        sourceRefs?: string[];
-        evidenceRefs?: string[];
-        reason?: string | null;
-      };
-    };
 
 export interface WorkspaceNodeDetail {
   node: WorkspaceNodeSummary;

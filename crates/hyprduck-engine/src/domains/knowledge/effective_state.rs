@@ -63,7 +63,6 @@ fn compute_effective_brain_state(
         &previous_origins,
         &protected_current_records,
     )?;
-    apply_accepted_proposals_to_snapshot(root, &mut effective_snapshot)?;
     refresh_materialized_wiki_pages(&mut effective_snapshot);
     refresh_current_materialized_events(&mut effective_snapshot)?;
     Ok(EffectiveBrainState {

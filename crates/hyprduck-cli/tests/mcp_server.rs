@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
 #[test]
-fn mcp_server_exposes_brain_tools_and_policy_proposals() {
+fn mcp_server_exposes_read_only_brain_tools() {
     let root_dir = std::env::temp_dir().join(format!("hyprduck-mcp-empty-{}", std::process::id()));
     let root_dir_arg = root_dir.to_string_lossy().to_string();
     fs::create_dir_all(&root_dir).expect("temp root");
@@ -76,17 +76,12 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
             "read_graph_history",
             "read_graph_snapshot",
             "read_health",
-            "propose_node",
-            "propose_memory",
-            "propose_claim",
-            "propose_link",
-            "append_observation",
-            "add_source_note",
-            "request_consolidation",
         ]
     );
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
-    assert_eq!(tools[9]["annotations"]["readOnlyHint"], false);
+    assert!(tools
+        .iter()
+        .all(|tool| tool["annotations"]["readOnlyHint"] == true));
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
@@ -357,64 +352,6 @@ fn mcp_server_exposes_brain_tools_and_policy_proposals() {
         .expect("wiki body")
         .contains("source-"));
 
-    write_message(
-        &mut stdin,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "propose_memory",
-                "arguments": {
-                    "workspaceId": "default",
-                    "rootDir": root_dir_arg.clone(),
-                    "actorId": "mcp-test-agent",
-                    "title": "Remember MCP contract",
-                    "body": "The MCP server should route safe memory through the policy path."
-                }
-            }
-        }),
-    );
-    let memory = read_message(&mut reader);
-    assert_eq!(memory["result"]["isError"], false);
-    let text = memory["result"]["content"][0]["text"]
-        .as_str()
-        .expect("tool text");
-    let payload: Value = serde_json::from_str(text).expect("memory payload");
-    assert_eq!(payload["proposal"]["kind"], "memory");
-    assert_eq!(payload["proposal"]["status"], "accepted");
-    assert_eq!(payload["event"]["policyResult"], "auto_applied");
-
-    write_message(
-        &mut stdin,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "tools/call",
-            "params": {
-                "name": "propose_claim",
-                "arguments": {
-                    "workspaceId": "default",
-                    "rootDir": root_dir_arg.clone(),
-                    "actorId": "mcp-test-agent",
-                    "title": "Claim needs review",
-                    "body": "Claims should wait for review before becoming trusted graph state.",
-                    "evidenceRefs": ["evidence-test"]
-                }
-            }
-        }),
-    );
-    let claim = read_message(&mut reader);
-    assert_eq!(claim["result"]["isError"], false);
-    let text = claim["result"]["content"][0]["text"]
-        .as_str()
-        .expect("tool text");
-    let payload: Value = serde_json::from_str(text).expect("claim payload");
-    assert_eq!(payload["proposal"]["kind"], "claim");
-    assert_eq!(payload["proposal"]["status"], "pending_review");
-    assert_eq!(payload["event"]["policyResult"], "needs_review");
-    assert!(std::path::Path::new(payload["proposalPath"].as_str().unwrap()).exists());
-
     drop(stdin);
     let status = child.wait().expect("server exit");
     assert!(status.success());
@@ -446,7 +383,7 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(
         workspace.join("events/brain_events.jsonl"),
         concat!(
-            r#"{"eventId":"event-mcp-readable","schemaVersion":1,"workspaceId":"default","scope":"project","eventType":"graph_materialized","operationType":"graph_materialized","actor":{"actorType":"agent","actorId":"mcp-test"},"sourceRefs":["source-mcp"],"sourceMarkdownRefs":["wiki/index.md"],"nodeRefs":["node-mcp-readable"],"relationRefs":[],"claimRefs":[],"memoryRefs":[],"targetNodeIds":[],"targetEdgeIds":[],"targetClaimIds":[],"targetMemoryIds":[],"evidenceRefs":[],"payloadJson":"{\"nodeCount\":1,\"relationCount\":0,\"claimCount\":0,\"memoryCount\":0,\"wikiPageCount\":1}","causality":{"causedByEventIds":[],"causedByProposalId":null,"causedBySourceIds":["source-mcp"],"snapshotId":"snapshot-mcp-readable","previousSnapshotId":null,"schemaVersion":1,"materializedVersion":42},"confidence":null,"policyResult":"applied","createdAt":42}"#,
+            r#"{"eventId":"event-mcp-readable","schemaVersion":1,"workspaceId":"default","scope":"project","eventType":"graph_materialized","operationType":"graph_materialized","actor":{"actorType":"agent","actorId":"mcp-test"},"sourceRefs":["source-mcp"],"sourceMarkdownRefs":["wiki/index.md"],"nodeRefs":["node-mcp-readable"],"relationRefs":[],"claimRefs":[],"memoryRefs":[],"targetNodeIds":[],"targetEdgeIds":[],"targetClaimIds":[],"targetMemoryIds":[],"evidenceRefs":[],"payloadJson":"{\"nodeCount\":1,\"relationCount\":0,\"claimCount\":0,\"memoryCount\":0,\"wikiPageCount\":1}","causality":{"causedByEventIds":[],"causedBySourceIds":["source-mcp"],"snapshotId":"snapshot-mcp-readable","previousSnapshotId":null,"schemaVersion":1,"materializedVersion":42},"confidence":null,"policyResult":"applied","createdAt":42}"#,
             "\n"
         ),
     )

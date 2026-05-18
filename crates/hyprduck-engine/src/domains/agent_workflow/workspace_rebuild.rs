@@ -90,7 +90,6 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     context: &ImportEvidenceContext,
 ) -> Result<ProviderGraphMaterializationReport> {
     let report_path = artifact_root.join("provider-graph-materialization.json");
-    let legacy_report_path = artifact_root.join("provider-graph-proposals.json");
     let config = match EngineConfigStore::default().and_then(|store| store.load()) {
         Ok(config) => config,
         Err(error) => {
@@ -122,13 +121,8 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     };
     let input_fingerprint =
         provider_graph_input_fingerprint(workspace_root, workspace_id, manifest, markdown, &config);
-    if let Ok(existing) = read_json_artifact::<ProviderGraphMaterializationReport>(&report_path)
-        .or_else(|_| read_json_artifact::<ProviderGraphMaterializationReport>(&legacy_report_path))
-    {
+    if let Ok(existing) = read_json_artifact::<ProviderGraphMaterializationReport>(&report_path) {
         if provider_graph_report_is_reusable(&existing, manifest, &input_fingerprint) {
-            if !report_path.exists() {
-                write_json_pretty(&report_path, &existing)?;
-            }
             return Ok(existing);
         }
     }
@@ -654,7 +648,6 @@ fn workspace_linking_materialized_event(
         causality: BrainEventCausality {
             caused_by_source_ids: vec![manifest.source_id.clone()],
             caused_by_event_ids: Vec::new(),
-            caused_by_proposal_id: None,
             snapshot_id: Some(format!("snapshot-{run_id}")),
             previous_snapshot_id: None,
             materialized_version: Some(snapshot.generated_at),
@@ -752,7 +745,6 @@ fn provider_graph_materialized_event(
         causality: BrainEventCausality {
             caused_by_source_ids: vec![manifest.source_id.clone()],
             caused_by_event_ids: Vec::new(),
-            caused_by_proposal_id: None,
             snapshot_id: Some(format!("snapshot-{run_id}")),
             previous_snapshot_id: None,
             materialized_version: Some(snapshot.generated_at),
@@ -1016,7 +1008,7 @@ mod tests {
             ])
         );
         assert!(encoded.get("providerRunId").is_none());
-        assert!(encoded.get("proposalCount").is_none());
+        assert!(encoded.get("candidateCount").is_none());
         assert!(encoded.get("appliedCount").is_none());
     }
 

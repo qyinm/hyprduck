@@ -571,11 +571,7 @@ fn relation_evidence_covers_endpoint_sources(
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     relation_evidence_covers_any_source(&relation.evidence_ids, left, evidence_source_by_id)
-        && relation_evidence_covers_any_source(
-            &relation.evidence_ids,
-            right,
-            evidence_source_by_id,
-        )
+        && relation_evidence_covers_any_source(&relation.evidence_ids, right, evidence_source_by_id)
 }
 
 fn relation_evidence_covers_any_source(
