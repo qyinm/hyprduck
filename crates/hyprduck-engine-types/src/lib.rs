@@ -1290,18 +1290,6 @@ pub fn model_options_for(provider_slug: &str) -> Vec<&'static str> {
             "google/gemini-2.5-flash",
             "moonshotai/kimi-k2.5",
         ],
-        "open_ai" => vec![
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-4o",
-            "gpt-4o-mini",
-        ],
-        "anthropic" => vec![
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-        ],
         "ollama" => vec![
             "gemma4:latest",
             "qwen3.5:latest",
