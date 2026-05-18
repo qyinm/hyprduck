@@ -215,6 +215,24 @@ fn mcp_server_exposes_read_only_brain_tools() {
         "hyprduck.context_pack.v0"
     );
     assert_eq!(persisted_context_pack["contextPack"]["packId"], "ctx_mcp");
+    let comparable_client_answer =
+        cited_answer_from_context_pack(&persisted_context_pack["contextPack"]);
+    assert!(
+        comparable_client_answer.contains("Indexed MCP page evidence"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("sourceId=source-mcp"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("page=1"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("evidenceRef=evidence-mcp"),
+        "{comparable_client_answer}"
+    );
 
     write_message(
         &mut stdin,
@@ -611,6 +629,21 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
         r#"{"schemaVersion":1,"workspaceId":"default","snapshotId":"snapshot-mcp-readable","eventId":"event-mcp-readable","sourceIngestId":"source-mcp","materializedAt":42,"publishedAt":42,"sourceMarkdownRefs":["wiki/index.md"],"materializedFiles":["brain-manifest.json","events/brain_events.jsonl","graph/claims.json","graph/edges.json","graph/nodes.json","memory/records.json","wiki/index.md"]}"#,
     )
     .expect("latest readable marker");
+}
+
+fn cited_answer_from_context_pack(context_pack: &Value) -> String {
+    let evidence = &context_pack["selectedEvidence"][0];
+    let quoted_text = evidence["quotedText"]
+        .as_str()
+        .expect("selected evidence quoted text");
+    let source_id = evidence["sourceId"]
+        .as_str()
+        .expect("selected evidence sourceId");
+    let page = evidence["page"].as_u64().expect("selected evidence page");
+    let evidence_ref = evidence["evidenceRef"]
+        .as_str()
+        .expect("selected evidence ref");
+    format!("{quoted_text} [sourceId={source_id}, page={page}, evidenceRef={evidence_ref}]")
 }
 
 fn write_message(stdin: &mut std::process::ChildStdin, message: Value) {
