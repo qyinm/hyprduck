@@ -30,16 +30,16 @@ impl BrainReader {
                 workspace_id
             );
         }
-        snapshot.nodes = read_json_artifact(&repo.root().join("graph/nodes.json"))?;
-        snapshot.relations = read_json_artifact(&repo.root().join("graph/edges.json"))?;
-        snapshot.evidence = read_json_artifact(&repo.root().join("graph/evidence.json"))?;
-        if let Ok(entities) = read_json_artifact(&repo.root().join("graph/entities.json")) {
+        snapshot.nodes = repo.read_json_artifact("graph/nodes.json")?;
+        snapshot.relations = repo.read_json_artifact("graph/edges.json")?;
+        snapshot.evidence = repo.read_json_artifact("graph/evidence.json")?;
+        if let Ok(entities) = repo.read_json_artifact("graph/entities.json") {
             snapshot.entities = entities;
         }
-        if let Ok(claims) = read_json_artifact(&repo.root().join("graph/claims.json")) {
+        if let Ok(claims) = repo.read_json_artifact("graph/claims.json") {
             snapshot.claims = claims;
         }
-        snapshot.memories = repo.read_memory_records()?;
+        snapshot.memories = repo.read_optional_json_artifact("memory/records.json")?;
         let events = repo.read_brain_events()?;
         snapshot.events = events.clone();
         Ok(Self {
@@ -254,9 +254,7 @@ impl BrainReader {
     }
 
     pub(crate) fn read_wiki_page_body(&self, mut page: WikiPage) -> Result<WikiPage> {
-        let path = self.repo.root().join(&page.path);
-        page.body = fs::read_to_string(&path)
-            .with_context(|| format!("failed reading {}", path.display()))?;
+        page.body = self.repo.read_text_artifact(&page.path)?;
         Ok(page)
     }
 

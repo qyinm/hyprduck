@@ -206,11 +206,13 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
     }
 }
 
+#[derive(Debug)]
 struct BrainResource {
     scope: BrainReadScope,
     kind: BrainResourceKind,
 }
 
+#[derive(Debug)]
 enum BrainResourceKind {
     GraphSnapshot,
     WikiPage { path: String },
@@ -228,12 +230,18 @@ fn parse_resource_uri(uri: &str) -> Result<BrainResource> {
         return Err(anyhow!("HyprDuck resource uri workspace cannot be empty"));
     }
     let query = parse_resource_query(query)?;
+    let root_dir = query
+        .get("rootDir")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if root_dir.is_some() && !root_dir_argument_allowed() {
+        return Err(anyhow!(
+            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
+        ));
+    }
     let scope = BrainReadScope {
         workspace_id: percent_decode(workspace_id)?,
-        root_dir: query
-            .get("rootDir")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        root_dir,
     };
     let kind = if resource_path == "graph/snapshot" {
         BrainResourceKind::GraphSnapshot
@@ -443,11 +451,21 @@ fn read_graph_wiki_cache_state(
 }
 
 fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
+    let root_dir = optional_string(arguments, "rootDir")?;
+    if root_dir.is_some() && !root_dir_argument_allowed() {
+        return Err(anyhow!(
+            "rootDir is disabled by default; set HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 for development roots"
+        ));
+    }
     Ok(BrainReadScope {
         workspace_id: optional_string(arguments, "workspaceId")?
             .unwrap_or_else(|| "default".into()),
-        root_dir: optional_string(arguments, "rootDir")?,
+        root_dir,
     })
+}
+
+fn root_dir_argument_allowed() -> bool {
+    std::env::var("HYPRDUCK_MCP_ALLOW_ROOT_DIR").is_ok_and(|value| value == "1")
 }
 
 fn required_string(arguments: &Map<String, Value>, name: &str) -> Result<String> {
@@ -644,7 +662,7 @@ fn tool_definition(
         "rootDir".into(),
         json!({
             "type": "string",
-            "description": "Optional materialized brain repo root."
+            "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 is set."
         }),
     );
 
@@ -682,4 +700,62 @@ fn title_case_tool_name(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
+
+    #[test]
+    fn read_scope_rejects_root_dir_without_dev_env() {
+        std::env::remove_var(ROOT_DIR_ENV);
+        let mut arguments = Map::new();
+        arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
+
+        let error = read_scope(&arguments).expect_err("rootDir should be disabled by default");
+        assert!(error.to_string().contains("rootDir is disabled"));
+    }
+
+    #[test]
+    fn read_scope_rejects_root_dir_when_dev_env_is_not_one() {
+        let mut arguments = Map::new();
+        arguments.insert("rootDir".into(), Value::String("/tmp/hyprduck-test".into()));
+
+        std::env::set_var(ROOT_DIR_ENV, "0");
+        let zero_error = read_scope(&arguments).expect_err("rootDir=0 should stay disabled");
+        assert!(zero_error.to_string().contains("rootDir is disabled"));
+
+        std::env::set_var(ROOT_DIR_ENV, "");
+        let empty_error =
+            read_scope(&arguments).expect_err("empty rootDir env should stay disabled");
+        assert!(empty_error.to_string().contains("rootDir is disabled"));
+
+        std::env::remove_var(ROOT_DIR_ENV);
+    }
+
+    #[test]
+    fn resource_uri_rejects_root_dir_without_dev_env() {
+        std::env::remove_var(ROOT_DIR_ENV);
+
+        let error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("resource rootDir should be disabled by default");
+        assert!(error.to_string().contains("rootDir is disabled"));
+    }
+
+    #[test]
+    fn resource_uri_rejects_root_dir_when_dev_env_is_not_one() {
+        std::env::set_var(ROOT_DIR_ENV, "0");
+        let zero_error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("rootDir=0 should stay disabled for resources");
+        assert!(zero_error.to_string().contains("rootDir is disabled"));
+
+        std::env::set_var(ROOT_DIR_ENV, "");
+        let empty_error = parse_resource_uri("hyprduck://brain/default/wiki/index.md?rootDir=/tmp")
+            .expect_err("empty rootDir env should stay disabled for resources");
+        assert!(empty_error.to_string().contains("rootDir is disabled"));
+
+        std::env::remove_var(ROOT_DIR_ENV);
+    }
 }

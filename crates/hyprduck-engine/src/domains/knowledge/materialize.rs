@@ -1081,18 +1081,21 @@ pub(crate) fn publish_latest_readable_graph_snapshot_marker(
 pub(crate) fn read_latest_readable_graph_snapshot_marker(
     root: &Path,
 ) -> Result<Option<LatestReadableGraphSnapshotMarker>> {
+    let repo = BrainArtifactRepository::new(root.to_path_buf());
     let path = root.join(LATEST_READABLE_SNAPSHOT_PATH);
     if !path.exists() {
         return Ok(None);
     }
-    read_json_artifact(&path).map(Some)
+    repo.read_json_artifact(LATEST_READABLE_SNAPSHOT_PATH)
+        .map(Some)
 }
 
 pub(crate) fn validate_latest_readable_materialized_files(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
-    let manifest: BrainRepoSnapshot = read_json_artifact(&root.join("brain-manifest.json"))?;
+    let repo = BrainArtifactRepository::new(root.to_path_buf());
+    let manifest: BrainRepoSnapshot = repo.read_json_artifact("brain-manifest.json")?;
     if manifest.workspace_id != snapshot.workspace_id {
         bail!(
             "materialized brain manifest workspace_id {} does not match {}",
@@ -1100,11 +1103,11 @@ pub(crate) fn validate_latest_readable_materialized_files(
             snapshot.workspace_id
         );
     }
-    let nodes: Vec<BrainNodeRecord> = read_json_artifact(&root.join("graph/nodes.json"))?;
-    let edges: Vec<BrainRelationRecord> = read_json_artifact(&root.join("graph/edges.json"))?;
-    let claims: Vec<ClaimRecord> = read_json_artifact(&root.join("graph/claims.json"))?;
-    let memories = read_memory_records(root)?;
-    let events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    let nodes: Vec<BrainNodeRecord> = repo.read_json_artifact("graph/nodes.json")?;
+    let edges: Vec<BrainRelationRecord> = repo.read_json_artifact("graph/edges.json")?;
+    let claims: Vec<ClaimRecord> = repo.read_json_artifact("graph/claims.json")?;
+    let memories: Vec<MemoryRecord> = repo.read_optional_json_artifact("memory/records.json")?;
+    let events = repo.read_brain_events()?;
     if nodes != snapshot.nodes {
         bail!("materialized graph/nodes.json does not match the completed snapshot");
     }
@@ -1121,7 +1124,8 @@ pub(crate) fn validate_latest_readable_materialized_files(
         bail!("materialized events/brain_events.jsonl does not match the completed snapshot");
     }
     for page in &snapshot.wiki_pages {
-        let page_body = fs::read_to_string(root.join(&page.path))
+        let page_body = repo
+            .read_text_artifact(&page.path)
             .with_context(|| format!("failed reading materialized wiki page {}", page.path))?;
         let expected = materialized_wiki_page_body(page, snapshot);
         if page_body != expected {

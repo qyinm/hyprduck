@@ -920,9 +920,24 @@ fn brain_maintenance_preserves_existing_wiki_page_when_adding_missing_manifest_r
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().display().to_string()),
     };
-    let health =
-        handle_get_brain_health(GetBrainHealthRequest { scope }).expect("health runs maintenance");
-    assert_eq!(health.status, BrainHealthStatus::Clean);
+    let read_only_health = handle_get_brain_health(GetBrainHealthRequest {
+        scope: scope.clone(),
+    })
+    .expect("read-only health");
+    assert_eq!(read_only_health.status, BrainHealthStatus::AttentionNeeded);
+    assert!(!workspace_root
+        .join("state/maintenance-latest.json")
+        .exists());
+    let still_broken_snapshot =
+        read_json_artifact::<BrainRepoSnapshot>(&workspace_root.join("brain-manifest.json"))
+            .expect("read manifest after health");
+    assert!(!still_broken_snapshot
+        .wiki_pages
+        .iter()
+        .any(|page| page.path == existing_wiki_path));
+
+    let report = run_brain_maintenance(&scope).expect("maintenance runs");
+    assert_eq!(report.issue_count, 0);
     let report: BrainMaintenanceReport =
         read_json_artifact(&workspace_root.join("state/maintenance-latest.json"))
             .expect("read maintenance report");
@@ -1081,30 +1096,96 @@ fn brain_writer_uses_directory_lock_without_pid_file() {
 #[test]
 fn context_pack_source_metadata_hashes_available_source_content() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let source_path = temp.path().join("source.pdf");
-    let markdown_path = temp.path().join("source.md");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let source_path = workspace_root.join("source.pdf");
+    let markdown_path = workspace_root.join("source.md");
     fs::write(&source_path, b"source bytes").expect("write source");
     fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
 
-    let metadata = build_context_pack_source_metadata(&[SourceRecord {
-        source_id: "src-context".into(),
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        original_path: "source.pdf".into(),
-        source_path: source_path.display().to_string(),
-        markdown_path: markdown_path.display().to_string(),
-        format: hyprduck_engine_types::SourceFormat::pdf(),
-        status: hyprduck_engine_types::SourceStatus::ingested(),
-        page_count: 1,
-        description: String::new(),
-        user_context: String::new(),
-        ingest_instruction: String::new(),
-        updated_at: 1,
-    }]);
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.pdf".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::pdf(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
 
     let source = metadata.get("src-context").expect("source metadata");
     assert!(source.content_hash.starts_with("fnv64:"));
     assert_eq!(source.provider_route, "unknown");
     assert!(!source.local_only);
+}
+
+#[test]
+fn context_pack_source_metadata_skips_paths_outside_workspace_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let outside_path = temp.path().join("outside.md");
+    fs::write(&outside_path, b"outside bytes").expect("outside");
+
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-outside".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "outside.md".into(),
+            source_path: outside_path.display().to_string(),
+            markdown_path: outside_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(!metadata.contains_key("src-outside"));
+}
+
+#[test]
+#[cfg(unix)]
+fn context_pack_source_metadata_skips_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let outside_path = temp.path().join("outside.md");
+    let symlink_path = workspace_root.join("source.md");
+    fs::write(&outside_path, b"outside bytes").expect("outside");
+    std::os::unix::fs::symlink(&outside_path, &symlink_path).expect("symlink");
+
+    let metadata = build_context_pack_source_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-symlink".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: symlink_path.display().to_string(),
+            markdown_path: symlink_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(!metadata.contains_key("src-symlink"));
 }
 
 #[test]
@@ -1144,6 +1225,70 @@ fn context_pack_v0_persistence_writes_latest_and_history_files() {
         serde_json::from_str(&fs::read_to_string(latest).expect("latest context pack"))
             .expect("context pack json");
     assert_eq!(decoded.pack_id, "ctx_test_pack");
+}
+
+#[test]
+fn resolve_brain_workspace_root_rejects_workspace_path_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: "../outside".into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+
+    let error = resolve_brain_workspace_root(&scope).expect_err("workspace escape rejected");
+    assert!(error.to_string().contains("invalid workspaceId"));
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_brain_workspace_root_rejects_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&root).expect("root");
+    fs::create_dir_all(&outside).expect("outside");
+    std::os::unix::fs::symlink(&outside, root.join("default")).expect("symlink");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(root.display().to_string()),
+    };
+
+    let error = resolve_brain_workspace_root(&scope).expect_err("symlink escape rejected");
+    assert!(error.to_string().contains("escapes allowed root"));
+}
+
+#[test]
+#[cfg(unix)]
+fn brain_reader_rejects_wiki_artifact_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("root/default");
+    let outside = temp.path().join("outside.md");
+    fs::create_dir_all(root.join("events")).expect("events");
+    fs::create_dir_all(root.join("graph")).expect("graph");
+    fs::create_dir_all(root.join("memory")).expect("memory");
+    fs::create_dir_all(root.join("wiki")).expect("wiki");
+    fs::write(&outside, "# Outside\n").expect("outside");
+    std::os::unix::fs::symlink(&outside, root.join("wiki/index.md")).expect("wiki symlink");
+    fs::write(
+        root.join("brain-manifest.json"),
+        r#"{"workspaceId":"default","generatedAt":1,"sources":[],"nodes":[],"relations":[],"evidence":[],"memories":[],"wikiPages":[{"pageId":"wiki-index","workspaceId":"default","path":"wiki/index.md","title":"Index","body":"","nodeRefs":[],"sourceRefs":[],"evidenceRefs":[],"updatedAt":1}],"entities":[],"claims":[],"extractions":[],"events":[]}"#,
+    )
+    .expect("manifest");
+    fs::write(root.join("graph/nodes.json"), "[]").expect("nodes");
+    fs::write(root.join("graph/edges.json"), "[]").expect("edges");
+    fs::write(root.join("graph/evidence.json"), "[]").expect("evidence");
+    fs::write(root.join("memory/records.json"), "[]").expect("memories");
+    fs::write(root.join("events/brain_events.jsonl"), "").expect("events");
+
+    let reader = BrainReader::open(&BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().join("root").display().to_string()),
+    })
+    .expect("reader");
+    let error = reader
+        .read_wiki_page("wiki/index.md")
+        .expect_err("wiki symlink escape rejected");
+    assert!(error.to_string().contains("escapes workspace root"));
 }
 
 #[test]

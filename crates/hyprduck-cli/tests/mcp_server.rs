@@ -8,11 +8,14 @@ use serde_json::{json, Value};
 fn mcp_server_exposes_read_only_brain_tools() {
     let root_dir = std::env::temp_dir().join(format!("hyprduck-mcp-empty-{}", std::process::id()));
     let root_dir_arg = root_dir.to_string_lossy().to_string();
+    let _ = fs::remove_dir_all(&root_dir);
     fs::create_dir_all(&root_dir).expect("temp root");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -202,13 +205,6 @@ fn mcp_server_exposes_read_only_brain_tools() {
         "# MCP Snapshot\n"
     );
 
-    let source_dir = root_dir.join("default/sources");
-    fs::create_dir_all(&source_dir).expect("source dir");
-    fs::write(
-        source_dir.join("agent-cache-refresh.md"),
-        "# Agent Cache Refresh\n\n## Page 1\n\nMCP read paths refresh graph and wiki state after markdown ingest.\n",
-    )
-    .expect("markdown source");
     write_message(
         &mut stdin,
         json!({
@@ -224,29 +220,27 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_health = read_message(&mut reader);
+    let snapshot_health = read_message(&mut reader);
     assert_eq!(
-        refreshed_health["result"]["isError"], false,
-        "{refreshed_health:#?}"
+        snapshot_health["result"]["isError"], false,
+        "{snapshot_health:#?}"
     );
     assert_eq!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["invalidated"], true,
-        "{refreshed_health:#?}"
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["invalidated"], false,
+        "{snapshot_health:#?}"
     );
-    assert_ne!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]["snapshotId"],
+    assert_eq!(
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]["snapshotId"],
         "snapshot-mcp-readable"
     );
     assert_eq!(
-        refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]
+        snapshot_health["result"]["_meta"]["hyprduckGraphWikiCache"]["current"]
             ["latestReadableSnapshotPath"],
         "state/latest-readable-snapshot.json"
     );
-    let refreshed_snapshot_id = refreshed_health["result"]["_meta"]["hyprduckGraphWikiCache"]
-        ["current"]["snapshotId"]
-        .as_str()
-        .expect("refreshed snapshot id")
-        .to_string();
+    assert!(!root_dir
+        .join("default/state/maintenance-latest.json")
+        .exists());
 
     write_message(
         &mut stdin,
@@ -259,35 +253,14 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_snapshot_resource = read_message(&mut reader);
-    let refreshed_snapshot_text = refreshed_snapshot_resource["result"]["contents"][0]["text"]
+    let snapshot_resource_after_health = read_message(&mut reader);
+    let snapshot_text_after_health = snapshot_resource_after_health["result"]["contents"][0]
+        ["text"]
         .as_str()
-        .expect("refreshed snapshot text");
-    let refreshed_snapshot: Value =
-        serde_json::from_str(refreshed_snapshot_text).expect("refreshed snapshot payload");
-    assert_eq!(refreshed_snapshot["snapshotId"], refreshed_snapshot_id);
-    assert!(refreshed_snapshot["sourcePaths"]
-        .as_array()
-        .expect("source paths")
-        .iter()
-        .any(|path| path
-            .as_str()
-            .is_some_and(|path| path.ends_with("/sources/agent-cache-refresh.md"))));
-    assert!(refreshed_snapshot["nodes"]
-        .as_array()
-        .expect("nodes")
-        .iter()
-        .any(|node| node["kind"] == "source"
-            && node["label"]
-                .as_str()
-                .is_some_and(|label| label.contains("agent-cache-refresh"))));
-    assert!(refreshed_snapshot["wikiPages"]
-        .as_array()
-        .expect("wiki pages")
-        .iter()
-        .any(|page| page["body"]
-            .as_str()
-            .is_some_and(|body| body.contains("agent-cache-refresh.md"))));
+        .expect("snapshot text after health");
+    let snapshot_after_health: Value =
+        serde_json::from_str(snapshot_text_after_health).expect("snapshot payload after health");
+    assert_eq!(snapshot_after_health["snapshotId"], "snapshot-mcp-readable");
 
     write_message(
         &mut stdin,
@@ -300,12 +273,11 @@ fn mcp_server_exposes_read_only_brain_tools() {
             }
         }),
     );
-    let refreshed_wiki_resource = read_message(&mut reader);
-    let refreshed_wiki_text = refreshed_wiki_resource["result"]["contents"][0]["text"]
+    let wiki_resource_after_health = read_message(&mut reader);
+    let wiki_text_after_health = wiki_resource_after_health["result"]["contents"][0]["text"]
         .as_str()
-        .expect("refreshed wiki text");
-    assert_ne!(refreshed_wiki_text, "# MCP Snapshot\n");
-    assert!(refreshed_wiki_text.contains("source-"));
+        .expect("wiki text after health");
+    assert_eq!(wiki_text_after_health, "# MCP Snapshot\n");
 
     write_message(
         &mut stdin,
@@ -331,21 +303,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .as_str()
         .expect("tool text");
     let tool_snapshot: Value = serde_json::from_str(text).expect("tool snapshot payload");
-    assert_eq!(tool_snapshot["snapshotId"], refreshed_snapshot_id);
-    assert!(tool_snapshot["sourcePaths"]
-        .as_array()
-        .expect("tool source paths")
-        .iter()
-        .any(|path| path
-            .as_str()
-            .is_some_and(|path| path.ends_with("/sources/agent-cache-refresh.md"))));
-    assert!(tool_snapshot["wikiPages"]
-        .as_array()
-        .expect("tool wiki pages")
-        .iter()
-        .any(|page| page["body"]
-            .as_str()
-            .is_some_and(|body| body.contains("source-"))));
+    assert_eq!(tool_snapshot["snapshotId"], "snapshot-mcp-readable");
 
     write_message(
         &mut stdin,
@@ -373,11 +331,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .expect("wiki tool text");
     let tool_wiki: Value = serde_json::from_str(text).expect("wiki tool payload");
     assert_eq!(tool_wiki["page"]["path"], "wiki/index.md");
-    assert_ne!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
-    assert!(tool_wiki["page"]["body"]
-        .as_str()
-        .expect("wiki body")
-        .contains("source-"));
+    assert_eq!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
 
     drop(stdin);
     let status = child.wait().expect("server exit");

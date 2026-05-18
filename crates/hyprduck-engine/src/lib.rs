@@ -703,7 +703,7 @@ fn handle_read_recent_events(
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
     let reader = BrainReader::open(&request.scope)?;
     let context_pack = reader.context_pack(&request.query, request.budget.unwrap_or(8000))?;
-    let source_metadata = build_context_pack_source_metadata(&context_pack.sources);
+    let source_metadata = build_context_pack_source_metadata(reader.root(), &context_pack.sources);
     let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
         &context_pack,
         format!("ctx_{}", uuid::Uuid::now_v7().simple()),
@@ -742,14 +742,19 @@ fn persist_context_pack_v0(
 }
 
 fn build_context_pack_source_metadata(
+    workspace_root: &Path,
     sources: &[SourceRecord],
 ) -> BTreeMap<SourceId, ContextPackSourceMetadataV0> {
+    let Ok(canonical_workspace_root) = workspace_root.canonicalize() else {
+        return BTreeMap::new();
+    };
     sources
         .iter()
         .filter_map(|source| {
-            let content = fs::read(&source.source_path)
-                .or_else(|_| fs::read(&source.markdown_path))
-                .ok()?;
+            let content = read_context_pack_source_bytes(
+                &canonical_workspace_root,
+                [&source.source_path, &source.markdown_path],
+            )?;
             Some((
                 source.source_id.clone(),
                 ContextPackSourceMetadataV0 {
@@ -760,6 +765,28 @@ fn build_context_pack_source_metadata(
             ))
         })
         .collect()
+}
+
+fn read_context_pack_source_bytes<'a>(
+    canonical_workspace_root: &Path,
+    candidate_paths: impl IntoIterator<Item = &'a String>,
+) -> Option<Vec<u8>> {
+    for candidate in candidate_paths {
+        let path = Path::new(candidate);
+        if !path.exists() {
+            continue;
+        }
+        let Ok(canonical_path) = path.canonicalize() else {
+            continue;
+        };
+        if !canonical_path.starts_with(canonical_workspace_root) {
+            continue;
+        }
+        if let Ok(content) = fs::read(&canonical_path) {
+            return Some(content);
+        }
+    }
+    None
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -805,16 +832,21 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
-    if !root.join("brain-manifest.json").exists() {
+    let repo = BrainArtifactRepository::new(root.clone());
+    if !repo.brain_manifest_path().exists() {
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
             recent_events: Vec::new(),
         });
     }
-    let report = run_brain_maintenance(&request.scope)?;
-    let attention_count = report.issue_count;
-    let mut recent_events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    let snapshot = read_materialized_brain_snapshot(&root, &request.scope.workspace_id)?;
+    let mut report = lint_brain_snapshot(&snapshot);
+    report
+        .issues
+        .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
+    let attention_count = report.issues.len();
+    let mut recent_events = repo.read_brain_events()?;
     recent_events.sort_by(|left, right| {
         right
             .created_at
@@ -1888,20 +1920,69 @@ fn join_or_none(values: &[String]) -> String {
 }
 
 fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
+    validate_workspace_id(&scope.workspace_id)?;
     if let Some(root_dir) = &scope.root_dir {
-        return Ok(PathBuf::from(root_dir).join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id);
     }
     if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
-        return Ok(PathBuf::from(output_root).join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id);
     }
     if let Some(application_support_root) = dirs::data_local_dir() {
-        return Ok(application_support_root
-            .join("HyprDuck")
-            .join(&scope.workspace_id));
+        return resolve_workspace_root_from_base(
+            &application_support_root.join("HyprDuck"),
+            &scope.workspace_id,
+        );
     }
-    Ok(std::env::temp_dir()
-        .join("HyprDuck")
-        .join(&scope.workspace_id))
+    resolve_workspace_root_from_base(&std::env::temp_dir().join("HyprDuck"), &scope.workspace_id)
+}
+
+fn validate_workspace_id(workspace_id: &str) -> Result<()> {
+    if workspace_id.trim().is_empty()
+        || workspace_id == "."
+        || workspace_id == ".."
+        || workspace_id.contains('/')
+        || workspace_id.contains('\\')
+    {
+        bail!("invalid workspaceId: workspace IDs must be single path segments");
+    }
+    Ok(())
+}
+
+fn resolve_workspace_root_from_base(base_root: &Path, workspace_id: &str) -> Result<PathBuf> {
+    let canonical_base = canonicalize_existing_or_parent(base_root)?;
+    let workspace_root = canonical_base.join(workspace_id);
+    if workspace_root.exists() {
+        let canonical_workspace = workspace_root
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", workspace_root.display()))?;
+        if !canonical_workspace.starts_with(&canonical_base) {
+            bail!(
+                "workspace root {} escapes allowed root {}",
+                canonical_workspace.display(),
+                canonical_base.display()
+            );
+        }
+        Ok(canonical_workspace)
+    } else {
+        Ok(workspace_root)
+    }
+}
+
+fn canonicalize_existing_or_parent(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return path
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", path.display()));
+    }
+    if let Some(parent) = path.parent().filter(|parent| parent.exists()) {
+        let canonical_parent = parent
+            .canonicalize()
+            .with_context(|| format!("failed canonicalizing {}", parent.display()))?;
+        if let Some(name) = path.file_name() {
+            return Ok(canonical_parent.join(name));
+        }
+    }
+    Ok(path.to_path_buf())
 }
 
 #[derive(Debug, Clone, Default)]

@@ -4,11 +4,11 @@ pub(crate) fn read_materialized_brain_snapshot(
     root: &Path,
     workspace_id: &str,
 ) -> Result<BrainRepoSnapshot> {
-    let manifest_path = root.join("brain-manifest.json");
-    if !manifest_path.exists() {
+    let repo = BrainArtifactRepository::new(root.to_path_buf());
+    if !repo.brain_manifest_path().exists() {
         return Ok(empty_replayed_brain_snapshot(workspace_id));
     }
-    let mut snapshot: BrainRepoSnapshot = read_json_artifact(&manifest_path)?;
+    let mut snapshot: BrainRepoSnapshot = repo.read_brain_manifest()?;
     if snapshot.workspace_id != workspace_id {
         bail!(
             "brain manifest workspace_id {} does not match requested workspace {}",
@@ -17,27 +17,35 @@ pub(crate) fn read_materialized_brain_snapshot(
         );
     }
     if root.join("graph/nodes.json").exists() {
-        snapshot.nodes = read_json_artifact(&root.join("graph/nodes.json"))?;
+        snapshot.nodes = repo.read_json_artifact("graph/nodes.json")?;
     }
     if root.join("graph/edges.json").exists() {
-        snapshot.relations = read_json_artifact(&root.join("graph/edges.json"))?;
+        snapshot.relations = repo.read_json_artifact("graph/edges.json")?;
     }
     if root.join("graph/evidence.json").exists() {
-        snapshot.evidence = read_json_artifact(&root.join("graph/evidence.json"))?;
+        snapshot.evidence = repo.read_json_artifact("graph/evidence.json")?;
     }
     if root.join("graph/entities.json").exists() {
-        snapshot.entities = read_json_artifact(&root.join("graph/entities.json"))?;
+        snapshot.entities = repo.read_json_artifact("graph/entities.json")?;
     }
     if root.join("graph/claims.json").exists() {
-        snapshot.claims = read_json_artifact(&root.join("graph/claims.json"))?;
+        snapshot.claims = repo.read_json_artifact("graph/claims.json")?;
     }
-    if let Ok(extractions) = read_structured_extraction_artifacts(root, &snapshot.sources) {
-        if !extractions.is_empty() {
-            snapshot.extractions = extractions;
+    let mut extractions = Vec::new();
+    for source in &snapshot.sources {
+        let path = format!(
+            "artifacts/{}/extraction.json",
+            sanitize_name(&source.source_id)
+        );
+        if root.join(&path).exists() {
+            extractions.push(repo.read_json_artifact(&path)?);
         }
     }
-    snapshot.memories = read_memory_records(root)?;
-    snapshot.events = read_brain_events_jsonl(&root.join("events/brain_events.jsonl"))?;
+    if !extractions.is_empty() {
+        snapshot.extractions = extractions;
+    }
+    snapshot.memories = repo.read_optional_json_artifact("memory/records.json")?;
+    snapshot.events = repo.read_brain_events()?;
     Ok(snapshot)
 }
 
