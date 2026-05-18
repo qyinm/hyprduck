@@ -1,9 +1,8 @@
 # HyprDuck Desktop IA
 
-목적: HyprDuck의 UI를 "파일 파싱 앱"이 아니라 "파일에서 지속적으로 자라는 개인/팀 지식 구조화 도구"로 설계하기 위한 source of truth.
+목적: HyprDuck의 UI를 "파일 파싱 앱"에서 "private document를 cited local context pack으로 컴파일하는 도구"로 정렬하기 위한 IA 기록.
 
 참고한 방향:
-- GBrain: agent-maintained brain, typed links, self-wiring knowledge graph, hybrid search, timeline/log, entity enrichment.
 - Karpathy LLM Wiki: raw sources -> LLM-maintained wiki -> schema, ingest/query/lint operations, index.md/log.md, persistent compounding artifact.
 
 핵심 전환:
@@ -13,14 +12,14 @@ Before
   file -> page images -> markdown output
 
 After
-  files -> immutable sources -> extracted claims/entities/topics -> linked knowledge base
-        -> wiki pages / graph / contradictions / questions / answers / updates
+  files -> source pack + evidence index -> query-time context pack
+        -> agent answer with source/page/evidence refs
 ```
 
 제품 문장:
 
 ```text
-HyprDuck turns local documents into a maintained, evidence-backed knowledge base.
+HyprDuck compiles private documents into reusable, cited local context packs for AI agents.
 ```
 
 비범위:
@@ -848,9 +847,7 @@ Knowledge
 Maintenance
 +-- history status
 +-- maintenance log recent entries
-+-- proposed updates
 +-- auto-fixed summary
-+-- user-review queue
 ```
 
 ---
