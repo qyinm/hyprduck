@@ -1128,6 +1128,542 @@ fn context_pack_source_metadata_hashes_available_source_content() {
 }
 
 #[test]
+fn context_pack_artifact_metadata_warns_when_source_pack_is_missing() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    let source_path = workspace_root.join("source.pdf");
+    let markdown_path = workspace_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.pdf".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::pdf(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let source = metadata
+        .sources
+        .get("src-context")
+        .expect("source metadata");
+    assert_eq!(source.provider_route, "unknown");
+    assert!(metadata
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "source_pack_missing"));
+}
+
+#[test]
+fn context_pack_artifact_metadata_sanitizes_unreadable_artifact_warnings() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let bad_source_pack_root = workspace_root.join("artifacts/src-bad-source-pack");
+    let bad_source_pack_sources = workspace_root.join("sources/src-bad-source-pack");
+    let bad_evidence_index_root = workspace_root.join("artifacts/src-bad-evidence-index");
+    let bad_evidence_index_sources = workspace_root.join("sources/src-bad-evidence-index");
+    fs::create_dir_all(&bad_source_pack_root).expect("bad source pack artifact root");
+    fs::create_dir_all(&bad_source_pack_sources).expect("bad source pack source root");
+    fs::create_dir_all(&bad_evidence_index_root).expect("bad evidence index artifact root");
+    fs::create_dir_all(&bad_evidence_index_sources).expect("bad evidence index source root");
+    let bad_source_pack_source_path = bad_source_pack_sources.join("source.md");
+    let bad_source_pack_markdown_path = bad_source_pack_root.join("source.md");
+    let bad_evidence_index_source_path = bad_evidence_index_sources.join("source.md");
+    let bad_evidence_index_markdown_path = bad_evidence_index_root.join("source.md");
+    fs::write(&bad_source_pack_source_path, b"source bytes").expect("write source");
+    fs::write(&bad_source_pack_markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(&bad_evidence_index_source_path, b"source bytes").expect("write source");
+    fs::write(&bad_evidence_index_markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(bad_source_pack_root.join("source_pack.json"), "{not json").expect("bad source pack");
+    fs::write(
+        bad_evidence_index_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-bad-evidence-index",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": bad_evidence_index_source_path.display().to_string(),
+            "markdownPath": bad_evidence_index_markdown_path.display().to_string(),
+            "artifactRoot": bad_evidence_index_root.display().to_string(),
+            "contentHash": "fnv64:source",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        bad_evidence_index_root.join("evidence_index.json"),
+        "{not json",
+    )
+    .expect("bad evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[
+            SourceRecord {
+                source_id: "src-bad-source-pack".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: "source.md".into(),
+                source_path: bad_source_pack_source_path.display().to_string(),
+                markdown_path: bad_source_pack_markdown_path.display().to_string(),
+                format: hyprduck_engine_types::SourceFormat::markdown(),
+                status: hyprduck_engine_types::SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+            SourceRecord {
+                source_id: "src-bad-evidence-index".into(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: "source.md".into(),
+                source_path: bad_evidence_index_source_path.display().to_string(),
+                markdown_path: bad_evidence_index_markdown_path.display().to_string(),
+                format: hyprduck_engine_types::SourceFormat::markdown(),
+                status: hyprduck_engine_types::SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+        ],
+    );
+
+    let temp_path = temp.path().display().to_string();
+    let source_pack_warning = metadata
+        .warnings
+        .iter()
+        .find(|warning| warning.warning_type == "source_pack_unreadable")
+        .expect("source pack unreadable warning");
+    assert_eq!(
+        source_pack_warning.message,
+        "Source Pack for src-bad-source-pack could not be read or decoded."
+    );
+    assert!(!source_pack_warning.message.contains(&temp_path));
+
+    let evidence_index_warning = metadata
+        .warnings
+        .iter()
+        .find(|warning| warning.warning_type == "evidence_index_unreadable")
+        .expect("evidence index unreadable warning");
+    assert_eq!(
+        evidence_index_warning.message,
+        "Evidence Index for src-bad-evidence-index could not be read or decoded."
+    );
+    assert!(!evidence_index_warning.message.contains(&temp_path));
+}
+
+#[test]
+fn context_pack_artifact_metadata_prefers_source_pack_and_evidence_index() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-context");
+    let source_root = workspace_root.join("sources/src-context");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-context",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:indexed-source",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-context",
+            "contentHash": "fnv64:indexed-source",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-src-context-source-1",
+                "sourceId": "src-context",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Indexed evidence quote.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:indexed-source",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-context".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let source = metadata
+        .sources
+        .get("src-context")
+        .expect("source metadata");
+    assert_eq!(source.content_hash, "fnv64:indexed-source");
+    assert_eq!(source.provider_route, "local_demo");
+    assert!(source.local_only);
+    let evidence = metadata
+        .evidence
+        .get("src-context")
+        .and_then(|source_evidence| source_evidence.get("ev-src-context-source-1"))
+        .expect("evidence metadata");
+    assert_eq!(evidence.quoted_text, "Indexed evidence quote.");
+    assert_eq!(evidence.span.as_deref(), Some("page"));
+    assert_eq!(
+        evidence.parse_confidence,
+        hyprduck_engine_types::ContextPackParseConfidence::High
+    );
+}
+
+#[test]
+fn context_pack_artifact_metadata_warns_and_skips_stale_evidence_index() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-stale");
+    let source_root = workspace_root.join("sources/src-stale");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-stale",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:current",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-stale",
+            "contentHash": "fnv64:stale",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-src-stale-source-1",
+                "sourceId": "src-stale",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Stale evidence quote.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:stale",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-stale".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(metadata
+        .evidence
+        .get("src-stale")
+        .map_or(true, |source_evidence| source_evidence.is_empty()));
+    assert!(metadata.warnings.iter().any(|warning| {
+        warning.warning_type == "evidence_index_stale_content_hash"
+            && warning.message.contains("fnv64:stale")
+            && warning.message.contains("fnv64:current")
+    }));
+}
+
+#[test]
+fn context_pack_artifact_metadata_warns_and_skips_mismatched_evidence_item() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-mismatch");
+    let source_root = workspace_root.join("sources/src-mismatch");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-mismatch",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:source",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-mismatch",
+            "contentHash": "fnv64:source",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-mismatched-source",
+                "sourceId": "other-source",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Wrong source evidence quote.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:source",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-mismatch".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(metadata
+        .evidence
+        .get("src-mismatch")
+        .map_or(true, |source_evidence| source_evidence.is_empty()));
+    let warning = metadata
+        .warnings
+        .iter()
+        .find(|warning| warning.warning_type == "evidence_item_source_mismatch")
+        .expect("source mismatch warning");
+    assert_eq!(warning.page_refs.len(), 1);
+    assert_eq!(warning.page_refs[0].source_id, "src-mismatch");
+    assert_eq!(warning.page_refs[0].page, 1);
+}
+
+#[test]
+fn context_pack_artifact_metadata_propagates_artifact_warnings_once() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-partial");
+    let source_root = workspace_root.join("sources/src-partial");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    let warning = serde_json::json!({
+        "type": "page_parse_failed",
+        "severity": "medium",
+        "message": "Page 2 failed during provider parsing.",
+        "page": 2
+    });
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-partial",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:partial",
+            "format": "markdown",
+            "pageCount": 2,
+            "ingestionStatus": "partial",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [warning.clone()],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-partial",
+            "contentHash": "fnv64:partial",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [],
+            "warnings": [warning],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-partial".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::partial(),
+            page_count: 2,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let warnings = metadata
+        .warnings
+        .iter()
+        .filter(|warning| warning.warning_type == "page_parse_failed")
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(
+        warnings[0].severity,
+        hyprduck_engine_types::ContextPackWarningSeverity::Medium
+    );
+    assert_eq!(warnings[0].page_refs.len(), 1);
+    assert_eq!(warnings[0].page_refs[0].source_id, "src-partial");
+    assert_eq!(warnings[0].page_refs[0].page, 2);
+}
+
+#[test]
 fn context_pack_source_metadata_skips_paths_outside_workspace_root() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
