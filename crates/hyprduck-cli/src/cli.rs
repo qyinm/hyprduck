@@ -57,6 +57,9 @@ impl Cli {
                     _ => return Err(anyhow!("unknown engines subcommand: {subcommand}")),
                 }
             }
+            Some("demo") => Some(Commands::Demo {
+                command: parse_demo_command(args.collect())?,
+            }),
             Some("eval") => {
                 let subcommand = args
                     .next()
@@ -92,6 +95,34 @@ impl Cli {
 
         Ok(Self { command })
     }
+}
+
+fn parse_demo_command(args: Vec<String>) -> Result<DemoCommand> {
+    let mut root_dir = None;
+    let mut query = "What does the demo document say an agent should cite?".to_string();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                index += 1;
+                root_dir = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--root needs a value"))?,
+                );
+            }
+            "--query" => {
+                index += 1;
+                query = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("--query needs a value"))?;
+            }
+            value => return Err(anyhow!("unknown demo option: {value}")),
+        }
+        index += 1;
+    }
+    Ok(DemoCommand { root_dir, query })
 }
 
 fn parse_eval_command(subcommand: String, args: Vec<String>) -> Result<EvalCommand> {
@@ -407,6 +438,7 @@ pub enum Commands {
     Serve,
     Mcp { command: McpCommand },
     Parse { input: String },
+    Demo { command: DemoCommand },
     Engines { command: EnginesCommand },
     Brain { command: BrainCommand },
     Eval { command: EvalCommand },
@@ -430,6 +462,12 @@ pub enum EvalCommand {
         fixtures: Option<String>,
         mode: String,
     },
+}
+
+#[derive(Debug)]
+pub struct DemoCommand {
+    pub root_dir: Option<String>,
+    pub query: String,
 }
 
 #[derive(Debug)]

@@ -9,10 +9,26 @@ use anyhow::Result;
 use cli::{Cli, Commands, GraphStateSelector};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    BrainReadScope, DocumentFormat, GetContextPackRequest, GraphHistoryEntry, ParseInput,
-    ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest, ReadRecentEventsRequest,
-    ReconstructBrainResponseData, SearchBrainRequest,
+    BrainReadScope, CompileProjectRequest, ContextPackParseConfidence, DocumentFormat,
+    EvidenceIndexItemV0, EvidenceIndexV0, GetContextPackRequest, GraphHistoryEntry, IngestStatus,
+    PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
+    ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
+    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V0_SCHEMA_VERSION,
+    SOURCE_PACK_V0_SCHEMA_VERSION,
 };
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+const DEMO_WORKSPACE_ID: &str = "demo";
+const DEMO_SOURCE_ID: &str = "demo-source";
+const DEMO_MARKDOWN: &str = r#"# HyprDuck Demo Contract
+
+The demo document says agents should cite source, page, and evidence IDs when
+they answer from private documents.
+
+The reusable artifact is a local Context Pack v0 generated from a Source Pack
+and Evidence Index.
+"#;
 
 fn main() -> Result<()> {
     let cli = Cli::parse()?;
@@ -22,6 +38,7 @@ fn main() -> Result<()> {
         Some(Commands::Serve) => run_serve(),
         Some(Commands::Mcp { command }) => run_mcp(command),
         Some(Commands::Engines { command }) => run_engines(command),
+        Some(Commands::Demo { command }) => run_demo(command),
         Some(Commands::Brain { command }) => run_brain(command),
         Some(Commands::Eval { command }) => run_eval(command),
         Some(Commands::Parse { input }) => run_parse(input),
@@ -161,6 +178,253 @@ fn run_engines(command: cli::EnginesCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_demo(command: cli::DemoCommand) -> Result<()> {
+    let started = Instant::now();
+    let root = match command.root_dir {
+        Some(root_dir) => PathBuf::from(root_dir),
+        None => unique_demo_root()?,
+    };
+    std::fs::create_dir_all(&root)?;
+    let fixture_path = root.join("demo-source.md");
+    std::fs::write(&fixture_path, DEMO_MARKDOWN)?;
+
+    let previous_store = std::env::var_os("HYPRDUCK_PROJECT_STORE");
+    let previous_output_dir = std::env::var_os("HYPRDUCK_OUTPUT_DIR");
+    let previous_provider_graph = std::env::var_os("HYPRDUCK_DISABLE_PROVIDER_GRAPH");
+    std::env::set_var("HYPRDUCK_PROJECT_STORE", root.join("knowledge.sqlite3"));
+    std::env::set_var("HYPRDUCK_OUTPUT_DIR", &root);
+    std::env::set_var("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1");
+
+    let result = run_demo_with_root(&root, &fixture_path, &command.query);
+
+    restore_env_var("HYPRDUCK_PROJECT_STORE", previous_store);
+    restore_env_var("HYPRDUCK_OUTPUT_DIR", previous_output_dir);
+    restore_env_var("HYPRDUCK_DISABLE_PROVIDER_GRAPH", previous_provider_graph);
+
+    let report = result?;
+    println!("demo-root: {}", root.display());
+    println!("workspace: {DEMO_WORKSPACE_ID}");
+    println!("source-pack: {}", report.source_pack_path.display());
+    println!("evidence-index: {}", report.evidence_index_path.display());
+    println!("context-pack: {}", report.context_pack_path);
+    println!("context-pack-v0: {}", report.schema_version);
+    println!("context-pack-v0-sources: {}", report.source_count);
+    println!("context-pack-v0-evidence: {}", report.evidence_count);
+    println!("context-pack-v0-findings: {}", report.finding_count);
+    println!("context-pack-v0-warnings: {}", report.warning_count);
+    println!("elapsed-ms: {}", started.elapsed().as_millis());
+    println!(
+        "next: hyprduck context --root {} --workspace {DEMO_WORKSPACE_ID} --write-context-pack \"{}\"",
+        root.display(),
+        command.query.replace('"', "\\\"")
+    );
+    Ok(())
+}
+
+struct DemoReport {
+    source_pack_path: PathBuf,
+    evidence_index_path: PathBuf,
+    context_pack_path: String,
+    schema_version: String,
+    source_count: usize,
+    evidence_count: usize,
+    finding_count: usize,
+    warning_count: usize,
+}
+
+fn run_demo_with_root(root: &Path, fixture_path: &Path, query: &str) -> Result<DemoReport> {
+    let manifest = write_demo_source_artifacts(root, fixture_path)?;
+    let client = SubprocessEngineClient::default();
+    client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(DEMO_WORKSPACE_ID.into()),
+        source_id: Some(DEMO_SOURCE_ID.into()),
+        skip_graph_generation: Some(true),
+    })?;
+
+    let context_response = client.get_context_pack(GetContextPackRequest {
+        scope: BrainReadScope {
+            workspace_id: DEMO_WORKSPACE_ID.into(),
+            root_dir: Some(root.display().to_string()),
+        },
+        query: query.to_string(),
+        budget: Some(4000),
+        persist: true,
+    })?;
+    let context_pack = context_response.context_pack_v0;
+    let context_pack_path = context_response
+        .persisted_context_pack_path
+        .ok_or_else(|| anyhow::anyhow!("demo context pack was not persisted"))?;
+
+    Ok(DemoReport {
+        source_pack_path: PathBuf::from(&manifest.artifact_root).join("source_pack.json"),
+        evidence_index_path: PathBuf::from(&manifest.artifact_root).join("evidence_index.json"),
+        context_pack_path,
+        schema_version: context_pack.schema_version,
+        source_count: context_pack.source_set.len(),
+        evidence_count: context_pack.selected_evidence.len(),
+        finding_count: context_pack.findings.len(),
+        warning_count: context_pack.warnings.len(),
+    })
+}
+
+fn write_demo_source_artifacts(root: &Path, fixture_path: &Path) -> Result<SourceArtifactManifest> {
+    let workspace_root = root.join(DEMO_WORKSPACE_ID);
+    let source_root = workspace_root.join("sources").join(DEMO_SOURCE_ID);
+    let artifact_root = workspace_root.join("artifacts").join(DEMO_SOURCE_ID);
+    let pages_root = artifact_root.join("pages");
+    std::fs::create_dir_all(&source_root)?;
+    std::fs::create_dir_all(&pages_root)?;
+    std::fs::create_dir_all(workspace_root.join("graph"))?;
+    std::fs::create_dir_all(workspace_root.join("wiki"))?;
+
+    let source_path = source_root.join("demo-source.md");
+    let markdown_path = artifact_root.join("hyprduck-demo.md");
+    let page_markdown_path = pages_root.join("page_1.md");
+    std::fs::copy(fixture_path, &source_path)?;
+    std::fs::write(
+        &markdown_path,
+        format!("# hyprduck-demo\n\n## Page 1\n\n{DEMO_MARKDOWN}\n"),
+    )?;
+    std::fs::write(&page_markdown_path, DEMO_MARKDOWN)?;
+
+    let now = unix_timestamp_seconds()?;
+    let content_hash = format!("fnv64:{:016x}", fnv1a64(DEMO_MARKDOWN.as_bytes()));
+    let manifest_path = artifact_root.join("source-manifest.json");
+    let page = PageArtifact {
+        index: 0,
+        label: "Page 1".into(),
+        image_path: None,
+        markdown_path: Some(page_markdown_path.display().to_string()),
+        plain_text_path: None,
+        error_message: None,
+    };
+    let manifest = SourceArtifactManifest {
+        workspace_id: DEMO_WORKSPACE_ID.into(),
+        source_id: DEMO_SOURCE_ID.into(),
+        original_path: fixture_path.display().to_string(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        artifact_root: artifact_root.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        format: DocumentFormat::Markdown,
+        output_name: "hyprduck-demo".into(),
+        status: IngestStatus::Ingested,
+        description: "Built-in HyprDuck demo fixture.".into(),
+        user_context: "Local demo; no hosted provider call.".into(),
+        ingest_instruction: "Demonstrate source/evidence/context pack artifacts.".into(),
+        pages: vec![page.clone()],
+        created_at: now,
+        updated_at: now,
+    };
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
+
+    let source_pack = SourcePackV0 {
+        schema_version: SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+        workspace_id: DEMO_WORKSPACE_ID.into(),
+        source_id: DEMO_SOURCE_ID.into(),
+        original_filename: "demo-source.md".into(),
+        original_path: fixture_path.display().to_string(),
+        source_path: source_path.display().to_string(),
+        markdown_path: markdown_path.display().to_string(),
+        artifact_root: artifact_root.display().to_string(),
+        content_hash: content_hash.clone(),
+        format: DocumentFormat::Markdown,
+        page_count: 1,
+        ingestion_status: IngestStatus::Ingested,
+        provider_route: "local_demo".into(),
+        local_only: true,
+        pages: vec![SourcePackPageV0 {
+            page: 1,
+            label: "Page 1".into(),
+            image_path: None,
+            markdown_path: Some(page_markdown_path.display().to_string()),
+            plain_text_path: None,
+            error_message: None,
+        }],
+        warnings: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    let evidence_index = EvidenceIndexV0 {
+        schema_version: EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+        workspace_id: DEMO_WORKSPACE_ID.into(),
+        source_id: DEMO_SOURCE_ID.into(),
+        content_hash: content_hash.clone(),
+        provider_route: "local_demo".into(),
+        local_only: true,
+        evidence: vec![EvidenceIndexItemV0 {
+            evidence_ref: format!("ev-{DEMO_SOURCE_ID}-source-1"),
+            source_id: DEMO_SOURCE_ID.into(),
+            page: 1,
+            region: "page:Page 1".into(),
+            span: Some("page".into()),
+            quoted_text: excerpt(DEMO_MARKDOWN, 280),
+            parse_confidence: ContextPackParseConfidence::High,
+            content_hash,
+            markdown_path: Some(page_markdown_path.display().to_string()),
+            image_path: None,
+        }],
+        warnings: Vec::new(),
+        generated_at: now,
+    };
+    std::fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::to_string_pretty(&source_pack)? + "\n",
+    )?;
+    std::fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::to_string_pretty(&evidence_index)? + "\n",
+    )?;
+
+    Ok(manifest)
+}
+
+fn unique_demo_root() -> Result<PathBuf> {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    Ok(std::env::temp_dir().join(format!("hyprduck-demo-{nanos}")))
+}
+
+fn unix_timestamp_seconds() -> Result<u64> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn excerpt(text: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for value in text.split_whitespace() {
+        let extra = usize::from(!output.is_empty());
+        if output.len() + extra + value.len() > max_chars {
+            break;
+        }
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(value);
+    }
+    output
+}
+
+fn restore_env_var(key: &str, previous: Option<std::ffi::OsString>) {
+    match previous {
+        Some(value) => std::env::set_var(key, value),
+        None => std::env::remove_var(key),
+    }
 }
 
 fn run_brain(command: cli::BrainCommand) -> Result<()> {
