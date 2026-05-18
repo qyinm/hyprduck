@@ -73,6 +73,20 @@ impl Cli {
                     command: parse_brain_command(subcommand, args.collect())?,
                 })
             }
+            Some("context") | Some("context-pack") => Some(Commands::Brain {
+                command: parse_brain_command("context-pack".into(), args.collect())?,
+            }),
+            Some("documents") | Some("docs") => {
+                let subcommand = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: hyprduck documents <search>"))?;
+                match subcommand.as_str() {
+                    "search" => Some(Commands::Brain {
+                        command: parse_brain_command("search".into(), args.collect())?,
+                    }),
+                    _ => return Err(anyhow!("unknown documents subcommand: {subcommand}")),
+                }
+            }
             Some(other) => return Err(anyhow!("unknown command: {other}")),
         };
 

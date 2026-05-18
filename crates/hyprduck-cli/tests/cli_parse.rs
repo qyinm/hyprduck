@@ -13,6 +13,59 @@ fn doctor_reports_engine_resolution() {
 }
 
 #[test]
+fn context_alias_writes_context_pack_v0() {
+    let root = unique_temp_dir("hyprduck-cli-context-alias");
+    fs::create_dir_all(root.join("default")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args([
+            "context",
+            "--root",
+            root.to_str().unwrap(),
+            "--write-context-pack",
+            "agent reuse",
+        ])
+        .output()
+        .expect("context alias should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("context-pack-v0: hyprduck.context_pack.v0"));
+    assert!(stdout.contains("context-pack-v0-path:"));
+    assert!(root.join("default/context_pack.json").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn documents_search_alias_keeps_brain_search_compatibility() {
+    let root = unique_temp_dir("hyprduck-cli-documents-search");
+    fs::create_dir_all(root.join("default")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args([
+            "documents",
+            "search",
+            "--root",
+            root.to_str().unwrap(),
+            "agent reuse",
+        ])
+        .output()
+        .expect("documents search alias should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn mcp_install_claude_code_writes_production_server_entry() {
     let home = unique_temp_dir("hyprduck-cli-mcp-install");
     let config_dir = home.join(".config/claude-code");
