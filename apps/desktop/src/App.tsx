@@ -943,11 +943,39 @@ function createWebMockApi(): HyprDuckDesktopApi {
           if (!workspace.project) {
             throw new Error("No workspace available in preview mode.");
           }
-          const answer = request?.nodeId
-            ? workspace.project.answerByNodeId[request.nodeId]
-            : workspace.project.answerByNodeId["source:preview"];
+          const terms = String(request?.question ?? "")
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((term) => term.length > 1);
+          const answerEntries = Object.entries(workspace.project.answerByNodeId);
+          const scoredAnswers = answerEntries
+            .map(([nodeId, answer]) => {
+              const detail = workspace.project?.detailsByNodeId[nodeId];
+              const haystack = [
+                detail?.canonicalName,
+                detail?.description,
+                answer.text,
+                answer.explanation,
+                ...(answer.citations ?? []).map((citation) => citation.snippet),
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+              const queryScore = terms.filter((term) => haystack.includes(term)).length;
+              const selectedBias = request?.nodeId === nodeId ? 1 : 0;
+              return { answer, queryScore, selectedBias };
+            })
+            .sort(
+              (left, right) =>
+                right.queryScore - left.queryScore ||
+                right.selectedBias - left.selectedBias,
+            );
+          const answer =
+            scoredAnswers.find((entry) => entry.queryScore > 0)?.answer ??
+            workspace.project.answerByNodeId["source:preview"] ??
+            scoredAnswers[0]?.answer;
           if (!answer) {
-            throw new Error("No answer available for this node in preview mode.");
+            throw new Error("No answer available for this workspace in preview mode.");
           }
           return { ...answer } as T;
         }

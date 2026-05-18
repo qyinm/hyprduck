@@ -93,13 +93,19 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/without leaving the graph/);
 });
 
-test("bottom prompt composer supports attachment intent and source metadata", () => {
-  expect(graphSource).toMatch(/Ask or add files to this knowledge base/);
-  expect(graphSource).toMatch(/Add to knowledge base/);
-  expect(graphSource).toMatch(/Ask only this time/);
-  expect(graphSource).toMatch(/File description/);
-  expect(graphSource).toMatch(/\+ Attach files/);
-  expect(graphSource).toMatch(/source\.description|source metadata/);
+test("bottom prompt composer opens a floating answer window above the prompt", () => {
+  expect(graphSource).toMatch(/GraphPromptComposer/);
+  expect(graphSource).toMatch(/GraphAnswerWindow/);
+  expect(graphSource).toMatch(/aria-label="Attach files"/);
+  expect(graphSource).toMatch(/dispatch\(\{ type: "open_answer_dock" \}\)/);
+  expect(graphSource).toMatch(/bottom-24/);
+  expect(graphSource).toMatch(/Close answer/);
+  expect(graphSource).toMatch(/Answering\.\.\./);
+  expect(graphSource).toMatch(/CompactEvidenceRow/);
+  expect(graphSource).not.toMatch(/Ask or add files to this knowledge base/);
+  expect(graphSource).not.toMatch(/name="attachment-intent"/);
+  expect(graphSource).not.toMatch(/Ask workspace graph or attach files/);
+  expect(graphSource).not.toMatch(/Live answer state|Stored answer state/);
 });
 
 test("evidence is rendered as UI content instead of raw markdown", () => {
