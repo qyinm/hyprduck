@@ -20,17 +20,17 @@ use hyprduck_engine_types::{
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
     GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
     MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest,
-    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
-    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
-    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
-    SourcePackV0, SourceRecord, SourceSummary, StructuredExtractionArtifact,
-    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
-    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
-    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection, WorkspaceId,
-    BRAIN_EVENT_SCHEMA_VERSION,
+    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
+    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0,
+    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
@@ -796,6 +796,58 @@ fn persist_context_pack_v0(
     fs::write(&latest_path, json)
         .with_context(|| format!("failed writing {}", latest_path.display()))?;
     Ok(latest_path.display().to_string())
+}
+
+fn handle_read_context_pack(
+    request: ReadContextPackRequest,
+) -> Result<ReadContextPackResponseData> {
+    let workspace_root = resolve_brain_workspace_root(&request.scope)?;
+    let repo = BrainArtifactRepository::new(workspace_root);
+    let path = match request.pack_id.as_deref() {
+        Some(pack_id) => {
+            validate_context_pack_id(pack_id)?;
+            format!("context_packs/{pack_id}.json")
+        }
+        None => "context_pack.json".into(),
+    };
+    let context_pack: hyprduck_engine_types::ContextPackV0 = repo
+        .read_json_artifact(&path)
+        .map_err(|_| anyhow!("persisted context pack could not be read or decoded"))?;
+    if context_pack.schema_version != hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION {
+        bail!(
+            "persisted context pack schemaVersion {} is unsupported",
+            context_pack.schema_version
+        );
+    }
+    if let Some(pack_id) = request.pack_id.as_deref() {
+        if context_pack.pack_id != pack_id {
+            bail!(
+                "persisted context pack packId {} does not match requested packId {}",
+                context_pack.pack_id,
+                pack_id
+            );
+        }
+    }
+    if context_pack.workspace_id != request.scope.workspace_id {
+        bail!(
+            "context pack workspace {} does not match requested workspace {}",
+            context_pack.workspace_id,
+            request.scope.workspace_id
+        );
+    }
+    Ok(ReadContextPackResponseData { context_pack })
+}
+
+fn validate_context_pack_id(pack_id: &str) -> Result<()> {
+    if pack_id.trim().is_empty()
+        || pack_id == "."
+        || pack_id == ".."
+        || pack_id.contains('/')
+        || pack_id.contains('\\')
+    {
+        bail!("invalid packId: context pack IDs must be single path segments");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -13,14 +13,14 @@ use hyprduck_engine_types::{
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackResponseData,
     KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent,
-    ParseProgress, ParseRequest, ParseResponseData, ReadGraphHistoryRequest,
-    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadNodeRequest, ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
-    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
-    ReconstructBrainResponseData, RuntimeReadinessResponseData, SaveConfigRequest,
-    SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData, ValidateProviderRequest,
-    ValidateProviderResponseData,
+    ParseProgress, ParseRequest, ParseResponseData, ReadContextPackRequest,
+    ReadContextPackResponseData, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
+    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
+    SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -63,6 +63,10 @@ pub trait EngineClient {
         &self,
         request: hyprduck_engine_types::GetContextPackRequest,
     ) -> Result<GetContextPackResponseData>;
+    fn read_context_pack(
+        &self,
+        request: ReadContextPackRequest,
+    ) -> Result<ReadContextPackResponseData>;
     fn get_brain_health(
         &self,
         request: GetBrainHealthRequest,
@@ -382,6 +386,17 @@ impl EngineClient for SubprocessEngineClient {
             None,
         )?;
         Ok(response)
+    }
+
+    fn read_context_pack(
+        &self,
+        request: ReadContextPackRequest,
+    ) -> Result<ReadContextPackResponseData> {
+        self.run_command::<ReadContextPackResponseData, ReadContextPackResponseData>(
+            EngineRequest::ReadContextPack(request),
+            EngineCommand::ReadContextPack,
+            None,
+        )
     }
 
     fn get_brain_health(

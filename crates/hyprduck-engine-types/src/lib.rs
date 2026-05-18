@@ -28,6 +28,7 @@ pub enum EngineCommand {
     SearchBrain,
     ReadSource,
     ReadPageEvidence,
+    ReadContextPack,
     ReadWikiPage,
     ReadNode,
     ReadRecentEvents,
@@ -415,6 +416,20 @@ pub struct ReadPageEvidenceResponseData {
     pub source: SourceRecord,
     pub evidence: Vec<PageEvidenceV0>,
     pub warnings: Vec<ContextPackWarningV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadContextPackRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub pack_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadContextPackResponseData {
+    pub context_pack: ContextPackV0,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1243,6 +1258,7 @@ pub enum EngineRequest {
     SearchBrain(SearchBrainRequest),
     ReadSource(ReadSourceRequest),
     ReadPageEvidence(ReadPageEvidenceRequest),
+    ReadContextPack(ReadContextPackRequest),
     ReadWikiPage(ReadWikiPageRequest),
     ReadNode(ReadNodeRequest),
     ReadRecentEvents(ReadRecentEventsRequest),
@@ -1755,6 +1771,10 @@ mod tests {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
                 page: Some(1),
+            }),
+            EngineRequest::ReadContextPack(ReadContextPackRequest {
+                scope: scope.clone(),
+                pack_id: Some("ctx_123".into()),
             }),
             EngineRequest::ReadWikiPage(ReadWikiPageRequest {
                 scope: scope.clone(),

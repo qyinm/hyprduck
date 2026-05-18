@@ -56,6 +56,7 @@ paths.
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
+| `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
 | `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |

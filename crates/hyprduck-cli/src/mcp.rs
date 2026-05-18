@@ -3,9 +3,9 @@ use std::io::{self, BufRead, Write};
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadGraphHistoryRequest,
-    ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest, ReadRecentEventsRequest,
-    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadContextPackRequest,
+    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest,
+    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -352,6 +352,12 @@ fn call_tool(
                 persist: false,
             })?)?
         }
+        "read_context_pack" => {
+            let pack_id = optional_string(arguments, "packId")?;
+            serde_json::to_value(
+                client.read_context_pack(ReadContextPackRequest { scope, pack_id })?,
+            )?
+        }
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
             serde_json::to_value(client.read_source(ReadSourceRequest { scope, source_id })?)?
@@ -594,6 +600,15 @@ fn tool_definitions() -> Vec<Value> {
                 "budget": { "type": "integer", "minimum": 1, "description": "Approximate token budget." },
             }),
             vec!["query"],
+            true,
+        ),
+        tool_definition(
+            "read_context_pack",
+            "Read the latest persisted Context Pack v0, or a specific pack by packId.",
+            json!({
+                "packId": { "type": "string", "description": "Optional packId under context_packs/. Defaults to the latest context_pack.json." },
+            }),
+            Vec::new(),
             true,
         ),
         tool_definition(

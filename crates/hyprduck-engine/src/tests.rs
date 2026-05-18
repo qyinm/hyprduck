@@ -1927,6 +1927,192 @@ fn context_pack_v0_persistence_writes_latest_and_history_files() {
 }
 
 #[test]
+fn read_context_pack_reads_latest_and_history_without_path_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().to_string_lossy().into_owned()),
+    };
+    let context_pack = hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: "ctx_test_pack".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![],
+        selected_evidence: vec![],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: "test".into(),
+            chunks_considered: 0,
+            chunks_selected: 0,
+            budget_requested: 4000,
+            budget_used: 0,
+        },
+        suggested_next_reads: vec![],
+    };
+    persist_context_pack_v0(&scope, &context_pack).expect("persist context pack");
+
+    let latest = handle_read_context_pack(ReadContextPackRequest {
+        scope: scope.clone(),
+        pack_id: None,
+    })
+    .expect("latest context pack");
+    assert_eq!(latest.context_pack.pack_id, "ctx_test_pack");
+
+    let history = handle_read_context_pack(ReadContextPackRequest {
+        scope: scope.clone(),
+        pack_id: Some("ctx_test_pack".into()),
+    })
+    .expect("history context pack");
+    assert_eq!(history.context_pack.pack_id, "ctx_test_pack");
+
+    let error = handle_read_context_pack(ReadContextPackRequest {
+        scope,
+        pack_id: Some("../ctx_test_pack".into()),
+    })
+    .expect_err("packId path escape rejected");
+    assert!(error.to_string().contains("invalid packId"));
+}
+
+#[test]
+#[cfg(unix)]
+fn read_context_pack_rejects_symlink_escape() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let outside_root = temp.path().join("outside");
+    fs::create_dir_all(workspace_root.join("context_packs")).expect("context packs dir");
+    fs::create_dir_all(&outside_root).expect("outside dir");
+    let context_pack = hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: "ctx_escape".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![],
+        selected_evidence: vec![],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: "test".into(),
+            chunks_considered: 0,
+            chunks_selected: 0,
+            budget_requested: 4000,
+            budget_used: 0,
+        },
+        suggested_next_reads: vec![],
+    };
+    let outside_latest = outside_root.join("context_pack.json");
+    let outside_history = outside_root.join("ctx_escape.json");
+    fs::write(
+        &outside_latest,
+        serde_json::to_string(&context_pack).expect("context pack json"),
+    )
+    .expect("outside latest");
+    fs::write(
+        &outside_history,
+        serde_json::to_string(&context_pack).expect("context pack json"),
+    )
+    .expect("outside history");
+    std::os::unix::fs::symlink(&outside_latest, workspace_root.join("context_pack.json"))
+        .expect("latest symlink");
+    std::os::unix::fs::symlink(
+        &outside_history,
+        workspace_root.join("context_packs/ctx_escape.json"),
+    )
+    .expect("history symlink");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().to_string_lossy().into_owned()),
+    };
+
+    let latest_error = handle_read_context_pack(ReadContextPackRequest {
+        scope: scope.clone(),
+        pack_id: None,
+    })
+    .expect_err("latest symlink escape rejected");
+    assert_eq!(
+        latest_error.to_string(),
+        "persisted context pack could not be read or decoded"
+    );
+    assert!(!latest_error
+        .to_string()
+        .contains(temp.path().display().to_string().as_str()));
+
+    let history_error = handle_read_context_pack(ReadContextPackRequest {
+        scope,
+        pack_id: Some("ctx_escape".into()),
+    })
+    .expect_err("history symlink escape rejected");
+    assert_eq!(
+        history_error.to_string(),
+        "persisted context pack could not be read or decoded"
+    );
+    assert!(!history_error
+        .to_string()
+        .contains(temp.path().display().to_string().as_str()));
+}
+
+#[test]
+fn read_context_pack_rejects_schema_and_requested_pack_id_mismatch() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("context_packs")).expect("context packs dir");
+    let mut context_pack = hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: "ctx_expected".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![],
+        selected_evidence: vec![],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: "test".into(),
+            chunks_considered: 0,
+            chunks_selected: 0,
+            budget_requested: 4000,
+            budget_used: 0,
+        },
+        suggested_next_reads: vec![],
+    };
+    context_pack.schema_version = "hyprduck.context_pack.future".into();
+    fs::write(
+        workspace_root.join("context_pack.json"),
+        serde_json::to_string(&context_pack).expect("invalid schema pack json"),
+    )
+    .expect("invalid schema context pack");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().to_string_lossy().into_owned()),
+    };
+    let schema_error = handle_read_context_pack(ReadContextPackRequest {
+        scope: scope.clone(),
+        pack_id: None,
+    })
+    .expect_err("schema mismatch rejected");
+    assert!(schema_error.to_string().contains("schemaVersion"));
+
+    context_pack.schema_version = hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into();
+    context_pack.pack_id = "ctx_other".into();
+    fs::write(
+        workspace_root.join("context_packs/ctx_expected.json"),
+        serde_json::to_string(&context_pack).expect("pack mismatch json"),
+    )
+    .expect("pack mismatch context pack");
+    let pack_id_error = handle_read_context_pack(ReadContextPackRequest {
+        scope,
+        pack_id: Some("ctx_expected".into()),
+    })
+    .expect_err("packId mismatch rejected");
+    assert!(pack_id_error
+        .to_string()
+        .contains("does not match requested packId"));
+}
+
+#[test]
 fn resolve_brain_workspace_root_rejects_workspace_path_escape() {
     let temp = tempfile::tempdir().expect("temp dir");
     let scope = BrainReadScope {

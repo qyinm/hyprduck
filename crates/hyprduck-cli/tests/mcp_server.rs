@@ -71,6 +71,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         names,
         vec![
             "get_context_pack",
+            "read_context_pack",
             "search_documents",
             "search_brain",
             "read_source",
@@ -160,6 +161,61 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert_eq!(payload["attentionCount"], 0);
 
     write_mcp_snapshot_workspace(&root_dir);
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 120,
+            "method": "tools/call",
+            "params": {
+                "name": "read_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone()
+                }
+            }
+        }),
+    );
+    let persisted_context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        persisted_context_pack_tool["result"]["isError"], false,
+        "{persisted_context_pack_tool:#?}"
+    );
+    let text = persisted_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("persisted context pack tool text");
+    let persisted_context_pack: Value =
+        serde_json::from_str(text).expect("persisted context pack payload");
+    assert_eq!(
+        persisted_context_pack["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    assert_eq!(persisted_context_pack["contextPack"]["packId"], "ctx_mcp");
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 121,
+            "method": "tools/call",
+            "params": {
+                "name": "read_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "packId": "missing-pack"
+                }
+            }
+        }),
+    );
+    let missing_context_pack_tool = read_message(&mut reader);
+    assert_eq!(missing_context_pack_tool["result"]["isError"], true);
+    let missing_text = missing_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("missing context pack error text");
+    assert!(missing_text.contains("persisted context pack could not be read or decoded"));
+    assert!(!missing_text.contains(root_dir_arg.as_str()));
+
     write_message(
         &mut stdin,
         json!({
@@ -449,6 +505,7 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::create_dir_all(workspace.join("memory")).expect("memory dir");
     fs::create_dir_all(workspace.join("state")).expect("state dir");
     fs::create_dir_all(workspace.join("wiki")).expect("wiki dir");
+    fs::create_dir_all(workspace.join("context_packs")).expect("context packs dir");
     fs::create_dir_all(workspace.join("sources/source-mcp")).expect("source dir");
     fs::create_dir_all(workspace.join("artifacts/source-mcp/pages")).expect("pages dir");
     fs::create_dir_all(workspace.join("artifacts/source-mcp/images")).expect("images dir");
@@ -513,6 +570,10 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
         ),
     )
     .expect("evidence index");
+    let context_pack = r#"{"schemaVersion":"hyprduck.context_pack.v0","packId":"ctx_mcp","workspaceId":"default","query":"MCP evidence","generatedAt":"2026-05-18T09:00:00Z","sourceSet":[{"sourceId":"source-mcp","originalFilename":"source.pdf","contentHash":"fnv64:mcp-source","pageCount":1,"ingestionStatus":"ingested","staleness":"current","providerRoute":"local_demo","localOnly":true}],"selectedEvidence":[{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","selectionReason":"MCP fixture evidence.","contentHash":"fnv64:mcp-source"}],"findings":[],"warnings":[],"retrievalTrace":{"strategy":"fixture","chunksConsidered":1,"chunksSelected":1,"budgetRequested":4000,"budgetUsed":100},"suggestedNextReads":[]}"#;
+    fs::write(workspace.join("context_pack.json"), context_pack).expect("latest context pack");
+    fs::write(workspace.join("context_packs/ctx_mcp.json"), context_pack)
+        .expect("history context pack");
     fs::write(
         workspace.join("events/brain_events.jsonl"),
         concat!(
