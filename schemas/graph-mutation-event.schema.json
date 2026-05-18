@@ -9,7 +9,7 @@
     "Do not sort events by createdAt, eventId, or materializedVersion during replay.",
     "upToEventId stops after applying the matching event row.",
     "upToTimestamp and upToMaterializedVersion are cutoff selectors evaluated while scanning append order.",
-    "GraphMaterialized and MemoryAccepted events mutate materialized state; proposal, review, source, and maintenance events remain audit context unless their payload is explicitly replayable.",
+    "GraphMaterialized and MemoryAccepted events mutate materialized state; source and maintenance events remain audit context unless their payload is explicitly replayable.",
     "Rollback appends a new GraphMaterialized event with operationType graph_rollback; it never rewrites earlier rows."
   ],
   "type": "object",
@@ -52,16 +52,8 @@
         "graph_materialized",
         "wiki_materialized",
         "correction_applied",
-        "node_proposed",
-        "memory_proposed",
-        "claim_proposed",
-        "link_proposed",
         "observation_appended",
-        "source_note_proposed",
-        "wiki_page_proposed",
         "memory_accepted",
-        "review_created",
-        "review_resolved",
         "brain_maintenance_run"
       ]
     },
@@ -85,11 +77,7 @@
         "source_compiled",
         "source_imported",
         "correction_applied",
-        "review_created",
-        "review_resolved",
-        "brain_maintenance_run",
-        "queued_proposal_auto_accept",
-        "queued_proposal_auto_reject"
+        "brain_maintenance_run"
       ]
     },
     "actor": {
@@ -123,7 +111,6 @@
       ],
       "properties": {
         "causedByEventIds": { "$ref": "#/$defs/stringArray" },
-        "causedByProposalId": { "type": ["string", "null"] },
         "causedBySourceIds": { "$ref": "#/$defs/stringArray" },
         "snapshotId": { "type": ["string", "null"] },
         "previousSnapshotId": { "type": ["string", "null"] },

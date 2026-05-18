@@ -1032,8 +1032,6 @@ pub(crate) fn ensure_materialized_brain_repo_dirs(root: &Path) -> Result<()> {
         root.join("events"),
         root.join("memory"),
         root.join("state"),
-        root.join("reviews/proposed-updates"),
-        root.join("reviews/lint-reports"),
         wiki_root.join("sources"),
         wiki_root.join("entities"),
         wiki_root.join("topics"),
@@ -1043,10 +1041,6 @@ pub(crate) fn ensure_materialized_brain_repo_dirs(root: &Path) -> Result<()> {
         fs::create_dir_all(&dir).with_context(|| format!("failed creating {}", dir.display()))?;
     }
 
-    fs::write(root.join("reviews/proposed-updates/.gitkeep"), "")
-        .context("failed writing proposed updates placeholder")?;
-    fs::write(root.join("reviews/lint-reports/.gitkeep"), "")
-        .context("failed writing lint reports placeholder")?;
     fs::write(root.join("memory/.gitkeep"), "").context("failed writing memory placeholder")?;
     Ok(())
 }
@@ -1323,18 +1317,10 @@ pub(crate) fn merge_preserved_brain_events(
 pub(crate) fn is_preserved_brain_event(event_type: BrainEventKind) -> bool {
     matches!(
         event_type,
-        BrainEventKind::NodeProposed
-            | BrainEventKind::MemoryProposed
-            | BrainEventKind::SourceIngestQueued
+        BrainEventKind::SourceIngestQueued
             | BrainEventKind::SourceCompiled
-            | BrainEventKind::ClaimProposed
-            | BrainEventKind::LinkProposed
             | BrainEventKind::ObservationAppended
-            | BrainEventKind::SourceNoteProposed
-            | BrainEventKind::WikiPageProposed
             | BrainEventKind::MemoryAccepted
-            | BrainEventKind::ReviewCreated
-            | BrainEventKind::ReviewResolved
             | BrainEventKind::BrainMaintenanceRun
     )
 }

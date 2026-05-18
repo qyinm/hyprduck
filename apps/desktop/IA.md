@@ -828,9 +828,8 @@ HyprDuck는 아래 산출물을 명시적으로 다룬다.
 |   +-- edges.json
 |   +-- evidence.json
 |
-+-- reviews/
-    +-- proposed-updates/*.json
-    +-- lint-reports/*.md
++-- state/
+    +-- maintenance-latest.json
 ```
 
 UI에서 반드시 보이는 artifact:
@@ -1147,7 +1146,6 @@ apps/desktop/src/features/workspace/types.ts
     +-- SourceSummary
     +-- KnowledgePageSummary
     +-- KnowledgeClaim
-    +-- KnowledgeUpdateProposal
     +-- KnowledgeLintFinding
     +-- TypedLinkKind
 ```

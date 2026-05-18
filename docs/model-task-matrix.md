@@ -29,8 +29,8 @@ The report must keep quality and latency together:
 | --- | --- | --- | --- | --- |
 | Page parse | OpenRouter vision model: `google/gemini-2.5-flash` or `z-ai/glm-5v-turbo` | Ollama vision model: `qwen3-vl:72b` for high quality, `qwen3-vl:8b` only for small/private docs | Markdown preserves page structure, tables, and image-backed citations | Hosted p95 under 20s/page, local p95 under 45s/page |
 | Structured extraction | Heuristic extractor plus hosted verification when available | Heuristic extractor only, with golden-corpus regression checks | Supported claims and relations must carry evidence refs | p95 under 5s/source after parse |
-| Entity merge | Local deterministic alias merge first, hosted review for risky merges | Deterministic merge only; keep uncertain aliases separate | No evidence-free merge becomes trusted graph state | p95 under 3s/workspace aggregate |
-| Review/save-back | Human-reviewed proposal path | Same local proposal path | Every accepted write creates an event and preserves source truth | p95 under 1s/write, excluding user review time |
+| Entity merge | Local deterministic alias merge first, hosted verification when available | Deterministic merge only; keep uncertain aliases separate | Merge output must carry source or evidence refs | p95 under 3s/workspace aggregate |
+| Graph materialization | Provider-generated graph records plus schema validation | Heuristic extraction plus schema validation | Materialized graph writes create events and preserve source artifacts | p95 under 5s/source after parse |
 | Grounded answer | Retrieval/context pack over local brain; hosted answer optional | Local retrieval-only answer with citations and warnings | Answer includes evidence IDs or blocks | p95 under 2s for retrieval pack |
 | Agent context pack | Local retrieval baseline | Same local path | Pack includes relevant memory, claims, entities, relations, sources, evidence, events | p95 under 2s for 8k budget |
 
@@ -46,9 +46,9 @@ every task.
   `deepseek-ocr:latest` can improve page text recovery, but they do not replace
   claim extraction, contradiction detection, or graph merge policy.
 - If local output misses citations, HyprDuck should keep the artifact as
-  `needs_review` instead of promoting it to trusted graph state.
-- Company/project memory writes should stay on the review path until the local
-  model is proven on the golden corpus.
+  `partial` instead of promoting it to the generated graph.
+- Company/project memory generation should stay disabled until the local model is
+  proven on the golden corpus.
 
 ## Settings Copy
 
@@ -57,8 +57,8 @@ The desktop settings surface should make the warning explicit:
 - Hosted vision models are recommended for high-recall parsing and extraction.
 - Ollama keeps data local, but small local models may miss tables, conflicts, or
   evidence links.
-- The user should run the golden corpus before trusting a new local model for
-  durable graph writes.
+- The user should run the golden corpus before using a new local model for
+  durable graph output.
 
 ## Update Rule
 

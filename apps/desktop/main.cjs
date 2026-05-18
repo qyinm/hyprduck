@@ -126,48 +126,6 @@ function registerIpcHandlers() {
           },
         }).then((response) => response.data);
       }
-      case "resolve_brain_review": {
-        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
-        return runEngineCommand("resolve_brain_review_item", {
-          command: "resolve_brain_review_item",
-          payload: {
-            scope: brainReadScope(workspaceId),
-            proposalId: args.proposal_id,
-            decision: args.decision,
-            actor: {
-              actorType: "user",
-              actorId: "local-user",
-            },
-            reason: args.reason ?? null,
-          },
-        }).then((response) => response.data);
-      }
-      case "propose_brain_update": {
-        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
-        return runEngineCommand("propose_brain_update", {
-          command: "propose_brain_update",
-          payload: {
-            scope: brainReadScope(workspaceId),
-            kind: args.kind,
-            title: args.title,
-            body: args.body,
-            actor: {
-              actorType: "user",
-              actorId: "local-user",
-            },
-            targetNodeId: args.target_node_id ?? null,
-            targetSourceId: args.target_source_id ?? null,
-            relationKind: args.relation_kind ?? null,
-            sourceDescription: args.source_description ?? null,
-            sourceUserContext: args.source_user_context ?? null,
-            sourceIngestInstruction: args.source_ingest_instruction ?? null,
-            sourceRefs: args.source_refs ?? [],
-            nodeRefs: args.node_refs ?? [],
-            evidenceRefs: args.evidence_refs ?? [],
-            proposalPayload: args.proposal_payload ?? null,
-          },
-        }).then((response) => response.data);
-      }
       case "get_models_for_provider":
         return getModelsForProvider(args.providerSlug);
       case "load_workspace_project":

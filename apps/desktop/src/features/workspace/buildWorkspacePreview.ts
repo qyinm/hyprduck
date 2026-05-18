@@ -87,7 +87,7 @@ export function buildWorkspacePreview(
       "This workspace is a graph-first preview built from the latest import. HyprDuck is showing the latest automatic ingest preview with visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
     actions: disabledCorrectionActions(
-      "Correction actions unlock once merge policy and safe-write review are connected.",
+      "Correction actions unlock once merge policy and graph editing are connected.",
     ),
     source: {
       workspaceId: "web-preview",
@@ -108,7 +108,7 @@ export function buildWorkspacePreview(
     },
   };
   answerByNodeId["source:preview"] = previewAnswer(
-    "HyprDuck can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before trusting this draft.",
+    "HyprDuck can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before using this draft.",
     stale,
     pageEvidence.slice(0, 2),
     pageNodes.map((node) => node.id),
@@ -178,7 +178,7 @@ function previewAnswer(
         kind: "inspect_evidence" as const,
         label: "Inspect evidence",
         description:
-          "Open the cited snippets in the inspector before trusting the draft answer.",
+          "Open the cited snippets in the inspector before using the draft answer.",
       },
       {
         kind: "ask_different_question" as const,

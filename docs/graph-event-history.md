@@ -21,8 +21,8 @@ Required replay fields:
 - `nodeRefs`, `relationRefs`, `claimRefs`, and `memoryRefs`: refs mentioned by the event.
 - `targetNodeIds`, `targetEdgeIds`, `targetClaimIds`, and `targetMemoryIds`: durable materialized records changed by the event.
 - `evidenceRefs`: source evidence supporting the mutation.
-- `payloadJson`: event-specific payload, including proposal, materialized graph, diff, or rollback data.
-- `causality`: proposal/source/snapshot lineage for audit and replay.
+- `payloadJson`: event-specific payload, including materialized graph, diff, or rollback data.
+- `causality`: source/snapshot lineage for audit and replay.
 - `policyResult`: automatic policy outcome.
 - `createdAt`: event creation timestamp.
 
@@ -40,11 +40,10 @@ Replay is deterministic and append-order based:
 Only replayable mutation events change materialized state:
 
 - `graph_materialized` with a `materializedGraph` payload replaces the materialized graph/wiki snapshot.
-- `graph_materialized` with an accepted `proposal` payload applies the proposal to the current replay snapshot.
 - `memory_accepted` upserts a memory record.
 - `graph_materialized` with `operationType: graph_rollback` restores a prior materialized state by appending a new event.
 
-Proposal, review, source, and maintenance events remain audit context unless
+Source and maintenance events remain audit context unless
 their payload is explicitly handled by the replay engine.
 
 ## Rollback And Snapshots
@@ -55,4 +54,4 @@ the selected materialized graph/wiki files, and appends a new
 `graph_materialized` event with `operationType: graph_rollback`.
 
 This makes rollback/replay behave like `git reset` over materialized files while
-keeping the append-only event log reviewable.
+keeping the append-only event log auditable.

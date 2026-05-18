@@ -102,8 +102,6 @@ pub(crate) struct BrainReplayResult {
 pub(crate) struct MaterializedGraphEventPayload {
     #[serde(default)]
     pub(crate) materialized_graph: Option<MaterializedGraphPayload>,
-    #[serde(default)]
-    pub(crate) proposal: Option<BrainUpdateProposal>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -190,12 +188,13 @@ pub(crate) fn reconstruct_brain_snapshot_from_events(
     }
 
     replay_state.replay_provider_overlays()?;
-    replay_state.apply_accepted_mutations()?;
     let mut snapshot = replay_state.into_snapshot();
     snapshot.events = included;
     if let Some(target_event_id) = up_to_event_id {
         if selected_event_id.as_deref() != Some(target_event_id) {
-            bail!("replay target event `{target_event_id}` was not found in events/brain_events.jsonl");
+            bail!(
+                "replay target event `{target_event_id}` was not found in events/brain_events.jsonl"
+            );
         }
     }
     snapshot.generated_at = selected_materialized_version.unwrap_or(snapshot.generated_at);
@@ -211,29 +210,19 @@ pub(crate) fn reconstruct_brain_snapshot_from_events(
 #[derive(Debug, Clone)]
 struct BrainReplayState {
     snapshot: BrainRepoSnapshot,
-    pending_proposals: BTreeMap<String, BrainUpdateProposal>,
     provider_overlay_events: Vec<BrainEvent>,
-    accepted_mutations: Vec<AcceptedReplayMutation>,
 }
 
 impl BrainReplayState {
     fn new(workspace_id: &str) -> Self {
         Self {
             snapshot: empty_replayed_brain_snapshot(workspace_id),
-            pending_proposals: BTreeMap::new(),
             provider_overlay_events: Vec::new(),
-            accepted_mutations: Vec::new(),
         }
     }
 
     fn apply_event(&mut self, event: &BrainEvent) -> Result<()> {
-        apply_replayed_brain_event(
-            event,
-            &mut self.snapshot,
-            &mut self.pending_proposals,
-            &mut self.provider_overlay_events,
-            &mut self.accepted_mutations,
-        )
+        apply_replayed_brain_event(event, &mut self.snapshot, &mut self.provider_overlay_events)
     }
 
     fn replay_provider_overlays(&mut self) -> Result<()> {
@@ -246,20 +235,6 @@ impl BrainReplayState {
         .map(|_| ())
     }
 
-    fn apply_accepted_mutations(&mut self) -> Result<()> {
-        for mutation in &self.accepted_mutations {
-            match mutation {
-                AcceptedReplayMutation::Proposal(proposal) => {
-                    apply_replayed_accepted_proposal(&mut self.snapshot, proposal.as_ref())?;
-                }
-                AcceptedReplayMutation::Memory(memory) => {
-                    upsert_replayed_memory(&mut self.snapshot, memory.clone());
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn into_snapshot(self) -> BrainRepoSnapshot {
         self.snapshot
     }
@@ -268,9 +243,7 @@ impl BrainReplayState {
 fn apply_replayed_brain_event(
     event: &BrainEvent,
     snapshot: &mut BrainRepoSnapshot,
-    pending_proposals: &mut BTreeMap<String, BrainUpdateProposal>,
     provider_overlay_events: &mut Vec<BrainEvent>,
-    accepted_mutations: &mut Vec<AcceptedReplayMutation>,
 ) -> Result<()> {
     match event.event_type {
         BrainEventKind::GraphMaterialized => {
@@ -288,59 +261,16 @@ fn apply_replayed_brain_event(
                 })?;
             if let Some(materialized) = payload.materialized_graph {
                 apply_materialized_graph_payload(snapshot, materialized, event);
-            } else if let Some(mut proposal) = payload.proposal {
-                proposal.status = BrainProposalStatus::Accepted;
-                if proposal.kind == BrainProposalKind::Memory {
-                    accepted_mutations.push(AcceptedReplayMutation::Memory(
-                        memory_record_for_proposal(&proposal),
-                    ));
-                } else {
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
-                }
-            }
-        }
-        BrainEventKind::NodeProposed
-        | BrainEventKind::ClaimProposed
-        | BrainEventKind::LinkProposed
-        | BrainEventKind::MemoryProposed
-        | BrainEventKind::WikiPageProposed => {
-            if let Ok(mut proposal) = event.payload_as::<BrainUpdateProposal>() {
-                if event.policy_result == "auto_applied"
-                    || proposal.status == BrainProposalStatus::Accepted
-                {
-                    proposal.status = BrainProposalStatus::Accepted;
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
-                } else {
-                    pending_proposals.insert(proposal.proposal_id.clone(), proposal);
-                }
             }
         }
         BrainEventKind::MemoryAccepted => {
-            if let Ok(proposal) = event.payload_as::<BrainUpdateProposal>() {
-                accepted_mutations.push(AcceptedReplayMutation::Memory(
-                    memory_record_for_proposal(&proposal),
-                ));
-            } else if let Ok(memory) = event.payload_as::<MemoryRecord>() {
-                accepted_mutations.push(AcceptedReplayMutation::Memory(memory));
-            }
-        }
-        BrainEventKind::ReviewResolved => {
-            if let Some(proposal_id) = accepted_review_resolved_proposal_id(event) {
-                if let Some(mut proposal) = pending_proposals.remove(&proposal_id) {
-                    proposal.status = BrainProposalStatus::Accepted;
-                    accepted_mutations.push(AcceptedReplayMutation::Proposal(Box::new(proposal)));
-                }
+            if let Ok(memory) = event.payload_as::<MemoryRecord>() {
+                upsert_replayed_memory(snapshot, memory);
             }
         }
         _ => {}
     }
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-enum AcceptedReplayMutation {
-    Proposal(Box<BrainUpdateProposal>),
-    Memory(MemoryRecord),
 }
 
 fn is_provider_graph_overlay_event(event: &BrainEvent) -> bool {
@@ -350,40 +280,6 @@ fn is_provider_graph_overlay_event(event: &BrainEvent) -> bool {
             Some("full_workspace_rebuild" | "source_graph_build" | "workspace_linking")
         )
         && event.policy_result == "materialized"
-}
-
-fn apply_replayed_accepted_proposal(
-    snapshot: &mut BrainRepoSnapshot,
-    proposal: &BrainUpdateProposal,
-) -> Result<()> {
-    if proposal.kind == BrainProposalKind::Memory {
-        upsert_replayed_memory(snapshot, memory_record_for_proposal(proposal));
-    } else {
-        apply_accepted_proposal_to_snapshot(proposal, snapshot)?;
-    }
-    Ok(())
-}
-
-fn accepted_review_resolved_proposal_id(event: &BrainEvent) -> Option<String> {
-    if event.policy_result != "accept" && event.policy_result != "auto_applied" {
-        return None;
-    }
-    let payload = event.payload_value().ok()?;
-    let decision = payload
-        .get("decision")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let status = payload
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(decision, "accept" | "auto_accept") && status != "accepted" {
-        return None;
-    }
-    payload
-        .get("proposalId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
 
 fn apply_materialized_graph_payload(
@@ -715,9 +611,6 @@ fn sorted_set_difference(left: &BTreeSet<&str>, right: &BTreeSet<&str>) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyprduck_engine_types::{
-        AgentNewClaimPayload, AgentNewEdgePayload, AgentNewMemoryPayload, AgentNewNodePayload,
-    };
 
     #[test]
     fn reconstruct_replays_provider_graph_events_as_latest_overlays() {
@@ -939,456 +832,6 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed parsing graph materialized payload for event `evt-corrupt`"));
-    }
-
-    #[test]
-    fn reconstruct_applies_accepted_proposals_after_provider_overlays() {
-        let workspace_id = "default";
-        let source = SourceRecord {
-            source_id: "source-a".into(),
-            workspace_id: workspace_id.into(),
-            original_path: "/tmp/source-a.pdf".into(),
-            source_path: "/tmp/source-a.pdf".into(),
-            markdown_path: "/tmp/source-a.md".into(),
-            format: "pdf".into(),
-            status: "ingested".into(),
-            page_count: 1,
-            description: String::new(),
-            user_context: String::new(),
-            ingest_instruction: String::new(),
-            updated_at: 1,
-        };
-        let evidence = EvidenceRef {
-            id: "ev-source-a".into(),
-            page_label: "Page 1".into(),
-            page_index: Some(0),
-            snippet: "Source A evidence.".into(),
-            source_path: Some(source.source_path.clone()),
-            source_id: Some(source.source_id.clone()),
-            markdown_path: Some(source.markdown_path.clone()),
-            image_path: None,
-            provenance: Some("test".into()),
-        };
-        let source_node = BrainNodeRecord {
-            node_id: "source:source-a".into(),
-            kind: BrainNodeKind::Source,
-            label: "source-a.pdf".into(),
-            scope: BrainScope::Project,
-            aliases: Vec::new(),
-            evidence_ids: vec![evidence.id.clone()],
-            source_ids: vec![source.source_id.clone()],
-            confidence: Some(1.0),
-            updated_at: 1,
-        };
-        let provider_concept = BrainNodeRecord {
-            node_id: "concept-shared".into(),
-            kind: BrainNodeKind::Concept,
-            label: "Provider Label".into(),
-            scope: BrainScope::Project,
-            aliases: Vec::new(),
-            evidence_ids: vec![evidence.id.clone()],
-            source_ids: vec![source.source_id.clone()],
-            confidence: Some(0.8),
-            updated_at: 100,
-        };
-        let proposal = BrainUpdateProposal {
-            proposal_id: "proposal-user-label".into(),
-            workspace_id: workspace_id.into(),
-            kind: BrainProposalKind::Node,
-            status: BrainProposalStatus::Accepted,
-            actor: BrainActor {
-                actor_type: BrainActorType::User,
-                actor_id: "local-user".into(),
-            },
-            scope: BrainScope::Project,
-            title: "Rename shared concept".into(),
-            body: "Use the user approved label.".into(),
-            target_node_id: None,
-            target_source_id: None,
-            relation_kind: None,
-            source_refs: vec![source.source_id.clone()],
-            node_refs: vec!["concept-shared".into()],
-            evidence_refs: vec![evidence.id.clone()],
-            proposal_payload: Some(AgentGraphProposalPayload::NewNode {
-                node: AgentNewNodePayload {
-                    label: "User Approved Label".into(),
-                    kind: BrainNodeKind::Concept,
-                    source_path: source.source_path.clone(),
-                    node_id: Some("concept-shared".into()),
-                    aliases: Vec::new(),
-                    source_refs: vec![source.source_id.clone()],
-                    evidence_refs: vec![evidence.id.clone()],
-                    reason: None,
-                },
-            }),
-            created_at: 200,
-        };
-        let base_event = test_graph_event(TestGraphEventInput {
-            workspace_id,
-            event_id: "evt-base",
-            operation_type: "graph_materialized",
-            generated_at: 1,
-            sources: std::slice::from_ref(&source),
-            nodes: std::slice::from_ref(&source_node),
-            relations: &[],
-            evidence: std::slice::from_ref(&evidence),
-        });
-        let provider_event = test_graph_event(TestGraphEventInput {
-            workspace_id,
-            event_id: "evt-provider",
-            operation_type: "source_graph_build",
-            generated_at: 100,
-            sources: std::slice::from_ref(&source),
-            nodes: &[source_node, provider_concept],
-            relations: &[],
-            evidence: std::slice::from_ref(&evidence),
-        });
-        let proposal_event = BrainEvent {
-            event_id: "evt-proposal-user-label".into(),
-            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-            workspace_id: workspace_id.into(),
-            scope: BrainScope::Project,
-            event_type: BrainEventKind::NodeProposed,
-            operation_type: Some("new_node".into()),
-            actor: proposal.actor.clone(),
-            source_refs: proposal.source_refs.clone(),
-            source_markdown_refs: Vec::new(),
-            node_refs: proposal.node_refs.clone(),
-            relation_refs: Vec::new(),
-            claim_refs: Vec::new(),
-            memory_refs: Vec::new(),
-            target_node_ids: proposal.node_refs.clone(),
-            target_edge_ids: Vec::new(),
-            target_claim_ids: Vec::new(),
-            target_memory_ids: Vec::new(),
-            evidence_refs: proposal.evidence_refs.clone(),
-            payload_json: serde_json::to_string(&proposal).expect("proposal payload"),
-            causality: BrainEventCausality::default(),
-            confidence: None,
-            policy_result: "auto_applied".into(),
-            created_at: 200,
-        };
-        let events = vec![
-            base_event.clone(),
-            provider_event.clone(),
-            proposal_event.clone(),
-        ];
-
-        let replay =
-            reconstruct_brain_snapshot_from_events(workspace_id, &events, None, None, None)
-                .expect("reconstruct graph");
-
-        let concept = replay
-            .snapshot
-            .nodes
-            .iter()
-            .find(|node| node.node_id == "concept-shared")
-            .expect("shared concept");
-        assert_eq!(concept.label, "User Approved Label");
-
-        let temp = tempfile::tempdir().expect("temp dir");
-        let workspace_root = temp.path().join(workspace_id);
-        ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure repo dirs");
-        write_json_pretty(
-            &workspace_root
-                .join("reviews/proposed-updates")
-                .join("proposal-user-label.json"),
-            &proposal,
-        )
-        .expect("write accepted proposal");
-        let mut materialized_input = empty_replayed_brain_snapshot(workspace_id);
-        materialized_input.generated_at = 1;
-        materialized_input.sources = vec![source];
-        materialized_input.evidence = vec![evidence];
-        materialized_input.events = vec![provider_event];
-        materialized_input.nodes = replay
-            .snapshot
-            .nodes
-            .iter()
-            .filter(|node| node.kind == BrainNodeKind::Source)
-            .cloned()
-            .collect();
-        let effective = compute_effective_brain_snapshot(&workspace_root, &materialized_input)
-            .expect("compute materialized snapshot");
-        let materialized_concept = effective
-            .nodes
-            .iter()
-            .find(|node| node.node_id == "concept-shared")
-            .expect("materialized shared concept");
-        assert_eq!(materialized_concept.label, concept.label);
-    }
-
-    #[test]
-    fn reconstruct_and_materialization_match_accepted_proposal_kinds() {
-        let workspace_id = "default";
-        let source = SourceRecord {
-            source_id: "source-a".into(),
-            workspace_id: workspace_id.into(),
-            original_path: "/tmp/source-a.pdf".into(),
-            source_path: "/tmp/source-a.pdf".into(),
-            markdown_path: "/tmp/source-a.md".into(),
-            format: "pdf".into(),
-            status: "ingested".into(),
-            page_count: 1,
-            description: String::new(),
-            user_context: String::new(),
-            ingest_instruction: String::new(),
-            updated_at: 1,
-        };
-        let evidence = EvidenceRef {
-            id: "ev-source-a".into(),
-            page_label: "Page 1".into(),
-            page_index: Some(0),
-            snippet: "Source A evidence.".into(),
-            source_path: Some(source.source_path.clone()),
-            source_id: Some(source.source_id.clone()),
-            markdown_path: Some(source.markdown_path.clone()),
-            image_path: None,
-            provenance: Some("test".into()),
-        };
-        let source_node = BrainNodeRecord {
-            node_id: "source:source-a".into(),
-            kind: BrainNodeKind::Source,
-            label: "source-a.pdf".into(),
-            scope: BrainScope::Project,
-            aliases: Vec::new(),
-            evidence_ids: vec![evidence.id.clone()],
-            source_ids: vec![source.source_id.clone()],
-            confidence: Some(1.0),
-            updated_at: 1,
-        };
-        let concept_a = provider_test_concept("concept-a", &source, &evidence, 1);
-        let concept_b = provider_test_concept("concept-b", &source, &evidence, 1);
-        let base_event = test_graph_event(TestGraphEventInput {
-            workspace_id,
-            event_id: "evt-base",
-            operation_type: "graph_materialized",
-            generated_at: 1,
-            sources: std::slice::from_ref(&source),
-            nodes: &[source_node.clone(), concept_a.clone(), concept_b.clone()],
-            relations: &[],
-            evidence: std::slice::from_ref(&evidence),
-        });
-        let proposals = vec![
-            accepted_test_proposal(AcceptedTestProposalInput {
-                workspace_id,
-                proposal_id: "proposal-claim",
-                kind: BrainProposalKind::Claim,
-                title: "Accepted claim",
-                body: "Claim accepted by user.",
-                source_refs: vec![source.source_id.clone()],
-                node_refs: vec!["concept-a".into()],
-                evidence_refs: vec![evidence.id.clone()],
-                target_node_id: None,
-                proposal_payload: Some(AgentGraphProposalPayload::NewClaim {
-                    claim: AgentNewClaimPayload {
-                        statement: "Claim accepted by user.".into(),
-                        source_path: source.source_path.clone(),
-                        claim_id: Some("claim-parity".into()),
-                        topic_refs: vec!["concept-a".into()],
-                        source_refs: vec![source.source_id.clone()],
-                        evidence_refs: vec![evidence.id.clone()],
-                        reason: None,
-                    },
-                }),
-                created_at: 10,
-            }),
-            accepted_test_proposal(AcceptedTestProposalInput {
-                workspace_id,
-                proposal_id: "proposal-link",
-                kind: BrainProposalKind::Link,
-                title: "Accepted relation",
-                body: "Concept A relates to concept B.",
-                source_refs: vec![source.source_id.clone()],
-                node_refs: vec!["concept-a".into()],
-                evidence_refs: vec![evidence.id.clone()],
-                target_node_id: Some("concept-b".into()),
-                proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
-                    edge: AgentNewEdgePayload {
-                        source_node_id: "concept-a".into(),
-                        target_node_id: "concept-b".into(),
-                        kind: BrainRelationKind::RelatedTo,
-                        label: "relates to".into(),
-                        source_path: source.source_path.clone(),
-                        edge_id: Some("relation-parity".into()),
-                        source_refs: vec![source.source_id.clone()],
-                        evidence_refs: vec![evidence.id.clone()],
-                        reason: None,
-                    },
-                }),
-                created_at: 11,
-            }),
-            accepted_test_proposal(AcceptedTestProposalInput {
-                workspace_id,
-                proposal_id: "proposal-wiki",
-                kind: BrainProposalKind::WikiPage,
-                title: "Accepted wiki page",
-                body: "Wiki page accepted by user.",
-                source_refs: vec![source.source_id.clone()],
-                node_refs: vec!["concept-a".into()],
-                evidence_refs: vec![evidence.id.clone()],
-                target_node_id: Some("concept-a".into()),
-                proposal_payload: None,
-                created_at: 12,
-            }),
-            accepted_test_proposal(AcceptedTestProposalInput {
-                workspace_id,
-                proposal_id: "proposal-memory",
-                kind: BrainProposalKind::Memory,
-                title: "Accepted memory",
-                body: "Memory accepted by user.",
-                source_refs: vec![source.source_id.clone()],
-                node_refs: Vec::new(),
-                evidence_refs: vec![evidence.id.clone()],
-                target_node_id: None,
-                proposal_payload: Some(AgentGraphProposalPayload::NewMemory {
-                    memory: AgentNewMemoryPayload {
-                        title: "Accepted memory".into(),
-                        body: "Memory accepted by user.".into(),
-                        source_path: source.source_path.clone(),
-                        memory_id: Some("memory-parity".into()),
-                        source_refs: vec![source.source_id.clone()],
-                        evidence_refs: vec![evidence.id.clone()],
-                        reason: None,
-                    },
-                }),
-                created_at: 13,
-            }),
-        ];
-        let mut events = vec![base_event.clone()];
-        for proposal in &proposals {
-            let mut event = brain_event_for_proposal(proposal).expect("proposal event");
-            event.policy_result = "auto_applied".into();
-            events.push(event);
-            if proposal.kind == BrainProposalKind::Memory {
-                events.push(brain_memory_accepted_event(proposal).expect("memory accepted event"));
-            }
-        }
-        let replay =
-            reconstruct_brain_snapshot_from_events(workspace_id, &events, None, None, None)
-                .expect("reconstruct proposal parity snapshot");
-
-        let temp = tempfile::tempdir().expect("temp dir");
-        let workspace_root = temp.path().join(workspace_id);
-        ensure_materialized_brain_repo_dirs(&workspace_root).expect("ensure repo dirs");
-        for proposal in &proposals {
-            write_json_pretty(
-                &workspace_root
-                    .join("reviews/proposed-updates")
-                    .join(format!("{}.json", proposal.proposal_id)),
-                proposal,
-            )
-            .expect("write accepted proposal");
-        }
-        write_json_pretty(
-            &workspace_root.join("memory/records.json"),
-            &[memory_record_for_proposal(
-                proposals
-                    .iter()
-                    .find(|proposal| proposal.kind == BrainProposalKind::Memory)
-                    .expect("memory proposal"),
-            )],
-        )
-        .expect("write memory record");
-        let mut materialized_input = empty_replayed_brain_snapshot(workspace_id);
-        materialized_input.generated_at = 1;
-        materialized_input.sources = vec![source];
-        materialized_input.evidence = vec![evidence];
-        materialized_input.nodes = vec![source_node, concept_a, concept_b];
-        materialized_input.events = vec![base_event];
-        let effective = compute_effective_brain_snapshot(&workspace_root, &materialized_input)
-            .expect("compute materialized proposal parity snapshot");
-
-        assert_eq!(
-            replay
-                .snapshot
-                .claims
-                .iter()
-                .find(|claim| claim.claim_id == "claim-parity")
-                .map(|claim| claim.statement.as_str()),
-            effective
-                .claims
-                .iter()
-                .find(|claim| claim.claim_id == "claim-parity")
-                .map(|claim| claim.statement.as_str())
-        );
-        assert_eq!(
-            replay
-                .snapshot
-                .relations
-                .iter()
-                .find(|relation| relation.relation_id == "relation-parity")
-                .map(|relation| relation.label.as_str()),
-            effective
-                .relations
-                .iter()
-                .find(|relation| relation.relation_id == "relation-parity")
-                .map(|relation| relation.label.as_str())
-        );
-        assert_eq!(
-            replay
-                .snapshot
-                .wiki_pages
-                .iter()
-                .find(|page| page.title == "Accepted wiki page")
-                .map(|page| page.body.as_str()),
-            effective
-                .wiki_pages
-                .iter()
-                .find(|page| page.title == "Accepted wiki page")
-                .map(|page| page.body.as_str())
-        );
-        assert_eq!(
-            replay
-                .snapshot
-                .memories
-                .iter()
-                .find(|memory| memory.memory_id == "memory-parity")
-                .map(|memory| memory.body.as_str()),
-            effective
-                .memories
-                .iter()
-                .find(|memory| memory.memory_id == "memory-parity")
-                .map(|memory| memory.body.as_str())
-        );
-    }
-
-    struct AcceptedTestProposalInput {
-        workspace_id: &'static str,
-        proposal_id: &'static str,
-        kind: BrainProposalKind,
-        title: &'static str,
-        body: &'static str,
-        source_refs: Vec<String>,
-        node_refs: Vec<String>,
-        evidence_refs: Vec<String>,
-        target_node_id: Option<String>,
-        proposal_payload: Option<AgentGraphProposalPayload>,
-        created_at: u64,
-    }
-
-    fn accepted_test_proposal(input: AcceptedTestProposalInput) -> BrainUpdateProposal {
-        BrainUpdateProposal {
-            proposal_id: input.proposal_id.into(),
-            workspace_id: input.workspace_id.into(),
-            kind: input.kind,
-            status: BrainProposalStatus::Accepted,
-            actor: BrainActor {
-                actor_type: BrainActorType::User,
-                actor_id: "local-user".into(),
-            },
-            scope: BrainScope::Project,
-            title: input.title.into(),
-            body: input.body.into(),
-            target_node_id: input.target_node_id,
-            target_source_id: None,
-            relation_kind: None,
-            source_refs: input.source_refs,
-            node_refs: input.node_refs,
-            evidence_refs: input.evidence_refs,
-            proposal_payload: input.proposal_payload,
-            created_at: input.created_at,
-        }
     }
 
     fn provider_test_concept(

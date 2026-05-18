@@ -5,20 +5,16 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub use hyprduck_knowledge::{
-    AgentGraphProposalPayload, AgentGraphProposalValidationCode, AgentGraphProposalValidationError,
-    AgentGraphProposalValidationIssue, AgentNewClaimPayload, AgentNewEdgePayload,
-    AgentNewMemoryPayload, AgentNewNodePayload, AnswerResponse, AnswerStatus, BrainActor,
-    BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, BrainNodeKind,
-    BrainNodeRecord, BrainProposalKind, BrainProposalStatus, BrainRelationKind,
-    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainUpdateProposal, ClaimRecord,
-    CorrectionAction, CorrectionKind, EntityRecord, EvidenceRef, GraphNodeDetail, GraphNodeKind,
-    GraphNodePosition, GraphNodeSummary, KnowledgeProject, MemoryRecord, PolicyResult,
-    ProjectOverview, ProjectStatus, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    SourceBacking, SourceFormat, SourceRecord, SourceStatus, StructuredExtractionArtifact,
-    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
-    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
-    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
-    BRAIN_EVENT_SCHEMA_VERSION,
+    AnswerResponse, AnswerStatus, BrainActor, BrainActorType, BrainEvent, BrainEventCausality,
+    BrainEventKind, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
+    BrainRepoSnapshot, BrainScope, ClaimRecord, CorrectionAction, CorrectionKind, EntityRecord,
+    EvidenceRef, GraphNodeDetail, GraphNodeKind, GraphNodePosition, GraphNodeSummary,
+    KnowledgeProject, MemoryRecord, PolicyResult, ProjectOverview, ProjectStatus,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SourceBacking, SourceFormat,
+    SourceRecord, SourceStatus, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, BRAIN_EVENT_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,9 +34,6 @@ pub enum EngineCommand {
     ReadGraphSnapshot,
     ReconstructBrain,
     GetContextPack,
-    ProposeBrainUpdate,
-    ListBrainReviewItems,
-    ResolveBrainReviewItem,
     GetBrainHealth,
     LoadConfig,
     SaveConfig,
@@ -159,7 +152,7 @@ pub enum IngestStatus {
     Rendering,
     Ingesting,
     Ingested,
-    NeedsReview,
+    Partial,
     Failed,
     Stale,
 }
@@ -595,108 +588,11 @@ pub struct GetContextPackResponseData {
     pub context_pack: BrainContextPack,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProposeBrainUpdateRequest {
-    pub scope: BrainReadScope,
-    pub kind: BrainProposalKind,
-    pub title: String,
-    pub body: String,
-    pub actor: BrainActor,
-    #[serde(default)]
-    pub target_node_id: Option<String>,
-    #[serde(default)]
-    pub target_source_id: Option<SourceId>,
-    #[serde(default)]
-    pub relation_kind: Option<BrainRelationKind>,
-    #[serde(default)]
-    pub source_description: Option<String>,
-    #[serde(default)]
-    pub source_user_context: Option<String>,
-    #[serde(default)]
-    pub source_ingest_instruction: Option<String>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub node_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub proposal_payload: Option<AgentGraphProposalPayload>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProposeBrainUpdateResponseData {
-    pub proposal: BrainUpdateProposal,
-    pub event: BrainEvent,
-    pub proposal_path: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BrainReviewDecision {
-    Accept,
-    Reject,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrainHealthStatus {
     Clean,
     AttentionNeeded,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrainReviewItem {
-    pub review_id: String,
-    pub proposal_id: String,
-    pub workspace_id: WorkspaceId,
-    pub kind: BrainProposalKind,
-    pub status: BrainProposalStatus,
-    pub title: String,
-    pub body: String,
-    pub proposal_path: String,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-    #[serde(default)]
-    pub node_refs: Vec<String>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    pub created_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListBrainReviewItemsRequest {
-    pub scope: BrainReadScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListBrainReviewItemsResponseData {
-    #[serde(default)]
-    pub items: Vec<BrainReviewItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveBrainReviewItemRequest {
-    pub scope: BrainReadScope,
-    pub proposal_id: String,
-    pub decision: BrainReviewDecision,
-    pub actor: BrainActor,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveBrainReviewItemResponseData {
-    pub proposal: BrainUpdateProposal,
-    pub event: BrainEvent,
-    pub proposal_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,8 +606,6 @@ pub struct GetBrainHealthRequest {
 pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
-    #[serde(default)]
-    pub review_items: Vec<BrainReviewItem>,
     #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
 }
@@ -865,9 +759,6 @@ pub enum EngineRequest {
     ReadGraphSnapshot(ReadGraphSnapshotRequest),
     ReconstructBrain(ReconstructBrainRequest),
     GetContextPack(GetContextPackRequest),
-    ProposeBrainUpdate(Box<ProposeBrainUpdateRequest>),
-    ListBrainReviewItems(ListBrainReviewItemsRequest),
-    ResolveBrainReviewItem(ResolveBrainReviewItemRequest),
     GetBrainHealth(GetBrainHealthRequest),
     LoadConfig(LoadConfigRequest),
     SaveConfig(SaveConfigRequest),
@@ -1411,39 +1302,6 @@ mod tests {
                 scope: scope.clone(),
                 query: "agent context".into(),
                 budget: Some(8000),
-            }),
-            EngineRequest::ProposeBrainUpdate(Box::new(ProposeBrainUpdateRequest {
-                scope: scope.clone(),
-                kind: BrainProposalKind::Memory,
-                title: "Remember project decision".into(),
-                body: "The agent should retain this decision for later sessions.".into(),
-                actor: BrainActor {
-                    actor_type: BrainActorType::Agent,
-                    actor_id: "hyprduck-cli".into(),
-                },
-                target_node_id: None,
-                target_source_id: None,
-                relation_kind: None,
-                source_description: None,
-                source_user_context: None,
-                source_ingest_instruction: None,
-                source_refs: vec![],
-                node_refs: vec!["project-hyprduck".into()],
-                evidence_refs: vec![],
-                proposal_payload: None,
-            })),
-            EngineRequest::ListBrainReviewItems(ListBrainReviewItemsRequest {
-                scope: scope.clone(),
-            }),
-            EngineRequest::ResolveBrainReviewItem(ResolveBrainReviewItemRequest {
-                scope: scope.clone(),
-                proposal_id: "proposal-123".into(),
-                decision: BrainReviewDecision::Accept,
-                actor: BrainActor {
-                    actor_type: BrainActorType::User,
-                    actor_id: "local-user".into(),
-                },
-                reason: Some("Looks correct".into()),
             }),
             EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
         ];

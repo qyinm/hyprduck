@@ -900,7 +900,7 @@ pub(crate) fn build_answer_for_detail(
                         kind: SuggestedActionKind::InspectEvidence,
                         label: "Inspect evidence".into(),
                         description:
-                            "Review the cited snippets before trusting the workspace-wide answer."
+                            "Review the cited snippets before using the workspace-wide answer."
                                 .into(),
                     },
                     SuggestedAction {

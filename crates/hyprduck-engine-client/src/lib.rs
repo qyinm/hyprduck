@@ -12,16 +12,14 @@ use hyprduck_engine_types::{
     ApplyCorrectionResponseData, BrainContextPack, CheckReadinessRequest, CompileProjectRequest,
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, KnowledgeProject,
-    ListBrainReviewItemsRequest, ListBrainReviewItemsResponseData, LoadConfigRequest,
-    LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest,
-    ParseResponseData, ProposeBrainUpdateRequest, ProposeBrainUpdateResponseData,
-    ReadGraphHistoryRequest, ReadGraphHistoryResponseData, ReadGraphSnapshotRequest,
-    ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    ResolveBrainReviewItemRequest, ResolveBrainReviewItemResponseData,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
-    SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
+    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress,
+    ParseRequest, ParseResponseData, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
+    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RuntimeReadinessResponseData, SaveConfigRequest,
+    SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData, ValidateProviderRequest,
+    ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -60,18 +58,6 @@ pub trait EngineClient {
         &self,
         request: hyprduck_engine_types::GetContextPackRequest,
     ) -> Result<BrainContextPack>;
-    fn propose_brain_update(
-        &self,
-        request: ProposeBrainUpdateRequest,
-    ) -> Result<ProposeBrainUpdateResponseData>;
-    fn list_brain_review_items(
-        &self,
-        request: ListBrainReviewItemsRequest,
-    ) -> Result<ListBrainReviewItemsResponseData>;
-    fn resolve_brain_review_item(
-        &self,
-        request: ResolveBrainReviewItemRequest,
-    ) -> Result<ResolveBrainReviewItemResponseData>;
     fn get_brain_health(
         &self,
         request: GetBrainHealthRequest,
@@ -380,39 +366,6 @@ impl EngineClient for SubprocessEngineClient {
             None,
         )?;
         Ok(response.context_pack)
-    }
-
-    fn propose_brain_update(
-        &self,
-        request: ProposeBrainUpdateRequest,
-    ) -> Result<ProposeBrainUpdateResponseData> {
-        self.run_command::<ProposeBrainUpdateResponseData, ProposeBrainUpdateResponseData>(
-            EngineRequest::ProposeBrainUpdate(Box::new(request)),
-            EngineCommand::ProposeBrainUpdate,
-            None,
-        )
-    }
-
-    fn list_brain_review_items(
-        &self,
-        request: ListBrainReviewItemsRequest,
-    ) -> Result<ListBrainReviewItemsResponseData> {
-        self.run_command::<ListBrainReviewItemsResponseData, ListBrainReviewItemsResponseData>(
-            EngineRequest::ListBrainReviewItems(request),
-            EngineCommand::ListBrainReviewItems,
-            None,
-        )
-    }
-
-    fn resolve_brain_review_item(
-        &self,
-        request: ResolveBrainReviewItemRequest,
-    ) -> Result<ResolveBrainReviewItemResponseData> {
-        self.run_command::<ResolveBrainReviewItemResponseData, ResolveBrainReviewItemResponseData>(
-            EngineRequest::ResolveBrainReviewItem(request),
-            EngineCommand::ResolveBrainReviewItem,
-            None,
-        )
     }
 
     fn get_brain_health(

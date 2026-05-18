@@ -134,10 +134,7 @@ interface RuntimeReadinessResponseData {
   checks: RuntimeReadinessCheck[];
 }
 
-type BrainProposalKind = "node" | "memory" | "claim" | "link" | "observation" | "source_note" | "wiki_page";
-type BrainProposalStatus = "pending_review" | "accepted" | "rejected";
 type BrainHealthStatus = "clean" | "attention_needed";
-type BrainReviewDecision = "accept" | "reject";
 type WorkspaceLoadStatus = "idle" | "loading" | "ready" | "fallback" | "error";
 
 interface WorkspaceLoadState {
@@ -149,21 +146,6 @@ interface WorkspaceLoadResult {
   envelope: WorkspaceProjectEnvelope;
   source: "materialized" | "legacy";
   fallbackReason?: string | null;
-}
-
-interface BrainReviewItem {
-  reviewId: string;
-  proposalId: string;
-  workspaceId: string;
-  kind: BrainProposalKind;
-  status: BrainProposalStatus;
-  title: string;
-  body: string;
-  proposalPath: string;
-  sourceRefs: string[];
-  nodeRefs: string[];
-  evidenceRefs: string[];
-  createdAt: number;
 }
 
 interface BrainActor {
@@ -189,7 +171,6 @@ interface BrainEvent {
 interface BrainHealthResponseData {
   status: BrainHealthStatus;
   attentionCount: number;
-  reviewItems: BrainReviewItem[];
   recentEvents: BrainEvent[];
 }
 
@@ -300,40 +281,6 @@ const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
 };
 
 const WEB_MOCK_NOW_SECONDS = Math.floor(Date.now() / 1000);
-const WEB_MOCK_REVIEW_ITEMS: BrainReviewItem[] = [
-  {
-    reviewId: "proposal-web-claim",
-    proposalId: "proposal-web-claim",
-    workspaceId: "web-preview",
-    kind: "claim",
-    status: "pending_review",
-    title: "Claim needs source-backed approval",
-    body: "Imported PDF notes say HyprDuck should keep agent memory updates auditable before they become trusted graph state.",
-    proposalPath:
-      "~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/proposal-web-claim.json",
-    sourceRefs: ["preview"],
-    nodeRefs: ["source:preview"],
-    evidenceRefs: ["ev-page-1"],
-    createdAt: WEB_MOCK_NOW_SECONDS - 300,
-  },
-  {
-    reviewId: "proposal-web-wiki",
-    proposalId: "proposal-web-wiki",
-    workspaceId: "web-preview",
-    kind: "wiki_page",
-    status: "pending_review",
-    title: "Wiki save-back is pending",
-    body: "Agent-authored wiki pages should remain visible in History before HyprDuck saves them into the local brain repo.",
-    proposalPath:
-      "~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/proposal-web-wiki.json",
-    sourceRefs: ["preview"],
-    nodeRefs: [],
-    evidenceRefs: [],
-    createdAt: WEB_MOCK_NOW_SECONDS - 120,
-  },
-];
-
-let webMockReviewItems = WEB_MOCK_REVIEW_ITEMS.map((item) => ({ ...item }));
 let webMockRecentEvents: BrainEvent[] = [
   {
     eventId: "evt-web-source-imported",
@@ -415,9 +362,8 @@ function deriveWebReadiness(): RuntimeReadinessResponseData {
 
 function createWebBrainHealth(): BrainHealthResponseData {
   return {
-    status: webMockReviewItems.length > 0 ? "attention_needed" : "clean",
-    attentionCount: webMockReviewItems.length,
-    reviewItems: webMockReviewItems.map((item) => ({ ...item })),
+    status: "clean",
+    attentionCount: 0,
     recentEvents: webMockRecentEvents.map((event) => ({ ...event })),
   };
 }
@@ -716,98 +662,6 @@ function createWebMockApi(): HyprDuckDesktopApi {
         }
         case "brain_health": {
           return createWebBrainHealth() as T;
-        }
-        case "resolve_brain_review": {
-          const proposalId = String(args.proposal_id ?? "");
-          const decision = String(args.decision ?? "reject") as BrainReviewDecision;
-          const resolved = webMockReviewItems.find(
-            (item) => item.proposalId === proposalId,
-          );
-          webMockReviewItems = webMockReviewItems.filter(
-            (item) => item.proposalId !== proposalId,
-          );
-          appendWebBrainEvent({
-            eventId: `evt-web-resolved-${Date.now()}`,
-            workspaceId: resolved?.workspaceId ?? "web-preview",
-            eventType: "review_resolved",
-            actor: { actorType: "user", actorId: "local-user" },
-            sourceRefs: resolved?.sourceRefs ?? [],
-            nodeRefs: resolved?.nodeRefs ?? [],
-            relationRefs: [],
-            evidenceRefs: resolved?.evidenceRefs ?? [],
-            payloadJson: JSON.stringify({
-              proposalId,
-              decision,
-              reason: args.reason ?? null,
-            }),
-            confidence: null,
-            policyResult: decision,
-            createdAt: Math.floor(Date.now() / 1000),
-          });
-          return {
-            proposal: {
-              proposalId,
-              status: decision === "accept" ? "accepted" : "rejected",
-            },
-          } as T;
-        }
-        case "propose_brain_update": {
-          const kind = String(args.kind ?? "memory") as BrainProposalKind;
-          const proposalId = `proposal-web-${Date.now()}`;
-          const reviewable =
-            kind === "node" || kind === "claim" || kind === "link" || kind === "wiki_page";
-          if (reviewable) {
-            webMockReviewItems = [
-              {
-                reviewId: proposalId,
-                proposalId,
-                workspaceId: "web-preview",
-                kind,
-                status: "pending_review",
-                title: String(args.title ?? "Untitled proposal"),
-                body: String(args.body ?? ""),
-                proposalPath: `~/Library/Application Support/HyprDuck/web-preview/reviews/proposed-updates/${proposalId}.json`,
-                sourceRefs: (args.source_refs as string[] | undefined) ?? [],
-                nodeRefs: (args.node_refs as string[] | undefined) ?? [],
-                evidenceRefs: (args.evidence_refs as string[] | undefined) ?? [],
-                createdAt: Math.floor(Date.now() / 1000),
-              },
-              ...webMockReviewItems,
-            ];
-          }
-          appendWebBrainEvent({
-            eventId: `evt-web-proposed-${Date.now()}`,
-            workspaceId: "web-preview",
-            eventType:
-              kind === "node"
-                ? "node_proposed"
-                : kind === "claim"
-                  ? "claim_proposed"
-                  : kind === "link"
-                    ? "link_proposed"
-                    : kind === "wiki_page"
-                      ? "wiki_page_proposed"
-                      : "memory_proposed",
-            actor: { actorType: "user", actorId: "local-user" },
-            sourceRefs: (args.source_refs as string[] | undefined) ?? [],
-            nodeRefs: (args.node_refs as string[] | undefined) ?? [],
-            relationRefs: [],
-            evidenceRefs: (args.evidence_refs as string[] | undefined) ?? [],
-            payloadJson: JSON.stringify({
-              title: args.title,
-              body: args.body,
-              proposalPayload: args.proposal_payload ?? null,
-            }),
-            confidence: null,
-            policyResult: reviewable ? "needs_review" : "auto_applied",
-            createdAt: Math.floor(Date.now() / 1000),
-          });
-          return {
-            proposal: {
-              proposalId,
-              status: reviewable ? "pending_review" : "accepted",
-            },
-          } as T;
         }
         case "get_models_for_provider": {
           const key = String(
@@ -1241,21 +1095,21 @@ function modelTaskGuidance(providerId: string, modelId: string) {
       return {
         tone: "warning",
         title: "Local model caution",
-        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before trusting durable graph writes.",
+        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before using generated graph output.",
       };
     }
 
     return {
       tone: "local",
       title: "Local-first path",
-      body: "Good for private parsing and retrieval checks. Keep risky merges and project memory writes on review until the golden corpus is clean.",
+      body: "Good for private parsing and retrieval checks. Keep generated merges and project memory output disabled until the golden corpus is clean.",
     };
   }
 
   return {
     tone: "hosted",
     title: "Hosted quality path",
-    body: "Recommended for high-recall page parsing, structured extraction, and merge review when privacy policy allows hosted inference.",
+    body: "Recommended for high-recall page parsing, structured extraction, and merge verification when privacy policy allows hosted inference.",
   };
 }
 
@@ -1649,7 +1503,7 @@ function SettingsPanel(props: {
             <h2 className="text-base font-semibold mb-1">AI provider</h2>
             <p className="text-sm text-muted-foreground mb-4">
               Select the provider and model for parsing, extraction, merge
-              review, and grounded answer workflows.
+              verification, and grounded answer workflows.
             </p>
             <div className="grid gap-4 grid-cols-2">
               <div className="space-y-2">
@@ -1911,23 +1765,10 @@ function formatEventType(eventType: string): string {
 }
 
 function isHistoryActivityEvent(event: BrainEvent): boolean {
-  return ![
-    "node_proposed",
-    "memory_proposed",
-    "claim_proposed",
-    "link_proposed",
-    "source_note_proposed",
-    "wiki_page_proposed",
-    "review_created",
-    "review_resolved",
-  ].includes(event.eventType);
+  return Boolean(event.eventType);
 }
 
 function formatPolicyResult(policyResult: string): string {
-  if (policyResult === "needs_review") {
-    return "pending";
-  }
-
   return policyResult
     .split("_")
     .filter(Boolean)

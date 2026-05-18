@@ -1,6 +1,5 @@
 use super::*;
 use crate::provider::{ollama_models_endpoint, ProviderKind};
-use hyprduck_engine_types::AgentNewEdgePayload;
 
 static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -855,7 +854,6 @@ fn brain_health_is_clean_for_empty_workspace() {
 
     assert_eq!(health.status, BrainHealthStatus::Clean);
     assert_eq!(health.attention_count, 0);
-    assert!(health.review_items.is_empty());
     assert!(health.recent_events.is_empty());
 }
 
@@ -916,8 +914,8 @@ fn brain_maintenance_preserves_existing_wiki_page_when_adding_missing_manifest_r
         handle_get_brain_health(GetBrainHealthRequest { scope }).expect("health runs maintenance");
     assert_eq!(health.status, BrainHealthStatus::Clean);
     let report: BrainMaintenanceReport =
-        read_json_artifact(&workspace_root.join("reviews/lint-reports/latest.json"))
-            .expect("read lint report");
+        read_json_artifact(&workspace_root.join("state/maintenance-latest.json"))
+            .expect("read maintenance report");
     assert!(report.repairs.contains(&existing_wiki_path));
     assert!(!report
         .issues
@@ -963,36 +961,60 @@ fn brain_writer_bootstraps_missing_memory_and_events_files() {
     fs::remove_file(workspace_root.join("memory/records.json")).expect("remove memory file");
     fs::remove_file(workspace_root.join("events/brain_events.jsonl")).expect("remove events");
 
-    let scope = BrainReadScope {
+    let memory = MemoryRecord {
+        memory_id: "memory-bootstrap".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        root_dir: Some(temp.path().display().to_string()),
-    };
-    let response = handle_propose_brain_update(ProposeBrainUpdateRequest {
-        scope: scope.clone(),
-        kind: BrainProposalKind::Memory,
+        scope: BrainScope::Project,
         title: "Remember bootstrap behavior".into(),
         body: "Missing memory and event files should be recreated safely.".into(),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: "claude-code".into(),
-        },
-        target_node_id: None,
-        target_source_id: None,
-        relation_kind: None,
-        source_description: None,
-        source_user_context: None,
-        source_ingest_instruction: None,
         source_refs: Vec::new(),
-        node_refs: Vec::new(),
         evidence_refs: Vec::new(),
-        proposal_payload: None,
-    })
-    .expect("propose memory with missing files");
-    assert_eq!(response.proposal.status, BrainProposalStatus::Accepted);
+        created_at: 42,
+        updated_at: 42,
+    };
+    let writer = BrainWorkspaceWriter::open(workspace_root.clone()).expect("open writer");
+    writer
+        .upsert_memory_record(memory.clone())
+        .expect("write memory with missing file");
+    writer
+        .append_event(&BrainEvent {
+            event_id: "evt-memory-bootstrap".into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::MemoryAccepted,
+            operation_type: Some("memory_recorded".into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "test-agent".into(),
+            },
+            source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
+            node_refs: Vec::new(),
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: vec![memory.memory_id.clone()],
+            target_node_ids: Vec::new(),
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: vec![memory.memory_id.clone()],
+            evidence_refs: Vec::new(),
+            payload_json: serde_json::to_string(&memory).expect("memory payload"),
+            causality: BrainEventCausality::default(),
+            confidence: None,
+            policy_result: "accepted".into(),
+            created_at: 42,
+        })
+        .expect("append memory event");
+    drop(writer);
 
     let memories = read_memory_records(&workspace_root).expect("read bootstrapped memories");
     assert_eq!(memories.len(), 1);
     assert!(workspace_root.join("events/brain_events.jsonl").exists());
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
     let events = handle_read_recent_events(ReadRecentEventsRequest {
         scope,
         limit: Some(10),
@@ -1009,57 +1031,7 @@ fn brain_writer_bootstraps_missing_memory_and_events_files() {
         .events
         .iter()
         .any(|event| event.event_type == BrainEventKind::MemoryAccepted));
-    assert!(events.events.iter().any(|event| {
-        event.event_type == BrainEventKind::GraphMaterialized
-            && event.operation_type.as_deref() == Some("new_memory")
-            && event.policy_result == "auto_applied"
-            && event.target_memory_ids.contains(&memories[0].memory_id)
-    }));
     assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
-}
-
-#[test]
-fn link_proposal_relation_uses_structured_edge_payload_endpoints() {
-    let proposal = BrainUpdateProposal {
-        proposal_id: "proposal-edge".into(),
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        kind: BrainProposalKind::Link,
-        status: BrainProposalStatus::Accepted,
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: "test-agent".into(),
-        },
-        scope: BrainScope::Project,
-        title: "Structured link".into(),
-        body: "The payload carries the concrete relation.".into(),
-        target_node_id: Some("legacy-target".into()),
-        target_source_id: None,
-        relation_kind: None,
-        source_refs: vec!["source-a".into(), "source-b".into()],
-        node_refs: vec!["legacy-source".into()],
-        evidence_refs: vec!["ev-a".into()],
-        proposal_payload: Some(AgentGraphProposalPayload::NewEdge {
-            edge: AgentNewEdgePayload {
-                source_node_id: "payload-source".into(),
-                target_node_id: "payload-target".into(),
-                kind: BrainRelationKind::RelatedTo,
-                label: "Payload edge".into(),
-                source_path: "hyprduck-cli".into(),
-                edge_id: Some("edge-payload".into()),
-                source_refs: vec!["source-b".into()],
-                evidence_refs: vec!["ev-b".into()],
-                reason: None,
-            },
-        }),
-        created_at: 123,
-    };
-
-    let relation = relation_record_for_proposal(&proposal).expect("relation");
-
-    assert_eq!(relation.relation_id, "edge-payload");
-    assert_eq!(relation.source_node_id, "payload-source");
-    assert_eq!(relation.target_node_id, "payload-target");
-    assert_eq!(relation.evidence_ids, vec!["ev-a", "ev-b"]);
 }
 
 #[test]
@@ -1094,77 +1066,6 @@ fn brain_writer_uses_directory_lock_without_pid_file() {
 
     assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
     assert!(workspace_root.join("brain.lock").exists());
-}
-
-#[test]
-fn brain_writer_deduplicates_concurrent_safe_proposals_by_fingerprint() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let markdown = "# Sample import\n\n## Page 1\n\nAgent brain context stays source backed.\n";
-    let markdown_path = temp.path().join("sample.md");
-    fs::write(&markdown_path, markdown).expect("write markdown");
-    let manifest = sample_manifest(&temp);
-    let request = CompileProjectRequest {
-        source_markdown_path: markdown_path.display().to_string(),
-        source_document_path: Some(manifest.source_path.clone()),
-        source_manifest_path: Some(manifest.manifest_path.clone()),
-        workspace_id: Some(DEFAULT_WORKSPACE_ID.into()),
-        source_id: Some(manifest.source_id.clone()),
-        skip_graph_generation: None,
-    };
-    let project = compile_knowledge_project(&request, markdown, Some(&manifest));
-    let store = KnowledgeProjectStore::new(temp.path().join("knowledge.sqlite3"));
-    store
-        .save_project(&project, &request, Some(&manifest))
-        .expect("save source-backed project");
-    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
-    let scope = BrainReadScope {
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        root_dir: Some(temp.path().display().to_string()),
-    };
-    let proposal_request = ProposeBrainUpdateRequest {
-        scope,
-        kind: BrainProposalKind::Memory,
-        title: "Remember duplicate write".into(),
-        body: "The same agent memory should collapse to one memory record.".into(),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: "claude-code".into(),
-        },
-        target_node_id: None,
-        target_source_id: None,
-        relation_kind: None,
-        source_description: None,
-        source_user_context: None,
-        source_ingest_instruction: None,
-        source_refs: vec![manifest.source_id.clone()],
-        node_refs: Vec::new(),
-        evidence_refs: Vec::new(),
-        proposal_payload: None,
-    };
-
-    let handles = (0..8)
-        .map(|_| {
-            let request = proposal_request.clone();
-            std::thread::spawn(move || {
-                handle_propose_brain_update(request).expect("concurrent safe proposal")
-            })
-        })
-        .collect::<Vec<_>>();
-    let responses = handles
-        .into_iter()
-        .map(|handle| handle.join().expect("join concurrent proposal"))
-        .collect::<Vec<_>>();
-    assert!(responses
-        .iter()
-        .all(|response| response.proposal.status == BrainProposalStatus::Accepted));
-
-    let memories = read_memory_records(&workspace_root).expect("read memory records");
-    assert_eq!(memories.len(), 1);
-    assert_eq!(memories[0].title, "Remember duplicate write");
-    let events = read_brain_events_jsonl(&workspace_root.join("events/brain_events.jsonl"))
-        .expect("events remain valid JSONL");
-    assert!(events.len() >= 16);
-    assert!(!workspace_root.join(BRAIN_LOCK_DIRECTORY_NAME).exists());
 }
 
 #[test]
@@ -1352,14 +1253,18 @@ fn source_backed_project_id_uses_manifest_identity() {
         .load_workspace_project(DEFAULT_WORKSPACE_ID)
         .expect("load aggregate")
         .expect("workspace aggregate");
-    assert!(aggregate.details_by_node_id.values().any(|detail| detail
-        .evidence
-        .iter()
-        .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))));
-    assert!(aggregate.details_by_node_id.values().any(|detail| detail
-        .evidence
-        .iter()
-        .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))));
+    assert!(aggregate.details_by_node_id.values().any(|detail| {
+        detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-a"))
+    }));
+    assert!(aggregate.details_by_node_id.values().any(|detail| {
+        detail
+            .evidence
+            .iter()
+            .any(|evidence| evidence.source_id.as_deref() == Some("source-b"))
+    }));
 }
 
 #[test]
