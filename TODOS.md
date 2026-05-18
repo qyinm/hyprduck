@@ -2,14 +2,18 @@
 
 ## Direction
 
-HyprDuck is moving from a document parser into a local-first brain repo for AI agents.
+HyprDuck is moving from a document parser into a local evidence compiler for AI agents.
 
-The parser remains the wedge, but the next product milestone is not "more chat" or "open MCP immediately." The next milestone is making the materialized brain measurable and retrievable: golden-corpus evaluation, local retrieval quality, context-pack hardening, and graph materialization quality.
+The parser remains the wedge, but the next product milestone is not "more chat"
+or a memory OS. The next milestone is proving the reusable cited context loop:
+source pack, evidence index, Context Pack v0, and MCP agent citation quality.
 
 Current roadmap order:
 
 ```text
-1. Team/company brain governance
+1. Context pack demo and agent citation proof
+2. Distribution proof through Claude Code, Codex, and Cursor
+3. Benchmark proof for document-to-agent-context quality
 ```
 
 ---
@@ -56,7 +60,9 @@ Current roadmap order:
 
 **What:** Replace simple substring-style brain search with a local retrieval baseline, then harden `GetContextPack` around that retrieval.
 
-**Why:** Agent-maintained brain value depends on whether agents can receive the right memories, sources, claims, relations, and evidence at the right time. Opening MCP over weak retrieval would freeze a poor external contract too early.
+**Why:** Agent value depends on whether agents can receive the right sources,
+claims, relations, and evidence at the right time. Opening MCP over weak
+retrieval would freeze a poor external contract too early.
 
 **Scope:**
 
@@ -136,67 +142,78 @@ Current roadmap order:
 
 ## P2 - Read-only MCP v0 - Done
 
-**What:** Expose HyprDuck's local brain through a read-only MCP surface after extraction and retrieval stabilize.
+**What:** Expose HyprDuck's local document context through a read-only MCP
+surface after extraction and retrieval stabilize.
 
-**Why:** The product direction is agent-maintained personal/company brain, but the first agent-facing contract should be read-only. Agents should be able to retrieve context before they can write durable memory.
+**Why:** The first agent-facing contract should be read-only. Agents should be
+able to retrieve source/page/evidence-backed context before any future write
+surface is considered.
 
 **Initial tools:**
 
+- `search_documents`
 - `search_brain`
 - `get_context_pack`
 - `read_source`
+- `read_page_evidence`
 - `read_wiki_page`
 - `read_node`
 - `read_recent_events`
+- `read_graph_history`
+- `read_graph_snapshot`
 - `read_health`
 
 **Acceptance:**
 
 - [x] MCP tools return the same evidence-backed IDs as the engine/CLI.
-- [x] Tools cannot mutate brain artifacts.
-- [x] Context packs are useful in Claude Code, Codex, Cursor, or another MCP client.
+- [x] Tools cannot mutate document context artifacts.
 - [x] Tool responses include source/evidence provenance.
 - [x] The contract is documented with examples.
 
 **Effort:** M
 **Priority:** P2
-**Depends on:** Retrieval baseline, context-pack hardening, stable brain repo schema
+**Depends on:** Retrieval baseline, context-pack hardening, stable context pack schema
 
-## P3 - Team/company brain governance
+## P3 - Context pack demo and distribution proof
 
-**What:** Turn personal/project brain scopes into team/company-ready governance.
+**What:** Make a known fixture prove the full loop from import to cited agent
+answer.
 
-**Why:** The desired direction is an agent-maintained personal/company brain. Team/company memory needs source visibility, audit, rollback, and scope boundaries before it can be used confidently.
+**Why:** HyprDuck needs proof that one local ingest can be reused by Claude Code,
+Codex, Cursor, or another MCP-aware agent without re-uploading documents or
+losing page evidence.
 
 **Scope:**
 
-- Clarify `personal`, `project`, `team`, and `company` scopes in storage and UI.
-- Add source visibility per scope.
-- Add audit and rollback paths for generated graph and memory records.
-- Add workspace health summaries for company-level memory.
-- Keep local-first operation as the default.
+- Define `hyprduck demo` target behavior.
+- Keep `hyprduck context` as the query-time context-pack alias.
+- Keep `hyprduck documents search` as the document-search alias.
+- Publish setup guides for at least two MCP clients.
+- Add prompt-injection and hosted-provider disclosure warnings to first-run docs.
+- Defer shared/team workflows until repeated cited reuse is proven.
 
 **Acceptance:**
 
-- [ ] Brain objects carry explicit scope.
-- [ ] Audit log can explain who/what wrote each memory, claim, or relation.
-- [ ] Rollback can undo generated graph updates without touching original sources.
-- [ ] UI copy makes scope and provenance level visible.
+- [ ] A fixture demo completes under 60 seconds.
+- [ ] A sample query writes schema-valid `context_pack.json`.
+- [ ] One MCP client can answer with source/page/evidence citations.
+- [ ] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
+- [ ] Default docs and tool lists contain no retired trust-layer UX language.
+- [ ] Missing provider and partial import failures produce specific warnings.
 
 **Effort:** L
 **Priority:** P3
-**Depends on:** Read-only MCP, event log, rollback, scope metadata
+**Depends on:** Read-only MCP, Source Pack/Evidence Index, Context Pack v0
 
 ---
 
 ## Completed / Existing Substrate
 
 - [x] Local document ingestion wedge
-- [x] Brain repo schema and materialization
+- [x] Internal graph/wiki materialization substrate
 - [x] Source metadata persistence from composer intent
-- [x] Read-only brain engine API
-- [x] Brain maintenance lint loop
-- [x] README and repository metadata aligned with agent-brain positioning
+- [x] Read-only document context engine API
+- [x] Context readiness lint path
 - [x] Structured extraction artifact
   - Added `StructuredExtractionArtifact` and nested entity/topic/claim/relation/page-ref contracts.
   - Re-exported the contract through `hyprduck-engine-types`.
@@ -215,9 +232,23 @@ Current roadmap order:
   - Added evidence IDs to search snippets for agent-readable citations.
   - Added CLI context-pack counts for memories, entities, claims, and relations.
   - Covered plural-token retrieval and graph/evidence expansion with a regression test.
+- [x] Context Pack v0, Source Pack, and Evidence Index artifacts
+  - Added `schemas/context-pack.schema.json`, `schemas/source-pack.schema.json`, and `schemas/evidence-index.schema.json`.
+  - Writes `source_pack.json` and `evidence_index.json` during output packaging.
+  - Persists query-time `context_pack.json` and history files when requested.
+  - Covers schema and artifact round trips in tests.
+- [x] MCP document-context naming and root hardening
+  - Added `search_documents` and `read_page_evidence`.
+  - Kept `search_brain` and `hyprduck://brain/...` as compatibility surfaces.
+  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`.
+  - Rejects workspace path and symlink escapes.
+  - Keeps `read_health` read-only.
+- [x] CLI context aliases
+  - Added `hyprduck context` / `hyprduck context-pack`.
+  - Added `hyprduck documents search` / `hyprduck docs search`.
 - [x] Save-back and correction persistence
   - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
   - Claim updates now write durable `graph/claims.json` records.
   - Link updates now write durable `graph/edges.json` records.
   - Wiki save-back writes durable `wiki/save-back/*.md` pages.
-  - Save-back records are replayed during brain repo materialization.
+  - Save-back records are replayed during internal graph/wiki materialization.

@@ -41,9 +41,13 @@ Example MCP client entry:
 
 ## Read Tools
 
-All tools accept optional `workspaceId` and `rootDir` arguments. If omitted,
-`workspaceId` defaults to `default` and the engine resolves the local HyprDuck
-workspace root.
+All tools accept an optional `workspaceId` argument. If omitted, `workspaceId`
+defaults to `default` and the engine resolves the local HyprDuck workspace root.
+
+`rootDir` is a development-only escape hatch for tests and local fixtures. It is
+rejected unless the MCP server process is started with
+`HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`. Production clients should pass `workspaceId`
+and let HyprDuck resolve the canonical workspace root.
 
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
@@ -55,6 +59,7 @@ workspace root.
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
 | `read_node` | `nodeId` | Read a graph node with evidence and adjacent relations. |
 | `read_recent_events` | none | Read append-only document context event history. |
+| `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness. |
 
@@ -68,8 +73,10 @@ tool calls:
 | `hyprduck://brain/default/graph/snapshot` | `application/json` | Latest resolved materialized graph/wiki snapshot. |
 | `hyprduck://brain/default/wiki/index.md` | `text/markdown` | Current materialized wiki index. |
 
-Resource URIs may include `?rootDir=/path/to/brain-root` when a client needs to
-read a specific materialized workspace root.
+Resource URIs may include `?rootDir=/path/to/workspace-root` only in the same
+explicit development mode described above. By default, resource reads resolve
+inside the application-supported HyprDuck workspace root and do not require full
+local paths.
 
 ## Materialized Snapshot Read Path
 
@@ -113,3 +120,19 @@ MCP, and agent consumers can audit exactly which files were loaded.
 
 Tool results return JSON as text content so MCP clients can pass the complete
 source, evidence, node, claim, relation, memory, and event IDs back to agents.
+
+## Security Notes
+
+- MCP is read-only by default; the default `tools/list` exposes no proposal,
+  review, write, rollback, or mutation tools.
+- Workspace IDs must be single path segments. The engine rejects `..`, absolute
+  path components, and symlink escapes after canonicalization.
+- Existing materialized artifact reads are canonicalized under the workspace
+  root before the engine reads them.
+- Context packs include provider-route fields, but they may currently be
+  `unknown` when the source artifact does not expose an effective route. Source
+  Pack and Evidence Index artifacts carry the import-time provider route.
+- Imported documents can contain prompt-injection text. Agents should treat
+  document content as untrusted source material and rely on selected evidence,
+  page refs, content hashes, and warnings rather than following instructions
+  embedded in imported documents.

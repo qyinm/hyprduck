@@ -19,47 +19,53 @@
 
 ## Overview
 
-HyprDuck turns local documents into markdown, page artifacts, and evidence-backed
-knowledge that AI agents can read.
+HyprDuck turns private PDFs and Word files into reusable, cited local context
+packs for AI agents.
 
 The current wedge is local document ingestion: import PDF, DOCX, or DOC files,
 preserve the original source, derive markdown and page artifacts, then compile
-the result into a source-backed knowledge base with wiki pages, graph nodes,
-claims, memory records, evidence refs, and maintenance logs.
+source packs, evidence indexes, and query-time context packs that agents can
+reuse without losing page evidence.
 
-The longer-term product direction is an agent-maintained personal or company
-brain:
+The primary product loop is:
 
 ```text
-local sources
-  -> immutable source records
-  -> extracted entities, claims, topics, and typed links
-  -> maintained wiki, graph, and memory
-  -> context packs agents can use without losing provenance
+private document
+  -> source pack + evidence index
+  -> query-time context pack
+  -> MCP agent reads cited source/page/evidence
+  -> same local context is reused in the next task
 ```
 
-HyprDuck is not a generic document chatbot. The product is built around durable
-local artifacts, visible provenance, and agent-readable context.
+HyprDuck is not a generic document chatbot, a memory OS, or a governance
+dashboard. The product is built around durable local artifacts, visible
+provenance, and agent-readable context.
 
 ---
 
 ## What HyprDuck Builds
 
-### Source-Backed Brain Repo
+### Source Packs And Evidence Indexes
 - Keeps imported files as immutable source records
 - Stores generated page artifacts and markdown output
-- Materializes brain artifacts under a local workspace
-- Writes append-only brain events for import, materialization, correction, and maintenance
+- Writes `source_pack.json` and `evidence_index.json` artifacts for imported sources
+- Preserves source IDs, page refs, content hashes, provider route, and parse warnings
 
-### Knowledge Graph
+### Context Pack v0
+- Builds query-shaped context packs with selected sources and evidence
+- Requires findings to point back to selected evidence through `derivedFrom`
+- Emits warnings for partial imports, visual loss, missing evidence, and budget truncation
+- Publishes the stable schema at [`schemas/context-pack.schema.json`](schemas/context-pack.schema.json)
+
+### Materialized Retrieval Model
 - Represents sources, concepts, entities, claims, memory, and wiki pages as graph records
 - Tracks evidence refs so nodes and claims stay tied to source material
-- Detects stale, orphaned, missing-evidence, and conflicting brain artifacts
+- Keeps internal graph/wiki files as retrieval infrastructure, not the product surface
 
 ### Agent Context Surface
-- Provides brain search and context-pack contracts through the Rust engine
+- Provides document search and context-pack contracts through the Rust engine
 - Exposes an MCP stdio server for external agents: [`docs/mcp.md`](docs/mcp.md)
-- Preserves provenance so agents can cite the source of durable context
+- Preserves provenance so agents can cite source, page, and evidence IDs
 
 ### Local-First Parsing
 - Imports PDF, DOCX, and DOC files
@@ -72,12 +78,12 @@ local artifacts, visible provenance, and agent-readable context.
 ## Current Status
 
 HyprDuck is in active development. The parser wedge, local workspace layout,
-brain materialization, and maintenance lint loop are implemented as early product
-infrastructure.
+Source Pack/Evidence Index artifacts, Context Pack v0, read-only MCP server, and
+document-context CLI aliases are implemented.
 
-The next major work is improving structured extraction and retrieval quality:
-entities, claims, typed relations, evidence coverage, golden-corpus evaluation,
-and stronger context packs before opening a broader external agent interface.
+The next major work is proving the first agent loop end to end: import a known
+fixture, generate a schema-valid context pack, connect Claude Code/Codex/Cursor,
+and produce an answer with source/page/evidence citations.
 
 ---
 
@@ -86,17 +92,22 @@ and stronger context packs before opening a broader external agent interface.
 1. Import a local document.
 2. HyprDuck saves source metadata and derived artifacts.
 3. The engine parses the document into markdown and page-level evidence.
-4. The brain compiler materializes source, node, claim, memory, wiki, graph, and event records.
-5. The Knowledge workspace lets you inspect the graph, evidence, and health.
-6. Agents can consume context packs while HyprDuck preserves source provenance.
+4. HyprDuck writes a source pack and evidence index.
+5. A query generates a schema-valid Context Pack v0.
+6. Agents consume context packs through CLI or MCP and cite source/page/evidence refs.
 
 ---
 
 ## Workspace Artifacts
 
-A HyprDuck brain workspace is designed around durable local files:
+A HyprDuck workspace is designed around durable local document context files:
 
 ```text
+artifacts/<source-id>/
+  source_pack.json
+  evidence_index.json
+context_pack.json
+context_packs/
 brain-manifest.json
 events/
   brain_events.jsonl
@@ -117,13 +128,16 @@ Original sources remain separate from generated artifacts.
 
 ## AI Providers
 
-HyprDuck currently focuses on:
+HyprDuck currently supports shared provider settings across parsing and
+document-context workflows:
 
 - **OpenRouter** for flexible hosted model access
 - **Ollama** for local-first and privacy-sensitive workflows
 
-Provider settings are shared across parsing and knowledge workflows. Ollama does
-not require an API key. Task-specific model guidance and latency budgets live in
+Ollama does not require an API key. Source Pack and Evidence Index artifacts
+record provider-route metadata; Context Pack v0 currently preserves the metadata
+field and falls back to `unknown` when the source artifact does not expose an
+effective route. Task-specific model guidance and latency budgets live in
 [`docs/model-task-matrix.md`](docs/model-task-matrix.md).
 
 ---
