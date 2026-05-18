@@ -174,6 +174,19 @@ pub(crate) fn select_focal_node_id(
         if project.details_by_node_id.contains_key(node_id) {
             return Ok(node_id.to_string());
         }
+        if project.summary.project_id.starts_with("workspace:") {
+            if let Some(node_id) = best_matching_detail_node_id(project, question) {
+                return Ok(node_id);
+            }
+            if let Some(node_id) = project
+                .nodes
+                .iter()
+                .find(|node| is_source_like_node_kind(node.kind))
+                .map(|node| node.id.clone())
+            {
+                return Ok(node_id);
+            }
+        }
         bail!(
             "node {node_id} was not found in project {}",
             request.project_id

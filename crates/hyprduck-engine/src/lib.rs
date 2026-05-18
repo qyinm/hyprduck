@@ -128,8 +128,8 @@ use run_artifacts::queued_proposal_provider_response_value;
 pub(crate) use runtime::emit_event;
 #[allow(unused_imports)]
 pub(crate) use search_context::{
-    best_snippet, context_pack_warnings, evidence_snippet, match_score,
-    normalize_search_token, search_terms, search_token_frequencies, trim_context_pack_to_budget,
+    best_snippet, context_pack_warnings, evidence_snippet, match_score, normalize_search_token,
+    search_terms, search_token_frequencies, trim_context_pack_to_budget,
 };
 use source_index::{chunk_source_markdown, read_workspace_source_chunks, upsert_source_chunks};
 
@@ -604,6 +604,15 @@ fn empty_workspace_project(workspace_id: &str) -> KnowledgeProject {
 
 fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectResponseData> {
     let store = KnowledgeProjectStore::default()?;
+    if let Some(workspace_id) = workspace_id_from_project_id(&request.project_id) {
+        let workspace_root = store.workspace_root(workspace_id)?;
+        if !workspace_root.join("brain-manifest.json").exists() {
+            store.materialize_workspace_brain_repo(workspace_id)?;
+        }
+        let reader = BrainReader::open_workspace_root(workspace_root, workspace_id)?;
+        let answer = answer_materialized_workspace_project(&reader, &request)?;
+        return Ok(AnswerProjectResponseData { answer });
+    }
     let project = load_answerable_project(&store, &request.project_id)?;
     let answer = answer_project(&project, &request)?;
     Ok(AnswerProjectResponseData { answer })
@@ -3486,7 +3495,12 @@ fn relation_record_for_proposal(proposal: &BrainUpdateProposal) -> Result<BrainR
     };
     let source_node_id = payload_edge
         .map(|edge| edge.source_node_id.trim().to_string())
-        .or_else(|| proposal.node_refs.first().map(|value| value.trim().to_string()))
+        .or_else(|| {
+            proposal
+                .node_refs
+                .first()
+                .map(|value| value.trim().to_string())
+        })
         .filter(|value| !value.is_empty())
         .context("accepted link proposal needs a source node ref")?;
     let target_node_id = payload_edge
@@ -4937,6 +4951,12 @@ impl KnowledgeProjectStore {
             return Ok(None);
         }
         Ok(Some(aggregate_workspace_project(workspace_id, rows)))
+    }
+
+    fn workspace_root(&self, workspace_id: &str) -> Result<PathBuf> {
+        let rows = self.load_projects_for_workspace(workspace_id)?;
+        Ok(workspace_root_for_rows(&rows)
+            .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id)))
     }
 
     fn save_source(

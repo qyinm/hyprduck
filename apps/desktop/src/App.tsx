@@ -47,7 +47,6 @@ import type {
   WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
   WorkspaceProject,
-  WorkspaceProposeBrainUpdateRequest,
   WorkspaceSourceSummary,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
@@ -944,11 +943,39 @@ function createWebMockApi(): HyprDuckDesktopApi {
           if (!workspace.project) {
             throw new Error("No workspace available in preview mode.");
           }
-          const answer = request?.nodeId
-            ? workspace.project.answerByNodeId[request.nodeId]
-            : workspace.project.answerByNodeId["source:preview"];
+          const terms = String(request?.question ?? "")
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((term) => term.length > 1);
+          const answerEntries = Object.entries(workspace.project.answerByNodeId);
+          const scoredAnswers = answerEntries
+            .map(([nodeId, answer]) => {
+              const detail = workspace.project?.detailsByNodeId[nodeId];
+              const haystack = [
+                detail?.canonicalName,
+                detail?.description,
+                answer.text,
+                answer.explanation,
+                ...(answer.citations ?? []).map((citation) => citation.snippet),
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+              const queryScore = terms.filter((term) => haystack.includes(term)).length;
+              const selectedBias = request?.nodeId === nodeId ? 1 : 0;
+              return { answer, queryScore, selectedBias };
+            })
+            .sort(
+              (left, right) =>
+                right.queryScore - left.queryScore ||
+                right.selectedBias - left.selectedBias,
+            );
+          const answer =
+            scoredAnswers.find((entry) => entry.queryScore > 0)?.answer ??
+            workspace.project.answerByNodeId["source:preview"] ??
+            scoredAnswers[0]?.answer;
           if (!answer) {
-            throw new Error("No answer available for this node in preview mode.");
+            throw new Error("No answer available for this workspace in preview mode.");
           }
           return { ...answer } as T;
         }
@@ -2208,46 +2235,6 @@ export function App() {
     );
   };
 
-  const proposeBrainUpdate = async (
-    request: WorkspaceProposeBrainUpdateRequest,
-  ) => {
-    const workspaceId =
-      request.workspaceId ??
-      loadedWorkspaceEnvelope?.workspace_id ??
-      snapshot.lastWorkspaceId ??
-      "default";
-    await invoke<unknown>("propose_brain_update", {
-      workspace_id: workspaceId,
-      kind: request.kind,
-      title: request.title,
-      body: request.body,
-      target_node_id: request.targetNodeId ?? null,
-      target_source_id: request.targetSourceId ?? null,
-      relation_kind: request.relationKind ?? null,
-      source_description: request.sourceDescription ?? null,
-      source_user_context: request.sourceUserContext ?? null,
-      source_ingest_instruction: request.sourceIngestInstruction ?? null,
-      source_refs: request.sourceRefs ?? [],
-      node_refs: request.nodeRefs ?? [],
-      evidence_refs: request.evidenceRefs ?? [],
-      proposal_payload: request.proposalPayload ?? null,
-    });
-    setWorkspaceLoadState({
-      status: "loading",
-      message: "Refreshing graph/wiki after brain update.",
-    });
-    const nextLoad = await loadGraphWorkspaceEnvelopeResult(
-      loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
-      loadedWorkspaceEnvelope?.project?.summary.projectId ?? null,
-    );
-    setLoadedWorkspaceEnvelope(nextLoad.envelope);
-    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
-    const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
-      workspace_id: workspaceId,
-    });
-    setBrainHealth(nextHealth);
-  };
-
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke<EngineConfigPayload>("save_engine_config", {
       payload,
@@ -2529,7 +2516,6 @@ export function App() {
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
-                onProposeBrainUpdate={proposeBrainUpdate}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />

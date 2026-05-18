@@ -486,6 +486,7 @@ Graph prompt composer behavior:
 +-- Ask only this time uses the file as temporary context and does not create source/wiki/graph artifacts.
 +-- If the user attaches a file with a prompt, the prompt is saved as source metadata when the intent is Add to knowledge base.
 +-- Save metadata fields: source.description, source.user_context, source.ingest_instruction.
++-- After submit, the answer window floats above the bottom prompt composer and shows only the response plus compact sources; it must not duplicate prompt or attachment controls.
 +-- Example: attach `contract.docx` with "This is the 2024 vendor agreement; focus on payment terms."
 +-- Attached files with Add to knowledge base enter the same automatic ingest pipeline and become source-file graph nodes.
 +-- The response can be saved back as a wiki page, claim, note, or source description.

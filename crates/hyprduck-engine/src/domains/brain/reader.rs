@@ -9,21 +9,25 @@ pub(crate) struct BrainReader {
 impl BrainReader {
     pub(crate) fn open(scope: &BrainReadScope) -> Result<Self> {
         let root = resolve_brain_workspace_root(scope)?;
+        Self::open_workspace_root(root, &scope.workspace_id)
+    }
+
+    pub(crate) fn open_workspace_root(root: PathBuf, workspace_id: &str) -> Result<Self> {
         let repo = BrainArtifactRepository::new(root);
         let manifest_path = repo.brain_manifest_path();
         if !manifest_path.exists() {
             return Ok(Self {
                 repo,
-                snapshot: empty_replayed_brain_snapshot(&scope.workspace_id),
+                snapshot: empty_replayed_brain_snapshot(workspace_id),
                 events: Vec::new(),
             });
         }
         let mut snapshot = repo.read_brain_manifest()?;
-        if snapshot.workspace_id != scope.workspace_id {
+        if snapshot.workspace_id != workspace_id {
             bail!(
                 "brain manifest workspace_id {} does not match requested workspace {}",
                 snapshot.workspace_id,
-                scope.workspace_id
+                workspace_id
             );
         }
         snapshot.nodes = read_json_artifact(&repo.root().join("graph/nodes.json"))?;

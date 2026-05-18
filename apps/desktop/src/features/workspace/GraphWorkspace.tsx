@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  ArrowUp,
   LoaderCircle,
   Plus,
-  RefreshCw,
-  Send,
   Share2,
   Trash2,
   X,
@@ -22,7 +21,6 @@ import type {
   WorkspaceApplyCorrectionRequest,
   WorkspaceEvidenceRef,
   WorkspaceProject,
-  WorkspaceProposeBrainUpdateRequest,
 } from "./types";
 
 interface GraphWorkspaceProps {
@@ -34,7 +32,6 @@ interface GraphWorkspaceProps {
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
-  onProposeBrainUpdate: (request: WorkspaceProposeBrainUpdateRequest) => Promise<void>;
 }
 
 interface GraphImportStatus {
@@ -56,7 +53,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenArtifact,
     onApplyCorrection,
     onAskProject,
-    onProposeBrainUpdate,
   } = props;
   const projectNodes = project?.nodes ?? [];
   const nodeById = Object.fromEntries(projectNodes.map((node) => [node.id, node]));
@@ -105,9 +101,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
-  const [composerIntent, setComposerIntent] = useState<"ephemeral" | "durable">(
-    "ephemeral",
-  );
   const answer = liveAnswer ?? baseAnswer;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
@@ -209,39 +202,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
     setAnswerPending(true);
     setAnswerError(null);
+    dispatch({ type: "open_answer_dock" });
     try {
-      if (composerIntent === "durable") {
-        await onProposeBrainUpdate({
-          workspaceId: project.summary.projectId.startsWith("workspace:")
-            ? project.summary.projectId.replace(/^workspace:/, "")
-            : null,
-          kind: selectedSourceId ? "source_note" : "memory",
-          title: selectedSourceId ? "Source metadata note" : "Brain memory",
-          body: prompt,
-          targetNodeId: selectedNode?.node.id ?? null,
-          targetSourceId: selectedSourceId,
-          sourceDescription: selectedSourceId ? prompt : null,
-          sourceUserContext: selectedSourceId
-            ? `Added from graph composer while inspecting ${selectedNode?.node.label ?? "workspace"}.`
-            : null,
-          sourceIngestInstruction: null,
-          sourceRefs: selectedSourceId ? [selectedSourceId] : [],
-          nodeRefs: selectedNode?.node.id ? [selectedNode.node.id] : [],
-          evidenceRefs: selectedNode?.evidence.map((evidence) => evidence.id) ?? [],
-        });
-        setLiveAnswer({
-          status: "grounded",
-          text: "Saved to the brain.",
-          explanation: selectedSourceId
-            ? "Saved as source metadata for the selected source."
-            : "Saved as a durable memory record.",
-          citations: [],
-          relatedNodeIds: selectedNode?.node.id ? [selectedNode.node.id] : [],
-          suggestedActions: [],
-        });
-        dispatch({ type: "set_answer_input", value: "" });
-        return;
-      }
       const nextAnswer = await onAskProject({
         projectId: project.summary.projectId,
         nodeId: selectedNode?.node.id ?? null,
@@ -292,14 +254,23 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             project={project}
             uiState={uiState}
           />
+          {uiState.answerDockOpen && (
+            <GraphAnswerWindow
+              answer={answer}
+              answerBadgeLabel={answerBadgeLabel}
+              answerError={answerError}
+              answerPending={answerPending}
+              onClose={() => dispatch({ type: "close_answer_dock" })}
+              onOpenArtifact={onOpenArtifact}
+              question={uiState.answerInput.trim()}
+            />
+          )}
           <GraphPromptComposer
-            answerError={answerError}
+            answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
-            intent={composerIntent}
             inputValue={uiState.answerInput}
             onAsk={() => void handleAskProject()}
             onAttachFiles={onOpenImport}
-            onIntentChange={setComposerIntent}
             onInputChange={(value) =>
               dispatch({
                 type: "set_answer_input",
@@ -757,18 +728,37 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         )}
       </div>
 
-      {uiState.answerDockOpen && (
-        <section className="rounded-xl border border-border bg-background">
-          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">
-                Ask or add files to this knowledge base
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Bottom prompt composer stays attached to the Knowledge graph. Use
-                selected context, attach source files, and save grounded answers.
-              </p>
-            </div>
+    </div>
+  );
+}
+
+interface GraphAnswerWindowProps {
+  answer: WorkspaceProject["answerByNodeId"][string] | null;
+  answerBadgeLabel: string;
+  answerError: string | null;
+  answerPending: boolean;
+  onClose: () => void;
+  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
+  question: string;
+}
+
+function GraphAnswerWindow(props: GraphAnswerWindowProps) {
+  const {
+    answer,
+    answerBadgeLabel,
+    answerError,
+    answerPending,
+    onClose,
+    onOpenArtifact,
+    question,
+  } = props;
+
+  return (
+    <section className="pointer-events-auto absolute inset-x-6 bottom-24 z-30 mx-auto max-h-[min(34rem,calc(100%-9rem))] w-[min(50rem,calc(100%-3rem))] overflow-y-auto rounded-2xl border border-border/80 bg-background/95 px-4 py-4 shadow-[0_18px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground">Answer</h3>
             <Badge
               variant="outline"
               className={cn(
@@ -780,120 +770,86 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               {answerBadgeLabel}
             </Badge>
           </div>
+          {question ? (
+            <p className="mt-1 truncate text-xs text-muted-foreground">{question}</p>
+          ) : null}
+        </div>
+        <Button
+          aria-label="Close answer"
+          className="size-8 shrink-0"
+          onClick={onClose}
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          <X size={16} />
+        </Button>
+      </div>
 
-          <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-            <div className="space-y-3">
-              <label className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                Ask selected graph context or attach files
-              </label>
-              <div className="grid gap-2 rounded-xl border border-border bg-secondary/70 p-3 text-xs text-foreground sm:grid-cols-2">
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="attachment-intent" defaultChecked />
-                  <span>Add to knowledge base</span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="attachment-intent" />
-                  <span>Ask only this time</span>
-                </label>
-                <div className="sm:col-span-2">
-                  File description becomes source metadata: source.description,
-                  source.user_context, and source.ingest_instruction.
-                </div>
-              </div>
-              <Input
-                onChange={(event) =>
-                  dispatch({
-                    type: "set_answer_input",
-                    value: event.target.value,
-                  })
-                }
-                placeholder="Ask, add source metadata, or describe attached files..."
-                value={uiState.answerInput}
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={onOpenImport}
-                  type="button"
-                  variant="outline"
-                >
-                  + Attach files
-                </Button>
-                <Button
-                  disabled={answerPending || !uiState.answerInput.trim()}
-                  onClick={() => void handleAskProject()}
-                  type="button"
-                >
-                  {answerPending ? "Answering…" : "Ask"}
-                </Button>
-                <Button
-                  onClick={() => dispatch({ type: "close_answer_dock" })}
-                  type="button"
-                  variant="outline"
-                >
-                  Close dock
-                </Button>
-              </div>
-              <p className="text-xs leading-5 text-muted-foreground">
-                Attached files use the same automatic ingest primitive as the
-                Sources mode. Answers can be saved back as a wiki page, claim,
-                note, or source description.
-              </p>
-              {answerError ? (
-                <p className="text-xs leading-5 text-destructive">{answerError}</p>
-              ) : null}
-            </div>
-
-            <div className="space-y-4 rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
-              <div className="flex items-center gap-2">
-                <RefreshCw size={14} className="text-muted-foreground" />
-                <p className="text-sm font-medium">
-                  {liveAnswer ? "Live answer state" : "Stored answer state"}
-                </p>
-              </div>
-              <p className="text-sm leading-6 text-foreground">
-                {answer?.text ??
-                  answer?.explanation ??
-                  "Select a node to view the answer state."}
-              </p>
-              {answer?.citations.length ? (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                    Cited evidence
-                  </p>
-                  {answer.citations.map((citation) => (
-                    <EvidenceCard
-                      evidence={citation}
-                      key={citation.id}
-                      onOpenArtifact={onOpenArtifact}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {answer?.suggestedActions.length ? (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                    Suggested next actions
-                  </p>
-                  <div className="space-y-2">
-                    {answer.suggestedActions.map((action) => (
-                      <div
-                        key={action.kind}
-                        className="rounded-xl border border-dashed border-border/70 px-3 py-3"
-                      >
-                        <div className="text-sm font-medium">{action.label}</div>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          {action.description}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+      <div className="mt-4">
+        {answerPending ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <LoaderCircle size={15} className="animate-spin" />
+            <span>Answering...</span>
           </div>
-        </section>
-      )}
-    </div>
+        ) : answerError ? (
+          <p className="text-sm leading-6 text-destructive">{answerError}</p>
+        ) : (
+          <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+            {answer?.text ??
+              answer?.explanation ??
+              "Ask a question from the prompt below."}
+          </p>
+        )}
+      </div>
+
+      {answer?.citations.length ? (
+        <div className="mt-4 border-t border-border/70 pt-3">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            Sources
+          </p>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {answer.citations.slice(0, 4).map((citation) => (
+              <CompactEvidenceRow
+                evidence={citation}
+                key={citation.id}
+                onOpenArtifact={onOpenArtifact}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+interface CompactEvidenceRowProps {
+  evidence: WorkspaceEvidenceRef;
+  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
+}
+
+function CompactEvidenceRow(props: CompactEvidenceRowProps) {
+  const { evidence, onOpenArtifact } = props;
+  const primaryPath = evidence.markdownPath ?? evidence.sourcePath ?? evidence.imagePath;
+  const sourceLabel = fileNameFromPath(
+    evidence.sourcePath ?? evidence.markdownPath ?? evidence.sourceId ?? "Source",
+  );
+
+  return (
+    <button
+      className="min-w-0 rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-left disabled:cursor-default"
+      disabled={!primaryPath}
+      onClick={() => primaryPath && void onOpenArtifact(primaryPath, false)}
+      type="button"
+    >
+      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="truncate">{sourceLabel}</span>
+        <span className="shrink-0">{evidence.pageLabel}</span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">
+        {formatEvidenceSnippet(evidence.snippet)}
+      </p>
+    </button>
   );
 }
 
@@ -965,11 +921,9 @@ function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
 interface GraphPromptComposerProps {
   answerError: string | null;
   answerPending: boolean;
-  intent: "ephemeral" | "durable";
   inputValue: string;
   onAsk: () => void;
   onAttachFiles: () => void;
-  onIntentChange: (intent: "ephemeral" | "durable") => void;
   onInputChange: (value: string) => void;
 }
 
@@ -977,18 +931,16 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
   const {
     answerError,
     answerPending,
-    intent,
     inputValue,
     onAsk,
     onAttachFiles,
-    onIntentChange,
     onInputChange,
   } = props;
   const canAsk = inputValue.trim().length > 0 && !answerPending;
 
   return (
     <form
-      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-16 w-[min(46rem,calc(100%-3rem))] items-center gap-2 rounded-[1.75rem] border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-14 w-[min(50rem,calc(100%-3rem))] items-center gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (canAsk) {
@@ -998,7 +950,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     >
       <Button
         aria-label="Attach files"
-        className="size-10 rounded-xl border-border bg-secondary/80"
+        className="h-14 w-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
         onClick={onAttachFiles}
         size="icon"
         type="button"
@@ -1006,44 +958,31 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       >
         <Plus size={19} />
       </Button>
-      <input
-        aria-label="Ask knowledge graph"
-        className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
-        onChange={(event) => onInputChange(event.target.value)}
-        placeholder={
-          intent === "durable"
-            ? "Describe source metadata or memory..."
-            : "Ask this knowledge graph..."
-        }
-        value={inputValue}
-      />
-      <select
-        aria-label="Composer intent"
-        className="hidden h-9 rounded-xl border border-border bg-secondary/80 px-2 text-xs font-medium text-foreground outline-none sm:block"
-        onChange={(event) =>
-          onIntentChange(event.target.value === "durable" ? "durable" : "ephemeral")
-        }
-        value={intent}
-      >
-        <option value="ephemeral">Ask only</option>
-        <option value="durable">Add to brain</option>
-      </select>
-      {answerPending ? (
-        <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-          {intent === "durable" ? "Saving..." : "Answering..."}
-        </span>
-      ) : null}
-      <Button
-        aria-label={intent === "durable" ? "Save to brain" : "Ask"}
-        className="size-10 rounded-xl"
-        disabled={!canAsk}
-        size="icon"
-        type="submit"
-      >
-        <Send size={18} />
-      </Button>
+      <div className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur">
+        <input
+          aria-label="Ask knowledge graph"
+          className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+          onChange={(event) => onInputChange(event.target.value)}
+          placeholder="Ask this knowledge graph..."
+          value={inputValue}
+        />
+        {answerPending ? (
+          <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+            Answering...
+          </span>
+        ) : null}
+        <Button
+          aria-label="Ask"
+          className="size-9 rounded-full"
+          disabled={!canAsk}
+          size="icon"
+          type="submit"
+        >
+          <ArrowUp size={18} />
+        </Button>
+      </div>
       {answerError ? (
-        <p className="absolute left-6 top-full mt-2 text-xs leading-5 text-destructive">
+        <p className="absolute left-16 top-full mt-2 text-xs leading-5 text-destructive">
           {answerError}
         </p>
       ) : null}
