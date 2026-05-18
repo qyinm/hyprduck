@@ -49,6 +49,10 @@ rejected unless the MCP server process is started with
 `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`. Production clients should pass `workspaceId`
 and let HyprDuck resolve the canonical workspace root.
 
+Tool responses redact absolute local filesystem paths by default. Debug clients
+can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
+paths.
+
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
@@ -76,7 +80,8 @@ tool calls:
 Resource URIs may include `?rootDir=/path/to/workspace-root` only in the same
 explicit development mode described above. By default, resource reads resolve
 inside the application-supported HyprDuck workspace root and do not require full
-local paths.
+local paths. Resource responses return public HyprDuck resource URIs without
+`rootDir` query parameters.
 
 ## Materialized Snapshot Read Path
 
@@ -129,6 +134,9 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
   path components, and symlink escapes after canonicalization.
 - Existing materialized artifact reads are canonicalized under the workspace
   root before the engine reads them.
+- MCP tool responses redact absolute local filesystem paths unless
+  `includeLocalPaths: true` is explicitly provided. MCP resource responses omit
+  `rootDir` query parameters from returned `contents[].uri` values.
 - Context packs include provider-route fields, but they may currently be
   `unknown` when the source artifact does not expose an effective route. Source
   Pack and Evidence Index artifacts carry the import-time provider route.
