@@ -246,6 +246,10 @@ losing page evidence.
 - [x] CLI context aliases
   - Added `hyprduck context` / `hyprduck context-pack`.
   - Added `hyprduck documents search` / `hyprduck docs search`.
+- [x] MCP client setup guides
+  - Added Codex and Claude Code installer setup instructions.
+  - Documented Cursor manual stdio configuration.
+  - Added a verification prompt that requires source/page/evidence citations.
 - [x] Save-back and correction persistence
   - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
   - Claim updates now write durable `graph/claims.json` records.

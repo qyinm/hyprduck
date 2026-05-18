@@ -742,7 +742,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "read_health",
-            "Read brain health without mutating artifacts.",
+            "Read workspace context readiness without mutating artifacts.",
             json!({}),
             Vec::new(),
             true,
