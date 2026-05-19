@@ -68,13 +68,36 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
 });
 
 test("Knowledge empty state focuses first users on importing source files", () => {
-  expect(graphSource).toMatch(/Your knowledge base is empty/);
+  expect(graphSource).toMatch(/Add private docs/);
   expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
   expect(graphSource).toMatch(/Choose files/);
+  expect(graphSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
   expect(previewSource).not.toMatch(/compile|compiled|compiler/i);
+});
+
+test("first-run activation presents document-agent-citation flow before graph controls", () => {
+  expect(graphSource).toMatch(/FirstRunActivationStrip/);
+  expect(graphSource).toMatch(/aria-label="First-run activation"/);
+  expect(graphSource).toMatch(/Add Docs/);
+  expect(graphSource).toMatch(/Connect Agent/);
+  expect(graphSource).toMatch(/Ask With Citations/);
+  expect(graphSource).toMatch(/Verify Evidence/);
+  expect(graphSource).toMatch(/Reuse/);
+  expect(graphSource).toMatch(/Register the local MCP server/);
+  expect(graphSource).toMatch(/Open source, page, and evidence refs/);
+  expect(graphSource).toMatch(/Ask a second question from the same source set/);
+  expect(graphSource).toMatch(/activeStep=\{\s*project\.summary\.documentCount > 0 \? "connect" : "add"\s*\}/);
+  expect(graphSource).toMatch(/id: "add",[\s\S]*?complete: hasImport/);
+  expect(graphSource).toMatch(/id: "connect",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "ask",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "verify",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "reuse",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/aria-label="Ask with citations"/);
+  expect(graphSource).toMatch(/placeholder="Ask with citations\.\.\."/);
+  expect(graphSource).not.toMatch(/Screen Recording|Accessibility/);
 });
 
 test("Graph workspace centers the canvas with inspector actions", () => {
