@@ -262,6 +262,76 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
+            "id": 122,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP evidence",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        context_pack_tool["result"]["isError"], false,
+        "{context_pack_tool:#?}"
+    );
+    let text = context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("context pack tool text");
+    let context_pack_payload: Value = serde_json::from_str(text).expect("context pack payload");
+    assert_eq!(
+        context_pack_payload["contextPackV0"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    let context_pack_answer =
+        cited_answer_from_context_pack(&context_pack_payload["contextPackV0"]);
+    assert!(
+        context_pack_answer.contains("sourceId=source-mcp"),
+        "{context_pack_answer}"
+    );
+    assert!(
+        context_pack_answer.contains("evidenceRef=evidence-mcp"),
+        "{context_pack_answer}"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "method": "tools/call",
+            "params": {
+                "name": "search_documents",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP source",
+                    "limit": 5
+                }
+            }
+        }),
+    );
+    let search_tool = read_message(&mut reader);
+    assert_eq!(search_tool["result"]["isError"], false, "{search_tool:#?}");
+    let text = search_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("search tool text");
+    let search_payload: Value = serde_json::from_str(text).expect("search payload");
+    assert!(search_payload["results"]
+        .as_array()
+        .expect("search results")
+        .iter()
+        .any(|result| result["id"] == "source-mcp"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
             "id": 21,
             "method": "resources/read",
             "params": {
@@ -284,7 +354,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         "state/latest-readable-snapshot.json"
     );
     assert_eq!(snapshot["nodes"][0]["nodeId"], "node-mcp-readable");
-    assert_eq!(snapshot["wikiPages"][0]["body"], "# MCP Snapshot\n");
+    assert_eq!(
+        snapshot["wikiPages"][0]["body"],
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
     assert_eq!(snapshot["sourcePaths"][0], "[redacted-local-path]");
 
     write_message(
@@ -309,7 +382,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
     );
     assert_eq!(
         wiki_resource["result"]["contents"][0]["text"],
-        "# MCP Snapshot\n"
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
     );
 
     write_message(
@@ -384,7 +457,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
     let wiki_text_after_health = wiki_resource_after_health["result"]["contents"][0]["text"]
         .as_str()
         .expect("wiki text after health");
-    assert_eq!(wiki_text_after_health, "# MCP Snapshot\n");
+    assert_eq!(
+        wiki_text_after_health,
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
 
     write_message(
         &mut stdin,
@@ -532,7 +608,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .expect("wiki tool text");
     let tool_wiki: Value = serde_json::from_str(text).expect("wiki tool payload");
     assert_eq!(tool_wiki["page"]["path"], "wiki/index.md");
-    assert_eq!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
+    assert_eq!(
+        tool_wiki["page"]["body"],
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
 
     drop(stdin);
     let status = child.wait().expect("server exit");
@@ -595,7 +674,11 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     .expect("evidence");
     fs::write(workspace.join("graph/claims.json"), "[]").expect("claims");
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
-    fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");
+    fs::write(
+        workspace.join("wiki/index.md"),
+        format!("# MCP Snapshot\n\nLocal path: {}\n", workspace.display()),
+    )
+    .expect("wiki index");
     fs::write(
         workspace.join("artifacts/source-mcp/source_pack.json"),
         format!(

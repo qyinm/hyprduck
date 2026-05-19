@@ -100,6 +100,7 @@ interface ProviderOption {
 }
 
 interface ValidationIssue {
+  code: string;
   message: string;
 }
 
@@ -301,7 +302,10 @@ function deriveWebValidation(
   );
   const issues: ValidationIssue[] = [];
   if (provider?.requires_api_key && !config.api_key.trim()) {
-    issues.push({ message: `${provider.label} requires an API key.` });
+    issues.push({
+      code: "provider_config",
+      message: `${provider.label} requires an API key.`,
+    });
   }
   return {
     ready: issues.length === 0,
@@ -732,6 +736,20 @@ function createWebMockApi(): HyprDuckDesktopApi {
           }, 700);
           return undefined as T;
         }
+        case "retry_failed_pages": {
+          emitWebSnapshot({
+            ...webMockSnapshot,
+            progressLog: [
+              ...webMockSnapshot.progressLog,
+              {
+                phase: "retry",
+                message: "Preview failed-page retry completed.",
+                timestamp: new Date().toISOString(),
+              },
+            ],
+          });
+          return undefined as T;
+        }
         case "cancel_parse": {
           if (webMockParseTimer) {
             clearTimeout(webMockParseTimer);
@@ -1081,14 +1099,14 @@ function modelTaskGuidance(providerId: string, modelId: string) {
       return {
         tone: "warning",
         title: "Local model caution",
-        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before using generated graph output.",
+        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before relying on agent-ready outputs.",
       };
     }
 
     return {
       tone: "local",
       title: "Local-first path",
-      body: "Good for private parsing and retrieval checks. Keep generated merges and project memory output disabled until the golden corpus is clean.",
+      body: "Good for private parsing and retrieval checks. Keep generated merge output disabled until the golden corpus is clean.",
     };
   }
 
@@ -1855,11 +1873,23 @@ export function App() {
         progressPercent: 100,
         message: "Import failed",
         failureMessage: latestProgress.message,
+        failedPageCount: snapshot.lastResult?.failedCount ?? 0,
+      };
+    }
+
+    if (snapshot.lastResult && snapshot.lastResult.failedCount > 0) {
+      return {
+        filePath: selectedFile?.path ?? snapshot.lastResult.savedOutputPath ?? "Imported source",
+        format: selectedFile?.format ?? "document",
+        status: "partial",
+        progressPercent: 100,
+        message: "Partial import",
+        failedPageCount: snapshot.lastResult.failedCount,
       };
     }
 
     return null;
-  }, [selectedFile, snapshot.activeJob, snapshot.progressLog]);
+  }, [selectedFile, snapshot.activeJob, snapshot.lastResult, snapshot.progressLog]);
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,
@@ -2004,6 +2034,11 @@ export function App() {
         format: selectedFile.format,
       },
     });
+    setActivePanel("knowledge");
+  };
+
+  const retryFailedPages = async () => {
+    await invoke<void>("retry_failed_pages");
     setActivePanel("knowledge");
   };
 
@@ -2343,6 +2378,7 @@ export function App() {
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
+                onRetryFailedPages={retryFailedPages}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />

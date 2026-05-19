@@ -1,5 +1,8 @@
 # MCP Client Setup
 
+Agent-facing setup and verification gates are tracked in
+[`docs/agents/mcp-client-setup.md`](agents/mcp-client-setup.md).
+
 HyprDuck exposes private document context through a local, read-only MCP stdio
 server. The server is intended for agent clients that can call `get_context_pack`,
 `search_documents`, `read_source`, `read_page_evidence`, and `read_health`.

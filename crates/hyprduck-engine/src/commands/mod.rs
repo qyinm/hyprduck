@@ -17,6 +17,10 @@ pub(crate) fn encode_success_response(
         EngineRequest::Parse(_) => {
             unreachable!("parse requests are handled by runtime::encode_parse_response")
         }
+        EngineRequest::RetryFailedPages(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::RetryFailedPages,
+            crate::handle_retry_failed_pages(request, &config_store.load()?)?,
+        )),
         EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::CompileProject,
             crate::handle_compile_project(request)?,
@@ -124,6 +128,7 @@ pub(crate) fn encode_success_response(
 pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
     match request {
         EngineRequest::Parse(_) => EngineCommand::Parse,
+        EngineRequest::RetryFailedPages(_) => EngineCommand::RetryFailedPages,
         EngineRequest::CompileProject(_) => EngineCommand::CompileProject,
         EngineRequest::LoadProject(_) => EngineCommand::LoadProject,
         EngineRequest::ApplyCorrection(_) => EngineCommand::ApplyCorrection,

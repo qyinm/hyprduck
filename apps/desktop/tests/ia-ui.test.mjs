@@ -16,6 +16,10 @@ const previewSource = readFileSync(
 );
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
+const modelTaskMatrixSource = readFileSync(
+  new URL("../../../docs/model-task-matrix.md", import.meta.url),
+  "utf8",
+);
 
 test("desktop IA is the committed source of truth for the Knowledge workspace", () => {
   expect(iaSource).toMatch(/Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface/);
@@ -68,13 +72,52 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
 });
 
 test("Knowledge empty state focuses first users on importing source files", () => {
-  expect(graphSource).toMatch(/Your knowledge base is empty/);
+  expect(graphSource).toMatch(/Add private docs/);
   expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
   expect(graphSource).toMatch(/Choose files/);
+  expect(graphSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
   expect(previewSource).not.toMatch(/compile|compiled|compiler/i);
+});
+
+test("launch copy stays agent-ready without unsupported provider claims", () => {
+  const buyerFacingCopy = [appSource, graphSource].join("\n");
+  const publicModelGuidance = modelTaskMatrixSource;
+
+  expect(buyerFacingCopy).toMatch(/Local model caution/);
+  expect(buyerFacingCopy).toMatch(/Hosted quality path/);
+  expect(buyerFacingCopy).toMatch(/agent-ready outputs/);
+  expect(buyerFacingCopy).toMatch(/source-backed evidence that coding agents can reuse with citations/);
+  expect(buyerFacingCopy).not.toMatch(/DeepSeek-only|generic PDF chat|PDF chat/);
+  expect(buyerFacingCopy).not.toMatch(/Context Pack v0/);
+  expect(buyerFacingCopy).not.toMatch(/OpenAI|Anthropic/);
+  expect(buyerFacingCopy).not.toMatch(/project memory output|generated graph output/);
+  expect(publicModelGuidance).toMatch(/local document parsing and agent-ready evidence reuse/);
+  expect(publicModelGuidance).not.toMatch(/brain-corpus|local brain|Graph materialization|Provider-generated graph records|generated graph/);
+});
+
+test("first-run activation presents document-agent-citation flow before graph controls", () => {
+  expect(graphSource).toMatch(/FirstRunActivationStrip/);
+  expect(graphSource).toMatch(/aria-label="First-run activation"/);
+  expect(graphSource).toMatch(/Add Docs/);
+  expect(graphSource).toMatch(/Connect Agent/);
+  expect(graphSource).toMatch(/Ask With Citations/);
+  expect(graphSource).toMatch(/Verify Evidence/);
+  expect(graphSource).toMatch(/Reuse/);
+  expect(graphSource).toMatch(/Register the local MCP server/);
+  expect(graphSource).toMatch(/Open source, page, and evidence refs/);
+  expect(graphSource).toMatch(/Ask a second question from the same source set/);
+  expect(graphSource).toMatch(/activeStep=\{\s*project\.summary\.documentCount > 0 \? "connect" : "add"\s*\}/);
+  expect(graphSource).toMatch(/id: "add",[\s\S]*?complete: hasImport/);
+  expect(graphSource).toMatch(/id: "connect",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "ask",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "verify",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/id: "reuse",[\s\S]*?complete: false/);
+  expect(graphSource).toMatch(/aria-label="Ask with citations"/);
+  expect(graphSource).toMatch(/placeholder="Ask with citations\.\.\."/);
+  expect(graphSource).not.toMatch(/Screen Recording|Accessibility/);
 });
 
 test("Graph workspace centers the canvas with inspector actions", () => {
@@ -142,6 +185,12 @@ test("desktop app prepares the short HyprDuck MCP shell command", () => {
   expect(mainSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
 });
 
+test("desktop provider validation preserves issue codes", () => {
+  expect(appSource).toMatch(/interface ValidationIssue \{\s*code: string;\s*message: string;\s*\}/);
+  expect(appSource).toMatch(/code: "provider_config"/);
+  expect(appSource).toMatch(/validation\.issues\.map\(\(issue\) => issue\.message\)/);
+});
+
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
   expect(appSource).toMatch(/type WorkspaceLoadStatus = "idle" \| "loading" \| "ready" \| "fallback" \| "error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
@@ -153,4 +202,23 @@ test("workspace snapshot refresh exposes loading fallback and error states", () 
   expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
   expect(appSource).toMatch(/Refreshing latest workspace snapshot/);
   expect(appSource).toMatch(/Could not refresh the workspace snapshot/);
+});
+
+test("partial import failures expose failed-page retry affordance", () => {
+  expect(appSource).toMatch(/failedPageCount: snapshot\.lastResult\?\.failedCount/);
+  expect(appSource).toMatch(/snapshot\.lastResult && snapshot\.lastResult\.failedCount > 0/);
+  expect(appSource).toMatch(/status: "partial"/);
+  expect(graphSource).toMatch(/failedPageCount/);
+  expect(graphSource).toMatch(/const partial = status\.status === "partial"/);
+  expect(graphSource).toMatch(/canRetryFailedPages = failedPageCount > 0/);
+  expect(graphSource).toMatch(/Retry failed pages/);
+  expect(graphSource).toMatch(/failedPageCount === 1 \? "page" : "pages"/);
+  expect(graphSource).toMatch(/onRetryFailedPages/);
+  expect(appSource).toMatch(/invoke<void>\("retry_failed_pages"\)/);
+  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+  expect(mainSource).toMatch(/case "retry_failed_pages"/);
+  expect(mainSource).toMatch(/function retryFailedPages/);
+  expect(mainSource).toMatch(/command: "retry_failed_pages"/);
+  expect(mainSource).toMatch(/sourceManifestPath: manifestPath/);
+  expect(mainSource).not.toMatch(/onRetryFailedPages=\{startParse\}/);
 });

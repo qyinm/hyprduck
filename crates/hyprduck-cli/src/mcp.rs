@@ -219,12 +219,13 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
                 scope: resource.scope,
                 path,
             })?;
+            let body = redact_local_path_text(&page.page.body);
             Ok(json!({
                 "contents": [
                     {
                         "uri": public_resource_uri(uri),
                         "mimeType": "text/markdown",
-                        "text": page.page.body
+                        "text": body
                     }
                 ]
             }))
@@ -575,6 +576,7 @@ fn redact_local_paths(value: Value) -> Value {
         Value::String(value) if is_absolute_local_path(&value) => {
             Value::String("[redacted-local-path]".into())
         }
+        Value::String(value) => Value::String(redact_local_path_text(&value)),
         Value::Array(values) => Value::Array(values.into_iter().map(redact_local_paths).collect()),
         Value::Object(map) => Value::Object(
             map.into_iter()
@@ -583,6 +585,69 @@ fn redact_local_paths(value: Value) -> Value {
         ),
         value => value,
     }
+}
+
+fn redact_local_path_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while cursor < value.len() {
+        let remaining = &value[cursor..];
+        let Some((relative_start, prefix_len)) = next_local_path_start(remaining) else {
+            output.push_str(remaining);
+            break;
+        };
+        let start = cursor + relative_start;
+        output.push_str(&value[cursor..start]);
+        output.push_str("[redacted-local-path]");
+        let path_start = start + prefix_len;
+        let path_end = value[path_start..]
+            .find(is_local_path_delimiter)
+            .map(|offset| path_start + offset)
+            .unwrap_or(value.len());
+        cursor = path_end;
+    }
+    output
+}
+
+fn next_local_path_start(value: &str) -> Option<(usize, usize)> {
+    for (index, _) in value.char_indices() {
+        let candidate = &value[index..];
+        if !is_local_path_start_boundary(value, index) {
+            continue;
+        }
+        if candidate.starts_with("file:///") {
+            return Some((index, "file://".len()));
+        }
+        if candidate.starts_with('/') || candidate.starts_with("~/") {
+            return Some((index, 0));
+        }
+        if candidate
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':')
+        {
+            return Some((index, 0));
+        }
+    }
+    None
+}
+
+fn is_local_path_start_boundary(value: &str, index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    value[..index]
+        .chars()
+        .next_back()
+        .is_some_and(is_local_path_delimiter)
+}
+
+fn is_local_path_delimiter(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '(' | '[' | '{' | '<' | ')' | ']' | '}' | '>' | '"' | '\'' | '`' | ',' | ';'
+        )
 }
 
 fn is_absolute_local_path(value: &str) -> bool {
@@ -1004,6 +1069,24 @@ mod tests {
     }
 
     #[test]
+    fn redacts_local_paths_embedded_in_markdown_text() {
+        let text = "Plain /Users/hippoo/file.md, link [doc](/Users/hippoo/doc.pdf), code `/tmp/raw.txt`, file URL file:///Users/hippoo/source.pdf and windows C:\\Users\\hippoo\\note.txt";
+        let redacted = redact_local_path_text(text);
+
+        assert!(!redacted.contains("/Users/hippoo"));
+        assert!(!redacted.contains("/tmp/raw.txt"));
+        assert!(!redacted.contains("file:///"));
+        assert!(!redacted.contains("C:\\Users\\hippoo"));
+        assert_eq!(redacted.matches("[redacted-local-path]").count(), 5);
+        assert!(redacted.contains("[doc]([redacted-local-path])"));
+        assert!(redacted.contains("`[redacted-local-path]`"));
+        assert_eq!(
+            redact_local_path_text("relative state/latest-readable-snapshot.json stays"),
+            "relative state/latest-readable-snapshot.json stays"
+        );
+    }
+
+    #[test]
     fn resource_uri_accepts_allowlisted_root_dir() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         clear_root_dir_env();
@@ -1021,6 +1104,48 @@ mod tests {
             resource.scope.root_dir.as_deref(),
             Some(expected_root_dir.as_str())
         );
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn resource_uri_rejects_root_dir_outside_allowed_roots() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let uri = format!(
+            "hyprduck://brain/default/wiki/index.md?rootDir={}",
+            outside.path().display()
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[allowed.path()]);
+        let error = parse_resource_uri(&uri).expect_err("outside resource rootDir rejected");
+        assert!(error.to_string().contains("HYPRDUCK_MCP_ALLOWED_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resource_uri_rejects_symlinked_root_dir_outside_allowed_roots() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let allowed = temp.path().join("allowed");
+        let outside = temp.path().join("outside");
+        let symlink = temp.path().join("linked-root");
+        std::fs::create_dir_all(&allowed).expect("allowed dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::os::unix::fs::symlink(&outside, &symlink).expect("symlink");
+        let uri = format!(
+            "hyprduck://brain/default/wiki/index.md?rootDir={}",
+            symlink.display()
+        );
+
+        std::env::set_var(ROOT_DIR_ENV, "1");
+        set_allowed_roots(&[allowed.as_path()]);
+        let error = parse_resource_uri(&uri).expect_err("symlink escape resource rootDir rejected");
+        assert!(error.to_string().contains("HYPRDUCK_MCP_ALLOWED_ROOTS"));
         clear_root_dir_env();
     }
 

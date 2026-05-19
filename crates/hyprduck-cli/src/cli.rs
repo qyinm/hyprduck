@@ -61,9 +61,9 @@ impl Cli {
                 command: parse_demo_command(args.collect())?,
             }),
             Some("eval") => {
-                let subcommand = args
-                    .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck eval golden-corpus [--fixtures <path>] [--mode source-evidence|hosted|local|all]"))?;
+                let subcommand = args.next().ok_or_else(|| {
+                    anyhow!("usage: hyprduck eval <golden-corpus|dry-run-log|benchmark-report>")
+                })?;
                 Some(Commands::Eval {
                     command: parse_eval_command(subcommand, args.collect())?,
                 })
@@ -153,6 +153,49 @@ fn parse_eval_command(subcommand: String, args: Vec<String>) -> Result<EvalComma
                 index += 1;
             }
             Ok(EvalCommand::GoldenCorpus { fixtures, mode })
+        }
+        "dry-run-log" => {
+            let mut input = None;
+            let mut index = 0usize;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--input" => {
+                        index += 1;
+                        input = Some(
+                            args.get(index)
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--input needs a value"))?,
+                        );
+                    }
+                    value => return Err(anyhow!("unknown dry-run-log option: {value}")),
+                }
+                index += 1;
+            }
+            Ok(EvalCommand::DryRunLog {
+                input: input.ok_or_else(|| anyhow!("hyprduck eval dry-run-log needs --input"))?,
+            })
+        }
+        "benchmark-report" => {
+            let mut input = None;
+            let mut index = 0usize;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--input" => {
+                        index += 1;
+                        input = Some(
+                            args.get(index)
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--input needs a value"))?,
+                        );
+                    }
+                    value => return Err(anyhow!("unknown benchmark-report option: {value}")),
+                }
+                index += 1;
+            }
+            Ok(EvalCommand::BenchmarkReport {
+                input: input
+                    .ok_or_else(|| anyhow!("hyprduck eval benchmark-report needs --input"))?,
+            })
         }
         _ => Err(anyhow!("unknown eval subcommand: {subcommand}")),
     }
@@ -461,6 +504,12 @@ pub enum EvalCommand {
     GoldenCorpus {
         fixtures: Option<String>,
         mode: String,
+    },
+    DryRunLog {
+        input: String,
+    },
+    BenchmarkReport {
+        input: String,
     },
 }
 

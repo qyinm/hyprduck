@@ -1,15 +1,14 @@
 # Model Task Matrix
 
 HyprDuck uses the parser as the ingest wedge, but the product needs a stable
-model policy for an agent-maintained local brain. This matrix defines the
-default model path for each task, the local fallback, and the latency budget that
-should be tracked with the golden corpus.
+model policy for local document parsing and agent-ready evidence reuse. This
+matrix defines the default model path for each task, the local fallback, and the
+latency budget that should be tracked with the golden corpus.
 
 ## Benchmark Command
 
 ```bash
 cargo run -p hyprduck-cli -- eval golden-corpus \
-  --fixtures crates/hyprduck-engine/tests/fixtures/brain-corpus \
   --mode all
 ```
 
@@ -30,9 +29,9 @@ The report must keep quality and latency together:
 | Page parse | OpenRouter vision model: `google/gemini-2.5-flash` or `z-ai/glm-5v-turbo` | Ollama vision model: `qwen3-vl:72b` for high quality, `qwen3-vl:8b` only for small/private docs | Markdown preserves page structure, tables, and image-backed citations | Hosted p95 under 20s/page, local p95 under 45s/page |
 | Structured extraction | Heuristic extractor plus hosted verification when available | Heuristic extractor only, with golden-corpus regression checks | Supported claims and relations must carry evidence refs | p95 under 5s/source after parse |
 | Entity merge | Local deterministic alias merge first, hosted verification when available | Deterministic merge only; keep uncertain aliases separate | Merge output must carry source or evidence refs | p95 under 3s/workspace aggregate |
-| Graph materialization | Provider-generated graph records plus schema validation | Heuristic extraction plus schema validation | Materialized graph writes create events and preserve source artifacts | p95 under 5s/source after parse |
-| Grounded answer | Retrieval/context pack over local brain; hosted answer optional | Local retrieval-only answer with citations and warnings | Answer includes evidence IDs or blocks | p95 under 2s for retrieval pack |
-| Agent context pack | Local retrieval baseline | Same local path | Pack includes relevant memory, claims, entities, relations, sources, evidence, events | p95 under 2s for 8k budget |
+| Internal retrieval materialization | Provider-generated records plus schema validation | Heuristic extraction plus schema validation | Materialized records create events and preserve source artifacts | p95 under 5s/source after parse |
+| Grounded answer | Retrieval/context pack over local evidence; hosted answer optional | Local retrieval-only answer with citations and warnings | Answer includes evidence IDs or blocks | p95 under 2s for retrieval pack |
+| Agent context pack | Local retrieval baseline | Same local path | Pack includes relevant claims, entities, relations, sources, evidence, and events | p95 under 2s for 8k budget |
 
 ## Local Model Limits
 
@@ -46,9 +45,9 @@ every task.
   `deepseek-ocr:latest` can improve page text recovery, but they do not replace
   claim extraction, contradiction detection, or graph merge policy.
 - If local output misses citations, HyprDuck should keep the artifact as
-  `partial` instead of promoting it to the generated graph.
-- Company/project memory generation should stay disabled until the local model is
-  proven on the golden corpus.
+  `partial` instead of promoting it to reusable evidence output.
+- Generated merge output should stay disabled until the local model is proven on
+  the golden corpus.
 
 ## Settings Copy
 
@@ -58,7 +57,7 @@ The desktop settings surface should make the warning explicit:
 - Ollama keeps data local, but small local models may miss tables, conflicts, or
   evidence links.
 - The user should run the golden corpus before using a new local model for
-  durable graph output.
+  durable agent-ready output.
 
 ## Update Rule
 
@@ -66,7 +65,6 @@ When model defaults change, update this file and verify:
 
 ```bash
 cargo run -p hyprduck-cli -- eval golden-corpus \
-  --fixtures crates/hyprduck-engine/tests/fixtures/brain-corpus \
   --mode all
 pnpm --dir apps/desktop build
 ```

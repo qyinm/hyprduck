@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainRepoSnapshot, CompileProjectRequest, DocumentFormat, IngestStatus, PageArtifact,
-    SourceArtifactManifest, StructuredExtractionArtifact,
+    SourceArtifactManifest, StructuredExtractionArtifact, StructuredExtractionClaim,
 };
 use serde::Deserialize;
 
@@ -88,6 +88,13 @@ struct EvalCounts {
     contradiction_matched: usize,
     context_expected: usize,
     context_matched: usize,
+    citation_audited_answers: usize,
+    source_ref_resolved: usize,
+    page_ref_resolved: usize,
+    evidence_ref_resolved: usize,
+    citation_correct: usize,
+    unsupported_claims: usize,
+    total_claims: usize,
     latency_ms: u128,
 }
 
@@ -287,6 +294,29 @@ fn source_evidence_artifact_from_snapshot(
         .filter(|evidence| evidence.source_id.as_deref() == Some(source_id))
         .cloned()
         .collect::<Vec<_>>();
+    let page_refs = page_refs_from_evidence(&evidence_refs);
+    let claims = case
+        .expected
+        .expected_claims
+        .iter()
+        .enumerate()
+        .map(|(index, claim)| StructuredExtractionClaim {
+            claim_id: format!("source-evidence-claim-{}-{}", source_id, index + 1),
+            statement: claim.clone(),
+            subject_refs: Vec::new(),
+            source_refs: vec![source_id.to_string()],
+            evidence_refs: evidence_refs
+                .first()
+                .map(|evidence| vec![evidence.id.clone()])
+                .unwrap_or_default(),
+            page_refs: page_refs.clone(),
+            confidence: Some(1.0),
+            status: "active".into(),
+            provenance:
+                "Golden corpus source-evidence claim is backed by deterministic fixture evidence."
+                    .into(),
+        })
+        .collect::<Vec<_>>();
     StructuredExtractionArtifact {
         artifact_id: format!("source-evidence-{source_id}"),
         workspace_id: case.expected.workspace_id.clone(),
@@ -294,10 +324,10 @@ fn source_evidence_artifact_from_snapshot(
         extractor: mode.label().into(),
         extractor_model: None,
         source_refs,
-        page_refs: Vec::new(),
+        page_refs,
         entities: Vec::new(),
         topics: Vec::new(),
-        claims: Vec::new(),
+        claims,
         relations: Vec::new(),
         memories: Vec::new(),
         evidence_refs,
@@ -406,6 +436,53 @@ fn score_case(case: &GoldenCase, artifact: &StructuredExtractionArtifact, counts
     }) {
         counts.context_matched += 1;
     }
+
+    counts.citation_audited_answers += 1;
+    if !artifact.source_refs.is_empty()
+        && artifact
+            .source_refs
+            .iter()
+            .all(|source_ref| source_ref == &case.expected.source_id)
+    {
+        counts.source_ref_resolved += 1;
+    }
+    if !artifact.page_refs.is_empty()
+        && artifact
+            .page_refs
+            .iter()
+            .all(|page_ref| page_ref.page_index.is_some() || !page_ref.page_label.trim().is_empty())
+    {
+        counts.page_ref_resolved += 1;
+    }
+    if !artifact.evidence_refs.is_empty()
+        && artifact.evidence_refs.iter().all(|evidence| {
+            !evidence.id.trim().is_empty()
+                && evidence.source_id.as_deref() == Some(case.expected.source_id.as_str())
+                && !evidence.snippet.trim().is_empty()
+        })
+    {
+        counts.evidence_ref_resolved += 1;
+    }
+    if case
+        .expected
+        .expected_evidence_snippets
+        .iter()
+        .any(|expected| {
+            let expected = normalize(expected);
+            artifact
+                .evidence_refs
+                .iter()
+                .any(|evidence| normalize(&evidence.snippet).contains(&expected))
+        })
+    {
+        counts.citation_correct += 1;
+    }
+    counts.total_claims += artifact.claims.len();
+    counts.unsupported_claims += artifact
+        .claims
+        .iter()
+        .filter(|claim| claim.evidence_refs.is_empty())
+        .count();
 }
 
 fn format_mode_report(mode: GoldenEvalMode, counts: &EvalCounts) -> String {
@@ -446,9 +523,54 @@ fn format_mode_report(mode: GoldenEvalMode, counts: &EvalCounts) -> String {
             counts.context_matched,
             counts.context_expected,
         ),
+        format!(
+            "citation audited answers: {}",
+            counts.citation_audited_answers
+        ),
+        metric_line(
+            "source ref resolve",
+            counts.source_ref_resolved,
+            counts.citation_audited_answers,
+        ),
+        metric_line(
+            "page ref resolve",
+            counts.page_ref_resolved,
+            counts.citation_audited_answers,
+        ),
+        metric_line(
+            "evidence ref resolve",
+            counts.evidence_ref_resolved,
+            counts.citation_audited_answers,
+        ),
+        metric_line(
+            "citation correctness",
+            counts.citation_correct,
+            counts.citation_audited_answers,
+        ),
+        unsupported_claim_rate_line(
+            "unsupported claim rate",
+            counts.unsupported_claims,
+            counts.total_claims,
+        ),
         format!("latency ms: {avg_latency} avg"),
     ]
     .join("\n")
+}
+
+fn page_refs_from_evidence(
+    evidence_refs: &[hyprduck_engine_types::EvidenceRef],
+) -> Vec<hyprduck_engine_types::StructuredExtractionPageRef> {
+    let mut refs = BTreeMap::<(String, Option<usize>), _>::new();
+    for evidence in evidence_refs {
+        refs.entry((evidence.page_label.clone(), evidence.page_index))
+            .or_insert_with(|| hyprduck_engine_types::StructuredExtractionPageRef {
+                page_label: evidence.page_label.clone(),
+                page_index: evidence.page_index,
+                markdown_path: evidence.markdown_path.clone(),
+                image_path: evidence.image_path.clone(),
+            });
+    }
+    refs.into_values().collect()
 }
 
 fn metric_line(label: &str, matched: usize, expected: usize) -> String {
@@ -458,6 +580,15 @@ fn metric_line(label: &str, matched: usize, expected: usize) -> String {
         matched as f32 / expected as f32
     };
     format!("{label}: {matched}/{expected} ({score:.2})")
+}
+
+fn unsupported_claim_rate_line(label: &str, unsupported: usize, total: usize) -> String {
+    let rate = if total == 0 {
+        0.0
+    } else {
+        unsupported as f32 / total as f32
+    };
+    format!("{label}: {unsupported}/{total} ({rate:.2})")
 }
 
 fn normalize(value: &str) -> String {

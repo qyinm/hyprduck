@@ -21,6 +21,7 @@ pub use hyprduck_knowledge::{
 #[serde(rename_all = "snake_case")]
 pub enum EngineCommand {
     Parse,
+    RetryFailedPages,
     CompileProject,
     LoadProject,
     ApplyCorrection,
@@ -194,6 +195,39 @@ pub struct SourceArtifactManifest {
     pub pages: Vec<PageArtifact>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPageArtifactUpdate {
+    pub page_index: usize,
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub plain_text: Option<String>,
+    #[serde(default)]
+    pub image_asset_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedPagesRequest {
+    pub source_manifest_path: String,
+    pub pages: Vec<RetryPageArtifactUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedPagesResponseData {
+    pub source_manifest: SourceArtifactManifest,
+    pub retried_page_count: usize,
+    pub remaining_failed_count: usize,
+    pub warnings_before: usize,
+    pub warnings_after: usize,
+    pub source_pack_path: String,
+    pub evidence_index_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -914,7 +948,6 @@ impl ContextPackV0 {
             .filter_map(|evidence| {
                 ContextPackEvidenceV0::from_evidence_ref(
                     evidence,
-                    source_metadata,
                     &artifact_metadata.evidence,
                     &source_set_ids,
                 )
@@ -950,6 +983,95 @@ impl ContextPackV0 {
             })
             .collect();
 
+        let omitted_evidence = pack
+            .evidence
+            .iter()
+            .filter(|evidence| match evidence.source_id.as_ref() {
+                Some(source_id) => {
+                    !source_metadata.contains_key(source_id)
+                        || !source_set_ids.contains(source_id)
+                        || !artifact_metadata.evidence.get(source_id).is_some_and(
+                            |source_evidence| source_evidence.contains_key(&evidence.id),
+                        )
+                }
+                None => true,
+            })
+            .collect::<Vec<_>>();
+
+        let mut suggested_next_reads = Vec::new();
+        let mut suggested_next_read_keys = std::collections::BTreeSet::new();
+        for evidence in &selected_evidence {
+            if evidence.parse_confidence == ContextPackParseConfidence::Low
+                && suggested_next_read_keys.insert((evidence.source_id.clone(), evidence.page))
+            {
+                suggested_next_reads.push(ContextPackSuggestedNextReadV0 {
+                    source_id: evidence.source_id.clone(),
+                    page: evidence.page,
+                    reason: "Review this page because selected evidence has low parse confidence."
+                        .into(),
+                });
+            }
+        }
+        for evidence in &omitted_evidence {
+            let Some(source_id) = evidence.source_id.clone() else {
+                continue;
+            };
+            let page = evidence.page_index.unwrap_or(0) + 1;
+            if suggested_next_read_keys.insert((source_id.clone(), page)) {
+                suggested_next_reads.push(ContextPackSuggestedNextReadV0 {
+                    source_id,
+                    page,
+                    reason: format!(
+                        "Review this page because evidence {} could not be selected for the Context Pack.",
+                        evidence.id
+                    ),
+                });
+            }
+        }
+
+        let warnings = pack
+            .warnings
+            .iter()
+            .map(|warning| ContextPackWarningV0 {
+                warning_type: context_pack_internal_warning_type(warning).into(),
+                severity: ContextPackWarningSeverity::Medium,
+                message: warning.clone(),
+                page_refs: Vec::new(),
+            })
+            .chain(omitted_evidence.iter().map(|evidence| ContextPackWarningV0 {
+                warning_type: "evidence_missing_content_hash".into(),
+                severity: ContextPackWarningSeverity::High,
+                message: format!(
+                    "Evidence {} was omitted from Context Pack v0 because its source content hash or provider route is unavailable.",
+                    evidence.id
+                ),
+                page_refs: evidence.source_id.clone().map_or_else(Vec::new, |source_id| {
+                    vec![ContextPackPageRefV0 {
+                        source_id,
+                        page: evidence.page_index.unwrap_or(0) + 1,
+                    }]
+                }),
+            }))
+            .chain(artifact_metadata.warnings.iter().cloned())
+            .chain(selected_evidence.iter().filter_map(|evidence| {
+                if evidence.parse_confidence != ContextPackParseConfidence::Low {
+                    return None;
+                }
+                Some(ContextPackWarningV0 {
+                    warning_type: "low_parse_confidence".into(),
+                    severity: ContextPackWarningSeverity::Medium,
+                    message: format!(
+                        "Evidence {} has low parse confidence; verify the source page before relying on it.",
+                        evidence.evidence_ref
+                    ),
+                    page_refs: vec![ContextPackPageRefV0 {
+                        source_id: evidence.source_id.clone(),
+                        page: evidence.page,
+                    }],
+                })
+            }))
+            .collect();
+
         Self {
             schema_version: CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
             pack_id: pack_id.into(),
@@ -959,42 +1081,7 @@ impl ContextPackV0 {
             source_set,
             selected_evidence,
             findings,
-            warnings: pack
-                .warnings
-                .iter()
-                .map(|warning| ContextPackWarningV0 {
-                    warning_type: "internal_context_warning".into(),
-                    severity: ContextPackWarningSeverity::Medium,
-                    message: warning.clone(),
-                    page_refs: Vec::new(),
-                })
-                .chain(
-                    pack.evidence
-                        .iter()
-                        .filter(|evidence| match evidence.source_id.as_ref() {
-                            Some(source_id) => {
-                                !source_metadata.contains_key(source_id)
-                                    || !source_set_ids.contains(source_id)
-                            }
-                            None => true,
-                        })
-                        .map(|evidence| ContextPackWarningV0 {
-                            warning_type: "evidence_missing_content_hash".into(),
-                            severity: ContextPackWarningSeverity::High,
-                            message: format!(
-                                "Evidence {} was omitted from Context Pack v0 because its source content hash or provider route is unavailable.",
-                                evidence.id
-                            ),
-                            page_refs: evidence.source_id.clone().map_or_else(Vec::new, |source_id| {
-                                vec![ContextPackPageRefV0 {
-                                    source_id,
-                                    page: evidence.page_index.unwrap_or(0) + 1,
-                                }]
-                            }),
-                        }),
-                )
-                .chain(artifact_metadata.warnings.iter().cloned())
-                .collect(),
+            warnings,
             retrieval_trace: ContextPackRetrievalTraceV0 {
                 strategy: "internal-brain-context-pack".into(),
                 chunks_considered: pack.evidence.len(),
@@ -1002,8 +1089,17 @@ impl ContextPackV0 {
                 budget_requested: pack.token_budget,
                 budget_used: pack.summary.len(),
             },
-            suggested_next_reads: Vec::new(),
+            suggested_next_reads,
         }
+    }
+}
+
+fn context_pack_internal_warning_type(warning: &str) -> &'static str {
+    let normalized = warning.to_ascii_lowercase();
+    if normalized.contains("budget") && normalized.contains("truncat") {
+        "budget_truncated"
+    } else {
+        "internal_context_warning"
     }
 }
 
@@ -1042,7 +1138,6 @@ impl ContextPackSourceV0 {
 impl ContextPackEvidenceV0 {
     fn from_evidence_ref(
         evidence: &EvidenceRef,
-        source_metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
         evidence_metadata: &BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
         source_set_ids: &std::collections::BTreeSet<SourceId>,
     ) -> Option<Self> {
@@ -1067,20 +1162,7 @@ impl ContextPackEvidenceV0 {
                 content_hash: metadata.content_hash.clone(),
             });
         }
-
-        let source = source_metadata.get(&source_id)?;
-        let page = evidence.page_index.unwrap_or(0) + 1;
-        Some(Self {
-            evidence_ref: evidence.id.clone(),
-            source_id,
-            page,
-            region: Some(format!("page:{}", evidence.page_label)),
-            span: None,
-            quoted_text: evidence.snippet.clone(),
-            parse_confidence: ContextPackParseConfidence::Unknown,
-            selection_reason: "Selected from the internal context pack for this query.".into(),
-            content_hash: source.content_hash.clone(),
-        })
+        None
     }
 }
 
@@ -1270,6 +1352,7 @@ pub struct EngineRuntimeEvent {
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum EngineRequest {
     Parse(ParseRequest),
+    RetryFailedPages(RetryFailedPagesRequest),
     CompileProject(CompileProjectRequest),
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),
@@ -2209,10 +2292,7 @@ mod tests {
             external.findings[0].derived_from,
             vec!["ev_src_agent_context_p1_b1"]
         );
-        assert_eq!(
-            external.warnings[0].warning_type,
-            "internal_context_warning"
-        );
+        assert_eq!(external.warnings[0].warning_type, "budget_truncated");
     }
 
     #[test]
@@ -2265,6 +2345,202 @@ mod tests {
             external.warnings[0].warning_type,
             "evidence_missing_content_hash"
         );
+        assert_eq!(external.suggested_next_reads.len(), 1);
+        assert_eq!(
+            external.suggested_next_reads[0].source_id,
+            "src_agent_context"
+        );
+        assert_eq!(external.suggested_next_reads[0].page, 1);
+        assert!(external.suggested_next_reads[0]
+            .reason
+            .contains("could not be selected"));
+    }
+
+    #[test]
+    fn context_pack_v0_requires_indexed_evidence_before_emitting_findings() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "agent reuse".into(),
+            token_budget: 4000,
+            summary: "Agent context reuse summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "src_agent_context".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/agent-context.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/src_agent_context.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/sources/src_agent_context.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_agent_reuse".into(),
+                workspace_id: "default".into(),
+                statement: "Context packs can be reused by agents.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_agent_context".into()],
+                evidence_refs: vec!["ev_src_agent_context_p1_b1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_src_agent_context_p1_b1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Internal snippet without Evidence Index backing.".into(),
+                source_path: None,
+                source_id: Some("src_agent_context".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: Some("markdown_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let artifact_metadata = ContextPackArtifactMetadataV0::from_sources(BTreeMap::from([(
+            "src_agent_context".into(),
+            ContextPackSourceMetadataV0 {
+                content_hash: "sha256:abc123".into(),
+                provider_route: "ollama".into(),
+                local_only: true,
+            },
+        )]));
+
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &artifact_metadata,
+        );
+
+        assert!(external.selected_evidence.is_empty());
+        assert!(external.findings.is_empty());
+        assert!(external.warnings.iter().any(|warning| warning.warning_type
+            == "evidence_missing_content_hash"
+            && warning.page_refs[0].source_id == "src_agent_context"
+            && warning.page_refs[0].page == 1));
+        assert_eq!(external.suggested_next_reads.len(), 1);
+        assert_eq!(
+            external.suggested_next_reads[0].source_id,
+            "src_agent_context"
+        );
+    }
+
+    #[test]
+    fn context_pack_v0_warns_and_suggests_next_read_for_low_confidence_evidence() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "visual table".into(),
+            token_budget: 4000,
+            summary: "Visual table summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "src_visual_table".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/visual-table.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/src_visual_table.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/sources/src_visual_table.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_visual_table".into(),
+                workspace_id: "default".into(),
+                statement: "The visual table needs verification.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_visual_table".into()],
+                evidence_refs: vec!["ev_visual_table_p1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_visual_table_p1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Visual table extracted text.".into(),
+                source_path: None,
+                source_id: Some("src_visual_table".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: Some("visual_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let mut artifact_metadata =
+            ContextPackArtifactMetadataV0::from_sources(BTreeMap::from([(
+                "src_visual_table".into(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: "sha256:visual-table".into(),
+                    provider_route: "ollama".into(),
+                    local_only: true,
+                },
+            )]));
+        artifact_metadata
+            .evidence
+            .entry("src_visual_table".into())
+            .or_default()
+            .insert(
+                "ev_visual_table_p1".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "src_visual_table".into(),
+                    page: 1,
+                    region: Some("page:Page 1".into()),
+                    span: Some("table".into()),
+                    quoted_text: "Visual table extracted text.".into(),
+                    parse_confidence: ContextPackParseConfidence::Low,
+                    content_hash: "sha256:visual-table".into(),
+                    markdown_path: None,
+                    image_path: None,
+                },
+            );
+
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &artifact_metadata,
+        );
+
+        assert_eq!(
+            external.selected_evidence[0].parse_confidence,
+            ContextPackParseConfidence::Low
+        );
+        assert!(external
+            .warnings
+            .iter()
+            .any(|warning| warning.warning_type == "low_parse_confidence"
+                && warning.page_refs[0].source_id == "src_visual_table"
+                && warning.page_refs[0].page == 1));
+        assert_eq!(external.suggested_next_reads.len(), 1);
+        assert_eq!(
+            external.suggested_next_reads[0].source_id,
+            "src_visual_table"
+        );
+        assert_eq!(external.suggested_next_reads[0].page, 1);
+        assert!(external.suggested_next_reads[0]
+            .reason
+            .contains("low parse confidence"));
     }
 
     #[test]

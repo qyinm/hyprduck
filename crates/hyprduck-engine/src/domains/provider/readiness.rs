@@ -14,14 +14,14 @@ pub(crate) fn validate_provider(config: &EngineConfig) -> ValidateProviderRespon
 
     if config.provider.requires_api_key() && config.api_key.trim().is_empty() {
         issues.push(ValidationIssue {
-            code: "missing_api_key".into(),
+            code: "provider_config".into(),
             message: format!("{} requires an API key.", config.provider.label()),
         });
     }
 
     if config.model_id.trim().is_empty() {
         issues.push(ValidationIssue {
-            code: "missing_model_id".into(),
+            code: "provider_config".into(),
             message: "A model ID is required.".into(),
         });
     }
@@ -32,7 +32,7 @@ pub(crate) fn validate_provider(config: &EngineConfig) -> ValidateProviderRespon
             || base_url.starts_with("https://"))
         {
             issues.push(ValidationIssue {
-                code: "invalid_base_url".into(),
+                code: "provider_config".into(),
                 message: "Base URL must start with http:// or https://".into(),
             });
         }
@@ -253,7 +253,7 @@ mod tests {
 
         assert!(!validation.ready);
         assert!(validation.issues.iter().any(|issue| {
-            issue.code == "missing_api_key" && issue.message == "OpenRouter requires an API key."
+            issue.code == "provider_config" && issue.message == "OpenRouter requires an API key."
         }));
     }
 }
