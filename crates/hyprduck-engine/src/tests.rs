@@ -5591,6 +5591,55 @@ fn output_packaging_records_partial_import_warnings_in_artifacts() {
 }
 
 #[test]
+fn output_packaging_records_all_page_failure_status() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.pages = vec![ParsedPage {
+        index: 0,
+        markdown: None,
+        plain_text: None,
+        svg: None,
+        image_asset_path: Some("images/page_1.png".into()),
+        error_message: Some("provider unavailable".into()),
+    }];
+    result.success_count = 0;
+    result.failed_count = 1;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("failed output manifest");
+
+    assert_eq!(manifest.status, IngestStatus::Failed);
+    assert_eq!(manifest.pages.len(), 1);
+    assert_eq!(
+        manifest.pages[0].error_message.as_deref(),
+        Some("provider unavailable")
+    );
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let source_pack: hyprduck_engine_types::SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.warnings.len(), 1);
+    assert_eq!(source_pack.warnings[0].warning_type, "page_parse_failed");
+    assert_eq!(evidence_index.warnings, source_pack.warnings);
+    assert!(evidence_index.evidence.is_empty());
+}
+
+#[test]
 fn output_packaging_records_ollama_as_local_provider() {
     let temp = tempfile::tempdir().expect("temp dir");
     let config = EngineConfig {

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use hyprduck_engine_types::{
     EngineConfigPayload, EngineSuccess, ParseResponseData, RuntimeReadinessResponseData,
+    SourcePackV0,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -48,6 +49,7 @@ fn run_parse(fixture: &str, format: &str) -> ParseResponseData {
     write_ollama_config(config_dir.path());
 
     let output_dir = tempdir().expect("output dir");
+    let output_root = output_dir.keep();
     let request = json!({
         "command": "parse",
         "payload": {
@@ -62,7 +64,7 @@ fn run_parse(fixture: &str, format: &str) -> ParseResponseData {
                 "debug_result_path": null
             },
             "output": {
-                "root_dir": output_dir.path(),
+                "root_dir": output_root,
                 "name": format!("fixture-{format}")
             }
         }
@@ -101,23 +103,81 @@ fn run_parse(fixture: &str, format: &str) -> ParseResponseData {
 fn pdf_fixture_round_trips_through_engine() {
     let result = run_parse("sample.pdf", "pdf");
     assert_eq!(result.result.pages.len(), 1);
-    assert_eq!(result.result.assets.len(), 0);
+    assert_eq!(result.result.assets.len(), 1);
+    assert_eq!(
+        result.result.pages[0].image_asset_path.as_deref(),
+        Some("images/page_1.png")
+    );
     assert!(result.result.markdown.contains("## Page 1"));
+    assert!(result
+        .result
+        .markdown
+        .contains("![Page 1](images/page_1.png)"));
     assert!(result.saved_output_path.is_some());
+    assert_source_artifacts(&result, "pdf");
 }
 
 #[test]
 fn docx_fixture_round_trips_through_engine() {
     let result = run_parse("sample.docx", "docx");
     assert_eq!(result.result.pages.len(), 1);
+    assert_eq!(result.result.assets.len(), 1);
+    assert_eq!(
+        result.result.pages[0].image_asset_path.as_deref(),
+        Some("images/page_1.svg")
+    );
+    assert!(result
+        .result
+        .markdown
+        .contains("![Page 1](images/page_1.svg)"));
     assert!(result.saved_output_path.is_some());
+    assert_source_artifacts(&result, "docx");
 }
 
 #[test]
 fn doc_fixture_round_trips_through_engine() {
     let result = run_parse("sample.doc", "doc");
     assert_eq!(result.result.pages.len(), 1);
+    assert_eq!(result.result.assets.len(), 1);
+    assert_eq!(
+        result.result.pages[0].image_asset_path.as_deref(),
+        Some("images/page_1.svg")
+    );
+    assert!(result
+        .result
+        .markdown
+        .contains("![Page 1](images/page_1.svg)"));
     assert!(result.saved_output_path.is_some());
+    assert_source_artifacts(&result, "doc");
+}
+
+fn assert_source_artifacts(result: &ParseResponseData, format: &str) {
+    let manifest = result.source_manifest.as_ref().expect("source manifest");
+    assert_eq!(
+        manifest.status,
+        hyprduck_engine_types::IngestStatus::Ingested
+    );
+    assert_eq!(manifest.pages.len(), 1);
+    assert!(Path::new(&manifest.source_path).exists());
+    assert!(Path::new(&manifest.markdown_path).exists());
+    assert!(manifest.pages[0]
+        .markdown_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).exists()));
+    assert!(manifest.pages[0]
+        .image_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).exists()));
+
+    let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
+    let source_pack: SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(&source_pack_path).expect("source pack json"))
+            .expect("source pack");
+    assert_eq!(source_pack.source_id, manifest.source_id);
+    assert_eq!(source_pack.format, manifest.format);
+    assert_eq!(source_pack.page_count, 1, "{format} page count");
+    assert_eq!(source_pack.pages.len(), 1, "{format} source pack pages");
+    assert!(source_pack.pages[0].image_path.is_some());
 }
 
 #[test]
