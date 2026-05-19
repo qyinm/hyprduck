@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use hyprduck_engine_types::{
-    EngineConfigPayload, EngineSuccess, ParseResponseData, RuntimeReadinessResponseData,
-    SourcePackV0,
+    EngineConfigPayload, EngineSuccess, EvidenceIndexV0, ParseResponseData,
+    RuntimeReadinessResponseData, SourcePackV0,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -178,6 +178,38 @@ fn assert_source_artifacts(result: &ParseResponseData, format: &str) {
     assert_eq!(source_pack.page_count, 1, "{format} page count");
     assert_eq!(source_pack.pages.len(), 1, "{format} source pack pages");
     assert!(source_pack.pages[0].image_path.is_some());
+
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let evidence_index: EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(&evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+    assert_eq!(
+        source_pack.schema_version,
+        hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence_index.schema_version,
+        hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+    );
+    assert_eq!(source_pack.workspace_id, manifest.workspace_id);
+    assert_eq!(evidence_index.workspace_id, manifest.workspace_id);
+    assert_eq!(evidence_index.source_id, manifest.source_id);
+    assert_eq!(source_pack.content_hash, evidence_index.content_hash);
+    assert_eq!(source_pack.provider_route, evidence_index.provider_route);
+    assert_eq!(source_pack.local_only, evidence_index.local_only);
+
+    if format != "doc" {
+        assert_eq!(evidence_index.evidence.len(), 1, "{format} evidence count");
+        assert_eq!(evidence_index.evidence[0].source_id, manifest.source_id);
+        assert_eq!(evidence_index.evidence[0].page, 1);
+        assert!(!evidence_index.evidence[0].evidence_ref.is_empty());
+        assert!(!evidence_index.evidence[0].quoted_text.trim().is_empty());
+        assert_eq!(
+            evidence_index.evidence[0].content_hash,
+            source_pack.content_hash
+        );
+    }
 }
 
 #[test]
