@@ -38,6 +38,8 @@ use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(test)]
+use std::io::ErrorKind;
+#[cfg(test)]
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -2868,7 +2870,9 @@ fn fnv1a_hash(bytes: &[u8]) -> u64 {
 }
 
 fn engine_failure(command: EngineCommand, error: &anyhow::Error) -> EngineFailure {
-    let code = if format!("{error:?}").contains("decode") {
+    let code = if let Some(provider_code) = provider_failure_code(error) {
+        provider_code
+    } else if format!("{error:?}").contains("decode") {
         "invalid_request"
     } else if format!("{error:?}").contains("config") {
         "config_error"
@@ -2876,6 +2880,41 @@ fn engine_failure(command: EngineCommand, error: &anyhow::Error) -> EngineFailur
         "runtime_error"
     };
     EngineFailure::new(command, code, error.to_string())
+}
+
+fn provider_failure_code(error: &anyhow::Error) -> Option<&'static str> {
+    let message = error.to_string();
+    [
+        "provider_config",
+        "provider_timeout",
+        "provider_response_invalid",
+        "unsupported_provider",
+    ]
+    .into_iter()
+    .find(|code| message.starts_with(&format!("{code}:")))
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+
+    #[test]
+    fn engine_failure_uses_provider_taxonomy_as_error_code() {
+        let error = anyhow!("provider_timeout: provider request timed out after 1s");
+        let failure = engine_failure(EngineCommand::Parse, &error);
+
+        assert_eq!(failure.error.code, "provider_timeout");
+        assert!(failure.error.message.contains("provider_timeout:"));
+    }
+
+    #[test]
+    fn engine_failure_keeps_non_provider_config_errors_as_config_error() {
+        let error = std::io::Error::new(ErrorKind::NotFound, "config file missing");
+        let error = anyhow!(error).context("failed reading config");
+        let failure = engine_failure(EngineCommand::LoadConfig, &error);
+
+        assert_eq!(failure.error.code, "config_error");
+    }
 }
 
 fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {

@@ -14,7 +14,7 @@ use super::response::{
 use super::validation::{
     validate_provider_source_local_graph_snapshot, validate_provider_workspace_linking_snapshot,
 };
-use crate::provider::EngineConfig;
+use crate::provider::{EngineConfig, ProviderKind};
 use crate::*;
 
 const PROVIDER_GRAPH_PROMPT_VERSION: u32 = 2;
@@ -156,7 +156,7 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     }
 
     if provider_unavailable(&config) {
-        report.skipped_reason = Some("provider_unavailable".into());
+        report.skipped_reason = Some(provider_unavailable_reason(&config).into());
         write_json_pretty(&report_path, &report)?;
         return Ok(report);
     }
@@ -383,6 +383,14 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     report.updated_at = unix_timestamp_seconds();
     write_json_pretty(&report_path, &report)?;
     Ok(report)
+}
+
+fn provider_unavailable_reason(config: &EngineConfig) -> &'static str {
+    match &config.provider {
+        ProviderKind::Unknown(_) => "unsupported_provider",
+        ProviderKind::OpenRouter if config.api_key.trim().is_empty() => "provider_config",
+        _ => "provider_config",
+    }
 }
 
 fn update_materialized_counts(
@@ -859,6 +867,33 @@ mod tests {
             &manifest,
             &changed_markdown
         ));
+    }
+
+    #[test]
+    fn provider_unavailable_reason_uses_provider_taxonomy() {
+        let missing_openrouter = EngineConfig {
+            provider: ProviderKind::OpenRouter,
+            model_id: "openai/gpt-4.1-mini".into(),
+            api_key: String::new(),
+            base_url: None,
+            prompt_template: "General".into(),
+        };
+        let unknown_provider = EngineConfig {
+            provider: ProviderKind::Unknown("legacy_ai".into()),
+            model_id: "legacy-model".into(),
+            api_key: "legacy-key".into(),
+            base_url: None,
+            prompt_template: "General".into(),
+        };
+
+        assert_eq!(
+            provider_unavailable_reason(&missing_openrouter),
+            "provider_config"
+        );
+        assert_eq!(
+            provider_unavailable_reason(&unknown_provider),
+            "unsupported_provider"
+        );
     }
 
     #[test]

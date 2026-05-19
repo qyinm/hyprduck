@@ -100,6 +100,7 @@ interface ProviderOption {
 }
 
 interface ValidationIssue {
+  code: string;
   message: string;
 }
 
@@ -301,7 +302,10 @@ function deriveWebValidation(
   );
   const issues: ValidationIssue[] = [];
   if (provider?.requires_api_key && !config.api_key.trim()) {
-    issues.push({ message: `${provider.label} requires an API key.` });
+    issues.push({
+      code: "provider_config",
+      message: `${provider.label} requires an API key.`,
+    });
   }
   return {
     ready: issues.length === 0,

@@ -15,6 +15,32 @@ use async_openai::{
 
 use crate::provider::{EngineConfig, ProviderKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderFailureKind {
+    ProviderConfig,
+    ProviderTimeout,
+    ProviderResponseInvalid,
+    UnsupportedProvider,
+}
+
+impl ProviderFailureKind {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::ProviderConfig => "provider_config",
+            Self::ProviderTimeout => "provider_timeout",
+            Self::ProviderResponseInvalid => "provider_response_invalid",
+            Self::UnsupportedProvider => "unsupported_provider",
+        }
+    }
+}
+
+pub(crate) fn provider_failure(
+    kind: ProviderFailureKind,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    anyhow!("{}: {}", kind.code(), message.into())
+}
+
 pub(crate) fn parse_openai_compatible(
     config: &EngineConfig,
     prompt: &str,
@@ -62,12 +88,23 @@ fn parse_openai_compatible_with_response_format_timeout(
     timeout: Option<Duration>,
     response_format: Option<ResponseFormat>,
 ) -> Result<String> {
-    let request = build_chat_completion_request(config, prompt, image_base64, response_format)?;
+    let request = build_chat_completion_request(config, prompt, image_base64, response_format)
+        .map_err(|error| {
+            provider_failure(
+                ProviderFailureKind::ProviderConfig,
+                format!("failed to build OpenAI-compatible chat completion request: {error:#}"),
+            )
+        })?;
     let client = openai_compatible_client(config);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("failed to build provider API runtime")?;
+        .map_err(|error| {
+            provider_failure(
+                ProviderFailureKind::ProviderConfig,
+                format!("failed to build provider API runtime: {error:#}"),
+            )
+        })?;
 
     runtime.block_on(async {
         let chat = client.chat();
@@ -75,17 +112,32 @@ fn parse_openai_compatible_with_response_format_timeout(
         let response = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, request_future)
                 .await
-                .map_err(|_| anyhow!("provider request timed out after {timeout:?}"))?,
+                .map_err(|_| {
+                    provider_failure(
+                        ProviderFailureKind::ProviderTimeout,
+                        format!("provider request timed out after {timeout:?}"),
+                    )
+                })?,
             None => request_future.await,
         }
-        .map_err(|error| anyhow!("failed to complete provider request: {error:#}"))?;
+        .map_err(|error| {
+            provider_failure(
+                ProviderFailureKind::ProviderConfig,
+                format!("failed to complete provider request: {error:#}"),
+            )
+        })?;
 
         response
             .choices
             .first()
             .and_then(|choice| choice.message.content.as_deref())
             .map(str::to_string)
-            .ok_or_else(|| anyhow!("provider response did not include markdown text"))
+            .ok_or_else(|| {
+                provider_failure(
+                    ProviderFailureKind::ProviderResponseInvalid,
+                    "provider response did not include markdown text",
+                )
+            })
     })
 }
 
@@ -207,6 +259,19 @@ mod tests {
         config.api_key.clear();
 
         assert!(!provider_unavailable(&config));
+    }
+
+    #[test]
+    fn provider_failure_messages_include_stable_taxonomy_code() {
+        let error = provider_failure(
+            ProviderFailureKind::ProviderResponseInvalid,
+            "provider response did not include markdown text",
+        );
+
+        assert_eq!(
+            error.to_string(),
+            "provider_response_invalid: provider response did not include markdown text"
+        );
     }
 
     #[test]

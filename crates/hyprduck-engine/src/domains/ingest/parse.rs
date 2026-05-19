@@ -373,24 +373,31 @@ fn parse_text_document(
             image_asset_path: None,
             error_message: None,
         },
-        Err(_) => ParsedPage {
-            index: 0,
-            markdown: Some(text.clone()),
-            plain_text: Some(text.clone()),
-            svg: None,
-            image_asset_path: None,
-            error_message: None,
-        },
+        Err(error) => {
+            let provider_error = format!("{error:#}");
+            let fallback_markdown = provider_fallback_markdown(&text, &provider_error);
+            ParsedPage {
+                index: 0,
+                markdown: Some(fallback_markdown.clone()),
+                plain_text: Some(fallback_markdown),
+                svg: None,
+                image_asset_path: None,
+                error_message: Some(provider_error),
+            }
+        }
     };
 
-    let failed_count = usize::from(page.markdown.is_none());
     Ok(attach_text_preview_assets(ParsedDocument {
         pages: vec![page],
         assets: Vec::new(),
         page_count: 1,
-        success_count: 1usize.saturating_sub(failed_count),
-        failed_count,
+        success_count: 1,
+        failed_count: 0,
     }))
+}
+
+fn provider_fallback_markdown(text: &str, provider_error: &str) -> String {
+    format!("_HyprDuck provider fallback: {provider_error}_\n\n{text}")
 }
 
 fn convert_pdf_to_pngs(path: &Path, process_locator: &impl ProcessLocator) -> Result<Vec<PathBuf>> {
@@ -447,7 +454,7 @@ fn rendered_page_sort_key(path: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::rendered_page_sort_key;
+    use super::{provider_fallback_markdown, rendered_page_sort_key};
     use std::path::Path;
 
     #[test]
@@ -472,6 +479,17 @@ mod tests {
                 "page-11.png"
             ]
         );
+    }
+
+    #[test]
+    fn provider_fallback_markdown_preserves_failure_taxonomy() {
+        let markdown = provider_fallback_markdown(
+            "Extracted text",
+            "provider_timeout: provider request timed out after 1s",
+        );
+
+        assert!(markdown.contains("provider_timeout: provider request timed out"));
+        assert!(markdown.contains("Extracted text"));
     }
 }
 

@@ -142,6 +142,12 @@ test("desktop app prepares the short HyprDuck MCP shell command", () => {
   expect(mainSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
 });
 
+test("desktop provider validation preserves issue codes", () => {
+  expect(appSource).toMatch(/interface ValidationIssue \{\s*code: string;\s*message: string;\s*\}/);
+  expect(appSource).toMatch(/code: "provider_config"/);
+  expect(appSource).toMatch(/validation\.issues\.map\(\(issue\) => issue\.message\)/);
+});
+
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
   expect(appSource).toMatch(/type WorkspaceLoadStatus = "idle" \| "loading" \| "ready" \| "fallback" \| "error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
