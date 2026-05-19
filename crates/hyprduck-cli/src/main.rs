@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod eval;
 mod mcp;
+mod metrics;
 mod tui;
 mod ui;
 
@@ -788,6 +789,9 @@ fn run_eval(command: cli::EvalCommand) -> Result<()> {
         cli::EvalCommand::GoldenCorpus { fixtures, mode } => {
             let mode = eval::GoldenEvalMode::parse(&mode)?;
             println!("{}", eval::run_golden_corpus(fixtures, mode)?);
+        }
+        cli::EvalCommand::DryRunLog { input } => {
+            println!("{}", metrics::run_dry_run_log(input)?);
         }
     }
     Ok(())
