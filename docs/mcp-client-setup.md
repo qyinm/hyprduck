@@ -4,11 +4,13 @@ HyprDuck exposes private document context through a local, read-only MCP stdio
 server. The server is intended for agent clients that can call `get_context_pack`,
 `search_documents`, `read_source`, `read_page_evidence`, and `read_health`.
 
-Production installs should point clients at the HyprDuck binary bundled in the
-macOS app:
+Production installs should use the short `hyprduck` command. Open HyprDuck once
+first; the app installs or refreshes the command at `~/.local/bin/hyprduck`.
+If `command -v hyprduck` does not print a path, use
+`~/.local/bin/hyprduck` in the commands below or add `~/.local/bin` to `PATH`.
 
 ```bash
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp serve
+hyprduck mcp serve
 ```
 
 Local development can use the Cargo-built CLI:
@@ -19,15 +21,14 @@ cargo run -p hyprduck-cli -- mcp serve
 
 ## Codex
 
-Register HyprDuck with Codex from the installed app:
+Register HyprDuck with Codex:
 
 ```bash
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install codex
+hyprduck mcp install codex
 ```
 
-The installer creates a `hyprduck` MCP server entry and a shell shim at
-`~/.local/bin/hyprduck`. The registered MCP command uses the canonical HyprDuck
-binary path that ran the installer, followed by:
+The installer creates a `hyprduck` MCP server entry. The registered MCP command
+uses the canonical HyprDuck binary path that ran the installer, followed by:
 
 ```bash
 mcp serve
@@ -39,10 +40,10 @@ tool call should usually be `get_context_pack`; follow-up inspection should use
 
 ## Claude Code
 
-Register HyprDuck with Claude Code from the installed app:
+Register HyprDuck with Claude Code:
 
 ```bash
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install claude-code
+hyprduck mcp install claude-code
 ```
 
 The installer writes `~/.config/claude-code/mcp_servers.json` and preserves
@@ -54,7 +55,7 @@ shape:
 {
   "mcpServers": {
     "hyprduck": {
-      "command": "/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin",
+      "command": "<canonical HyprDuck CLI path>",
       "args": ["mcp", "serve"]
     }
   }
@@ -68,8 +69,7 @@ before using lower-level read tools.
 ## Cursor
 
 Cursor can use the same stdio server command if its MCP settings are configured
-manually. Use the installed binary path directly, or use `hyprduck` only after
-the installer-created `~/.local/bin/hyprduck` shim is on `PATH`:
+manually:
 
 ```json
 {

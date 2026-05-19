@@ -194,6 +194,9 @@ fn mcp_install_claude_code_writes_production_server_entry() {
         .unwrap()
         .contains("hyprduck"));
     assert!(home.join(".local/bin/hyprduck").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("shell command:"));
+    assert!(stdout.contains("path note:"));
     let _ = fs::remove_dir_all(home);
 }
 
@@ -230,6 +233,65 @@ fn mcp_install_codex_registers_server_and_shell_command() {
     assert!(calls.contains("mcp add hyprduck --"));
     assert!(calls.contains("mcp serve"));
     assert!(home.join(".local/bin/hyprduck").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("shell command:"));
+    assert!(stdout.contains("path note:"));
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+#[cfg(unix)]
+fn mcp_install_preserves_unmanaged_shell_symlink() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install-preserve-symlink");
+    let bin_dir = home.join(".local/bin");
+    let foreign_target = home.join("custom-hyprduck");
+    let shim_path = bin_dir.join("hyprduck");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(&foreign_target, "#!/bin/sh\nexit 0\n").unwrap();
+    std::os::unix::fs::symlink(&foreign_target, &shim_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "claude-code"])
+        .env("HOME", &home)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_link(&shim_path).unwrap(), foreign_target);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("shell command already points elsewhere"));
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+#[cfg(unix)]
+fn mcp_install_replaces_previous_app_bundle_shell_symlink() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install-managed-symlink");
+    let bin_dir = home.join(".local/bin");
+    let old_bundle_bin =
+        home.join("Old HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin");
+    let shim_path = bin_dir.join("hyprduck");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(old_bundle_bin.parent().unwrap()).unwrap();
+    fs::write(&old_bundle_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    std::os::unix::fs::symlink(&old_bundle_bin, &shim_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "claude-code"])
+        .env("HOME", &home)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_ne!(fs::read_link(&shim_path).unwrap(), old_bundle_bin);
     let _ = fs::remove_dir_all(home);
 }
 

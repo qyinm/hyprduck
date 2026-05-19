@@ -7,16 +7,18 @@ hyprduck mcp serve
 ```
 
 For production macOS installs, use the CLI bundled inside the installed app to
-install the shell command and register HyprDuck with Codex or Claude Code:
+register HyprDuck with Codex or Claude Code. Open HyprDuck once first; the app
+installs or refreshes the `hyprduck` shell command at `~/.local/bin/hyprduck`.
+If `command -v hyprduck` does not print a path, use the `~/.local/bin/hyprduck`
+fallback shown below or add `~/.local/bin` to `PATH`.
 
 ```bash
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install codex
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install claude-code
+hyprduck mcp install codex
+hyprduck mcp install claude-code
 ```
 
-That writes a `hyprduck` MCP server entry pointing at the installed app bundle
-and creates `~/.local/bin/hyprduck`, so clients and shells do not depend on a
-source checkout or `cargo run`.
+That writes a `hyprduck` MCP server entry pointing at the installed app bundle,
+so clients do not depend on a source checkout or `cargo run`.
 
 See [`docs/mcp-client-setup.md`](mcp-client-setup.md) for Codex, Claude Code,
 and Cursor setup details.
@@ -25,6 +27,14 @@ For local development, run the same server through Cargo:
 
 ```bash
 cargo run -p hyprduck-cli -- mcp serve
+```
+
+If your shell does not include `~/.local/bin` on `PATH`, use the shim path
+directly:
+
+```bash
+~/.local/bin/hyprduck mcp install codex
+~/.local/bin/hyprduck mcp install claude-code
 ```
 
 ## Client Configuration
