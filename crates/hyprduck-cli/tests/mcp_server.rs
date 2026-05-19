@@ -262,6 +262,76 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
+            "id": 122,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP evidence",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        context_pack_tool["result"]["isError"], false,
+        "{context_pack_tool:#?}"
+    );
+    let text = context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("context pack tool text");
+    let context_pack_payload: Value = serde_json::from_str(text).expect("context pack payload");
+    assert_eq!(
+        context_pack_payload["contextPackV0"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    let context_pack_answer =
+        cited_answer_from_context_pack(&context_pack_payload["contextPackV0"]);
+    assert!(
+        context_pack_answer.contains("sourceId=source-mcp"),
+        "{context_pack_answer}"
+    );
+    assert!(
+        context_pack_answer.contains("evidenceRef=evidence-mcp"),
+        "{context_pack_answer}"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "method": "tools/call",
+            "params": {
+                "name": "search_documents",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP source",
+                    "limit": 5
+                }
+            }
+        }),
+    );
+    let search_tool = read_message(&mut reader);
+    assert_eq!(search_tool["result"]["isError"], false, "{search_tool:#?}");
+    let text = search_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("search tool text");
+    let search_payload: Value = serde_json::from_str(text).expect("search payload");
+    assert!(search_payload["results"]
+        .as_array()
+        .expect("search results")
+        .iter()
+        .any(|result| result["id"] == "source-mcp"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
             "id": 21,
             "method": "resources/read",
             "params": {
