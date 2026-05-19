@@ -100,13 +100,16 @@ use brain_repo::*;
 use chat_openai_compatible_client::{
     parse_openai_compatible_json_schema_with_timeout, provider_unavailable,
 };
+#[cfg(test)]
 use domains::ingest::markdown_queue::*;
 #[cfg(test)]
 use domains::ingest::output_package::write_output_package_with_fallback;
 use domains::ingest::output_package::{
-    build_markdown, build_source_id, export_output_package, load_source_manifest,
-    resolved_source_ids, source_summary_from_manifest, write_source_manifest,
+    build_markdown, export_output_package, load_source_manifest, resolved_source_ids,
+    source_summary_from_manifest,
 };
+#[cfg(test)]
+use domains::ingest::output_package::{build_source_id, write_source_manifest};
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,
@@ -131,7 +134,9 @@ use source_index::{chunk_source_markdown, read_workspace_source_chunks, upsert_s
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
+#[cfg(test)]
 const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
+#[cfg(test)]
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
 const PROVIDER_GRAPH_AGENT_ID: &str = "hyprduck-provider-graph-agent";
@@ -1588,6 +1593,7 @@ struct BrainMaintenanceReport {
     issues: Vec<BrainLintIssue>,
 }
 
+#[cfg(test)]
 fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceReport> {
     let root = resolve_brain_workspace_root(scope)?;
     let ingest_paths = resolve_markdown_ingest_paths(scope)?;
@@ -1980,6 +1986,7 @@ fn lint_missing_materialized_wiki_refs(
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg(test)]
 struct MissingWikiPageStub {
     path: String,
     title: String,
@@ -1989,6 +1996,7 @@ struct MissingWikiPageStub {
     evidence_refs: Vec<String>,
 }
 
+#[cfg(test)]
 fn repair_missing_materialized_wiki_stubs(
     root: &Path,
     snapshot: &mut BrainRepoSnapshot,
@@ -2204,6 +2212,7 @@ fn repair_missing_materialized_wiki_stubs(
     Ok(stubs.len())
 }
 
+#[cfg(test)]
 fn upsert_missing_wiki_stub(
     stubs: &mut BTreeMap<String, MissingWikiPageStub>,
     path: &str,
@@ -2242,6 +2251,7 @@ fn upsert_missing_wiki_stub(
     }
 }
 
+#[cfg(test)]
 fn missing_wiki_stub_body(stub: &MissingWikiPageStub) -> String {
     let contexts = if stub.contexts.is_empty() {
         "- Recovered from a missing materialized wiki reference.".into()
@@ -2262,6 +2272,7 @@ fn missing_wiki_stub_body(stub: &MissingWikiPageStub) -> String {
     )
 }
 
+#[cfg(test)]
 fn title_from_wiki_path(path: &str) -> String {
     path.trim_start_matches("wiki/")
         .trim_end_matches(".md")
@@ -2390,6 +2401,7 @@ fn claim_terms(value: &str) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn repair_generated_brain_artifacts(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
@@ -2442,6 +2454,7 @@ fn repair_generated_brain_artifacts(
     Ok(count)
 }
 
+#[cfg(test)]
 fn repair_json_artifact<T: Serialize>(
     path: &Path,
     value: &T,
@@ -2457,6 +2470,7 @@ fn repair_json_artifact<T: Serialize>(
     Ok(1)
 }
 
+#[cfg(test)]
 fn brain_maintenance_event(
     snapshot: &BrainRepoSnapshot,
     report: &BrainMaintenanceReport,
@@ -2526,6 +2540,7 @@ fn brain_relation_record_content_matches(
         && left.confidence == right.confidence
 }
 
+#[cfg(test)]
 fn dedupe_wiki_pages(pages: Vec<WikiPage>) -> Vec<WikiPage> {
     let mut merged = BTreeMap::<String, WikiPage>::new();
     for mut page in pages {
@@ -2548,6 +2563,7 @@ fn dedupe_wiki_pages(pages: Vec<WikiPage>) -> Vec<WikiPage> {
     pages
 }
 
+#[cfg(test)]
 fn merge_wiki_page_record(existing: &mut WikiPage, incoming: WikiPage) {
     existing.node_refs = merge_string_refs(&existing.node_refs, &incoming.node_refs);
     existing.source_refs = merge_string_refs(&existing.source_refs, &incoming.source_refs);

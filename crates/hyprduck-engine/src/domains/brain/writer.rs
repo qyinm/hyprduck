@@ -15,6 +15,7 @@ impl BrainWorkspaceWriter {
         self.repo.root()
     }
 
+    #[cfg(test)]
     pub(crate) fn append_event(&self, event: &BrainEvent) -> Result<()> {
         self.repo.append_event(event)
     }
