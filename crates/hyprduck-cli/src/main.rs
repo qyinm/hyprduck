@@ -1,4 +1,5 @@
 mod app;
+mod benchmark;
 mod cli;
 mod eval;
 mod mcp;
@@ -792,6 +793,9 @@ fn run_eval(command: cli::EvalCommand) -> Result<()> {
         }
         cli::EvalCommand::DryRunLog { input } => {
             println!("{}", metrics::run_dry_run_log(input)?);
+        }
+        cli::EvalCommand::BenchmarkReport { input } => {
+            println!("{}", benchmark::run_benchmark_report(input)?);
         }
     }
     Ok(())

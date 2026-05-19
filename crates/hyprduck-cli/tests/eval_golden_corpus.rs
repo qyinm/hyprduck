@@ -81,6 +81,84 @@ fn dry_run_log_rejects_local_paths_and_content_fields() {
     assert!(stderr.contains("sensitive path or document content"));
 }
 
+#[test]
+fn benchmark_report_validates_baselines_and_provider_variance() {
+    let temp = tempfile::tempdir().unwrap();
+    let report_path = temp.path().join("benchmark-report.json");
+    std::fs::write(&report_path, benchmark_report_json(false)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args([
+            "eval",
+            "benchmark-report",
+            "--input",
+            report_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("benchmark eval should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("benchmark documents: 2"));
+    assert!(stdout.contains("benchmark runs: 24"));
+    assert!(stdout.contains(
+        "baselines: raw_text_dump, direct_upload_chat, context_pack, context_pack_page_evidence"
+    ));
+    assert!(stdout.contains("provider classes: hosted, local"));
+    assert!(stdout.contains("context pack + page evidence citation score:"));
+    assert!(stdout.contains("context pack + page evidence unsupported claim rate:"));
+    assert!(stdout.contains("comparison outcomes: 1 win, 2 tie, 0 loss"));
+    assert!(stdout.contains("benchmark export: valid"));
+}
+
+#[test]
+fn benchmark_report_rejects_local_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let report_path = temp.path().join("benchmark-report.json");
+    std::fs::write(&report_path, benchmark_report_json(true)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args([
+            "eval",
+            "benchmark-report",
+            "--input",
+            report_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("benchmark eval should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("sensitive path or document content"));
+}
+
+#[test]
+fn benchmark_report_rejects_uncomputed_comparison_claims() {
+    let temp = tempfile::tempdir().unwrap();
+    let report_path = temp.path().join("benchmark-report.json");
+    let body =
+        benchmark_report_json(false).replacen(r#""outcome": "tie""#, r#""outcome": "win""#, 1);
+    std::fs::write(&report_path, body).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args([
+            "eval",
+            "benchmark-report",
+            "--input",
+            report_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("benchmark eval should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("claimed win but computed tie"));
+}
+
 fn dry_run_log_json(document_type: &str) -> String {
     let mut runs = Vec::new();
     for index in 1..=10 {
@@ -181,5 +259,114 @@ fn dry_run_log_json(document_type: &str) -> String {
         }}"#,
         runs.join(","),
         repeated_use_events
+    )
+}
+
+fn benchmark_report_json(include_sensitive: bool) -> String {
+    let docs = [
+        ("benchmark-pdf", "pdf", ["task-a", "task-b", "task-c"]),
+        ("benchmark-docx", "docx", ["task-a", "task-b", "task-c"]),
+    ];
+    let baselines = [
+        "raw_text_dump",
+        "direct_upload_chat",
+        "context_pack",
+        "context_pack_page_evidence",
+    ];
+    let mut runs = Vec::new();
+    let mut index = 0usize;
+    for (document_id, _, tasks) in docs {
+        for task_id in tasks {
+            for baseline in baselines {
+                index += 1;
+                let is_direct = baseline == "direct_upload_chat";
+                let is_context_page = baseline == "context_pack_page_evidence";
+                let citation = if is_context_page || baseline == "context_pack" {
+                    "pass"
+                } else if is_direct {
+                    "partial"
+                } else {
+                    "fail"
+                };
+                runs.push(format!(
+                    r#"{{
+                        "runId": "bench-run-{index}",
+                        "documentId": "{document_id}",
+                        "taskId": "{task_id}",
+                        "baseline": "{baseline}",
+                        "providerRoute": "{}",
+                        "providerClass": "{}",
+                        "taskCorrectness": "{}",
+                        "citationCorrectness": "{citation}",
+                        "unsupportedClaim": {},
+                        "usefulAnswerMs": {},
+                        "visualTableHandling": "{}",
+                        "repeatedUseSuccess": {},
+                        "userConfidence": {},
+                        "failureTaxonomy": {}
+                    }}"#,
+                    if index % 2 == 0 {
+                        "ollama/local"
+                    } else {
+                        "openrouter/hosted"
+                    },
+                    if index % 2 == 0 { "local" } else { "hosted" },
+                    if baseline == "raw_text_dump" {
+                        "partial"
+                    } else {
+                        "pass"
+                    },
+                    if is_direct { "true" } else { "false" },
+                    300 + index,
+                    if document_id == "benchmark-pdf" {
+                        "partial"
+                    } else {
+                        "pass"
+                    },
+                    if is_context_page { "true" } else { "false" },
+                    if is_context_page { 5 } else { 4 },
+                    if is_direct { r#"["citation"]"# } else { "[]" }
+                ));
+            }
+        }
+    }
+    let doc_id = if include_sensitive {
+        "/Users/example/report.pdf"
+    } else {
+        "benchmark-pdf"
+    };
+    format!(
+        r#"{{
+            "schemaVersion": "hyprduck.benchmark.v1",
+            "generatedAt": "2026-05-19T00:00:00Z",
+            "documents": [
+                {{
+                    "documentId": "{doc_id}",
+                    "documentType": "pdf",
+                    "taskIds": ["task-a", "task-b", "task-c"]
+                }},
+                {{
+                    "documentId": "benchmark-docx",
+                    "documentType": "docx",
+                    "taskIds": ["task-a", "task-b", "task-c"]
+                }}
+            ],
+            "runs": [{}],
+            "comparisons": [
+                {{
+                    "metric": "citation correctness",
+                    "outcome": "win"
+                }},
+                {{
+                    "metric": "useful answer time",
+                    "outcome": "tie"
+                }},
+                {{
+                    "metric": "task correctness",
+                    "outcome": "tie"
+                }}
+            ]
+        }}"#,
+        runs.join(",")
     )
 }
