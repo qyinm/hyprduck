@@ -13,13 +13,14 @@ use hyprduck_engine_types::{
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackResponseData,
     KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent,
-    ParseProgress, ParseRequest, ParseResponseData, ReadGraphHistoryRequest,
-    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadNodeRequest, ReadNodeResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReconstructBrainRequest, ReconstructBrainResponseData, RuntimeReadinessResponseData,
-    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
-    ValidateProviderRequest, ValidateProviderResponseData,
+    ParseProgress, ParseRequest, ParseResponseData, ReadContextPackRequest,
+    ReadContextPackResponseData, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
+    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
+    SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -36,6 +37,10 @@ pub trait EngineClient {
     fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
     fn search_brain(&self, request: SearchBrainRequest) -> Result<SearchBrainResponseData>;
     fn read_source(&self, request: ReadSourceRequest) -> Result<ReadSourceResponseData>;
+    fn read_page_evidence(
+        &self,
+        request: ReadPageEvidenceRequest,
+    ) -> Result<ReadPageEvidenceResponseData>;
     fn read_wiki_page(&self, request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData>;
     fn read_node(&self, request: ReadNodeRequest) -> Result<ReadNodeResponseData>;
     fn read_recent_events(
@@ -58,6 +63,10 @@ pub trait EngineClient {
         &self,
         request: hyprduck_engine_types::GetContextPackRequest,
     ) -> Result<GetContextPackResponseData>;
+    fn read_context_pack(
+        &self,
+        request: ReadContextPackRequest,
+    ) -> Result<ReadContextPackResponseData>;
     fn get_brain_health(
         &self,
         request: GetBrainHealthRequest,
@@ -293,6 +302,17 @@ impl EngineClient for SubprocessEngineClient {
         )
     }
 
+    fn read_page_evidence(
+        &self,
+        request: ReadPageEvidenceRequest,
+    ) -> Result<ReadPageEvidenceResponseData> {
+        self.run_command::<ReadPageEvidenceResponseData, ReadPageEvidenceResponseData>(
+            EngineRequest::ReadPageEvidence(request),
+            EngineCommand::ReadPageEvidence,
+            None,
+        )
+    }
+
     fn read_wiki_page(&self, request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
         self.run_command::<ReadWikiPageResponseData, ReadWikiPageResponseData>(
             EngineRequest::ReadWikiPage(request),
@@ -366,6 +386,17 @@ impl EngineClient for SubprocessEngineClient {
             None,
         )?;
         Ok(response)
+    }
+
+    fn read_context_pack(
+        &self,
+        request: ReadContextPackRequest,
+    ) -> Result<ReadContextPackResponseData> {
+        self.run_command::<ReadContextPackResponseData, ReadContextPackResponseData>(
+            EngineRequest::ReadContextPack(request),
+            EngineCommand::ReadContextPack,
+            None,
+        )
     }
 
     fn get_brain_health(

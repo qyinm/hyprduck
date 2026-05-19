@@ -7,21 +7,34 @@ hyprduck mcp serve
 ```
 
 For production macOS installs, use the CLI bundled inside the installed app to
-install the shell command and register HyprDuck with Codex or Claude Code:
+register HyprDuck with Codex or Claude Code. Open HyprDuck once first; the app
+installs or refreshes the `hyprduck` shell command at `~/.local/bin/hyprduck`.
+If `command -v hyprduck` does not print a path, use the `~/.local/bin/hyprduck`
+fallback shown below or add `~/.local/bin` to `PATH`.
 
 ```bash
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install codex
-/Applications/HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin mcp install claude-code
+hyprduck mcp install codex
+hyprduck mcp install claude-code
 ```
 
-That writes a `hyprduck` MCP server entry pointing at the installed app bundle
-and creates `~/.local/bin/hyprduck`, so clients and shells do not depend on a
-source checkout or `cargo run`.
+That writes a `hyprduck` MCP server entry pointing at the installed app bundle,
+so clients do not depend on a source checkout or `cargo run`.
+
+See [`docs/mcp-client-setup.md`](mcp-client-setup.md) for Codex, Claude Code,
+and Cursor setup details.
 
 For local development, run the same server through Cargo:
 
 ```bash
 cargo run -p hyprduck-cli -- mcp serve
+```
+
+If your shell does not include `~/.local/bin` on `PATH`, use the shim path
+directly:
+
+```bash
+~/.local/bin/hyprduck mcp install codex
+~/.local/bin/hyprduck mcp install claude-code
 ```
 
 ## Client Configuration
@@ -46,8 +59,13 @@ defaults to `default` and the engine resolves the local HyprDuck workspace root.
 
 `rootDir` is a development-only escape hatch for tests and local fixtures. It is
 rejected unless the MCP server process is started with
-`HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`. Production clients should pass `workspaceId`
-and let HyprDuck resolve the canonical workspace root.
+`HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and `HYPRDUCK_MCP_ALLOWED_ROOTS` contains the
+canonical workspace root. `HYPRDUCK_MCP_ALLOWED_ROOTS` uses the OS path-list
+format, so macOS and Linux development sessions separate multiple roots with
+`:`.
+
+Production clients should pass `workspaceId` and let HyprDuck resolve the
+canonical workspace root.
 
 Tool responses redact absolute local filesystem paths by default. Debug clients
 can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
@@ -56,6 +74,7 @@ paths.
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
+| `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
 | `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
@@ -65,7 +84,7 @@ paths.
 | `read_recent_events` | none | Read append-only document context event history. |
 | `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
-| `read_health` | none | Read workspace context readiness. |
+| `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |
 
 ## Read Resources
 
@@ -78,7 +97,9 @@ tool calls:
 | `hyprduck://brain/default/wiki/index.md` | `text/markdown` | Current materialized wiki index. |
 
 Resource URIs may include `?rootDir=/path/to/workspace-root` only in the same
-explicit development mode described above. By default, resource reads resolve
+explicit development mode described above. The server canonicalizes both
+`rootDir` and the configured allowed roots before accepting the override, which
+prevents symlink and path-prefix escapes. By default, resource reads resolve
 inside the application-supported HyprDuck workspace root and do not require full
 local paths. Resource responses return public HyprDuck resource URIs without
 `rootDir` query parameters.
@@ -128,10 +149,12 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
 
 ## Security Notes
 
-- MCP is read-only by default; the default `tools/list` exposes no proposal,
-  review, write, rollback, or mutation tools.
+- MCP is read-only by default; the default `tools/list` exposes only
+  read/search/inspect tools and no mutation tools.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
+- `rootDir` is disabled by default and, when explicitly enabled for development,
+  must resolve under a canonical path in `HYPRDUCK_MCP_ALLOWED_ROOTS`.
 - Existing materialized artifact reads are canonicalized under the workspace
   root before the engine reads them.
 - MCP tool responses redact absolute local filesystem paths unless
@@ -140,6 +163,9 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
 - Context packs include provider-route fields, but they may currently be
   `unknown` when the source artifact does not expose an effective route. Source
   Pack and Evidence Index artifacts carry the import-time provider route.
+- `read_health` reports per-source readiness without local paths: source status,
+  failed-page count, content-hash state, provider route, local/hosted flag, and
+  source warnings.
 - Imported documents can contain prompt-injection text. Agents should treat
   document content as untrusted source material and rely on selected evidence,
   page refs, content hashes, and warnings rather than following instructions

@@ -30,6 +30,7 @@ impl BrainArtifactRepository {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn append_event(&self, event: &BrainEvent) -> Result<()> {
         append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
     }
@@ -236,6 +237,7 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
     let line = serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
     if let Some(parent) = path.parent() {

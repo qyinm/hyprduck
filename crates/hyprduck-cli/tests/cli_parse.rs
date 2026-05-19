@@ -1,6 +1,8 @@
 use std::process::Command;
 use std::{fs, time};
 
+use hyprduck_engine_types::{ContextPackV0, EvidenceIndexV0, SourcePackV0};
+
 #[test]
 fn doctor_reports_engine_resolution() {
     let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
@@ -98,13 +100,65 @@ fn demo_writes_local_context_pack_artifacts() {
     assert!(stdout.contains("context-pack-v0: hyprduck.context_pack.v0"));
     assert!(stdout.contains("source-pack:"));
     assert!(stdout.contains("evidence-index:"));
-    assert!(root.join("demo/context_pack.json").exists());
-    assert!(root
-        .join("demo/artifacts/demo-source/source_pack.json")
-        .exists());
-    assert!(root
-        .join("demo/artifacts/demo-source/evidence_index.json")
-        .exists());
+    let elapsed_ms = stdout_value(&stdout, "elapsed-ms:")
+        .expect("elapsed")
+        .parse::<u64>()
+        .expect("elapsed number");
+    assert!(elapsed_ms < 60_000, "demo exceeded 60s: {elapsed_ms}ms");
+
+    let context_pack_path = root.join("demo/context_pack.json");
+    let source_pack_path = root.join("demo/artifacts/demo-source/source_pack.json");
+    let evidence_index_path = root.join("demo/artifacts/demo-source/evidence_index.json");
+    assert!(context_pack_path.exists());
+    assert!(source_pack_path.exists());
+    assert!(evidence_index_path.exists());
+
+    let context_pack: ContextPackV0 =
+        serde_json::from_str(&fs::read_to_string(&context_pack_path).unwrap())
+            .expect("schema-valid context pack");
+    assert_eq!(context_pack.schema_version, "hyprduck.context_pack.v0");
+    assert_eq!(context_pack.workspace_id, "demo");
+    assert_eq!(context_pack.source_set.len(), 1);
+    assert_eq!(context_pack.source_set[0].source_id, "demo-source");
+    assert_eq!(context_pack.source_set[0].provider_route, "local_demo");
+    assert!(context_pack.source_set[0].local_only);
+    assert_eq!(context_pack.selected_evidence.len(), 1);
+    assert_eq!(
+        context_pack.selected_evidence[0].source_id,
+        context_pack.source_set[0].source_id
+    );
+    assert_eq!(context_pack.selected_evidence[0].page, 1);
+    assert!(context_pack
+        .selected_evidence
+        .iter()
+        .all(|evidence| !evidence.evidence_ref.is_empty()));
+    assert!(context_pack
+        .findings
+        .iter()
+        .flat_map(|finding| finding.derived_from.iter())
+        .all(|evidence_ref| context_pack
+            .selected_evidence
+            .iter()
+            .any(|evidence| &evidence.evidence_ref == evidence_ref)));
+    assert!(context_pack.retrieval_trace.chunks_selected >= 1);
+
+    let source_pack: SourcePackV0 =
+        serde_json::from_str(&fs::read_to_string(&source_pack_path).unwrap())
+            .expect("schema-valid source pack");
+    assert_eq!(source_pack.schema_version, "hyprduck.source_pack.v0");
+    assert_eq!(source_pack.source_id, "demo-source");
+    assert_eq!(source_pack.provider_route, "local_demo");
+    assert!(source_pack.local_only);
+
+    let evidence_index: EvidenceIndexV0 =
+        serde_json::from_str(&fs::read_to_string(&evidence_index_path).unwrap())
+            .expect("schema-valid evidence index");
+    assert_eq!(evidence_index.schema_version, "hyprduck.evidence_index.v0");
+    assert_eq!(evidence_index.source_id, "demo-source");
+    assert_eq!(evidence_index.provider_route, "local_demo");
+    assert!(evidence_index.local_only);
+    assert_eq!(evidence_index.content_hash, source_pack.content_hash);
+    assert_eq!(evidence_index.evidence.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -140,6 +194,9 @@ fn mcp_install_claude_code_writes_production_server_entry() {
         .unwrap()
         .contains("hyprduck"));
     assert!(home.join(".local/bin/hyprduck").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("shell command:"));
+    assert!(stdout.contains("path note:"));
     let _ = fs::remove_dir_all(home);
 }
 
@@ -176,6 +233,65 @@ fn mcp_install_codex_registers_server_and_shell_command() {
     assert!(calls.contains("mcp add hyprduck --"));
     assert!(calls.contains("mcp serve"));
     assert!(home.join(".local/bin/hyprduck").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("shell command:"));
+    assert!(stdout.contains("path note:"));
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+#[cfg(unix)]
+fn mcp_install_preserves_unmanaged_shell_symlink() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install-preserve-symlink");
+    let bin_dir = home.join(".local/bin");
+    let foreign_target = home.join("custom-hyprduck");
+    let shim_path = bin_dir.join("hyprduck");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(&foreign_target, "#!/bin/sh\nexit 0\n").unwrap();
+    std::os::unix::fs::symlink(&foreign_target, &shim_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "claude-code"])
+        .env("HOME", &home)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_link(&shim_path).unwrap(), foreign_target);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("shell command already points elsewhere"));
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+#[cfg(unix)]
+fn mcp_install_replaces_previous_app_bundle_shell_symlink() {
+    let home = unique_temp_dir("hyprduck-cli-mcp-install-managed-symlink");
+    let bin_dir = home.join(".local/bin");
+    let old_bundle_bin =
+        home.join("Old HyprDuck.app/Contents/Resources/binaries/hyprduck-aarch64-apple-darwin");
+    let shim_path = bin_dir.join("hyprduck");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(old_bundle_bin.parent().unwrap()).unwrap();
+    fs::write(&old_bundle_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    std::os::unix::fs::symlink(&old_bundle_bin, &shim_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "install", "claude-code"])
+        .env("HOME", &home)
+        .output()
+        .expect("mcp install command should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_ne!(fs::read_link(&shim_path).unwrap(), old_bundle_bin);
     let _ = fs::remove_dir_all(home);
 }
 
@@ -296,6 +412,12 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+}
+
+fn stdout_value<'a>(stdout: &'a str, label: &str) -> Option<&'a str> {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(label).map(str::trim))
 }
 
 #[cfg(unix)]

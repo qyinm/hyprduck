@@ -156,9 +156,12 @@ MCP, and resource reads.
 
 `hyprduck mcp serve` exposes read-only tools:
 
-- `search_brain`
 - `get_context_pack`
+- `read_context_pack`
+- `search_documents`
+- `search_brain`
 - `read_source`
+- `read_page_evidence`
 - `read_wiki_page`
 - `read_node`
 - `read_recent_events`

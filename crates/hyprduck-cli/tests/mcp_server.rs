@@ -15,6 +15,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
         .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
         .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -71,6 +72,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         names,
         vec![
             "get_context_pack",
+            "read_context_pack",
             "search_documents",
             "search_brain",
             "read_source",
@@ -91,6 +93,29 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
+    let retired_surface_terms = [
+        "trust console",
+        "review queue",
+        "proposed-write",
+        "proposal",
+        "governance",
+        "write tool",
+        "rollback",
+    ];
+    for tool in tools {
+        let text = format!(
+            "{} {}",
+            tool["name"].as_str().unwrap_or_default(),
+            tool["description"].as_str().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        for retired_term in retired_surface_terms {
+            assert!(
+                !text.contains(retired_term),
+                "retired MCP surface term {retired_term:?} leaked through tool metadata: {text}"
+            );
+        }
+    }
 
     write_message(
         &mut stdin,
@@ -160,6 +185,79 @@ fn mcp_server_exposes_read_only_brain_tools() {
     assert_eq!(payload["attentionCount"], 0);
 
     write_mcp_snapshot_workspace(&root_dir);
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 120,
+            "method": "tools/call",
+            "params": {
+                "name": "read_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone()
+                }
+            }
+        }),
+    );
+    let persisted_context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        persisted_context_pack_tool["result"]["isError"], false,
+        "{persisted_context_pack_tool:#?}"
+    );
+    let text = persisted_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("persisted context pack tool text");
+    let persisted_context_pack: Value =
+        serde_json::from_str(text).expect("persisted context pack payload");
+    assert_eq!(
+        persisted_context_pack["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    assert_eq!(persisted_context_pack["contextPack"]["packId"], "ctx_mcp");
+    let comparable_client_answer =
+        cited_answer_from_context_pack(&persisted_context_pack["contextPack"]);
+    assert!(
+        comparable_client_answer.contains("Indexed MCP page evidence"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("sourceId=source-mcp"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("page=1"),
+        "{comparable_client_answer}"
+    );
+    assert!(
+        comparable_client_answer.contains("evidenceRef=evidence-mcp"),
+        "{comparable_client_answer}"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 121,
+            "method": "tools/call",
+            "params": {
+                "name": "read_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "packId": "missing-pack"
+                }
+            }
+        }),
+    );
+    let missing_context_pack_tool = read_message(&mut reader);
+    assert_eq!(missing_context_pack_tool["result"]["isError"], true);
+    let missing_text = missing_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("missing context pack error text");
+    assert!(missing_text.contains("persisted context pack could not be read or decoded"));
+    assert!(!missing_text.contains(root_dir_arg.as_str()));
+
     write_message(
         &mut stdin,
         json!({
@@ -352,6 +450,43 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "id": 30,
             "method": "tools/call",
             "params": {
+                "name": "read_page_evidence",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": "source-mcp",
+                    "page": 1
+                }
+            }
+        }),
+    );
+    let page_evidence_tool = read_message(&mut reader);
+    assert_eq!(
+        page_evidence_tool["result"]["isError"], false,
+        "{page_evidence_tool:#?}"
+    );
+    let text = page_evidence_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("page evidence tool text");
+    let page_evidence: Value = serde_json::from_str(text).expect("page evidence payload");
+    assert_eq!(page_evidence["evidence"][0]["evidenceRef"], "evidence-mcp");
+    assert_eq!(
+        page_evidence["evidence"][0]["quotedText"],
+        "Indexed MCP page evidence"
+    );
+    assert_eq!(page_evidence["evidence"][0]["parseConfidence"], "high");
+    assert_eq!(
+        page_evidence["evidence"][0]["markdownPath"],
+        "[redacted-local-path]"
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {
                 "name": "read_graph_snapshot",
                 "arguments": {
                     "workspaceId": "default",
@@ -375,7 +510,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
-            "id": 31,
+            "id": 32,
             "method": "tools/call",
             "params": {
                 "name": "read_wiki_page",
@@ -412,6 +547,30 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::create_dir_all(workspace.join("memory")).expect("memory dir");
     fs::create_dir_all(workspace.join("state")).expect("state dir");
     fs::create_dir_all(workspace.join("wiki")).expect("wiki dir");
+    fs::create_dir_all(workspace.join("context_packs")).expect("context packs dir");
+    fs::create_dir_all(workspace.join("sources/source-mcp")).expect("source dir");
+    fs::create_dir_all(workspace.join("artifacts/source-mcp/pages")).expect("pages dir");
+    fs::create_dir_all(workspace.join("artifacts/source-mcp/images")).expect("images dir");
+    fs::write(
+        workspace.join("sources/source-mcp/source.pdf"),
+        b"source bytes",
+    )
+    .expect("source file");
+    fs::write(
+        workspace.join("artifacts/source-mcp/source.md"),
+        "# MCP source\n",
+    )
+    .expect("source markdown");
+    fs::write(
+        workspace.join("artifacts/source-mcp/pages/page_1.md"),
+        "# MCP page\n",
+    )
+    .expect("page markdown");
+    fs::write(
+        workspace.join("artifacts/source-mcp/images/page_1.png"),
+        b"image bytes",
+    )
+    .expect("page image");
     fs::write(
         workspace.join("brain-manifest.json"),
         format!(
@@ -438,6 +597,26 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
     fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");
     fs::write(
+        workspace.join("artifacts/source-mcp/source_pack.json"),
+        format!(
+            r#"{{"schemaVersion":"hyprduck.source_pack.v0","workspaceId":"default","sourceId":"source-mcp","originalFilename":"source.pdf","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","artifactRoot":"{root}/artifacts/source-mcp","contentHash":"fnv64:mcp-source","format":"pdf","pageCount":1,"ingestionStatus":"ingested","providerRoute":"local_demo","localOnly":true,"pages":[],"warnings":[],"createdAt":42,"updatedAt":42}}"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("source pack");
+    fs::write(
+        workspace.join("artifacts/source-mcp/evidence_index.json"),
+        format!(
+            r#"{{"schemaVersion":"hyprduck.evidence_index.v0","workspaceId":"default","sourceId":"source-mcp","contentHash":"fnv64:mcp-source","providerRoute":"local_demo","localOnly":true,"evidence":[{{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","contentHash":"fnv64:mcp-source","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png"}}],"warnings":[],"generatedAt":42}}"#,
+            root = workspace.display()
+        ),
+    )
+    .expect("evidence index");
+    let context_pack = r#"{"schemaVersion":"hyprduck.context_pack.v0","packId":"ctx_mcp","workspaceId":"default","query":"MCP evidence","generatedAt":"2026-05-18T09:00:00Z","sourceSet":[{"sourceId":"source-mcp","originalFilename":"source.pdf","contentHash":"fnv64:mcp-source","pageCount":1,"ingestionStatus":"ingested","staleness":"current","providerRoute":"local_demo","localOnly":true}],"selectedEvidence":[{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","selectionReason":"MCP fixture evidence.","contentHash":"fnv64:mcp-source"}],"findings":[],"warnings":[],"retrievalTrace":{"strategy":"fixture","chunksConsidered":1,"chunksSelected":1,"budgetRequested":4000,"budgetUsed":100},"suggestedNextReads":[]}"#;
+    fs::write(workspace.join("context_pack.json"), context_pack).expect("latest context pack");
+    fs::write(workspace.join("context_packs/ctx_mcp.json"), context_pack)
+        .expect("history context pack");
+    fs::write(
         workspace.join("events/brain_events.jsonl"),
         concat!(
             r#"{"eventId":"event-mcp-readable","schemaVersion":1,"workspaceId":"default","scope":"project","eventType":"graph_materialized","operationType":"graph_materialized","actor":{"actorType":"agent","actorId":"mcp-test"},"sourceRefs":["source-mcp"],"sourceMarkdownRefs":["wiki/index.md"],"nodeRefs":["node-mcp-readable"],"relationRefs":[],"claimRefs":[],"memoryRefs":[],"targetNodeIds":[],"targetEdgeIds":[],"targetClaimIds":[],"targetMemoryIds":[],"evidenceRefs":[],"payloadJson":"{\"nodeCount\":1,\"relationCount\":0,\"claimCount\":0,\"memoryCount\":0,\"wikiPageCount\":1}","causality":{"causedByEventIds":[],"causedBySourceIds":["source-mcp"],"snapshotId":"snapshot-mcp-readable","previousSnapshotId":null,"schemaVersion":1,"materializedVersion":42},"confidence":null,"policyResult":"applied","createdAt":42}"#,
@@ -450,6 +629,21 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
         r#"{"schemaVersion":1,"workspaceId":"default","snapshotId":"snapshot-mcp-readable","eventId":"event-mcp-readable","sourceIngestId":"source-mcp","materializedAt":42,"publishedAt":42,"sourceMarkdownRefs":["wiki/index.md"],"materializedFiles":["brain-manifest.json","events/brain_events.jsonl","graph/claims.json","graph/edges.json","graph/nodes.json","memory/records.json","wiki/index.md"]}"#,
     )
     .expect("latest readable marker");
+}
+
+fn cited_answer_from_context_pack(context_pack: &Value) -> String {
+    let evidence = &context_pack["selectedEvidence"][0];
+    let quoted_text = evidence["quotedText"]
+        .as_str()
+        .expect("selected evidence quoted text");
+    let source_id = evidence["sourceId"]
+        .as_str()
+        .expect("selected evidence sourceId");
+    let page = evidence["page"].as_u64().expect("selected evidence page");
+    let evidence_ref = evidence["evidenceRef"]
+        .as_str()
+        .expect("selected evidence ref");
+    format!("{quoted_text} [sourceId={source_id}, page={page}, evidenceRef={evidence_ref}]")
 }
 
 fn write_message(stdin: &mut std::process::ChildStdin, message: Value) {

@@ -37,7 +37,7 @@ private document
   -> same local context is reused in the next task
 ```
 
-HyprDuck is not a generic document chatbot, a memory OS, or a governance
+HyprDuck is not a generic document chatbot, a memory OS, or an approval
 dashboard. The product is built around durable local artifacts, visible
 provenance, and agent-readable context.
 
@@ -81,9 +81,10 @@ HyprDuck is in active development. The parser wedge, local workspace layout,
 Source Pack/Evidence Index artifacts, Context Pack v0, read-only MCP server, and
 document-context CLI aliases are implemented.
 
-The next major work is proving the first agent loop end to end: import a known
-fixture, generate a schema-valid context pack, connect Claude Code/Codex/Cursor,
-and produce an answer with source/page/evidence citations.
+The current demo path proves the protocol-level loop with a comparable MCP
+client dry run: import a known fixture, generate a schema-valid context pack,
+read it over MCP, and produce an answer with source/page/evidence citations.
+The next major work is real user dry runs in Claude Code, Codex, and Cursor.
 
 ---
 

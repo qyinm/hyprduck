@@ -238,4 +238,22 @@ mod tests {
             issue.code == "unsupported_provider" && issue.message.contains("legacy_ai")
         }));
     }
+
+    #[test]
+    fn provider_validation_reports_missing_hosted_api_key() {
+        let config = EngineConfig {
+            provider: ProviderKind::OpenRouter,
+            model_id: "google/gemini-2.5-flash".into(),
+            api_key: String::new(),
+            base_url: None,
+            prompt_template: "General".into(),
+        };
+
+        let validation = validate_provider(&config);
+
+        assert!(!validation.ready);
+        assert!(validation.issues.iter().any(|issue| {
+            issue.code == "missing_api_key" && issue.message == "OpenRouter requires an API key."
+        }));
+    }
 }

@@ -147,8 +147,35 @@ fn install_shell_shim(home: &std::path::Path, current_exe: &str) -> Result<()> {
     let bin_dir = home.join(".local").join("bin");
     std::fs::create_dir_all(&bin_dir)?;
     let shim_path = bin_dir.join("hyprduck");
-    if shim_path.exists() || shim_path.symlink_metadata().is_ok() {
-        std::fs::remove_file(&shim_path)?;
+    match std::fs::symlink_metadata(&shim_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = std::fs::read_link(&shim_path)?;
+            let resolved_target = resolve_link_target(&shim_path, &target);
+            let current_exe_path = std::path::PathBuf::from(current_exe);
+            if resolved_target == current_exe_path {
+                print_shell_shim_status(&bin_dir, &shim_path);
+                return Ok(());
+            }
+            if !is_managed_hyprduck_cli_target(&resolved_target) {
+                eprintln!(
+                    "shell command already points elsewhere and was left unchanged: {}",
+                    shim_path.display()
+                );
+                print_path_note(&bin_dir, &shim_path);
+                return Ok(());
+            }
+            std::fs::remove_file(&shim_path)?;
+        }
+        Ok(_) => {
+            eprintln!(
+                "shell command already exists and was left unchanged: {}",
+                shim_path.display()
+            );
+            print_path_note(&bin_dir, &shim_path);
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
 
     #[cfg(unix)]
@@ -157,8 +184,51 @@ fn install_shell_shim(home: &std::path::Path, current_exe: &str) -> Result<()> {
     #[cfg(not(unix))]
     std::fs::copy(current_exe, &shim_path)?;
 
-    println!("shell command: {}", shim_path.display());
+    print_shell_shim_status(&bin_dir, &shim_path);
     Ok(())
+}
+
+fn resolve_link_target(
+    shim_path: &std::path::Path,
+    target: &std::path::Path,
+) -> std::path::PathBuf {
+    if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        shim_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(target)
+    }
+}
+
+fn is_managed_hyprduck_cli_target(target: &std::path::Path) -> bool {
+    let Some(file_name) = target.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let target = target.to_string_lossy();
+    file_name.starts_with("hyprduck-") && target.contains(".app/Contents/Resources/binaries/")
+}
+
+fn print_shell_shim_status(bin_dir: &std::path::Path, shim_path: &std::path::Path) {
+    println!("shell command: {}", shim_path.display());
+    print_path_note(bin_dir, shim_path);
+}
+
+fn print_path_note(bin_dir: &std::path::Path, shim_path: &std::path::Path) {
+    if !is_directory_on_path(bin_dir) {
+        println!(
+            "path note: {} is not on PATH; use {} directly or add it to PATH",
+            bin_dir.display(),
+            shim_path.display()
+        );
+    }
+}
+
+fn is_directory_on_path(directory: &std::path::Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|entry| entry == directory))
+        .unwrap_or(false)
 }
 
 fn run_doctor() -> Result<()> {

@@ -127,6 +127,21 @@ test("workspace graph reader loads the latest materialized snapshot first", () =
   expect(appSource).not.toMatch(/setLoadedWorkspaceEnvelope\(\(current\) => \(\{\s*project,/);
 });
 
+test("desktop app prepares the short HyprDuck MCP shell command", () => {
+  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+
+  expect(mainSource).toMatch(/ensureHyprduckShellCommand\(\)/);
+  expect(mainSource).toMatch(/function resolveCliPath\(\)/);
+  expect(mainSource).toMatch(/HYPRDUCK_CLI_BIN/);
+  expect(mainSource).toMatch(/HYPRDUCK_INSTALL_CLI_SHIM/);
+  expect(mainSource).toMatch(/isManagedHyprduckCliTarget/);
+  expect(mainSource).toMatch(/isDirectoryOnPath/);
+  expect(mainSource).toMatch(/existing-symlink/);
+  expect(mainSource).toMatch(/"\.local", "bin"/);
+  expect(mainSource).toMatch(/"hyprduck"/);
+  expect(mainSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
+});
+
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
   expect(appSource).toMatch(/type WorkspaceLoadStatus = "idle" \| "loading" \| "ready" \| "fallback" \| "error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);

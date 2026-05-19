@@ -194,12 +194,12 @@ losing page evidence.
 
 **Acceptance:**
 
-- [ ] A fixture demo completes under 60 seconds.
-- [ ] A sample query writes schema-valid `context_pack.json`.
-- [ ] One MCP client can answer with source/page/evidence citations.
-- [ ] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
-- [ ] Default docs and tool lists contain no retired trust-layer UX language.
-- [ ] Missing provider and partial import failures produce specific warnings.
+- [x] A fixture demo completes under 60 seconds.
+- [x] A sample query writes schema-valid `context_pack.json`.
+- [x] One MCP client can answer with source/page/evidence citations.
+- [x] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
+- [x] Default docs and tool lists contain no retired trust-layer UX language.
+- [x] Missing provider and partial import failures produce specific warnings.
 
 **Effort:** L
 **Priority:** P3
@@ -240,12 +240,16 @@ losing page evidence.
 - [x] MCP document-context naming and root hardening
   - Added `search_documents` and `read_page_evidence`.
   - Kept `search_brain` and `hyprduck://brain/...` as compatibility surfaces.
-  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1`.
-  - Rejects workspace path and symlink escapes.
-  - Keeps `read_health` read-only.
+  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and a canonical `HYPRDUCK_MCP_ALLOWED_ROOTS` allowlist.
+  - Rejects workspace path, prefix, and symlink escapes.
+  - Keeps `read_health` read-only and adds per-source readiness fields for status, failed pages, content-hash state, and provider route.
 - [x] CLI context aliases
   - Added `hyprduck context` / `hyprduck context-pack`.
   - Added `hyprduck documents search` / `hyprduck docs search`.
+- [x] MCP client setup guides
+  - Added Codex and Claude Code installer setup instructions.
+  - Documented Cursor manual stdio configuration.
+  - Added a verification prompt that requires source/page/evidence citations.
 - [x] Save-back and correction persistence
   - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
   - Claim updates now write durable `graph/claims.json` records.

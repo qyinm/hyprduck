@@ -27,6 +27,8 @@ pub enum EngineCommand {
     AnswerProject,
     SearchBrain,
     ReadSource,
+    ReadPageEvidence,
+    ReadContextPack,
     ReadWikiPage,
     ReadNode,
     ReadRecentEvents,
@@ -379,6 +381,55 @@ pub struct ReadSourceResponseData {
     pub wiki_page: Option<WikiPage>,
     #[serde(default)]
     pub evidence: Vec<EvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPageEvidenceRequest {
+    pub scope: BrainReadScope,
+    pub source_id: SourceId,
+    #[serde(default)]
+    pub page: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageEvidenceV0 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPageEvidenceResponseData {
+    pub source: SourceRecord,
+    pub evidence: Vec<PageEvidenceV0>,
+    pub warnings: Vec<ContextPackWarningV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadContextPackRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub pack_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadContextPackResponseData {
+    pub context_pack: ContextPackV0,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -800,13 +851,53 @@ pub struct ContextPackSourceMetadataV0 {
     pub local_only: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceMetadataV0 {
+    pub source_id: SourceId,
+    pub page: usize,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackArtifactMetadataV0 {
+    #[serde(default)]
+    pub sources: BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+    #[serde(default)]
+    pub evidence: BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
+    #[serde(default)]
+    pub warnings: Vec<ContextPackWarningV0>,
+}
+
+impl ContextPackArtifactMetadataV0 {
+    pub fn from_sources(sources: BTreeMap<SourceId, ContextPackSourceMetadataV0>) -> Self {
+        Self {
+            sources,
+            evidence: BTreeMap::new(),
+            warnings: Vec::new(),
+        }
+    }
+}
+
 impl ContextPackV0 {
     pub fn from_brain_context_pack(
         pack: &BrainContextPack,
         pack_id: impl Into<String>,
         generated_at: impl Into<String>,
-        source_metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+        artifact_metadata: &ContextPackArtifactMetadataV0,
     ) -> Self {
+        let source_metadata = &artifact_metadata.sources;
         let source_set = pack
             .sources
             .iter()
@@ -821,7 +912,12 @@ impl ContextPackV0 {
             .evidence
             .iter()
             .filter_map(|evidence| {
-                ContextPackEvidenceV0::from_evidence_ref(evidence, source_metadata, &source_set_ids)
+                ContextPackEvidenceV0::from_evidence_ref(
+                    evidence,
+                    source_metadata,
+                    &artifact_metadata.evidence,
+                    &source_set_ids,
+                )
             })
             .collect::<Vec<_>>();
         let selected_evidence_ids = selected_evidence
@@ -897,6 +993,7 @@ impl ContextPackV0 {
                             }),
                         }),
                 )
+                .chain(artifact_metadata.warnings.iter().cloned())
                 .collect(),
             retrieval_trace: ContextPackRetrievalTraceV0 {
                 strategy: "internal-brain-context-pack".into(),
@@ -946,12 +1043,31 @@ impl ContextPackEvidenceV0 {
     fn from_evidence_ref(
         evidence: &EvidenceRef,
         source_metadata: &BTreeMap<SourceId, ContextPackSourceMetadataV0>,
+        evidence_metadata: &BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
         source_set_ids: &std::collections::BTreeSet<SourceId>,
     ) -> Option<Self> {
         let source_id = evidence.source_id.clone()?;
         if !source_set_ids.contains(&source_id) {
             return None;
         }
+
+        if let Some(metadata) = evidence_metadata
+            .get(&source_id)
+            .and_then(|source_evidence| source_evidence.get(&evidence.id))
+        {
+            return Some(Self {
+                evidence_ref: evidence.id.clone(),
+                source_id: metadata.source_id.clone(),
+                page: metadata.page,
+                region: metadata.region.clone(),
+                span: metadata.span.clone(),
+                quoted_text: metadata.quoted_text.clone(),
+                parse_confidence: metadata.parse_confidence.clone(),
+                selection_reason: "Selected from the source evidence index for this query.".into(),
+                content_hash: metadata.content_hash.clone(),
+            });
+        }
+
         let source = source_metadata.get(&source_id)?;
         let page = evidence.page_index.unwrap_or(0) + 1;
         Some(Self {
@@ -996,7 +1112,26 @@ pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
     #[serde(default)]
+    pub source_reports: Vec<BrainHealthSourceReport>,
+    #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainHealthSourceReport {
+    pub source_id: SourceId,
+    pub status: SourceStatus,
+    pub page_count: usize,
+    pub failed_page_count: usize,
+    pub provider_route: String,
+    #[serde(default)]
+    pub local_only: Option<bool>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    pub content_hash_status: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1141,6 +1276,8 @@ pub enum EngineRequest {
     AnswerProject(AnswerProjectRequest),
     SearchBrain(SearchBrainRequest),
     ReadSource(ReadSourceRequest),
+    ReadPageEvidence(ReadPageEvidenceRequest),
+    ReadContextPack(ReadContextPackRequest),
     ReadWikiPage(ReadWikiPageRequest),
     ReadNode(ReadNodeRequest),
     ReadRecentEvents(ReadRecentEventsRequest),
@@ -1649,6 +1786,15 @@ mod tests {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
             }),
+            EngineRequest::ReadPageEvidence(ReadPageEvidenceRequest {
+                scope: scope.clone(),
+                source_id: "source-123".into(),
+                page: Some(1),
+            }),
+            EngineRequest::ReadContextPack(ReadContextPackRequest {
+                scope: scope.clone(),
+                pack_id: Some("ctx_123".into()),
+            }),
             EngineRequest::ReadWikiPage(ReadWikiPageRequest {
                 scope: scope.clone(),
                 path: "wiki/index.md".into(),
@@ -2015,11 +2161,31 @@ mod tests {
                 local_only: true,
             },
         )]);
+        let mut artifact_metadata = ContextPackArtifactMetadataV0::from_sources(source_metadata);
+        artifact_metadata
+            .evidence
+            .entry("src_agent_context".into())
+            .or_default()
+            .insert(
+                "ev_src_agent_context_p1_b1".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "src_agent_context".into(),
+                    page: 1,
+                    region: Some("page:Page 1".into()),
+                    span: Some("page".into()),
+                    quoted_text: "Indexed source evidence quote.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "sha256:abc123".into(),
+                    markdown_path: None,
+                    image_path: None,
+                },
+            );
+
         let external = ContextPackV0::from_brain_context_pack(
             &internal,
             "ctx_test",
             "2026-05-18T09:00:00Z",
-            &source_metadata,
+            &artifact_metadata,
         );
         assert_eq!(external.schema_version, CONTEXT_PACK_V0_SCHEMA_VERSION);
         assert_eq!(
@@ -2030,6 +2196,15 @@ mod tests {
         assert_eq!(external.source_set[0].provider_route, "ollama");
         assert_eq!(external.selected_evidence[0].page, 1);
         assert_eq!(external.selected_evidence[0].content_hash, "sha256:abc123");
+        assert_eq!(
+            external.selected_evidence[0].quoted_text,
+            "Indexed source evidence quote."
+        );
+        assert_eq!(external.selected_evidence[0].span.as_deref(), Some("page"));
+        assert_eq!(
+            external.selected_evidence[0].parse_confidence,
+            ContextPackParseConfidence::High
+        );
         assert_eq!(
             external.findings[0].derived_from,
             vec!["ev_src_agent_context_p1_b1"]
@@ -2082,7 +2257,7 @@ mod tests {
             &internal,
             "ctx_test",
             "2026-05-18T09:00:00Z",
-            &BTreeMap::new(),
+            &ContextPackArtifactMetadataV0::default(),
         );
         assert!(external.selected_evidence.is_empty());
         assert!(external.findings.is_empty());
@@ -2090,6 +2265,143 @@ mod tests {
             external.warnings[0].warning_type,
             "evidence_missing_content_hash"
         );
+    }
+
+    #[test]
+    fn context_pack_v0_scopes_indexed_evidence_metadata_by_source() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "shared evidence ref".into(),
+            token_budget: 4000,
+            summary: "Shared ref summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![
+                SourceRecord {
+                    source_id: "source-alpha".into(),
+                    workspace_id: "default".into(),
+                    original_path: "/tmp/alpha.md".into(),
+                    source_path: "/tmp/HyprDuck/default/sources/source-alpha.md".into(),
+                    markdown_path: "/tmp/HyprDuck/default/sources/source-alpha.md".into(),
+                    format: SourceFormat::markdown(),
+                    status: SourceStatus::ingested(),
+                    page_count: 1,
+                    description: String::new(),
+                    user_context: String::new(),
+                    ingest_instruction: String::new(),
+                    updated_at: 1,
+                },
+                SourceRecord {
+                    source_id: "source-beta".into(),
+                    workspace_id: "default".into(),
+                    original_path: "/tmp/beta.md".into(),
+                    source_path: "/tmp/HyprDuck/default/sources/source-beta.md".into(),
+                    markdown_path: "/tmp/HyprDuck/default/sources/source-beta.md".into(),
+                    format: SourceFormat::markdown(),
+                    status: SourceStatus::ingested(),
+                    page_count: 1,
+                    description: String::new(),
+                    user_context: String::new(),
+                    ingest_instruction: String::new(),
+                    updated_at: 1,
+                },
+            ],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim-beta".into(),
+                workspace_id: "default".into(),
+                statement: "Beta claim.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["source-beta".into()],
+                evidence_refs: vec!["ev-shared".into()],
+                status: "active".into(),
+                updated_at: 1,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev-shared".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Fallback beta snippet.".into(),
+                source_path: None,
+                source_id: Some("source-beta".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: None,
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let mut artifact_metadata = ContextPackArtifactMetadataV0::from_sources(BTreeMap::from([
+            (
+                "source-alpha".into(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: "fnv64:alpha".into(),
+                    provider_route: "ollama".into(),
+                    local_only: true,
+                },
+            ),
+            (
+                "source-beta".into(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: "fnv64:beta".into(),
+                    provider_route: "ollama".into(),
+                    local_only: true,
+                },
+            ),
+        ]));
+        artifact_metadata
+            .evidence
+            .entry("source-alpha".into())
+            .or_default()
+            .insert(
+                "ev-shared".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "source-alpha".into(),
+                    page: 1,
+                    region: Some("page:Alpha".into()),
+                    span: Some("alpha".into()),
+                    quoted_text: "Wrong alpha quote.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "fnv64:alpha".into(),
+                    markdown_path: None,
+                    image_path: None,
+                },
+            );
+        artifact_metadata
+            .evidence
+            .entry("source-beta".into())
+            .or_default()
+            .insert(
+                "ev-shared".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "source-beta".into(),
+                    page: 1,
+                    region: Some("page:Beta".into()),
+                    span: Some("beta".into()),
+                    quoted_text: "Correct beta quote.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "fnv64:beta".into(),
+                    markdown_path: None,
+                    image_path: None,
+                },
+            );
+
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &artifact_metadata,
+        );
+        assert_eq!(external.selected_evidence.len(), 1);
+        assert_eq!(external.selected_evidence[0].source_id, "source-beta");
+        assert_eq!(
+            external.selected_evidence[0].quoted_text,
+            "Correct beta quote."
+        );
+        assert_eq!(external.selected_evidence[0].content_hash, "fnv64:beta");
     }
 
     #[test]

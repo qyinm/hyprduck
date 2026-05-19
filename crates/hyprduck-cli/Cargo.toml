@@ -16,3 +16,6 @@ hyprduck-engine-client = { path = "../hyprduck-engine-client" }
 hyprduck-engine-types = { path = "../hyprduck-engine-types" }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

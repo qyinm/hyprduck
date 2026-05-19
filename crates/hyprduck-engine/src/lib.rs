@@ -10,24 +10,28 @@ use base64::Engine;
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthStatus,
-    BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord,
-    CompileProjectRequest, CompileProjectResponseData, ContextPackSourceMetadataV0,
-    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
-    EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
+    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
+    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
+    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, ContextPackArtifactMetadataV0,
+    ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0, CorrectionAction, CorrectionKind,
+    DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceIndexV0, EvidenceRef,
+    GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
     GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
-    MemoryRecord, PageArtifact, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData,
-    ParseResult, ParsedPage, ProjectOverview, ProjectStatus, ReadNodeRequest, ReadNodeResponseData,
-    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
-    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
-    SourceRecord, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
+    MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
+    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
+    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
+    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
+    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0,
+    SourceRecord, SourceStatus, SourceSummary, StructuredExtractionArtifact,
+    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
+    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
+    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection, WorkspaceId,
+    BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
@@ -96,13 +100,16 @@ use brain_repo::*;
 use chat_openai_compatible_client::{
     parse_openai_compatible_json_schema_with_timeout, provider_unavailable,
 };
+#[cfg(test)]
 use domains::ingest::markdown_queue::*;
 #[cfg(test)]
 use domains::ingest::output_package::write_output_package_with_fallback;
 use domains::ingest::output_package::{
-    build_markdown, build_source_id, export_output_package, load_source_manifest,
-    resolved_source_ids, source_summary_from_manifest, write_source_manifest,
+    build_markdown, export_output_package, load_source_manifest, resolved_source_ids,
+    source_summary_from_manifest,
 };
+#[cfg(test)]
+use domains::ingest::output_package::{build_source_id, write_source_manifest};
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,
@@ -127,7 +134,9 @@ use source_index::{chunk_source_markdown, read_workspace_source_chunks, upsert_s
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;
+#[cfg(test)]
 const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
+#[cfg(test)]
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
 const PROVIDER_GRAPH_AGENT_ID: &str = "hyprduck-provider-graph-agent";
@@ -652,6 +661,59 @@ fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseDa
     })
 }
 
+fn handle_read_page_evidence(
+    request: ReadPageEvidenceRequest,
+) -> Result<ReadPageEvidenceResponseData> {
+    if request.page == Some(0) {
+        bail!("argument page must be a positive 1-based integer");
+    }
+
+    let reader = BrainReader::open(&request.scope)?;
+    let source = reader
+        .snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == request.source_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("source {} was not found", request.source_id))?;
+
+    let artifact_metadata =
+        build_context_pack_artifact_metadata(reader.root(), std::slice::from_ref(&source));
+    let mut evidence = artifact_metadata
+        .evidence
+        .get(&source.source_id)
+        .into_iter()
+        .flat_map(|source_evidence| source_evidence.iter())
+        .filter(|(_, metadata)| request.page.map_or(true, |page| metadata.page == page))
+        .map(|(evidence_ref, metadata)| PageEvidenceV0 {
+            evidence_ref: evidence_ref.clone(),
+            source_id: metadata.source_id.clone(),
+            page: metadata.page,
+            region: metadata
+                .region
+                .clone()
+                .unwrap_or_else(|| format!("page:{}", metadata.page)),
+            span: metadata.span.clone(),
+            quoted_text: metadata.quoted_text.clone(),
+            parse_confidence: metadata.parse_confidence.clone(),
+            content_hash: metadata.content_hash.clone(),
+            markdown_path: metadata.markdown_path.clone(),
+            image_path: metadata.image_path.clone(),
+        })
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.page
+            .cmp(&right.page)
+            .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
+    });
+
+    Ok(ReadPageEvidenceResponseData {
+        source,
+        evidence,
+        warnings: artifact_metadata.warnings,
+    })
+}
+
 fn handle_read_wiki_page(request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
     let reader = BrainReader::open(&request.scope)?;
     let page = reader.read_wiki_page(&request.path)?;
@@ -703,12 +765,13 @@ fn handle_read_recent_events(
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
     let reader = BrainReader::open(&request.scope)?;
     let context_pack = reader.context_pack(&request.query, request.budget.unwrap_or(8000))?;
-    let source_metadata = build_context_pack_source_metadata(reader.root(), &context_pack.sources);
+    let artifact_metadata =
+        build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
     let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
         &context_pack,
         format!("ctx_{}", uuid::Uuid::now_v7().simple()),
         current_iso_timestamp_utc(),
-        &source_metadata,
+        &artifact_metadata,
     );
     let persisted_context_pack_path = if request.persist {
         Some(persist_context_pack_v0(&request.scope, &context_pack_v0)?)
@@ -741,30 +804,463 @@ fn persist_context_pack_v0(
     Ok(latest_path.display().to_string())
 }
 
+fn handle_read_context_pack(
+    request: ReadContextPackRequest,
+) -> Result<ReadContextPackResponseData> {
+    let workspace_root = resolve_brain_workspace_root(&request.scope)?;
+    let repo = BrainArtifactRepository::new(workspace_root);
+    let path = match request.pack_id.as_deref() {
+        Some(pack_id) => {
+            validate_context_pack_id(pack_id)?;
+            format!("context_packs/{pack_id}.json")
+        }
+        None => "context_pack.json".into(),
+    };
+    let context_pack: hyprduck_engine_types::ContextPackV0 = repo
+        .read_json_artifact(&path)
+        .map_err(|_| anyhow!("persisted context pack could not be read or decoded"))?;
+    if context_pack.schema_version != hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION {
+        bail!(
+            "persisted context pack schemaVersion {} is unsupported",
+            context_pack.schema_version
+        );
+    }
+    if let Some(pack_id) = request.pack_id.as_deref() {
+        if context_pack.pack_id != pack_id {
+            bail!(
+                "persisted context pack packId {} does not match requested packId {}",
+                context_pack.pack_id,
+                pack_id
+            );
+        }
+    }
+    if context_pack.workspace_id != request.scope.workspace_id {
+        bail!(
+            "context pack workspace {} does not match requested workspace {}",
+            context_pack.workspace_id,
+            request.scope.workspace_id
+        );
+    }
+    Ok(ReadContextPackResponseData { context_pack })
+}
+
+fn validate_context_pack_id(pack_id: &str) -> Result<()> {
+    if pack_id.trim().is_empty()
+        || pack_id == "."
+        || pack_id == ".."
+        || pack_id.contains('/')
+        || pack_id.contains('\\')
+    {
+        bail!("invalid packId: context pack IDs must be single path segments");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn build_context_pack_source_metadata(
     workspace_root: &Path,
     sources: &[SourceRecord],
 ) -> BTreeMap<SourceId, ContextPackSourceMetadataV0> {
+    build_context_pack_artifact_metadata(workspace_root, sources).sources
+}
+
+fn build_context_pack_artifact_metadata(
+    workspace_root: &Path,
+    sources: &[SourceRecord],
+) -> ContextPackArtifactMetadataV0 {
     let Ok(canonical_workspace_root) = workspace_root.canonicalize() else {
-        return BTreeMap::new();
+        return ContextPackArtifactMetadataV0::default();
     };
-    sources
-        .iter()
-        .filter_map(|source| {
-            let content = read_context_pack_source_bytes(
+    let repo = BrainArtifactRepository::new(canonical_workspace_root.clone());
+    let mut metadata = ContextPackArtifactMetadataV0::default();
+
+    for source in sources {
+        let mut source_pack_read_failed = false;
+        let source_pack = match read_source_pack_v0(&repo, &source.source_id) {
+            Ok(source_pack) => source_pack,
+            Err(_error) => {
+                source_pack_read_failed = true;
+                metadata.warnings.push(context_artifact_warning(
+                    "source_pack_unreadable",
+                    format!(
+                        "Source Pack for {} could not be read or decoded.",
+                        source.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ));
+                None
+            }
+        };
+        if source_pack.is_none() && !source_pack_read_failed {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "source_pack_missing",
+                    format!(
+                        "Source Pack for {} is unavailable; Context Pack v0 may fall back to workspace source bytes.",
+                        source.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+        }
+        let fallback_content = || {
+            read_context_pack_source_bytes(
                 &canonical_workspace_root,
                 [&source.source_path, &source.markdown_path],
-            )?;
-            Some((
-                source.source_id.clone(),
-                ContextPackSourceMetadataV0 {
+            )
+        };
+
+        let valid_source_pack = source_pack.as_ref().filter(|pack| {
+            pack.schema_version == hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+                && pack.source_id == source.source_id
+                && pack.workspace_id == source.workspace_id
+        });
+        if let Some(pack) = source_pack.as_ref() {
+            if pack.schema_version != hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "source_pack_schema_mismatch",
+                        format!(
+                            "Source Pack for {} was ignored because schemaVersion {} is unsupported.",
+                            source.source_id, pack.schema_version
+                        ),
+                        &source.source_id,
+                        None,
+                    ),
+                );
+            }
+            if pack.source_id != source.source_id {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "source_pack_source_mismatch",
+                        format!(
+                            "Source Pack for {} was ignored because it declares sourceId {}.",
+                            source.source_id, pack.source_id
+                        ),
+                        &source.source_id,
+                        None,
+                    ),
+                );
+            }
+            if pack.workspace_id != source.workspace_id {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "source_pack_workspace_mismatch",
+                        format!(
+                            "Source Pack for {} was ignored because it declares workspaceId {}.",
+                            source.source_id, pack.workspace_id
+                        ),
+                        &source.source_id,
+                        None,
+                    ),
+                );
+            }
+        }
+
+        let Some(source_metadata) = valid_source_pack
+            .map(|pack| ContextPackSourceMetadataV0 {
+                content_hash: pack.content_hash.clone(),
+                provider_route: pack.provider_route.clone(),
+                local_only: pack.local_only,
+            })
+            .or_else(|| {
+                fallback_content().map(|content| ContextPackSourceMetadataV0 {
                     content_hash: format!("fnv64:{:016x}", fnv1a64(&content)),
                     provider_route: "unknown".into(),
                     local_only: false,
+                })
+            })
+        else {
+            continue;
+        };
+
+        if let Some(pack) = valid_source_pack {
+            for warning in &pack.warnings {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning_from_source_warning(warning, &source.source_id),
+                );
+            }
+        }
+
+        metadata
+            .sources
+            .insert(source.source_id.clone(), source_metadata.clone());
+
+        let evidence_index = match read_evidence_index_v0(&repo, &source.source_id) {
+            Ok(evidence_index) => evidence_index,
+            Err(_error) => {
+                metadata.warnings.push(context_artifact_warning(
+                    "evidence_index_unreadable",
+                    format!(
+                        "Evidence Index for {} could not be read or decoded.",
+                        source.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ));
+                None
+            }
+        };
+
+        let Some(evidence_index) = evidence_index else {
+            if valid_source_pack.is_some() {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "evidence_index_missing",
+                        format!(
+                            "Evidence Index for {} is unavailable; Context Pack v0 may fall back to internal evidence refs.",
+                            source.source_id
+                        ),
+                        &source.source_id,
+                        None,
+                    ),
+                );
+            }
+            continue;
+        };
+
+        if evidence_index.schema_version != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+        {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_schema_mismatch",
+                    format!(
+                        "Evidence Index for {} was ignored because schemaVersion {} is unsupported.",
+                        source.source_id, evidence_index.schema_version
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+        if evidence_index.source_id != source.source_id {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_source_mismatch",
+                    format!(
+                        "Evidence Index for {} was ignored because it declares sourceId {}.",
+                        source.source_id, evidence_index.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+        if evidence_index.workspace_id != source.workspace_id {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_workspace_mismatch",
+                    format!(
+                        "Evidence Index for {} was ignored because it declares workspaceId {}.",
+                        source.source_id, evidence_index.workspace_id
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+        if valid_source_pack.is_some()
+            && (evidence_index.provider_route != source_metadata.provider_route
+                || evidence_index.local_only != source_metadata.local_only)
+        {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_provider_mismatch",
+                    format!(
+                        "Evidence Index for {} was ignored because provider metadata does not match the selected Source Pack.",
+                        source.source_id
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+        if evidence_index.content_hash != source_metadata.content_hash {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning(
+                    "evidence_index_stale_content_hash",
+                    format!(
+                        "Evidence Index for {} was ignored because contentHash {} does not match selected source hash {}.",
+                        source.source_id, evidence_index.content_hash, source_metadata.content_hash
+                    ),
+                    &source.source_id,
+                    None,
+                ),
+            );
+            continue;
+        }
+
+        for warning in &evidence_index.warnings {
+            push_context_artifact_warning_once(
+                &mut metadata.warnings,
+                context_artifact_warning_from_source_warning(warning, &source.source_id),
+            );
+        }
+
+        let source_evidence = metadata
+            .evidence
+            .entry(source.source_id.clone())
+            .or_default();
+        for evidence in evidence_index.evidence {
+            if evidence.source_id != source.source_id {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "evidence_item_source_mismatch",
+                        format!(
+                            "Evidence {} was ignored because it declares sourceId {}.",
+                            evidence.evidence_ref, evidence.source_id
+                        ),
+                        &source.source_id,
+                        Some(evidence.page),
+                    ),
+                );
+                continue;
+            }
+            if evidence.content_hash != source_metadata.content_hash {
+                push_context_artifact_warning_once(
+                    &mut metadata.warnings,
+                    context_artifact_warning(
+                        "evidence_item_stale_content_hash",
+                        format!(
+                            "Evidence {} was ignored because contentHash {} does not match selected source hash {}.",
+                            evidence.evidence_ref, evidence.content_hash, source_metadata.content_hash
+                        ),
+                        &source.source_id,
+                        Some(evidence.page),
+                    ),
+                );
+                continue;
+            }
+            source_evidence.insert(
+                evidence.evidence_ref.clone(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: evidence.source_id,
+                    page: evidence.page,
+                    region: Some(evidence.region),
+                    span: evidence.span,
+                    quoted_text: evidence.quoted_text,
+                    parse_confidence: evidence.parse_confidence,
+                    content_hash: evidence.content_hash,
+                    markdown_path: evidence.markdown_path,
+                    image_path: evidence.image_path,
                 },
-            ))
-        })
-        .collect()
+            );
+        }
+    }
+
+    metadata
+}
+
+fn context_artifact_warning(
+    warning_type: impl Into<String>,
+    message: impl Into<String>,
+    source_id: &str,
+    page: Option<usize>,
+) -> hyprduck_engine_types::ContextPackWarningV0 {
+    hyprduck_engine_types::ContextPackWarningV0 {
+        warning_type: warning_type.into(),
+        severity: hyprduck_engine_types::ContextPackWarningSeverity::High,
+        message: message.into(),
+        page_refs: page.map_or_else(Vec::new, |page| {
+            vec![hyprduck_engine_types::ContextPackPageRefV0 {
+                source_id: source_id.to_string(),
+                page,
+            }]
+        }),
+    }
+}
+
+fn context_artifact_warning_from_source_warning(
+    warning: &hyprduck_engine_types::SourcePackWarningV0,
+    source_id: &str,
+) -> hyprduck_engine_types::ContextPackWarningV0 {
+    hyprduck_engine_types::ContextPackWarningV0 {
+        warning_type: warning.warning_type.clone(),
+        severity: warning.severity.clone(),
+        message: warning.message.clone(),
+        page_refs: warning.page.map_or_else(Vec::new, |page| {
+            vec![hyprduck_engine_types::ContextPackPageRefV0 {
+                source_id: source_id.to_string(),
+                page,
+            }]
+        }),
+    }
+}
+
+fn push_context_artifact_warning_once(
+    warnings: &mut Vec<hyprduck_engine_types::ContextPackWarningV0>,
+    warning: hyprduck_engine_types::ContextPackWarningV0,
+) {
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
+}
+
+fn read_source_pack_v0(
+    repo: &BrainArtifactRepository,
+    source_id: &str,
+) -> Result<Option<SourcePackV0>> {
+    read_optional_source_artifact(repo, source_id, "source_pack.json")
+}
+
+fn read_evidence_index_v0(
+    repo: &BrainArtifactRepository,
+    source_id: &str,
+) -> Result<Option<EvidenceIndexV0>> {
+    read_optional_source_artifact(repo, source_id, "evidence_index.json")
+}
+
+fn read_optional_source_artifact<T: serde::de::DeserializeOwned>(
+    repo: &BrainArtifactRepository,
+    source_id: &str,
+    filename: &str,
+) -> Result<Option<T>> {
+    let Some(path) = source_artifact_relative_path(source_id, filename) else {
+        return Ok(None);
+    };
+    if !repo.root().join(&path).exists() {
+        return Ok(None);
+    }
+    match repo.read_json_artifact(&path) {
+        Ok(value) => Ok(Some(value)),
+        Err(error)
+            if error.to_string().contains("No such file")
+                || error.to_string().contains("not found") =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn source_artifact_relative_path(source_id: &str, filename: &str) -> Option<String> {
+    let source_id_path = Path::new(source_id);
+    if source_id_path.components().count() != 1
+        || !source_id_path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(format!("artifacts/{source_id}/{filename}"))
 }
 
 fn read_context_pack_source_bytes<'a>(
@@ -837,6 +1333,7 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
+            source_reports: Vec::new(),
             recent_events: Vec::new(),
         });
     }
@@ -845,7 +1342,12 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
     report
         .issues
         .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
-    let attention_count = report.issues.len();
+    let source_reports = brain_health_source_reports(&repo, &snapshot);
+    let source_attention_count: usize = source_reports
+        .iter()
+        .map(|report| report.warnings.len())
+        .sum();
+    let attention_count = report.issues.len() + source_attention_count;
     let mut recent_events = repo.read_brain_events()?;
     recent_events.sort_by(|left, right| {
         right
@@ -861,8 +1363,190 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             BrainHealthStatus::AttentionNeeded
         },
         attention_count,
+        source_reports,
         recent_events,
     })
+}
+
+fn brain_health_source_reports(
+    repo: &BrainArtifactRepository,
+    snapshot: &BrainRepoSnapshot,
+) -> Vec<BrainHealthSourceReport> {
+    snapshot
+        .sources
+        .iter()
+        .map(|source| brain_health_source_report(repo, source))
+        .collect()
+}
+
+fn brain_health_source_report(
+    repo: &BrainArtifactRepository,
+    source: &SourceRecord,
+) -> BrainHealthSourceReport {
+    let mut warnings = Vec::new();
+    let mut provider_route = "unknown".to_string();
+    let mut local_only = None;
+    let mut content_hash = None;
+    let mut content_hash_status = "unknown".to_string();
+    let mut failed_page_count = 0usize;
+
+    let mut source_pack_read_failed = false;
+    let source_pack = match read_source_pack_v0(repo, &source.source_id) {
+        Ok(source_pack) => source_pack,
+        Err(_error) => {
+            source_pack_read_failed = true;
+            push_health_warning(&mut warnings, "source_pack_unreadable");
+            None
+        }
+    };
+    let valid_source_pack = source_pack.as_ref().filter(|pack| {
+        pack.schema_version == hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+            && pack.source_id == source.source_id
+            && pack.workspace_id == source.workspace_id
+    });
+    match source_pack.as_ref() {
+        Some(pack)
+            if pack.schema_version != hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION =>
+        {
+            push_health_warning(&mut warnings, "source_pack_schema_mismatch");
+        }
+        Some(pack) if pack.source_id != source.source_id => {
+            push_health_warning(&mut warnings, "source_pack_source_mismatch");
+        }
+        Some(pack) if pack.workspace_id != source.workspace_id => {
+            push_health_warning(&mut warnings, "source_pack_workspace_mismatch");
+        }
+        None if !source_pack_read_failed => {
+            push_health_warning(&mut warnings, "source_pack_missing");
+        }
+        _ => {}
+    }
+
+    if let Some(pack) = valid_source_pack {
+        provider_route = pack.provider_route.clone();
+        local_only = Some(pack.local_only);
+        content_hash = Some(pack.content_hash.clone());
+        content_hash_status = "source_pack_only".into();
+        failed_page_count = pack
+            .pages
+            .iter()
+            .filter(|page| page.error_message.is_some())
+            .count();
+        for warning in &pack.warnings {
+            push_health_warning(&mut warnings, source_pack_health_warning_summary(warning));
+        }
+    }
+
+    let mut evidence_index_read_failed = false;
+    let evidence_index = match read_evidence_index_v0(repo, &source.source_id) {
+        Ok(evidence_index) => evidence_index,
+        Err(_error) => {
+            evidence_index_read_failed = true;
+            push_health_warning(&mut warnings, "evidence_index_unreadable");
+            None
+        }
+    };
+    let valid_evidence_index = evidence_index.as_ref().filter(|index| {
+        index.schema_version == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+            && index.source_id == source.source_id
+            && index.workspace_id == source.workspace_id
+    });
+    match evidence_index.as_ref() {
+        Some(index)
+            if index.schema_version != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION =>
+        {
+            push_health_warning(&mut warnings, "evidence_index_schema_mismatch");
+        }
+        Some(index) if index.source_id != source.source_id => {
+            push_health_warning(&mut warnings, "evidence_index_source_mismatch");
+        }
+        Some(index) if index.workspace_id != source.workspace_id => {
+            push_health_warning(&mut warnings, "evidence_index_workspace_mismatch");
+        }
+        None if !evidence_index_read_failed => {
+            push_health_warning(&mut warnings, "evidence_index_missing");
+        }
+        _ => {}
+    }
+
+    if let Some(index) = valid_evidence_index {
+        if provider_route == "unknown" {
+            provider_route = index.provider_route.clone();
+            local_only = Some(index.local_only);
+        }
+        if let Some(pack_hash) = content_hash.as_deref() {
+            if pack_hash == index.content_hash {
+                content_hash_status = "current".into();
+            } else {
+                content_hash_status = "mismatch".into();
+                push_health_warning(&mut warnings, "content_hash_mismatch");
+            }
+        } else {
+            content_hash = Some(index.content_hash.clone());
+            content_hash_status = "evidence_index_only".into();
+        }
+    }
+
+    if source.status == SourceStatus::partial() {
+        push_health_warning(&mut warnings, "partial_import");
+    } else if source.status == SourceStatus::failed() {
+        push_health_warning(&mut warnings, "import_failed");
+    } else if source.status == SourceStatus::stale() {
+        content_hash_status = "stale".into();
+        push_health_warning(&mut warnings, "stale_source");
+    }
+    if failed_page_count > 0 {
+        push_health_warning(
+            &mut warnings,
+            format!("{failed_page_count} page(s) failed during import"),
+        );
+    }
+
+    BrainHealthSourceReport {
+        source_id: source.source_id.clone(),
+        status: source.status.clone(),
+        page_count: source.page_count,
+        failed_page_count,
+        provider_route,
+        local_only,
+        content_hash,
+        content_hash_status,
+        warnings,
+    }
+}
+
+fn source_pack_health_warning_summary(
+    warning: &hyprduck_engine_types::SourcePackWarningV0,
+) -> String {
+    match warning.page {
+        Some(page) => format!(
+            "source_pack_warning:{}:severity:{}:page:{page}",
+            warning.warning_type,
+            warning_severity_slug(&warning.severity)
+        ),
+        None => format!(
+            "source_pack_warning:{}:severity:{}",
+            warning.warning_type,
+            warning_severity_slug(&warning.severity)
+        ),
+    }
+}
+
+fn warning_severity_slug(
+    severity: &hyprduck_engine_types::ContextPackWarningSeverity,
+) -> &'static str {
+    match severity {
+        hyprduck_engine_types::ContextPackWarningSeverity::Low => "low",
+        hyprduck_engine_types::ContextPackWarningSeverity::Medium => "medium",
+        hyprduck_engine_types::ContextPackWarningSeverity::High => "high",
+    }
+}
+
+fn push_health_warning(warnings: &mut Vec<String>, warning: impl Into<String>) {
+    let warning = warning.into();
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -909,6 +1593,7 @@ struct BrainMaintenanceReport {
     issues: Vec<BrainLintIssue>,
 }
 
+#[cfg(test)]
 fn run_brain_maintenance(scope: &BrainReadScope) -> Result<BrainMaintenanceReport> {
     let root = resolve_brain_workspace_root(scope)?;
     let ingest_paths = resolve_markdown_ingest_paths(scope)?;
@@ -1301,6 +1986,7 @@ fn lint_missing_materialized_wiki_refs(
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg(test)]
 struct MissingWikiPageStub {
     path: String,
     title: String,
@@ -1310,6 +1996,7 @@ struct MissingWikiPageStub {
     evidence_refs: Vec<String>,
 }
 
+#[cfg(test)]
 fn repair_missing_materialized_wiki_stubs(
     root: &Path,
     snapshot: &mut BrainRepoSnapshot,
@@ -1525,6 +2212,7 @@ fn repair_missing_materialized_wiki_stubs(
     Ok(stubs.len())
 }
 
+#[cfg(test)]
 fn upsert_missing_wiki_stub(
     stubs: &mut BTreeMap<String, MissingWikiPageStub>,
     path: &str,
@@ -1563,6 +2251,7 @@ fn upsert_missing_wiki_stub(
     }
 }
 
+#[cfg(test)]
 fn missing_wiki_stub_body(stub: &MissingWikiPageStub) -> String {
     let contexts = if stub.contexts.is_empty() {
         "- Recovered from a missing materialized wiki reference.".into()
@@ -1583,6 +2272,7 @@ fn missing_wiki_stub_body(stub: &MissingWikiPageStub) -> String {
     )
 }
 
+#[cfg(test)]
 fn title_from_wiki_path(path: &str) -> String {
     path.trim_start_matches("wiki/")
         .trim_end_matches(".md")
@@ -1711,6 +2401,7 @@ fn claim_terms(value: &str) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn repair_generated_brain_artifacts(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
@@ -1763,6 +2454,7 @@ fn repair_generated_brain_artifacts(
     Ok(count)
 }
 
+#[cfg(test)]
 fn repair_json_artifact<T: Serialize>(
     path: &Path,
     value: &T,
@@ -1778,6 +2470,7 @@ fn repair_json_artifact<T: Serialize>(
     Ok(1)
 }
 
+#[cfg(test)]
 fn brain_maintenance_event(
     snapshot: &BrainRepoSnapshot,
     report: &BrainMaintenanceReport,
@@ -1847,6 +2540,7 @@ fn brain_relation_record_content_matches(
         && left.confidence == right.confidence
 }
 
+#[cfg(test)]
 fn dedupe_wiki_pages(pages: Vec<WikiPage>) -> Vec<WikiPage> {
     let mut merged = BTreeMap::<String, WikiPage>::new();
     for mut page in pages {
@@ -1869,6 +2563,7 @@ fn dedupe_wiki_pages(pages: Vec<WikiPage>) -> Vec<WikiPage> {
     pages
 }
 
+#[cfg(test)]
 fn merge_wiki_page_record(existing: &mut WikiPage, incoming: WikiPage) {
     existing.node_refs = merge_string_refs(&existing.node_refs, &incoming.node_refs);
     existing.source_refs = merge_string_refs(&existing.source_refs, &incoming.source_refs);
