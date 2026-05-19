@@ -284,7 +284,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         "state/latest-readable-snapshot.json"
     );
     assert_eq!(snapshot["nodes"][0]["nodeId"], "node-mcp-readable");
-    assert_eq!(snapshot["wikiPages"][0]["body"], "# MCP Snapshot\n");
+    assert_eq!(
+        snapshot["wikiPages"][0]["body"],
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
     assert_eq!(snapshot["sourcePaths"][0], "[redacted-local-path]");
 
     write_message(
@@ -309,7 +312,7 @@ fn mcp_server_exposes_read_only_brain_tools() {
     );
     assert_eq!(
         wiki_resource["result"]["contents"][0]["text"],
-        "# MCP Snapshot\n"
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
     );
 
     write_message(
@@ -384,7 +387,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
     let wiki_text_after_health = wiki_resource_after_health["result"]["contents"][0]["text"]
         .as_str()
         .expect("wiki text after health");
-    assert_eq!(wiki_text_after_health, "# MCP Snapshot\n");
+    assert_eq!(
+        wiki_text_after_health,
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
 
     write_message(
         &mut stdin,
@@ -532,7 +538,10 @@ fn mcp_server_exposes_read_only_brain_tools() {
         .expect("wiki tool text");
     let tool_wiki: Value = serde_json::from_str(text).expect("wiki tool payload");
     assert_eq!(tool_wiki["page"]["path"], "wiki/index.md");
-    assert_eq!(tool_wiki["page"]["body"], "# MCP Snapshot\n");
+    assert_eq!(
+        tool_wiki["page"]["body"],
+        "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
+    );
 
     drop(stdin);
     let status = child.wait().expect("server exit");
@@ -595,7 +604,11 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     .expect("evidence");
     fs::write(workspace.join("graph/claims.json"), "[]").expect("claims");
     fs::write(workspace.join("memory/records.json"), "[]").expect("memories");
-    fs::write(workspace.join("wiki/index.md"), "# MCP Snapshot\n").expect("wiki index");
+    fs::write(
+        workspace.join("wiki/index.md"),
+        format!("# MCP Snapshot\n\nLocal path: {}\n", workspace.display()),
+    )
+    .expect("wiki index");
     fs::write(
         workspace.join("artifacts/source-mcp/source_pack.json"),
         format!(
