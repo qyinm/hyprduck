@@ -16,6 +16,10 @@ const previewSource = readFileSync(
 );
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
+const modelTaskMatrixSource = readFileSync(
+  new URL("../../../docs/model-task-matrix.md", import.meta.url),
+  "utf8",
+);
 
 test("desktop IA is the committed source of truth for the Knowledge workspace", () => {
   expect(iaSource).toMatch(/Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface/);
@@ -76,6 +80,22 @@ test("Knowledge empty state focuses first users on importing source files", () =
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
   expect(previewSource).not.toMatch(/compile|compiled|compiler/i);
+});
+
+test("launch copy stays agent-ready without unsupported provider claims", () => {
+  const buyerFacingCopy = [appSource, graphSource].join("\n");
+  const publicModelGuidance = modelTaskMatrixSource;
+
+  expect(buyerFacingCopy).toMatch(/Local model caution/);
+  expect(buyerFacingCopy).toMatch(/Hosted quality path/);
+  expect(buyerFacingCopy).toMatch(/agent-ready outputs/);
+  expect(buyerFacingCopy).toMatch(/source-backed evidence that coding agents can reuse with citations/);
+  expect(buyerFacingCopy).not.toMatch(/DeepSeek-only|generic PDF chat|PDF chat/);
+  expect(buyerFacingCopy).not.toMatch(/Context Pack v0/);
+  expect(buyerFacingCopy).not.toMatch(/OpenAI|Anthropic/);
+  expect(buyerFacingCopy).not.toMatch(/project memory output|generated graph output/);
+  expect(publicModelGuidance).toMatch(/local document parsing and agent-ready evidence reuse/);
+  expect(publicModelGuidance).not.toMatch(/brain-corpus|local brain|Graph materialization|Provider-generated graph records|generated graph/);
 });
 
 test("first-run activation presents document-agent-citation flow before graph controls", () => {

@@ -1099,14 +1099,14 @@ function modelTaskGuidance(providerId: string, modelId: string) {
       return {
         tone: "warning",
         title: "Local model caution",
-        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before using generated graph output.",
+        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before relying on agent-ready outputs.",
       };
     }
 
     return {
       tone: "local",
       title: "Local-first path",
-      body: "Good for private parsing and retrieval checks. Keep generated merges and project memory output disabled until the golden corpus is clean.",
+      body: "Good for private parsing and retrieval checks. Keep generated merge output disabled until the golden corpus is clean.",
     };
   }
 
