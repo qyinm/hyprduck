@@ -1,164 +1,55 @@
-# HyprDuck - Project Knowledge Base
+# HyprDuck Agent Rules
 
-**Generated:** 2026-03-06
-**Project:** HyprDuck - File Parsing to Markdown
-**Stack:** Rust, Electron, JavaScript, macOS
+HyprDuck compiles private documents into reusable, cited local context packs for AI agents.
 
----
+## Product Direction
 
-## OVERVIEW
+- Keep the product focused on private document evidence reuse for coding agents.
+- Keep desktop first-run focused on `Add Docs -> Connect Agent -> Ask With Citations -> Verify Evidence -> Reuse`.
+- Treat graph, wiki, claims, memory, and event history as internal retrieval and inspection infrastructure, not first-run product promises.
+- Do not reframe HyprDuck as DeepSeek-only, generic PDF chat, graph-first, brain-first, generic memory OS, or a trust console.
 
-HyprDuck is a macOS app that imports documents, converts each page into an image, and turns the result into markdown using AI.
+## Architecture Boundaries
 
-Current product direction:
-- **File Parsing**: PDF, DOCX, and DOC conversion into page images for markdown generation
-- **AI Processing**: provider-based analysis via OpenRouter, OpenAI, Anthropic, or Ollama
+- Keep the active desktop shell in `apps/desktop`.
+- Keep Electron main/preload as shell, window, and IPC glue.
+- Keep parsing, artifact generation, provider execution, and output packaging in the Rust engine.
+- Do not reintroduce frontend-owned output packaging or provider persistence.
+- Do not block document import behind Screen Recording or Accessibility permissions; those apply only to optional legacy capture code.
 
-The active desktop shell is `apps/desktop` (Electron), and the primary product surface is import-first file parsing through the Rust engine.
+## Artifact Contract
 
-**Core Value Proposition:** local document parsing for agent-ready knowledge.
+- Preserve provider route, local/hosted status, content hash, parse warnings, source refs, page refs, and evidence refs in agent-facing artifacts.
+- Treat Source Pack as the import-time per-source artifact.
+- Treat Evidence Index as the materialized map from evidence IDs to source/page/span/region data.
+- Treat Context Pack as the query-time artifact external agents consume.
+- Generate markdown with durable image and page references.
 
----
+## Provider Rules
 
-## PROJECT STRUCTURE
+- Treat OpenRouter and Ollama as the current launch provider paths.
+- Keep Ollama usable without an API key.
+- Do not claim direct OpenAI or Anthropic support until it is implemented, configured, tested, and documented.
+- Keep user-facing provider errors specific, especially for missing keys, hosted/local disclosure, and unavailable Ollama instances.
 
-```text
-HyprDuck/
-├── apps/
-│   ├── cli/
-│   ├── desktop/
-│   │   ├── package.json
-│   │   ├── main.cjs
-│   │   ├── preload.cjs
-│   │   └── src/
-│   └── site/
-├── packages/
-└── scripts/
-```
+## MCP And Workspace Security
 
----
+- Keep MCP read-only by default.
+- Do not expose mutation, write, proposal, or approval tools in the default MCP surface.
+- Do not let production MCP reads accept arbitrary agent-provided paths.
+- Resolve production workspace access through approved canonical roots.
+- Keep development `rootDir` overrides gated, allowlisted, and protected against symlink or path escapes.
+- Redact local paths by default in agent-facing output.
 
-## WHERE TO LOOK
+## Workflow Rules
 
-| Task | Location | Notes |
-|------|----------|-------|
-| Desktop app entry | `apps/desktop/main.cjs` | Active Electron desktop shell |
-| Desktop preload bridge | `apps/desktop/preload.cjs` | Safe IPC bridge for renderer calls |
-| Desktop UI | `apps/desktop/src/App.tsx` | Main/settings/progress/result windows |
-| Desktop styling | `apps/desktop/src/styles.css` | Active desktop visual surface |
-| Engine contract | `crates/hyprduck-engine-types/src/lib.rs` | Shared request/response/event schema |
-| Engine runtime | `crates/hyprduck-engine/src/main.rs` | Conversion, provider execution, output writing |
-| Engine client | `crates/hyprduck-engine-client/src/lib.rs` | Shared subprocess bridge |
-
----
-
-## DATA MODELS
-
-```swift
-struct CaptureJob {
-    var captureMode: CaptureMode
-    var nextAction: NextAction
-    var captureCount: Int
-    var delayBetweenCaptures: TimeInterval
-    var outputName: String
-}
-
-struct DocumentImportJob {
-    let fileURL: URL
-    let format: DocumentFormat
-    var outputName: String
-}
-
-struct ImageProcessingResult {
-    let id: Int
-    let image: NSImage
-    var status: Status
-    var analysis: String?
-    var errorMessage: String?
-}
-```
-
----
-
-## CONVENTIONS
-
-### Desktop Shell Style
-- Keep the active desktop shell in `apps/desktop`
-- Keep shell logic in Electron main/preload and parsing/output logic in the Rust engine
-- Avoid reintroducing frontend-owned output packaging or provider persistence
-
-### Permissions
-- File parsing must remain usable without Screen Recording or Accessibility permissions
-- Screen Recording and Accessibility apply only to optional legacy capture code
-- Do not surface capture-permission friction in the primary import flow
-
-### AI Architecture
-- Treat AI settings as shared across file parsing flows
-- Use provider abstractions instead of product-specific OCR services
-- Keep user-facing error messages specific, especially for missing API keys or unavailable Ollama instances
-
-### Output
-- Save results under `~/Documents/HyprDuck/`
-- Keep images on disk, not in long-term memory
-- Generate markdown that references the saved images
-
----
-
-## ANTI-PATTERNS (DO NOT)
-
-- **DO NOT** reintroduce product messaging that describes HyprDuck as DeepSeek-only
-- **DO NOT** block file parsing behind capture permissions
-- **DO NOT** save markdown without corresponding image references
-- **DO NOT** let legacy capture terminology leak into the primary app surface
-- **DO NOT** route main UI and menu actions through different service instances
-
----
-
-## UNIQUE REQUIREMENTS
-
-### File Parsing
-- Support PDF, DOCX, and DOC
-- Convert documents into one image per page before AI processing
-- Allow retrying failed pages and saving partial results
-
-### AI Providers
-- OpenRouter, OpenAI, Anthropic, and Ollama are first-class providers
-- Ollama should support local usage without an API key
-- Prompt templates should support general document parsing, tutorials, UI flows, code, and tables
-
-## PULL REQUESTS
-
-When opening a pull request, follow the template at `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Why, Changes, Testing).
-
-## COMMANDS
-
-```bash
-# Build active desktop app
-pnpm --dir apps/desktop build
-
-# Verify desktop shell types
-cargo check -p hyprduck-desktop
-
-# Run core tests
-cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
-```
-
----
-
-## NOTES
-
-### Current Scope
-- File parsing to markdown
-- Shared provider-based AI processing
-- Local and cloud AI options via Ollama and hosted providers
-
-### Near-Term Focus
-- Output quality and markdown structure
-- Import UX clarity
-- Retry and partial-save reliability
-- Unifying product messaging with the implemented app
-
-### Testing Considerations
-- Import-only flow on a fresh machine
-- Partial AI failure and retry flows
-- Provider configuration errors, especially missing keys and local Ollama availability
+- State assumptions before coding when the request has multiple valid interpretations.
+- Prefer the smallest implementation that satisfies the requested behavior.
+- Touch only files needed for the task; do not refactor adjacent code unless required.
+- Define the verification target before implementation and loop until it passes or a real blocker is found.
+- Use Bun for JavaScript work; do not introduce new pnpm commands.
+- Keep commands and operational references under `docs/agents/`, not in this file.
+- Use the narrowest relevant verification command for the files changed.
+- Keep public PR text focused on shipped code and verified behavior.
+- Follow `.github/PULL_REQUEST_TEMPLATE.md` when opening pull requests.
+- Never copy `docs/private/` paths or private planning content into public docs, commit messages, or PR bodies.
