@@ -159,6 +159,8 @@ function registerIpcHandlers() {
         }).then((response) => response.data.answer);
       case "start_parse":
         return startParse(args.request);
+      case "retry_failed_pages":
+        return retryFailedPages();
       case "cancel_parse":
         return cancelParse();
       case "open_saved_output":
@@ -324,6 +326,155 @@ async function startParse(request) {
     }
 
     snapshot.activeJob = null;
+    publishSnapshot();
+  } catch (error) {
+    if (!snapshot.activeJob) {
+      return;
+    }
+    markFailed(error.message);
+  }
+}
+
+async function retryFailedPages() {
+  if (snapshot.activeJob) {
+    throw new Error("an import is already running");
+  }
+  if (!snapshot.lastSourceManifestPath) {
+    throw new Error("No source manifest is available for failed-page retry.");
+  }
+
+  const manifestPath = resolveKnownWorkspacePath(snapshot.lastSourceManifestPath);
+  const sourceManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const failedPages = (sourceManifest.pages ?? []).filter((page) => page.error_message);
+  if (failedPages.length === 0) {
+    throw new Error("No failed pages are available to retry.");
+  }
+
+  const sourcePath = sourceManifest.original_path || sourceManifest.source_path;
+  snapshot.activeJob = {
+    jobId: nextJobId(),
+    filePath: sourcePath,
+    format: sourceManifest.format,
+    status: "queued",
+    progressPercent: 4,
+    lastMessage: `Queued retry for ${failedPages.length} failed page${
+      failedPages.length === 1 ? "" : "s"
+    }`,
+  };
+  snapshot.progressLog = [];
+  pushProgressEntry("retry", snapshot.activeJob.lastMessage);
+  publishSnapshot();
+
+  try {
+    const parseResponse = await runEngineCommand(
+      "parse",
+      {
+        command: "parse",
+        payload: {
+          version: "1",
+          template: "General",
+          input: {
+            path: sourcePath,
+            format: formatForEngine(sourceManifest.format),
+          },
+          options: {
+            preserve_images: true,
+            emit_structured_json: false,
+            emit_svg: false,
+            language_hints: [],
+            debug_request_path: null,
+            debug_result_path: null,
+          },
+          output: null,
+        },
+      },
+      { onEvent: applyRuntimeProgressLine },
+    );
+    const parsedPages = parseResponse.data?.result?.pages ?? [];
+    const retryPages = failedPages.map((failedPage) => {
+      const parsedPage = parsedPages.find((page) => page.index === failedPage.index);
+      const markdown = parsedPage?.markdown ?? null;
+      const plainText = parsedPage?.plain_text ?? null;
+      const retryError =
+        parsedPage?.error_message ??
+        (!markdown && !plainText ? "retry produced no page artifact" : null);
+      return {
+        pageIndex: failedPage.index,
+        markdown,
+        plainText,
+        imageAssetPath: null,
+        errorMessage: retryError,
+      };
+    });
+
+    if (snapshot.activeJob) {
+      snapshot.activeJob.progressPercent = 94;
+      snapshot.activeJob.lastMessage = "Updating failed page artifacts";
+      pushProgressEntry("retry", "Updating failed page artifacts");
+      publishSnapshot();
+    }
+
+    const retryResponse = await runEngineCommand("retry_failed_pages", {
+      command: "retry_failed_pages",
+      payload: {
+        sourceManifestPath: manifestPath,
+        pages: retryPages,
+      },
+    });
+    const retryData = retryResponse.data;
+    const updatedManifest = retryData.sourceManifest;
+    const remainingFailedCount = retryData.remainingFailedCount ?? 0;
+    const markdown = fs.existsSync(updatedManifest.markdown_path)
+      ? fs.readFileSync(updatedManifest.markdown_path, "utf8")
+      : "";
+
+    snapshot.lastResult = {
+      savedOutputPath: updatedManifest.markdown_path ?? null,
+      successCount: (updatedManifest.pages ?? []).length - remainingFailedCount,
+      failedCount: remainingFailedCount,
+      markdown,
+    };
+    snapshot.lastProjectId = null;
+    snapshot.lastWorkspaceId = updatedManifest.workspace_id ?? snapshot.lastWorkspaceId;
+    snapshot.lastSourceId = updatedManifest.source_id ?? snapshot.lastSourceId;
+    snapshot.lastSourceManifestPath = updatedManifest.manifest_path ?? manifestPath;
+    pushProgressEntry(
+      "retry",
+      `Retried ${retryData.retriedPageCount ?? 0} failed page${
+        retryData.retriedPageCount === 1 ? "" : "s"
+      }; ${remainingFailedCount} still failed`,
+    );
+
+    if (snapshot.activeJob) {
+      snapshot.activeJob.progressPercent = 100;
+      snapshot.activeJob.lastMessage = "Compiling knowledge workspace after retry";
+      pushProgressEntry("compile", "Compiling knowledge workspace after retry");
+      publishSnapshot();
+    }
+    const project = await compileWorkspaceProject(
+      updatedManifest.markdown_path,
+      updatedManifest.source_path,
+      updatedManifest,
+      { skipGraphGeneration: true },
+    );
+    snapshot.lastProjectId = project.projectId;
+    snapshot.lastWorkspaceId = project.workspaceId ?? snapshot.lastWorkspaceId;
+    snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
+    snapshot.workspaceRevision += 1;
+    pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
+
+    if (snapshot.activeJob) {
+      snapshot.activeJob.status = "running";
+      snapshot.activeJob.progressPercent = 96;
+      snapshot.activeJob.lastMessage = "Rebuilding workspace graph";
+    }
+    pushProgressEntry("graph", "Queued workspace graph rebuild");
+    enqueueWorkspaceGraphRebuild(
+      updatedManifest.markdown_path,
+      updatedManifest.source_path,
+      updatedManifest,
+      snapshot.activeJob?.jobId ?? null,
+    );
     publishSnapshot();
   } catch (error) {
     if (!snapshot.activeJob) {

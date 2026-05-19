@@ -276,6 +276,133 @@ pub(crate) fn write_source_manifest(manifest: &SourceArtifactManifest) -> Result
         .with_context(|| format!("failed writing source manifest {}", manifest.manifest_path))
 }
 
+pub(crate) fn retry_failed_page_artifacts(
+    request: &RetryFailedPagesRequest,
+    config: &EngineConfig,
+) -> Result<RetryFailedPagesResponseData> {
+    if request.pages.is_empty() {
+        bail!("retry failed pages requires at least one page update");
+    }
+
+    let mut manifest = load_source_manifest_from_path(&request.source_manifest_path)?;
+    let warnings_before = source_pack_warnings(&manifest).len();
+    let mut retried_page_count = 0usize;
+
+    for update in &request.pages {
+        let page = manifest
+            .pages
+            .iter_mut()
+            .find(|page| page.index == update.page_index)
+            .ok_or_else(|| {
+                anyhow!(
+                    "retry page {} was not found in source manifest",
+                    update.page_index + 1
+                )
+            })?;
+
+        if page.error_message.is_none() {
+            bail!(
+                "retry page {} is not failed; retry is limited to failed pages",
+                update.page_index + 1
+            );
+        }
+
+        if update.error_message.is_none()
+            && update
+                .markdown
+                .as_ref()
+                .is_none_or(|value| value.trim().is_empty())
+            && update
+                .plain_text
+                .as_ref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            bail!(
+                "retry page {} needs markdown, plain text, or an error message",
+                update.page_index + 1
+            );
+        }
+
+        if let Some(error_message) = &update.error_message {
+            page.error_message = Some(error_message.clone());
+            continue;
+        }
+
+        let page_number = update.page_index + 1;
+        let pages_dir = Path::new(&manifest.artifact_root).join("pages");
+        fs::create_dir_all(&pages_dir).with_context(|| {
+            format!(
+                "failed creating page artifact directory {}",
+                pages_dir.display()
+            )
+        })?;
+
+        if let Some(markdown) = update
+            .markdown
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let path = pages_dir.join(format!("page_{page_number}.md"));
+            fs::write(&path, markdown).with_context(|| {
+                format!("failed writing retry page markdown {}", path.display())
+            })?;
+            page.markdown_path = Some(path.display().to_string());
+        }
+
+        if let Some(plain_text) = update
+            .plain_text
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let path = pages_dir.join(format!("page_{page_number}.txt"));
+            fs::write(&path, plain_text)
+                .with_context(|| format!("failed writing retry page text {}", path.display()))?;
+            page.plain_text_path = Some(path.display().to_string());
+        }
+
+        if let Some(image_asset_path) = &update.image_asset_path {
+            let image_path = Path::new(image_asset_path);
+            page.image_path = Some(
+                if image_path.is_absolute() {
+                    image_path.to_path_buf()
+                } else {
+                    Path::new(&manifest.artifact_root).join(image_path)
+                }
+                .display()
+                .to_string(),
+            );
+        }
+
+        page.error_message = None;
+        retried_page_count += 1;
+    }
+
+    manifest.status = ingest_status_for_pages(&manifest.pages);
+    manifest.updated_at = unix_timestamp_seconds();
+    rewrite_manifest_markdown(&manifest)?;
+    write_source_manifest(&manifest)?;
+
+    let content_hash = file_content_hash(Path::new(&manifest.source_path))?;
+    write_source_pack_and_evidence_index(&manifest, &content_hash, manifest.updated_at, config)?;
+
+    let remaining_failed_count = failed_page_count(&manifest.pages);
+    Ok(RetryFailedPagesResponseData {
+        source_pack_path: Path::new(&manifest.artifact_root)
+            .join("source_pack.json")
+            .display()
+            .to_string(),
+        evidence_index_path: Path::new(&manifest.artifact_root)
+            .join("evidence_index.json")
+            .display()
+            .to_string(),
+        warnings_after: source_pack_warnings(&manifest).len(),
+        warnings_before,
+        remaining_failed_count,
+        retried_page_count,
+        source_manifest: manifest,
+    })
+}
+
 fn write_source_pack_and_evidence_index(
     manifest: &SourceArtifactManifest,
     content_hash: &str,
@@ -352,6 +479,57 @@ fn write_source_pack_and_evidence_index(
         )
     })?;
     Ok(())
+}
+
+fn load_source_manifest_from_path(path: &str) -> Result<SourceArtifactManifest> {
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed reading source manifest {path}"))?;
+    serde_json::from_str(&json).with_context(|| format!("failed decoding source manifest {path}"))
+}
+
+fn rewrite_manifest_markdown(manifest: &SourceArtifactManifest) -> Result<()> {
+    let mut markdown = format!("# {}\n\n", manifest.output_name);
+    for page in &manifest.pages {
+        markdown.push_str(&format!("## {}\n\n", page.label));
+        if let Some(image_path) = &page.image_path {
+            markdown.push_str(&format!("![{}]({image_path})\n\n", page.label));
+        }
+        if let Some(page_markdown_path) = &page.markdown_path {
+            let body = fs::read_to_string(page_markdown_path)
+                .with_context(|| format!("failed reading page markdown {page_markdown_path}"))?;
+            markdown.push_str(&body);
+            markdown.push_str("\n\n");
+        } else if let Some(plain_text_path) = &page.plain_text_path {
+            let body = fs::read_to_string(plain_text_path)
+                .with_context(|| format!("failed reading page text {plain_text_path}"))?;
+            markdown.push_str(&body);
+            markdown.push_str("\n\n");
+        } else if let Some(error_message) = &page.error_message {
+            markdown.push_str(&format!("_AI analysis unavailable: {error_message}_\n\n"));
+        } else {
+            markdown.push_str("_AI analysis unavailable._\n\n");
+        }
+    }
+    fs::write(&manifest.markdown_path, markdown)
+        .with_context(|| format!("failed writing markdown {}", manifest.markdown_path))
+}
+
+fn failed_page_count(pages: &[PageArtifact]) -> usize {
+    pages
+        .iter()
+        .filter(|page| page.error_message.is_some())
+        .count()
+}
+
+fn ingest_status_for_pages(pages: &[PageArtifact]) -> IngestStatus {
+    let failed_count = failed_page_count(pages);
+    if failed_count == 0 {
+        IngestStatus::Ingested
+    } else if failed_count == pages.len() {
+        IngestStatus::Failed
+    } else {
+        IngestStatus::Partial
+    }
 }
 
 fn source_pack_warnings(

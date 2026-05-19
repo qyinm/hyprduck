@@ -183,3 +183,22 @@ test("workspace snapshot refresh exposes loading fallback and error states", () 
   expect(appSource).toMatch(/Refreshing latest workspace snapshot/);
   expect(appSource).toMatch(/Could not refresh the workspace snapshot/);
 });
+
+test("partial import failures expose failed-page retry affordance", () => {
+  expect(appSource).toMatch(/failedPageCount: snapshot\.lastResult\?\.failedCount/);
+  expect(appSource).toMatch(/snapshot\.lastResult && snapshot\.lastResult\.failedCount > 0/);
+  expect(appSource).toMatch(/status: "partial"/);
+  expect(graphSource).toMatch(/failedPageCount/);
+  expect(graphSource).toMatch(/const partial = status\.status === "partial"/);
+  expect(graphSource).toMatch(/canRetryFailedPages = failedPageCount > 0/);
+  expect(graphSource).toMatch(/Retry failed pages/);
+  expect(graphSource).toMatch(/failedPageCount === 1 \? "page" : "pages"/);
+  expect(graphSource).toMatch(/onRetryFailedPages/);
+  expect(appSource).toMatch(/invoke<void>\("retry_failed_pages"\)/);
+  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+  expect(mainSource).toMatch(/case "retry_failed_pages"/);
+  expect(mainSource).toMatch(/function retryFailedPages/);
+  expect(mainSource).toMatch(/command: "retry_failed_pages"/);
+  expect(mainSource).toMatch(/sourceManifestPath: manifestPath/);
+  expect(mainSource).not.toMatch(/onRetryFailedPages=\{startParse\}/);
+});

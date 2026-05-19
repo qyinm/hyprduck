@@ -21,6 +21,7 @@ pub use hyprduck_knowledge::{
 #[serde(rename_all = "snake_case")]
 pub enum EngineCommand {
     Parse,
+    RetryFailedPages,
     CompileProject,
     LoadProject,
     ApplyCorrection,
@@ -194,6 +195,39 @@ pub struct SourceArtifactManifest {
     pub pages: Vec<PageArtifact>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPageArtifactUpdate {
+    pub page_index: usize,
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub plain_text: Option<String>,
+    #[serde(default)]
+    pub image_asset_path: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedPagesRequest {
+    pub source_manifest_path: String,
+    pub pages: Vec<RetryPageArtifactUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedPagesResponseData {
+    pub source_manifest: SourceArtifactManifest,
+    pub retried_page_count: usize,
+    pub remaining_failed_count: usize,
+    pub warnings_before: usize,
+    pub warnings_after: usize,
+    pub source_pack_path: String,
+    pub evidence_index_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1318,6 +1352,7 @@ pub struct EngineRuntimeEvent {
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum EngineRequest {
     Parse(ParseRequest),
+    RetryFailedPages(RetryFailedPagesRequest),
     CompileProject(CompileProjectRequest),
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),

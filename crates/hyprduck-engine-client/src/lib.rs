@@ -19,8 +19,9 @@ use hyprduck_engine_types::{
     ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
     ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
-    SearchBrainResponseData, ValidateProviderRequest, ValidateProviderResponseData,
+    RetryFailedPagesRequest, RetryFailedPagesResponseData, RuntimeReadinessResponseData,
+    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
+    ValidateProviderRequest, ValidateProviderResponseData,
 };
 
 pub trait EngineClient {
@@ -29,6 +30,10 @@ pub trait EngineClient {
         request: ParseRequest,
         on_progress: &mut dyn FnMut(ParseProgress),
     ) -> Result<ParseResponseData>;
+    fn retry_failed_pages(
+        &self,
+        request: RetryFailedPagesRequest,
+    ) -> Result<RetryFailedPagesResponseData>;
 
     fn compile_project(&self, request: CompileProjectRequest)
         -> Result<CompileProjectResponseData>;
@@ -242,6 +247,17 @@ impl EngineClient for SubprocessEngineClient {
             EngineRequest::Parse(request),
             EngineCommand::Parse,
             Some(on_progress),
+        )
+    }
+
+    fn retry_failed_pages(
+        &self,
+        request: RetryFailedPagesRequest,
+    ) -> Result<RetryFailedPagesResponseData> {
+        self.run_command::<RetryFailedPagesResponseData, RetryFailedPagesResponseData>(
+            EngineRequest::RetryFailedPages(request),
+            EngineCommand::RetryFailedPages,
+            None,
         )
     }
 

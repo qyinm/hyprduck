@@ -736,6 +736,20 @@ function createWebMockApi(): HyprDuckDesktopApi {
           }, 700);
           return undefined as T;
         }
+        case "retry_failed_pages": {
+          emitWebSnapshot({
+            ...webMockSnapshot,
+            progressLog: [
+              ...webMockSnapshot.progressLog,
+              {
+                phase: "retry",
+                message: "Preview failed-page retry completed.",
+                timestamp: new Date().toISOString(),
+              },
+            ],
+          });
+          return undefined as T;
+        }
         case "cancel_parse": {
           if (webMockParseTimer) {
             clearTimeout(webMockParseTimer);
@@ -1859,11 +1873,23 @@ export function App() {
         progressPercent: 100,
         message: "Import failed",
         failureMessage: latestProgress.message,
+        failedPageCount: snapshot.lastResult?.failedCount ?? 0,
+      };
+    }
+
+    if (snapshot.lastResult && snapshot.lastResult.failedCount > 0) {
+      return {
+        filePath: selectedFile?.path ?? snapshot.lastResult.savedOutputPath ?? "Imported source",
+        format: selectedFile?.format ?? "document",
+        status: "partial",
+        progressPercent: 100,
+        message: "Partial import",
+        failedPageCount: snapshot.lastResult.failedCount,
       };
     }
 
     return null;
-  }, [selectedFile, snapshot.activeJob, snapshot.progressLog]);
+  }, [selectedFile, snapshot.activeJob, snapshot.lastResult, snapshot.progressLog]);
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,
@@ -2008,6 +2034,11 @@ export function App() {
         format: selectedFile.format,
       },
     });
+    setActivePanel("knowledge");
+  };
+
+  const retryFailedPages = async () => {
+    await invoke<void>("retry_failed_pages");
     setActivePanel("knowledge");
   };
 
@@ -2347,6 +2378,7 @@ export function App() {
                 onAskProject={answerWorkspaceProject}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
+                onRetryFailedPages={retryFailedPages}
                 project={workspaceProject}
                 uiState={workspaceUiState}
               />

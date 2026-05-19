@@ -33,6 +33,7 @@ interface GraphWorkspaceProps {
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
+  onRetryFailedPages: () => Promise<void>;
 }
 
 interface GraphImportStatus {
@@ -42,6 +43,7 @@ interface GraphImportStatus {
   progressPercent: number;
   message: string | null;
   failureMessage?: string | null;
+  failedPageCount?: number;
 }
 
 export function GraphWorkspace(props: GraphWorkspaceProps) {
@@ -54,6 +56,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenArtifact,
     onApplyCorrection,
     onAskProject,
+    onRetryFailedPages,
   } = props;
   const projectNodes = project?.nodes ?? [];
   const nodeById = Object.fromEntries(projectNodes.map((node) => [node.id, node]));
@@ -260,7 +263,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             }
             hasImport={Boolean(project.summary.documentCount)}
           />
-          {importStatus && <GraphImportStatusBanner status={importStatus} />}
+          {importStatus && (
+            <GraphImportStatusBanner
+              onRetryFailedPages={onRetryFailedPages}
+              status={importStatus}
+            />
+          )}
           <SigmaGraphCanvas
             className="flex-1"
             dispatch={dispatch}
@@ -866,10 +874,16 @@ function CompactEvidenceRow(props: CompactEvidenceRowProps) {
   );
 }
 
-function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
-  const { status } = props;
+function GraphImportStatusBanner(props: {
+  status: GraphImportStatus;
+  onRetryFailedPages: () => Promise<void>;
+}) {
+  const { onRetryFailedPages, status } = props;
   const failed = status.status === "failed" || Boolean(status.failureMessage);
+  const partial = status.status === "partial";
   const progress = Math.max(0, Math.min(100, Math.round(status.progressPercent)));
+  const failedPageCount = status.failedPageCount ?? 0;
+  const canRetryFailedPages = failedPageCount > 0;
 
   return (
     <div
@@ -877,13 +891,19 @@ function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
         "pointer-events-auto absolute left-6 right-6 top-14 z-30 rounded-xl border px-4 py-3 shadow-sm backdrop-blur",
         failed
           ? "border-destructive/25 bg-destructive/10 text-destructive"
+          : partial
+            ? "border-amber-300/60 bg-amber-50 text-amber-950"
           : "border-border bg-background/95 text-foreground",
       )}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold">
-            {failed ? "Import failed" : "Importing source file"}
+            {failed
+              ? "Import failed"
+              : partial
+                ? "Partial import"
+                : "Importing source file"}
           </p>
           <p className="mt-1 truncate text-sm text-muted-foreground">
             {fileNameFromPath(status.filePath)} · {status.format.toUpperCase()}
@@ -892,7 +912,7 @@ function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
         </div>
         <ImportStatusIndicator failed={failed} progress={progress} />
       </div>
-      {!failed && (
+      {!failed && !partial && (
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary">
           <div
             className="h-full rounded-full bg-foreground transition-all"
@@ -902,6 +922,22 @@ function GraphImportStatusBanner(props: { status: GraphImportStatus }) {
       )}
       {failed && status.failureMessage ? (
         <p className="mt-2 text-sm leading-5">{status.failureMessage}</p>
+      ) : null}
+      {canRetryFailedPages ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-medium">
+            {failedPageCount} failed {failedPageCount === 1 ? "page" : "pages"} can be retried.
+          </p>
+          <Button
+            className="h-8 border-destructive/30 text-xs"
+            onClick={() => void onRetryFailedPages()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Retry failed pages
+          </Button>
+        </div>
       ) : null}
     </div>
   );

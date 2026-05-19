@@ -25,16 +25,16 @@ use hyprduck_engine_types::{
     ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
     ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0,
-    SourceRecord, SourceStatus, SourceSummary, StructuredExtractionArtifact,
-    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
-    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
-    SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection, WorkspaceId,
-    BRAIN_EVENT_SCHEMA_VERSION,
+    RelationEdgeDetail, RelationEdgeSummary, RelationKind, RetryFailedPagesRequest,
+    RetryFailedPagesResponseData, SearchBrainRequest, SearchBrainResponseData,
+    SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0, SourceRecord, SourceStatus,
+    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
-use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions};
+use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions, RetryPageArtifactUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(test)]
@@ -104,6 +104,7 @@ use chat_openai_compatible_client::{
 };
 #[cfg(test)]
 use domains::ingest::markdown_queue::*;
+use domains::ingest::output_package::retry_failed_page_artifacts;
 #[cfg(test)]
 use domains::ingest::output_package::write_output_package_with_fallback;
 use domains::ingest::output_package::{
@@ -123,9 +124,7 @@ use import_context::{
 use infra::process::resolve_binary;
 use knowledge::*;
 use parse::{parse_document, EventSink, ProcessLocator};
-#[cfg(test)]
-use provider::EngineConfig;
-use provider::EngineConfigStore;
+use provider::{EngineConfig, EngineConfigStore};
 pub(crate) use runtime::emit_event;
 #[allow(unused_imports)]
 pub(crate) use search_context::{
@@ -225,6 +224,13 @@ fn handle_parse(
         saved_output_path,
         source_manifest,
     })
+}
+
+pub(crate) fn handle_retry_failed_pages(
+    request: RetryFailedPagesRequest,
+    config: &EngineConfig,
+) -> Result<RetryFailedPagesResponseData> {
+    retry_failed_page_artifacts(&request, config)
 }
 
 struct RuntimeParseEventSink;

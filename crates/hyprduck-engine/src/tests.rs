@@ -5591,6 +5591,158 @@ fn output_packaging_records_partial_import_warnings_in_artifacts() {
 }
 
 #[test]
+fn retry_failed_page_updates_artifacts_and_regenerates_evidence_index() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.pages.push(ParsedPage {
+        index: 1,
+        markdown: None,
+        plain_text: None,
+        svg: None,
+        image_asset_path: None,
+        error_message: Some("provider unavailable".into()),
+    });
+    result.failed_count = 1;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("partial output manifest");
+    let first_page_path = manifest.pages[0]
+        .markdown_path
+        .as_ref()
+        .expect("first page markdown")
+        .clone();
+    let first_page_before = fs::read_to_string(&first_page_path).expect("first page before");
+
+    let response = retry_failed_page_artifacts(
+        &RetryFailedPagesRequest {
+            source_manifest_path: manifest.manifest_path.clone(),
+            pages: vec![RetryPageArtifactUpdate {
+                page_index: 1,
+                markdown: Some("Recovered retry evidence for page two.".into()),
+                plain_text: Some("Recovered retry evidence for page two.".into()),
+                image_asset_path: None,
+                error_message: None,
+            }],
+        },
+        &sample_engine_config(),
+    )
+    .expect("retry failed page");
+
+    assert_eq!(response.retried_page_count, 1);
+    assert_eq!(response.remaining_failed_count, 0);
+    assert_eq!(response.warnings_before, 1);
+    assert_eq!(response.warnings_after, 0);
+    assert_eq!(response.source_manifest.status, IngestStatus::Ingested);
+    assert_eq!(
+        fs::read_to_string(&first_page_path).expect("first page after"),
+        first_page_before
+    );
+
+    let source_pack: hyprduck_engine_types::SourcePackV0 = serde_json::from_str(
+        &fs::read_to_string(&response.source_pack_path).expect("source pack json"),
+    )
+    .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(&response.evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert!(source_pack.warnings.is_empty());
+    assert_eq!(source_pack.ingestion_status, IngestStatus::Ingested);
+    assert_eq!(source_pack.pages[1].page, 2);
+    assert!(source_pack.pages[1].error_message.is_none());
+    assert_eq!(evidence_index.warnings, source_pack.warnings);
+    assert_eq!(evidence_index.evidence.len(), 2);
+    assert!(evidence_index
+        .evidence
+        .iter()
+        .any(|evidence| evidence.page == 2
+            && evidence.quoted_text.contains("Recovered retry evidence")));
+}
+
+#[test]
+fn retry_failed_page_failure_preserves_existing_partial_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.pages.push(ParsedPage {
+        index: 1,
+        markdown: None,
+        plain_text: None,
+        svg: None,
+        image_asset_path: None,
+        error_message: Some("provider unavailable".into()),
+    });
+    result.failed_count = 1;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("partial output manifest");
+    let first_page_path = manifest.pages[0]
+        .markdown_path
+        .as_ref()
+        .expect("first page markdown")
+        .clone();
+    let first_page_before = fs::read_to_string(&first_page_path).expect("first page before");
+
+    let response = retry_failed_page_artifacts(
+        &RetryFailedPagesRequest {
+            source_manifest_path: manifest.manifest_path.clone(),
+            pages: vec![RetryPageArtifactUpdate {
+                page_index: 1,
+                markdown: None,
+                plain_text: None,
+                image_asset_path: None,
+                error_message: Some("provider timeout on retry".into()),
+            }],
+        },
+        &sample_engine_config(),
+    )
+    .expect("retry failure result");
+
+    assert_eq!(response.retried_page_count, 0);
+    assert_eq!(response.remaining_failed_count, 1);
+    assert_eq!(response.warnings_before, 1);
+    assert_eq!(response.warnings_after, 1);
+    assert_eq!(response.source_manifest.status, IngestStatus::Partial);
+    assert_eq!(
+        fs::read_to_string(&first_page_path).expect("first page after"),
+        first_page_before
+    );
+
+    let source_pack: hyprduck_engine_types::SourcePackV0 = serde_json::from_str(
+        &fs::read_to_string(&response.source_pack_path).expect("source pack json"),
+    )
+    .expect("source pack");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+        &fs::read_to_string(&response.evidence_index_path).expect("evidence index json"),
+    )
+    .expect("evidence index");
+
+    assert_eq!(source_pack.warnings.len(), 1);
+    assert_eq!(source_pack.warnings[0].page, Some(2));
+    assert_eq!(source_pack.warnings[0].message, "provider timeout on retry");
+    assert_eq!(evidence_index.warnings, source_pack.warnings);
+    assert_eq!(evidence_index.evidence.len(), 1);
+}
+
+#[test]
 fn output_packaging_records_all_page_failure_status() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fallback_root = temp.path().join("output-root");
