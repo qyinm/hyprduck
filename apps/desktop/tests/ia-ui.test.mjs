@@ -98,25 +98,14 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
   expect(publicModelGuidance).not.toMatch(/brain-corpus|local brain|Graph materialization|Provider-generated graph records|generated graph/);
 });
 
-test("first-run activation presents document-agent-citation flow before graph controls", () => {
-  expect(graphSource).toMatch(/FirstRunActivationStrip/);
-  expect(graphSource).toMatch(/aria-label="First-run activation"/);
-  expect(graphSource).toMatch(/Add Docs/);
-  expect(graphSource).toMatch(/Connect Agent/);
-  expect(graphSource).toMatch(/Ask With Citations/);
-  expect(graphSource).toMatch(/Verify Evidence/);
-  expect(graphSource).toMatch(/Reuse/);
-  expect(graphSource).toMatch(/Register the local MCP server/);
-  expect(graphSource).toMatch(/Open source, page, and evidence refs/);
-  expect(graphSource).toMatch(/Ask a second question from the same source set/);
-  expect(graphSource).toMatch(/activeStep=\{\s*project\.summary\.documentCount > 0 \? "connect" : "add"\s*\}/);
-  expect(graphSource).toMatch(/id: "add",[\s\S]*?complete: hasImport/);
-  expect(graphSource).toMatch(/id: "connect",[\s\S]*?complete: false/);
-  expect(graphSource).toMatch(/id: "ask",[\s\S]*?complete: false/);
-  expect(graphSource).toMatch(/id: "verify",[\s\S]*?complete: false/);
-  expect(graphSource).toMatch(/id: "reuse",[\s\S]*?complete: false/);
+test("Knowledge workspace keeps the graph canvas and removes onboarding checklist chrome", () => {
+  expect(graphSource).toMatch(/SigmaGraphCanvas/);
   expect(graphSource).toMatch(/aria-label="Ask with citations"/);
   expect(graphSource).toMatch(/placeholder="Ask with citations\.\.\."/);
+  expect(graphSource).not.toMatch(/FirstRunActivationStrip/);
+  expect(graphSource).not.toMatch(/aria-label="First-run activation"/);
+  expect(graphSource).not.toMatch(/Register the local MCP server/);
+  expect(graphSource).not.toMatch(/Ask a second question from the same source set/);
   expect(graphSource).not.toMatch(/Screen Recording|Accessibility/);
 });
 

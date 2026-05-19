@@ -6,7 +6,8 @@ HyprDuck compiles private documents into reusable, cited local context packs for
 
 - Keep the product focused on private document evidence reuse for coding agents.
 - Keep desktop first-run focused on `Add Docs -> Connect Agent -> Ask With Citations -> Verify Evidence -> Reuse`.
-- Treat graph, wiki, claims, memory, and event history as internal retrieval and inspection infrastructure, not first-run product promises.
+- Keep the desktop app's graph canvas as a required inspection surface for document/source/concept relationships.
+- Treat graph, wiki, claims, memory, and event history as retrieval and inspection infrastructure, not first-run product promises or marketing claims.
 - Do not reframe HyprDuck as DeepSeek-only, generic PDF chat, graph-first, brain-first, generic memory OS, or a trust console.
 
 ## Architecture Boundaries

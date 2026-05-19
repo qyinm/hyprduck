@@ -184,11 +184,15 @@ pub(crate) fn read_brain_events_jsonl(path: &Path) -> Result<Vec<BrainEvent>> {
     }
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
-    contents
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("failed decoding brain event JSONL row"))
-        .collect()
+    let mut events = Vec::new();
+    for line in contents.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str::<BrainEvent>(line) {
+            Ok(event) => events.push(event),
+            Err(error) if error.to_string().contains("unknown variant") => {}
+            Err(error) => return Err(error).context("failed decoding brain event JSONL row"),
+        }
+    }
+    Ok(events)
 }
 
 pub(crate) fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {

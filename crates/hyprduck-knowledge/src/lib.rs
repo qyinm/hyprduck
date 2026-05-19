@@ -782,8 +782,33 @@ pub struct BrainRepoSnapshot {
     pub claims: Vec<ClaimRecord>,
     #[serde(default)]
     pub extractions: Vec<StructuredExtractionArtifact>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_brain_events_ignoring_unknown_variants"
+    )]
     pub events: Vec<BrainEvent>,
+}
+
+fn deserialize_brain_events_ignoring_unknown_variants<'de, D>(
+    deserializer: D,
+) -> Result<Vec<BrainEvent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut events = Vec::new();
+    for value in values {
+        match serde_json::from_value::<BrainEvent>(value) {
+            Ok(event) => events.push(event),
+            Err(error) if error.to_string().contains("unknown variant") => {}
+            Err(error) => {
+                return Err(serde::de::Error::custom(format!(
+                    "failed decoding brain event: {error}"
+                )));
+            }
+        }
+    }
+    Ok(events)
 }
 
 #[cfg(test)]
@@ -978,5 +1003,36 @@ mod tests {
 
         assert!(event.payload_value().is_err());
         assert!(event.payload_as::<TestBrainEventPayload>().is_err());
+    }
+
+    #[test]
+    fn brain_repo_snapshot_ignores_unknown_legacy_event_types() {
+        let known_event = serde_json::to_value(test_brain_event()).expect("known event");
+        let snapshot = serde_json::json!({
+            "workspaceId": "workspace-1",
+            "generatedAt": 42,
+            "events": [
+                {
+                    "eventId": "legacy-event-1",
+                    "schemaVersion": BRAIN_EVENT_SCHEMA_VERSION,
+                    "workspaceId": "workspace-1",
+                    "scope": "project",
+                    "eventType": "link_proposed",
+                    "actor": {
+                        "actorType": "agent",
+                        "actorId": "legacy-agent"
+                    },
+                    "policyResult": "materialized",
+                    "createdAt": 41
+                },
+                known_event
+            ]
+        });
+
+        let decoded: BrainRepoSnapshot =
+            serde_json::from_value(snapshot).expect("decode snapshot with legacy event");
+
+        assert_eq!(decoded.events.len(), 1);
+        assert_eq!(decoded.events[0].event_id, "event-1");
     }
 }

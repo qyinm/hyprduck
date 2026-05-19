@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
-  CheckCircle2,
   LoaderCircle,
   Plus,
   Share2,
@@ -142,10 +141,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   if (!project) {
     return (
       <div className="flex h-full min-h-[30rem] flex-col bg-background px-6 pb-6 pt-14">
-        <FirstRunActivationStrip
-          activeStep="add"
-          hasImport={false}
-        />
         <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/15 p-10 text-center">
           <div className="mb-4 inline-flex size-12 items-center justify-center rounded-xl bg-secondary text-secondary-foreground">
             <Share2 size={20} />
@@ -257,12 +252,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             graphPaneClass,
           )}
         >
-          <FirstRunActivationStrip
-            activeStep={
-              project.summary.documentCount > 0 ? "connect" : "add"
-            }
-            hasImport={Boolean(project.summary.documentCount)}
-          />
           {importStatus && (
             <GraphImportStatusBanner
               onRetryFailedPages={onRetryFailedPages}
@@ -940,100 +929,6 @@ function GraphImportStatusBanner(props: {
         </div>
       ) : null}
     </div>
-  );
-}
-
-type FirstRunStepId = "add" | "connect" | "ask" | "verify" | "reuse";
-
-function FirstRunActivationStrip(props: {
-  activeStep: FirstRunStepId;
-  hasImport: boolean;
-}) {
-  const { activeStep, hasImport } = props;
-  const steps: Array<{
-    id: FirstRunStepId;
-    label: string;
-    description: string;
-    complete: boolean;
-  }> = [
-    {
-      id: "add",
-      label: "Add Docs",
-      description: "Add private docs",
-      complete: hasImport,
-    },
-    {
-      id: "connect",
-      label: "Connect Agent",
-      description: "Register the local MCP server",
-      complete: false,
-    },
-    {
-      id: "ask",
-      label: "Ask With Citations",
-      description: "Use the prompt for a cited answer",
-      complete: false,
-    },
-    {
-      id: "verify",
-      label: "Verify Evidence",
-      description: "Open source, page, and evidence refs",
-      complete: false,
-    },
-    {
-      id: "reuse",
-      label: "Reuse",
-      description: "Ask a second question from the same source set",
-      complete: false,
-    },
-  ];
-
-  return (
-    <section
-      aria-label="First-run activation"
-      className="mb-3 flex shrink-0 flex-wrap items-center gap-2 border-b border-border/70 pb-3"
-    >
-      {steps.map((step, index) => {
-        const isActive = step.id === activeStep;
-        return (
-          <div
-            className={cn(
-              "flex min-h-12 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left",
-              isActive
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-background text-foreground",
-            )}
-            key={step.id}
-          >
-            <span
-              className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold",
-                step.complete
-                  ? "border-transparent bg-emerald-600 text-white"
-                  : isActive
-                    ? "border-background/70"
-                    : "border-border",
-              )}
-            >
-              {step.complete ? <CheckCircle2 size={13} /> : index + 1}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-xs font-semibold">
-                {step.label}
-              </span>
-              <span
-                className={cn(
-                  "block truncate text-[11px]",
-                  isActive ? "text-background/75" : "text-muted-foreground",
-                )}
-              >
-                {step.description}
-              </span>
-            </span>
-          </div>
-        );
-      })}
-    </section>
   );
 }
 

@@ -1388,6 +1388,52 @@ fn materialization_fails_on_corrupt_existing_events_file() {
 }
 
 #[test]
+fn brain_event_jsonl_reader_ignores_unknown_legacy_event_types() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let events_path = temp.path().join("brain_events.jsonl");
+    let legacy_event = serde_json::json!({
+        "eventId": "legacy-event-1",
+        "schemaVersion": BRAIN_EVENT_SCHEMA_VERSION,
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "scope": "project",
+        "eventType": "link_proposed",
+        "actor": {
+            "actorType": "agent",
+            "actorId": "legacy-agent"
+        },
+        "policyResult": "materialized",
+        "createdAt": 41
+    });
+    let known_event = serde_json::json!({
+        "eventId": "event-1",
+        "schemaVersion": BRAIN_EVENT_SCHEMA_VERSION,
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "scope": "project",
+        "eventType": "brain_maintenance_run",
+        "actor": {
+            "actorType": "system",
+            "actorId": "system"
+        },
+        "policyResult": "accepted",
+        "createdAt": 42
+    });
+    fs::write(
+        &events_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&legacy_event).expect("legacy event"),
+            serde_json::to_string(&known_event).expect("known event")
+        ),
+    )
+    .expect("write events");
+
+    let events = read_brain_events_jsonl(&events_path).expect("read events");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "event-1");
+}
+
+#[test]
 fn brain_writer_uses_directory_lock_without_pid_file() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
