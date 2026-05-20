@@ -1,17 +1,15 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use async_openai::{
-    config::OpenAIConfig,
-    types::chat::{
-        ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
-        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessage,
-        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl, ResponseFormat,
-        ResponseFormatJsonSchema,
-    },
-    Client,
+use async_openai::types::chat::{
+    ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
+    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+    CreateChatCompletionRequest, CreateChatCompletionRequestArgs, ImageUrl, ResponseFormat,
+    ResponseFormatJsonSchema,
 };
+use reqwest::blocking::Client;
+use serde_json::Value;
 
 use crate::provider::{EngineConfig, ProviderKind};
 
@@ -95,58 +93,61 @@ fn parse_openai_compatible_with_response_format_timeout(
                 format!("failed to build OpenAI-compatible chat completion request: {error:#}"),
             )
         })?;
-    let client = openai_compatible_client(config);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| {
-            provider_failure(
-                ProviderFailureKind::ProviderConfig,
-                format!("failed to build provider API runtime: {error:#}"),
-            )
-        })?;
-
-    runtime.block_on(async {
-        let chat = client.chat();
-        let request_future = chat.create(request);
-        let response = match timeout {
-            Some(timeout) => tokio::time::timeout(timeout, request_future)
-                .await
-                .map_err(|_| {
-                    provider_failure(
-                        ProviderFailureKind::ProviderTimeout,
-                        format!("provider request timed out after {timeout:?}"),
-                    )
-                })?,
-            None => request_future.await,
-        }
-        .map_err(|error| {
-            provider_failure(
-                ProviderFailureKind::ProviderConfig,
-                format!("failed to complete provider request: {error:#}"),
-            )
-        })?;
-
-        response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.as_deref())
-            .map(str::to_string)
-            .ok_or_else(|| {
-                provider_failure(
-                    ProviderFailureKind::ProviderResponseInvalid,
-                    "provider response did not include markdown text",
-                )
-            })
+    let mut client_builder = Client::builder();
+    if let Some(timeout) = timeout {
+        client_builder = client_builder.timeout(timeout);
+    }
+    let client = client_builder.build().map_err(|error| {
+        provider_failure(
+            ProviderFailureKind::ProviderConfig,
+            format!("failed to build provider HTTP client: {error:#}"),
+        )
+    })?;
+    let mut http_request = client
+        .post(format!(
+            "{}/chat/completions",
+            openai_compatible_api_base(config)
+        ))
+        .json(&request);
+    if !config.api_key.trim().is_empty() {
+        http_request = http_request.bearer_auth(config.api_key.trim());
+    }
+    let response = http_request.send().map_err(|error| {
+        let kind = if error.is_timeout() {
+            ProviderFailureKind::ProviderTimeout
+        } else {
+            ProviderFailureKind::ProviderConfig
+        };
+        provider_failure(
+            kind,
+            format!("failed to complete provider request: {error:#}"),
+        )
+    })?;
+    let status = response.status();
+    let response_json = response.text().map_err(|error| {
+        provider_failure(
+            ProviderFailureKind::ProviderResponseInvalid,
+            format!("failed to read provider response body: {error:#}"),
+        )
+    })?;
+    if !status.is_success() {
+        return Err(provider_failure(
+            ProviderFailureKind::ProviderConfig,
+            format!("provider returned HTTP {status}: {response_json}"),
+        ));
+    }
+    let value = serde_json::from_str::<Value>(&response_json).map_err(|error| {
+        provider_failure(
+            ProviderFailureKind::ProviderResponseInvalid,
+            format!("failed to decode provider response JSON: {error:#}"),
+        )
+    })?;
+    extract_chat_completion_content(&value).ok_or_else(|| {
+        provider_failure(
+            ProviderFailureKind::ProviderResponseInvalid,
+            "provider response did not include markdown text",
+        )
     })
-}
-
-fn openai_compatible_client(config: &EngineConfig) -> Client<OpenAIConfig> {
-    let openai_config = OpenAIConfig::new()
-        .with_api_base(openai_compatible_api_base(config))
-        .with_api_key(config.api_key.clone());
-
-    Client::with_config(openai_config)
 }
 
 fn build_chat_completion_request(
@@ -206,6 +207,17 @@ fn normalize_openai_compatible_api_base(raw: &str) -> String {
         .strip_suffix("/chat/completions")
         .unwrap_or(trimmed)
         .to_string()
+}
+
+fn extract_chat_completion_content(value: &Value) -> Option<String> {
+    value
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()
+        .map(str::to_string)
 }
 
 pub(crate) fn provider_unavailable(config: &EngineConfig) -> bool {
@@ -271,6 +283,29 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "provider_response_invalid: provider response did not include markdown text"
+        );
+    }
+
+    #[test]
+    fn chat_completion_content_extraction_ignores_extra_provider_fields() {
+        let response = serde_json::json!({
+            "id": "gen-test",
+            "object": "chat.completion",
+            "service_tier": "standard",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "{\"ok\":true}"
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            extract_chat_completion_content(&response).as_deref(),
+            Some("{\"ok\":true}")
         );
     }
 

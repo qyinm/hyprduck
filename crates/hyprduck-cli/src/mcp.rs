@@ -344,13 +344,20 @@ fn call_tool(
         }
         "get_context_pack" => {
             let query = required_string(arguments, "query")?;
+            let selected_node_id = optional_string(arguments, "nodeId")?;
             let budget = optional_usize(arguments, "budget")?;
-            serde_json::to_value(client.get_context_pack(GetContextPackRequest {
+            let response = client.get_context_pack(GetContextPackRequest {
                 scope,
                 query,
+                selected_node_id,
                 budget,
                 persist: false,
-            })?)?
+            })?;
+            serde_json::json!({
+                "contextPack": response.context_pack_v0.clone(),
+                "contextPackV0": response.context_pack_v0,
+                "persistedContextPackPath": response.persisted_context_pack_path,
+            })
         }
         "read_context_pack" => {
             let pack_id = optional_string(arguments, "packId")?;
@@ -702,6 +709,7 @@ fn tool_definitions() -> Vec<Value> {
             "Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace.",
             json!({
                 "query": { "type": "string", "description": "Task or question to build context for." },
+                "nodeId": { "type": "string", "description": "Optional selected graph node ID used as a retrieval bias, not as a full graph export." },
                 "budget": { "type": "integer", "minimum": 1, "description": "Approximate token budget." },
             }),
             vec!["query"],

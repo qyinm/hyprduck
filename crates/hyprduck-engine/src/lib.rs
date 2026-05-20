@@ -325,7 +325,9 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
             });
         }
 
-        let project = store.load_project(Some(project_id))?;
+        let project = store
+            .load_project(Some(project_id))?
+            .map(source_ui_graph_projection);
         let stored_workspace_id = store.load_workspace_id_for_project(project_id)?;
         if let (Some(request_workspace_id), Some(actual_workspace_id)) = (
             request.workspace_id.as_deref(),
@@ -360,7 +362,7 @@ fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectRespons
         .transpose()?
         .flatten();
     if project.is_none() && request.workspace_id.is_none() {
-        project = store.load_project(None)?;
+        project = store.load_project(None)?.map(source_ui_graph_projection);
     }
     let sources = workspace_id
         .as_deref()
@@ -772,7 +774,16 @@ fn handle_read_recent_events(
 
 fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
     let reader = BrainReader::open(&request.scope)?;
-    let context_pack = reader.context_pack(&request.query, request.budget.unwrap_or(8000))?;
+    let budget = request.budget.unwrap_or(8000);
+    let context_pack = if request.selected_node_id.is_some() {
+        reader.context_pack_with_selection(
+            &request.query,
+            budget,
+            request.selected_node_id.as_deref(),
+        )?
+    } else {
+        reader.context_pack(&request.query, budget)?
+    };
     let artifact_metadata =
         build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
     let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
@@ -3426,7 +3437,9 @@ impl KnowledgeProjectStore {
         if rows.is_empty() {
             return Ok(None);
         }
-        Ok(Some(aggregate_workspace_project(workspace_id, rows)))
+        Ok(Some(workspace_ui_graph_projection(
+            aggregate_workspace_project(workspace_id, rows),
+        )))
     }
 
     fn workspace_root(&self, workspace_id: &str) -> Result<PathBuf> {

@@ -161,6 +161,117 @@ test("shows derived_from source edges when both endpoints are visible", () => {
   ]);
 });
 
+test("caps materialized workspace projection and reports hidden counts", () => {
+  const conceptCount = 75;
+  const relatedCount = 120;
+  const nodes: MaterializedGraphSnapshot["nodes"] = [
+    {
+      nodeId: "source-pdf",
+      kind: "source",
+      label: "report.pdf",
+      aliases: [],
+      evidenceIds: [],
+      sourceIds: ["source-1"],
+      confidence: 1,
+      updatedAt: 2,
+    },
+  ];
+  const edges: MaterializedGraphSnapshot["edges"] = [];
+
+  for (let index = 0; index < conceptCount; index += 1) {
+    nodes.push({
+      nodeId: `concept-${index.toString().padStart(3, "0")}`,
+      kind: "concept",
+      label: `Projection Concept ${index.toString().padStart(3, "0")}`,
+      aliases: [],
+      evidenceIds: Array.from({ length: Math.min(5, conceptCount - index) }, (_, evidenceIndex) =>
+        `ev-${index}-${evidenceIndex}`,
+      ),
+      sourceIds: ["source-1"],
+      confidence: 0.9,
+      updatedAt: 2,
+    });
+    edges.push({
+      relationId: `edge-source-${index.toString().padStart(3, "0")}`,
+      kind: "source_of",
+      sourceNodeId: "source-pdf",
+      targetNodeId: `concept-${index.toString().padStart(3, "0")}`,
+      label: "source of",
+      evidenceIds: [`ev-${index}-0`],
+      confidence: 0.8,
+      updatedAt: 2,
+    });
+  }
+  for (let index = 0; index < relatedCount; index += 1) {
+    edges.push({
+      relationId: `edge-related-${index.toString().padStart(3, "0")}`,
+      kind: "related_to",
+      sourceNodeId: `concept-${(index % conceptCount).toString().padStart(3, "0")}`,
+      targetNodeId: `concept-${((index + 1) % conceptCount).toString().padStart(3, "0")}`,
+      label: "related to",
+      evidenceIds: [`ev-${index % conceptCount}-0`],
+      confidence: 0.7,
+      updatedAt: 2,
+    });
+  }
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-large",
+    sourceIngestId: "ingest-large",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json"],
+    sourcePaths: ["/brain/default/sources/source-1/report.pdf"],
+    graphMaterializationReports: [
+      {
+        sourceId: "source-1",
+        status: "linked",
+        stage: "linked",
+        progress: 1,
+        sourceGraphMaterialized: true,
+        workspaceLinkingMaterialized: true,
+        rawSourceGraphNodeCount: 151,
+        rawSourceGraphRelationCount: 150,
+        canonicalSourceGraphNodeCount: 76,
+        canonicalSourceGraphRelationCount: 120,
+        prunedSourceGraphNodeCount: 75,
+        prunedSourceGraphRelationCount: 30,
+        compactionStatus: "compacted",
+      },
+    ],
+    nodes,
+    edges,
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+  const visibleConcepts = envelope.project.nodes.filter((node) => node.kind === "concept");
+  const visibleNodeIds = new Set(envelope.project.nodes.map((node) => node.id));
+
+  expect(visibleConcepts.length).toBeLessThanOrEqual(60);
+  expect(envelope.project.nodes.filter((node) => node.kind === "source")).toHaveLength(1);
+  expect(envelope.project.edges.length).toBeLessThanOrEqual(90);
+  expect(envelope.project.summary.hiddenConceptCount).toBe(15);
+  expect(envelope.project.summary.compactionSummary).toBe(
+    "75 canonical concepts -> 60 visible concepts",
+  );
+  expect(envelope.project.summary.graphMaterializationSummary).toBe(
+    "151 raw nodes -> 76 canonical nodes -> 61 visible nodes · 150 raw links -> 120 canonical links -> 90 visible links · 1/1 sources complete",
+  );
+  expect(envelope.project.summary.hiddenRelationCount).toBe(
+    conceptCount + relatedCount - envelope.project.edges.length,
+  );
+  expect(
+    envelope.project.edges.every(
+      (edge) => visibleNodeIds.has(edge.sourceNodeId) && visibleNodeIds.has(edge.targetNodeId),
+    ),
+  ).toBe(true);
+});
+
 test("matches source artifact paths by segment instead of substring", () => {
   const snapshot: MaterializedGraphSnapshot = {
     snapshotId: "snapshot-1",

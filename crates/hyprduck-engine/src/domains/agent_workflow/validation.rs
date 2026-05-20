@@ -234,6 +234,12 @@ pub(crate) fn validate_provider_workspace_linking_snapshot(
         .map(|node| (node.node_id.as_str(), node.source_ids.as_slice()))
         .collect::<Vec<_>>();
     for relation in &snapshot.relations {
+        if relation.kind == BrainRelationKind::SourceOf {
+            bail!(
+                "workspace linking relation {} must not return source_of",
+                relation.relation_id
+            );
+        }
         let left = node_sources
             .iter()
             .find(|(node_id, _)| *node_id == relation.source_node_id)

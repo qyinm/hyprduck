@@ -324,6 +324,7 @@ fn run_demo_with_root(root: &Path, fixture_path: &Path, query: &str) -> Result<D
             root_dir: Some(root.display().to_string()),
         },
         query: query.to_string(),
+        selected_node_id: None,
         budget: Some(4000),
         persist: true,
     })?;
@@ -531,6 +532,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             workspace,
             root_dir,
             query,
+            selected_node_id,
             budget,
             persist,
         } => {
@@ -540,6 +542,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                     root_dir,
                 },
                 query,
+                selected_node_id,
                 budget,
                 persist,
             })?;

@@ -1030,6 +1030,8 @@ pub(crate) fn refresh_project_after_correction(project: &mut KnowledgeProject) {
     project.summary.node_count = project.nodes.len();
     project.summary.relationship_count = relationship_count;
     project.summary.evidence_count = evidence_count;
+    project.summary.hidden_concept_count = 0;
+    project.summary.hidden_relation_count = 0;
     project.summary.summary = format!(
         "Workspace contains {} concept nodes and {} explainable relationships. Manual corrections keep the graph grounded in visible evidence.",
         concept_count, relationship_count

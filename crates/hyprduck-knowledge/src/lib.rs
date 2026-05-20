@@ -135,6 +135,10 @@ pub struct ProjectOverview {
     pub node_count: usize,
     pub relationship_count: usize,
     pub evidence_count: usize,
+    #[serde(default)]
+    pub hidden_concept_count: usize,
+    #[serde(default)]
+    pub hidden_relation_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

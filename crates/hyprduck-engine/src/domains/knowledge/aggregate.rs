@@ -1,5 +1,10 @@
 use super::*;
 
+pub(crate) const SOURCE_UI_VISIBLE_CONCEPT_LIMIT: usize = 16;
+pub(crate) const SOURCE_UI_VISIBLE_RELATION_LIMIT: usize = 24;
+pub(crate) const WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT: usize = 60;
+pub(crate) const WORKSPACE_UI_VISIBLE_RELATION_LIMIT: usize = 90;
+
 pub(crate) fn aggregate_workspace_project(
     workspace_id: &str,
     rows: Vec<(StoredSourceRow, Option<KnowledgeProject>)>,
@@ -514,6 +519,8 @@ pub(crate) fn finalize_workspace_project(
             node_count: nodes.len(),
             relationship_count: edges.len(),
             evidence_count,
+            hidden_concept_count: 0,
+            hidden_relation_count: 0,
         },
         nodes,
         edges,
@@ -564,6 +571,211 @@ pub(crate) fn matching_source_concept_node_ids(
         })
         .map(|detail| detail.node.id.clone())
         .collect()
+}
+
+pub(crate) fn source_ui_graph_projection(project: KnowledgeProject) -> KnowledgeProject {
+    ui_graph_projection(
+        project,
+        SOURCE_UI_VISIBLE_CONCEPT_LIMIT,
+        SOURCE_UI_VISIBLE_RELATION_LIMIT,
+    )
+}
+
+pub(crate) fn workspace_ui_graph_projection(project: KnowledgeProject) -> KnowledgeProject {
+    ui_graph_projection(
+        project,
+        WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT,
+        WORKSPACE_UI_VISIBLE_RELATION_LIMIT,
+    )
+}
+
+pub(crate) fn ui_graph_projection(
+    mut project: KnowledgeProject,
+    visible_concept_limit: usize,
+    visible_relation_limit: usize,
+) -> KnowledgeProject {
+    let original_concept_count = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+    let original_relation_count = project.edges.len();
+    let related_count_by_node_id =
+        project
+            .edges
+            .iter()
+            .fold(BTreeMap::<String, usize>::new(), |mut counts, edge| {
+                *counts.entry(edge.source_node_id.clone()).or_default() += 1;
+                *counts.entry(edge.target_node_id.clone()).or_default() += 1;
+                counts
+            });
+
+    let mut ranked_concepts = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .map(|node| {
+            (
+                ui_node_salience_score(node, &related_count_by_node_id),
+                node.evidence_count,
+                node.label.clone(),
+                node.id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked_concepts.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(right.1.cmp(&left.1))
+            .then(left.2.cmp(&right.2))
+            .then(left.3.cmp(&right.3))
+    });
+    let visible_concept_ids = ranked_concepts
+        .into_iter()
+        .take(visible_concept_limit)
+        .map(|(_, _, _, node_id)| node_id)
+        .collect::<BTreeSet<_>>();
+    let visible_node_ids = project
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind != GraphNodeKind::Concept || visible_concept_ids.contains(&node.id)
+        })
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    project
+        .nodes
+        .retain(|node| visible_node_ids.contains(&node.id));
+    project
+        .details_by_node_id
+        .retain(|node_id, _| visible_node_ids.contains(node_id));
+    project
+        .answer_by_node_id
+        .retain(|node_id, _| visible_node_ids.contains(node_id));
+
+    let mut visible_edges = project
+        .edges
+        .into_iter()
+        .filter(|edge| {
+            visible_node_ids.contains(&edge.source_node_id)
+                && visible_node_ids.contains(&edge.target_node_id)
+        })
+        .collect::<Vec<_>>();
+    visible_edges.sort_by(|left, right| {
+        ui_relation_salience_score(right)
+            .cmp(&ui_relation_salience_score(left))
+            .then(right.evidence_count.cmp(&left.evidence_count))
+            .then(left.label.cmp(&right.label))
+            .then(left.id.cmp(&right.id))
+    });
+    visible_edges.truncate(visible_relation_limit);
+    let visible_edge_ids = visible_edges
+        .iter()
+        .map(|edge| edge.id.clone())
+        .collect::<BTreeSet<_>>();
+    project.edges = visible_edges;
+    project
+        .edge_details_by_id
+        .retain(|edge_id, _| visible_edge_ids.contains(edge_id));
+
+    refresh_project_projection_links(&mut project);
+    let visible_concept_count = project
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+    let hidden_concept_count = original_concept_count.saturating_sub(visible_concept_count);
+    let hidden_relation_count = original_relation_count.saturating_sub(project.edges.len());
+    project.summary.node_count = project.nodes.len();
+    project.summary.relationship_count = project.edges.len();
+    project.summary.hidden_concept_count = hidden_concept_count;
+    project.summary.hidden_relation_count = hidden_relation_count;
+    if hidden_concept_count > 0 || hidden_relation_count > 0 {
+        project.summary.summary = format!(
+            "{} Default projection shows {} visible concept nodes and {} visible relationships; {} concept nodes and {} relationships are hidden.",
+            project.summary.summary,
+            visible_concept_count,
+            project.edges.len(),
+            hidden_concept_count,
+            hidden_relation_count
+        );
+    }
+    project
+}
+
+fn ui_node_salience_score(
+    node: &GraphNodeSummary,
+    related_count_by_node_id: &BTreeMap<String, usize>,
+) -> i32 {
+    let confidence_score = node
+        .confidence
+        .map(|confidence| (confidence.clamp(0.0, 1.0) * 100.0).round() as i32)
+        .unwrap_or(0);
+    let label_penalty = if node.label.chars().count() > 80 {
+        50
+    } else {
+        0
+    };
+    (node.evidence_count as i32 * 100)
+        + (related_count_by_node_id.get(&node.id).copied().unwrap_or(0) as i32 * 12)
+        + confidence_score
+        - label_penalty
+}
+
+fn ui_relation_salience_score(edge: &RelationEdgeSummary) -> i32 {
+    let kind_score = match edge.kind {
+        RelationKind::SourceDocument => 20,
+        RelationKind::RelatedTo => 10,
+    };
+    let confidence_score = edge
+        .confidence
+        .map(|confidence| (confidence.clamp(0.0, 1.0) * 100.0).round() as i32)
+        .unwrap_or(0);
+    (edge.evidence_count as i32 * 100) + kind_score + confidence_score
+}
+
+fn refresh_project_projection_links(project: &mut KnowledgeProject) {
+    let mut related_count_by_node_id = BTreeMap::<String, usize>::new();
+    let mut connected_node_ids_by_node_id = BTreeMap::<String, BTreeSet<String>>::new();
+    for edge in &project.edges {
+        note_relation(
+            &mut related_count_by_node_id,
+            &mut connected_node_ids_by_node_id,
+            &edge.source_node_id,
+            &edge.target_node_id,
+        );
+    }
+    for node in &mut project.nodes {
+        node.related_count = related_count_by_node_id.get(&node.id).copied().unwrap_or(0);
+        if let Some(detail) = project.details_by_node_id.get_mut(&node.id) {
+            detail.node = node.clone();
+        }
+        if let Some(answer) = project.answer_by_node_id.get_mut(&node.id) {
+            answer.related_node_ids = connected_node_ids_by_node_id
+                .get(&node.id)
+                .map(|related| related.iter().cloned().collect())
+                .unwrap_or_default();
+        }
+    }
+
+    let edge_by_id = project
+        .edges
+        .iter()
+        .map(|edge| (edge.id.clone(), edge.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let label_by_node_id = project
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.label.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for (edge_id, detail) in &mut project.edge_details_by_id {
+        if let Some(edge) = edge_by_id.get(edge_id) {
+            detail.edge = edge.clone();
+            detail.explanation = edge_explanation(edge, &label_by_node_id, &detail.evidence);
+        }
+    }
 }
 
 pub(crate) fn source_label_from_summary(summary: &SourceSummary) -> String {

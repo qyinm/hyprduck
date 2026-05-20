@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
 use hyprduck_engine_types::{
-    BrainEvent, BrainEventKind, BrainRepoSnapshot, GraphHistoryEntry, GraphRollbackTarget,
-    ReadGraphHistoryRequest, ReadGraphHistoryResponseData, ReadGraphSnapshotRequest,
-    ReadGraphSnapshotResponseData, ReadRecentEventsRequest,
+    BrainEvent, BrainEventKind, BrainRepoSnapshot, GraphHistoryEntry,
+    GraphMaterializationReportSummary, GraphRollbackTarget, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
+    ReadRecentEventsRequest,
 };
 use serde_json::Value;
 
@@ -89,6 +91,7 @@ pub(crate) fn handle_read_graph_snapshot(
         materialized_at,
         materialized_paths,
         source_paths: graph_snapshot_source_paths(&reader.snapshot),
+        graph_materialization_reports: read_graph_materialization_reports(reader.root()),
         nodes: reader.snapshot.nodes.clone(),
         edges: reader.snapshot.relations.clone(),
         claims: reader.snapshot.claims.clone(),
@@ -100,6 +103,24 @@ pub(crate) fn handle_read_graph_snapshot(
             .collect(),
         wiki_pages: reader.read_all_wiki_pages()?,
     })
+}
+
+fn read_graph_materialization_reports(root: &Path) -> Vec<GraphMaterializationReportSummary> {
+    let artifacts_root = root.join("artifacts");
+    let Ok(entries) = fs::read_dir(&artifacts_root) else {
+        return Vec::new();
+    };
+    let mut reports = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path().join("provider-graph-materialization.json"))
+        .filter(|path| path.exists())
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|contents| {
+            serde_json::from_str::<GraphMaterializationReportSummary>(&contents).ok()
+        })
+        .collect::<Vec<_>>();
+    reports.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+    reports
 }
 
 pub(crate) fn graph_snapshot_source_ingest_id(event: &BrainEvent) -> String {

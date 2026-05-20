@@ -152,6 +152,10 @@ export interface WorkspaceProjectSummary {
   nodeCount: number;
   relationshipCount: number;
   evidenceCount: number;
+  hiddenConceptCount?: number;
+  hiddenRelationCount?: number;
+  compactionSummary?: string | null;
+  graphMaterializationSummary?: string | null;
 }
 
 export interface WorkspaceProject {
@@ -249,9 +253,26 @@ export interface MaterializedGraphSnapshot {
   materializedAt: number;
   materializedPaths: string[];
   sourcePaths: string[];
+  graphMaterializationReports?: GraphMaterializationReportSummary[];
   nodes: MaterializedGraphNodeRecord[];
   edges: MaterializedGraphRelationRecord[];
   claims: unknown[];
   memoryRefs: string[];
   wikiPages: MaterializedWikiPage[];
+}
+
+export interface GraphMaterializationReportSummary {
+  sourceId: string;
+  status: string;
+  stage?: string;
+  progress?: number;
+  sourceGraphMaterialized?: boolean;
+  workspaceLinkingMaterialized?: boolean;
+  rawSourceGraphNodeCount?: number;
+  rawSourceGraphRelationCount?: number;
+  canonicalSourceGraphNodeCount?: number;
+  canonicalSourceGraphRelationCount?: number;
+  prunedSourceGraphNodeCount?: number;
+  prunedSourceGraphRelationCount?: number;
+  compactionStatus?: string | null;
 }

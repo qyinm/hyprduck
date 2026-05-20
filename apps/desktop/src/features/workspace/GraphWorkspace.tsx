@@ -105,6 +105,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
   const answer = liveAnswer ?? baseAnswer;
+  const hiddenConceptCount = project?.summary.hiddenConceptCount ?? 0;
+  const hiddenRelationCount = project?.summary.hiddenRelationCount ?? 0;
+  const projectionSummary =
+    hiddenConceptCount > 0 || hiddenRelationCount > 0
+      ? `${project?.nodes.filter((node) => node.kind === "concept").length ?? 0} concepts shown · ${hiddenConceptCount} hidden · ${project?.edges.length ?? 0} links shown · ${hiddenRelationCount} hidden`
+      : null;
+  const compactionSummary = project?.summary.compactionSummary ?? null;
+  const graphMaterializationSummary =
+    project?.summary.graphMaterializationSummary ?? null;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
@@ -301,6 +310,19 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 Selection detail, source provenance, and evidence stay visible
                 without leaving the graph.
               </p>
+              {projectionSummary ? (
+                <p className="mt-2 text-xs font-medium text-muted-foreground">
+                  {projectionSummary}
+                </p>
+              ) : null}
+              {graphMaterializationSummary ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {graphMaterializationSummary}
+                </p>
+              ) : null}
+              {compactionSummary ? (
+                <p className="mt-1 text-xs text-muted-foreground">{compactionSummary}</p>
+              ) : null}
             </div>
 
             {selectedEdge ? (

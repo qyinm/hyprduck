@@ -288,6 +288,24 @@ fn mcp_server_exposes_read_only_brain_tools() {
         context_pack_payload["contextPackV0"]["schemaVersion"],
         "hyprduck.context_pack.v0"
     );
+    assert_eq!(
+        context_pack_payload["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    assert!(context_pack_payload.get("contextPack").is_some());
+    assert!(context_pack_payload.get("contextPackV0").is_some());
+    assert!(context_pack_payload["contextPack"].get("nodes").is_none());
+    assert!(context_pack_payload["contextPack"]
+        .get("relations")
+        .is_none());
+    assert!(context_pack_payload["contextPack"]
+        .get("evidence")
+        .is_none());
+    assert!(!text.contains("originalPath"));
+    assert!(!text.contains("sourcePath"));
+    assert!(!text.contains("markdownPath"));
+    assert!(!text.contains("provider-graph-candidates"));
+    assert!(!text.contains("provider-graph-source-raw-merged"));
     let context_pack_answer =
         cited_answer_from_context_pack(&context_pack_payload["contextPackV0"]);
     assert!(

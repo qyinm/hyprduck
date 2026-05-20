@@ -129,6 +129,8 @@ pub(crate) fn compile_agent_orchestrated_project(
             node_count: nodes.len(),
             relationship_count: 0,
             evidence_count,
+            hidden_concept_count: 0,
+            hidden_relation_count: 0,
         },
         nodes,
         edges: Vec::new(),

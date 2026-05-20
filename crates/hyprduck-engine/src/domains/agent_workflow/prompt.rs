@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::source_index::SourceChunk;
 use crate::*;
 
-pub(crate) fn build_source_local_graph_prompt(
+pub(crate) fn build_source_chunk_graph_prompt(
     workspace_id: &str,
     manifest: &SourceArtifactManifest,
-    markdown: &str,
+    chunks: &[SourceChunk],
+    batch_evidence: &[EvidenceRef],
     snapshot: &BrainRepoSnapshot,
     context: &ImportEvidenceContext,
 ) -> Result<String> {
@@ -17,32 +19,35 @@ pub(crate) fn build_source_local_graph_prompt(
         .cloned()
         .into_iter()
         .collect::<Vec<_>>();
-    let evidence = snapshot
-        .evidence
-        .iter()
-        .filter(|evidence| evidence.source_id.as_deref() == Some(manifest.source_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
     let sources_json =
         serde_json::to_string_pretty(&source).context("failed to encode imported source")?;
-    let evidence_json =
-        serde_json::to_string_pretty(&evidence).context("failed to encode imported evidence")?;
+    let evidence_json = serde_json::to_string_pretty(batch_evidence)
+        .context("failed to encode imported evidence")?;
+    let chunks_json =
+        serde_json::to_string_pretty(chunks).context("failed to encode imported source chunks")?;
     let context_refs = import_evidence_context_allowed_refs(context);
 
     Ok(format!(
-        r#"You are HyprDuck's source-local graph construction agent.
+        r#"You are HyprDuck's source-local graph candidate extraction agent.
 
 Task:
-- Build a graph only for the newly imported sourceId {source_id}.
-- Do not rebuild, rewrite, or summarize the rest of the workspace.
-- Return materialized graph records that are grounded only in the provided source and evidence.
+- Extract high-signal graph candidates only for the newly imported sourceId {source_id}.
+- This request covers a bounded subset of source chunks, not the full document.
+- Return candidate records grounded only in the provided source, evidence, and chunks.
 - Include one source node using nodeId "source:{source_id}".
-- If the imported source has meaningful domain text, create durable non-source concept/topic nodes.
-- Every non-source node must cite sourceId {source_id} or evidence from that source.
-- Every non-source node must be connected from "source:{source_id}" with a source_of edge, or otherwise be connected to a source-grounded node.
-- Every edge, claim, memory, and wiki page must cite existing evidenceIds from the imported source.
+- If these chunks contain meaningful domain text, create only the most important non-source concept/topic nodes.
+- Return at most 8 non-source concept/topic nodes for this chunk batch.
+- Return at most 10 non-source relations for this chunk batch.
+- Return at most 3 claims for this chunk batch.
+- Return memories as [] unless the source explicitly states a durable decision or invariant.
+- Return wikiPages as []; HyprDuck synthesizes wiki summaries after canonicalization.
+- Do not emit source_of edges. HyprDuck will add canonical source_of edges after dedupe.
+- Do not create nodes solely for document scaffolding headings unless the cited evidence shows they are actual domain concepts.
+- Do not perform exhaustive term extraction. Prefer fewer high-signal concepts over broad coverage.
+- Every non-source node must cite at least one existing evidenceId from sourceId {source_id}.
+- Every non-source relation and claim must cite existing evidenceIds from the imported source.
 - Preserve source and evidence records exactly as provided. Do not invent sourceIds or evidenceIds.
-- Use stable nodeIds/relationIds/claimIds/memoryIds so repeated imports remain readable.
+- Use stable raw nodeIds/relationIds/claimIds so repeated chunk runs remain readable. HyprDuck will assign canonical durable IDs later.
 - Return JSON only. No markdown fence, no prose.
 
 Output shape:
@@ -74,8 +79,8 @@ Imported source:
 Imported evidence:
 {evidence_json}
 
-Imported markdown:
-{markdown}
+Imported source chunks:
+{chunks_json}
 "#,
         workspace_id = workspace_id,
         source_id = manifest.source_id,
@@ -84,7 +89,7 @@ Imported markdown:
         context_refs = join_or_none(&context_refs),
         sources_json = sources_json,
         evidence_json = evidence_json,
-        markdown = truncate_for_prompt(markdown, 24000)
+        chunks_json = chunks_json,
     ))
 }
 
@@ -101,10 +106,14 @@ pub(crate) fn build_workspace_linking_prompt(
         .iter()
         .map(|source| source.source_id.as_str())
         .collect::<BTreeSet<_>>();
-    let chunks = read_workspace_source_chunks(workspace_root)?
-        .into_iter()
-        .filter(|chunk| valid_source_ids.contains(chunk.source_id.as_str()))
-        .collect::<Vec<_>>();
+    let chunks = select_workspace_linking_candidate_chunks(
+        read_workspace_source_chunks(workspace_root)?
+            .into_iter()
+            .filter(|chunk| valid_source_ids.contains(chunk.source_id.as_str()))
+            .collect(),
+        &manifest.source_id,
+        markdown,
+    );
     let current_graph_json = serde_json::to_string_pretty(&json!({
         "nodes": snapshot.nodes,
         "edges": snapshot.relations,
@@ -144,11 +153,14 @@ Task:
 - Add only meaningful cross-source links between the imported source graph and the existing workspace graph.
 - Do not rebuild, replace, or delete existing nodes, edges, claims, memories, wiki pages, sources, or evidence.
 - Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
-- Actively look for grounded links between algorithms, data structures, complexity topics, graph concepts, tree concepts, sorting/searching topics, and prerequisite/follow-up ideas across sources.
+- Actively look for grounded cross-source links such as shared concepts, prerequisites, contrasts, refinements, dependencies, repeated claims, or related methods.
 - Return only records needed for cross-source linking. Return no new edges only when no grounded relationship exists after comparing the imported markdown with the workspace chunks.
+- Return at most 24 cross-source relations, 8 claims, and 3 wiki pages.
+- Return memories as [].
 - Every returned edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
 - Every returned edge must cite evidence from both endpoint source sides: at least one evidenceId from sourceId {source_id} and at least one evidenceId from the other endpoint's sourceIds.
 - Do not return sources, evidence, nodes, entities, or extractions. Endpoint nodes must already exist in the current graph.
+- Do not return source_of edges. HyprDuck owns source edges.
 - Do not invent sourceIds, evidenceIds, or nodeIds.
 - Use stable ids so repeated linking runs remain readable.
 - Return JSON only. No markdown fence, no prose.
@@ -201,6 +213,48 @@ Latest imported markdown:
         },
         markdown = truncate_for_prompt(markdown, 16000)
     ))
+}
+
+fn select_workspace_linking_candidate_chunks(
+    chunks: Vec<SourceChunk>,
+    imported_source_id: &str,
+    imported_markdown: &str,
+) -> Vec<SourceChunk> {
+    const MAX_WORKSPACE_LINKING_CHUNKS: usize = 24;
+    let query_terms = search_terms(imported_markdown)
+        .into_iter()
+        .take(80)
+        .collect::<BTreeSet<_>>();
+    let mut scored = chunks
+        .into_iter()
+        .filter(|chunk| chunk.source_id != imported_source_id)
+        .map(|chunk| {
+            let text = format!(
+                "{} {} {}",
+                chunk.source_title,
+                chunk.heading_path.join(" "),
+                chunk.text
+            );
+            let score = search_terms(&text)
+                .into_iter()
+                .filter(|term| query_terms.contains(term))
+                .count();
+            (score, chunk)
+        })
+        .filter(|(score, _)| *score > 0)
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(left.1.source_id.cmp(&right.1.source_id))
+            .then(left.1.line_start.cmp(&right.1.line_start))
+    });
+    scored
+        .into_iter()
+        .take(MAX_WORKSPACE_LINKING_CHUNKS)
+        .map(|(_, chunk)| chunk)
+        .collect()
 }
 
 fn truncate_for_prompt(value: &str, max_chars: usize) -> String {

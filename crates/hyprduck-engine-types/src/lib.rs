@@ -590,6 +590,8 @@ pub struct ReadGraphSnapshotResponseData {
     #[serde(default)]
     pub source_paths: Vec<String>,
     #[serde(default)]
+    pub graph_materialization_reports: Vec<GraphMaterializationReportSummary>,
+    #[serde(default)]
     pub nodes: Vec<BrainNodeRecord>,
     #[serde(default, rename = "edges")]
     pub edges: Vec<BrainRelationRecord>,
@@ -599,6 +601,35 @@ pub struct ReadGraphSnapshotResponseData {
     pub memory_refs: Vec<String>,
     #[serde(default)]
     pub wiki_pages: Vec<WikiPage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphMaterializationReportSummary {
+    pub source_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub progress: f32,
+    #[serde(default)]
+    pub source_graph_materialized: bool,
+    #[serde(default)]
+    pub workspace_linking_materialized: bool,
+    #[serde(default)]
+    pub raw_source_graph_node_count: usize,
+    #[serde(default)]
+    pub raw_source_graph_relation_count: usize,
+    #[serde(default)]
+    pub canonical_source_graph_node_count: usize,
+    #[serde(default)]
+    pub canonical_source_graph_relation_count: usize,
+    #[serde(default)]
+    pub pruned_source_graph_node_count: usize,
+    #[serde(default)]
+    pub pruned_source_graph_relation_count: usize,
+    #[serde(default)]
+    pub compaction_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -634,6 +665,8 @@ pub struct ReconstructBrainResponseData {
 pub struct GetContextPackRequest {
     pub scope: BrainReadScope,
     pub query: String,
+    #[serde(default)]
+    pub selected_node_id: Option<String>,
     #[serde(default)]
     pub budget: Option<usize>,
     #[serde(default)]
@@ -1907,6 +1940,7 @@ mod tests {
             EngineRequest::GetContextPack(GetContextPackRequest {
                 scope: scope.clone(),
                 query: "agent context".into(),
+                selected_node_id: None,
                 budget: Some(8000),
                 persist: false,
             }),

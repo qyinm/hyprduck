@@ -3,6 +3,10 @@ use std::path::Path;
 
 use crate::*;
 
+const WORKSPACE_LINKING_MAX_RELATIONS: usize = 24;
+const WORKSPACE_LINKING_MAX_CLAIMS: usize = 8;
+const WORKSPACE_LINKING_MAX_WIKI_PAGES: usize = 3;
+
 pub(crate) fn parse_provider_workspace_rebuild_snapshot(raw: &str) -> Result<BrainRepoSnapshot> {
     let value = extract_provider_json_value(raw)?;
     if let Ok(payload) = serde_json::from_value::<MaterializedGraphEventPayload>(value.clone()) {
@@ -241,6 +245,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
     snapshot.relations.retain(|relation| {
         node_ids.contains(&relation.source_node_id)
             && node_ids.contains(&relation.target_node_id)
+            && relation.kind != BrainRelationKind::SourceOf
             && !relation.evidence_ids.is_empty()
             && is_cross_source_relation(relation, &node_source_ids, source_id)
             && relation_evidence_covers_endpoint_sources(
@@ -249,6 +254,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 &evidence_source_by_id,
             )
     });
+    cap_workspace_linking_relations(&mut snapshot.relations);
     normalize_supported_records(
         snapshot,
         workspace_id,
@@ -276,6 +282,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 .iter()
                 .any(|candidate| candidate != source_id)
     });
+    cap_workspace_linking_claims(&mut snapshot.claims);
     snapshot.memories.retain(|memory| {
         memory
             .source_refs
@@ -286,6 +293,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 .iter()
                 .any(|candidate| candidate != source_id)
     });
+    snapshot.memories.clear();
     snapshot.wiki_pages.retain(|page| {
         page.source_refs
             .iter()
@@ -295,6 +303,48 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 .iter()
                 .any(|candidate| candidate != source_id)
     });
+    cap_workspace_linking_wiki_pages(&mut snapshot.wiki_pages);
+}
+
+fn cap_workspace_linking_relations(relations: &mut Vec<BrainRelationRecord>) {
+    relations.sort_by(|left, right| {
+        workspace_linking_relation_score(right)
+            .cmp(&workspace_linking_relation_score(left))
+            .then(left.relation_id.cmp(&right.relation_id))
+    });
+    relations.truncate(WORKSPACE_LINKING_MAX_RELATIONS);
+}
+
+fn cap_workspace_linking_claims(claims: &mut Vec<ClaimRecord>) {
+    claims.sort_by(|left, right| {
+        workspace_linking_claim_score(right)
+            .cmp(&workspace_linking_claim_score(left))
+            .then(left.claim_id.cmp(&right.claim_id))
+    });
+    claims.truncate(WORKSPACE_LINKING_MAX_CLAIMS);
+}
+
+fn cap_workspace_linking_wiki_pages(wiki_pages: &mut Vec<WikiPage>) {
+    wiki_pages.sort_by(|left, right| {
+        right
+            .evidence_refs
+            .len()
+            .cmp(&left.evidence_refs.len())
+            .then(left.path.cmp(&right.path))
+    });
+    wiki_pages.truncate(WORKSPACE_LINKING_MAX_WIKI_PAGES);
+}
+
+fn workspace_linking_relation_score(relation: &BrainRelationRecord) -> usize {
+    relation.evidence_ids.len() * 100
+        + relation
+            .confidence
+            .map(|confidence| (confidence.clamp(0.0, 1.0) * 100.0).round() as usize)
+            .unwrap_or(0)
+}
+
+fn workspace_linking_claim_score(claim: &ClaimRecord) -> usize {
+    claim.evidence_refs.len() * 100 + claim.source_refs.len() * 10 + claim.topic_refs.len()
 }
 
 fn retain_existing_refs(refs: &mut Vec<String>, valid_refs: &BTreeSet<String>) {

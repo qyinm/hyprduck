@@ -379,6 +379,7 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 workspace,
                 root_dir,
                 query,
+                selected_node_id: node_refs.into_iter().next(),
                 budget,
                 persist: persist_context_pack,
             })
@@ -530,6 +531,7 @@ pub enum BrainCommand {
         workspace: String,
         root_dir: Option<String>,
         query: String,
+        selected_node_id: Option<String>,
         budget: Option<usize>,
         persist: bool,
     },

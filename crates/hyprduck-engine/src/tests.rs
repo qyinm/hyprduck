@@ -44,6 +44,307 @@ fn compile_manifest_fixture_project_with_source(
     )
 }
 
+fn synthetic_projection_project(
+    project_id: &str,
+    source_count: usize,
+    concept_count: usize,
+    related_relation_count: usize,
+) -> KnowledgeProject {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut details_by_node_id = BTreeMap::new();
+    let mut edge_details_by_id = BTreeMap::new();
+    let mut answer_by_node_id = BTreeMap::new();
+
+    for source_index in 0..source_count {
+        let node_id = format!("source:projection-{source_index}");
+        let node = GraphNodeSummary {
+            id: node_id.clone(),
+            label: format!("Projection source {source_index}"),
+            kind: GraphNodeKind::Source,
+            confidence: Some(0.8),
+            related_count: 0,
+            evidence_count: 1,
+            position: GraphNodePosition { x: 10.0, y: 10.0 },
+        };
+        nodes.push(node.clone());
+        details_by_node_id.insert(
+            node_id.clone(),
+            GraphNodeDetail {
+                node: node.clone(),
+                canonical_name: node.label.clone(),
+                aliases: Vec::new(),
+                description: "Synthetic source for projection tests.".into(),
+                evidence: Vec::new(),
+                actions: Vec::new(),
+                source: None,
+            },
+        );
+        answer_by_node_id.insert(
+            node_id,
+            AnswerResponse {
+                status: AnswerStatus::LowConfidence,
+                text: None,
+                explanation: "Synthetic source answer.".into(),
+                citations: Vec::new(),
+                related_node_ids: Vec::new(),
+                suggested_actions: Vec::new(),
+            },
+        );
+    }
+
+    let mut evidence_by_concept = Vec::new();
+    for concept_index in 0..concept_count {
+        let node_id = format!("concept-projection-{concept_index:03}");
+        let evidence_count = concept_count - concept_index;
+        let evidence = (0..evidence_count.min(5))
+            .map(|evidence_index| EvidenceRef {
+                id: format!("ev-projection-{concept_index:03}-{evidence_index}"),
+                page_label: format!("Page {}", evidence_index + 1),
+                page_index: Some(evidence_index),
+                snippet: format!(
+                    "Projection concept {concept_index} has evidence {evidence_index}."
+                ),
+                source_path: Some(format!("/tmp/projection/source-{concept_index}.pdf")),
+                source_id: Some(format!(
+                    "source-projection-{}",
+                    concept_index % source_count.max(1)
+                )),
+                markdown_path: Some(format!("/tmp/projection/source-{concept_index}.md")),
+                image_path: None,
+                provenance: Some("synthetic projection fixture".into()),
+            })
+            .collect::<Vec<_>>();
+        evidence_by_concept.push(evidence.clone());
+        let node = GraphNodeSummary {
+            id: node_id.clone(),
+            label: format!("Projection Concept {concept_index:03}"),
+            kind: GraphNodeKind::Concept,
+            confidence: Some(0.9 - (concept_index as f32 * 0.001).min(0.5)),
+            related_count: 0,
+            evidence_count,
+            position: GraphNodePosition { x: 50.0, y: 50.0 },
+        };
+        nodes.push(node.clone());
+        details_by_node_id.insert(
+            node_id.clone(),
+            GraphNodeDetail {
+                node: node.clone(),
+                canonical_name: node.label.clone(),
+                aliases: Vec::new(),
+                description: "Synthetic concept for projection tests.".into(),
+                evidence: evidence.clone(),
+                actions: Vec::new(),
+                source: None,
+            },
+        );
+        answer_by_node_id.insert(
+            node_id.clone(),
+            AnswerResponse {
+                status: AnswerStatus::Grounded,
+                text: Some("Synthetic concept answer.".into()),
+                explanation: "Synthetic answer.".into(),
+                citations: evidence.iter().take(1).cloned().collect(),
+                related_node_ids: Vec::new(),
+                suggested_actions: Vec::new(),
+            },
+        );
+
+        let source_node_id = format!("source:projection-{}", concept_index % source_count.max(1));
+        let edge_id = format!("edge-source-projection-{concept_index:03}");
+        let edge = RelationEdgeSummary {
+            id: edge_id.clone(),
+            source_node_id,
+            target_node_id: node_id,
+            kind: RelationKind::SourceDocument,
+            label: "Compiled from source".into(),
+            confidence: Some(0.8),
+            evidence_count: evidence.len(),
+        };
+        edge_details_by_id.insert(
+            edge_id,
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: String::new(),
+                evidence,
+            },
+        );
+        edges.push(edge);
+    }
+
+    for relation_index in 0..related_relation_count {
+        if concept_count < 2 {
+            break;
+        }
+        let left = relation_index % concept_count;
+        let right = (relation_index + 1) % concept_count;
+        if left == right {
+            continue;
+        }
+        let edge_id = format!("edge-related-projection-{relation_index:03}");
+        let edge = RelationEdgeSummary {
+            id: edge_id.clone(),
+            source_node_id: format!("concept-projection-{left:03}"),
+            target_node_id: format!("concept-projection-{right:03}"),
+            kind: RelationKind::RelatedTo,
+            label: "Related to".into(),
+            confidence: Some(0.7),
+            evidence_count: evidence_by_concept[left].len(),
+        };
+        edge_details_by_id.insert(
+            edge_id,
+            RelationEdgeDetail {
+                edge: edge.clone(),
+                explanation: String::new(),
+                evidence: evidence_by_concept[left].clone(),
+            },
+        );
+        edges.push(edge);
+    }
+
+    KnowledgeProject {
+        summary: ProjectOverview {
+            project_id: project_id.into(),
+            title: "Synthetic projection project".into(),
+            status: ProjectStatus::Ready,
+            stale: false,
+            summary: "Synthetic projection project.".into(),
+            document_count: source_count,
+            node_count: nodes.len(),
+            relationship_count: edges.len(),
+            evidence_count: details_by_node_id
+                .values()
+                .map(|detail| detail.evidence.len())
+                .sum::<usize>(),
+            hidden_concept_count: 0,
+            hidden_relation_count: 0,
+        },
+        nodes,
+        edges,
+        details_by_node_id,
+        edge_details_by_id,
+        answer_by_node_id,
+    }
+}
+
+fn assert_projection_has_no_dangling_edges(project: &KnowledgeProject) {
+    let node_ids = project
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for edge in &project.edges {
+        assert!(
+            node_ids.contains(edge.source_node_id.as_str()),
+            "edge {} has missing source {}",
+            edge.id,
+            edge.source_node_id
+        );
+        assert!(
+            node_ids.contains(edge.target_node_id.as_str()),
+            "edge {} has missing target {}",
+            edge.id,
+            edge.target_node_id
+        );
+    }
+}
+
+fn assert_projection_details_match_visible_graph(project: &KnowledgeProject) {
+    let node_ids = project
+        .nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    let edge_ids = project
+        .edges
+        .iter()
+        .map(|edge| edge.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        project
+            .details_by_node_id
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        node_ids
+    );
+    assert_eq!(
+        project
+            .edge_details_by_id
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        edge_ids
+    );
+}
+
+fn synthetic_context_pack_snapshot(record_count: usize) -> BrainRepoSnapshot {
+    let source = SourceRecord {
+        source_id: "source-alpha".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "/tmp/source-alpha.pdf".into(),
+        source_path: "/tmp/source-alpha.pdf".into(),
+        markdown_path: "/tmp/source-alpha.md".into(),
+        format: "pdf".into(),
+        status: "ingested".into(),
+        page_count: record_count,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 1;
+    snapshot.sources = vec![source.clone()];
+    for index in 0..record_count {
+        let evidence_id = format!("ev-alpha-{index:03}");
+        let node_id = format!("concept-alpha-{index:03}");
+        snapshot.evidence.push(EvidenceRef {
+            id: evidence_id.clone(),
+            page_label: format!("Page {}", index + 1),
+            page_index: Some(index),
+            snippet: format!("Alpha projection evidence {index} supports a canonical graph fact."),
+            source_path: Some(source.source_path.clone()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(source.markdown_path.clone()),
+            image_path: None,
+            provenance: Some("synthetic context pack fixture".into()),
+        });
+        snapshot.nodes.push(BrainNodeRecord {
+            node_id: node_id.clone(),
+            kind: BrainNodeKind::Concept,
+            label: format!("Alpha Projection Concept {index:03}"),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence_id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(0.9),
+            updated_at: 1,
+        });
+        snapshot.claims.push(ClaimRecord {
+            claim_id: format!("claim-alpha-{index:03}"),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: format!("Alpha projection claim {index} is evidence backed."),
+            topic_refs: vec![node_id.clone()],
+            source_refs: vec![source.source_id.clone()],
+            evidence_refs: vec![evidence_id.clone()],
+            status: "supported".into(),
+            updated_at: 1,
+        });
+        snapshot.relations.push(BrainRelationRecord {
+            relation_id: format!("relation-alpha-{index:03}"),
+            kind: BrainRelationKind::RelatedTo,
+            source_node_id: node_id,
+            target_node_id: format!("concept-alpha-{next:03}", next = (index + 1) % record_count),
+            label: "Related to".into(),
+            evidence_ids: vec![evidence_id],
+            confidence: Some(0.7),
+            updated_at: 1,
+        });
+    }
+    snapshot
+}
+
 #[test]
 fn provider_workspace_rebuild_response_materializes_complete_graph_snapshot() {
     let generated_at = 42;
@@ -228,7 +529,7 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
             id: "ev-alpha".into(),
             page_label: "Page 1".into(),
             page_index: Some(0),
-            snippet: "Alpha source describes graph algorithms.".into(),
+            snippet: "Alpha source describes a durable signal.".into(),
             source_path: Some("/tmp/alpha.md".into()),
             source_id: Some("source-alpha".into()),
             markdown_path: Some("/tmp/alpha.md".into()),
@@ -259,9 +560,9 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
                     "updatedAt": generated_at
                 },
                 {
-                    "nodeId": "concept-kruskal",
+                    "nodeId": "concept-durable-signal",
                     "kind": "concept",
-                    "label": "Kruskal algorithm",
+                    "label": "Durable Signal",
                     "scope": "project",
                     "evidenceIds": ["ev-alpha", "retrieved:stale:chunk"],
                     "sourceIds": ["source-alpha", "source-stale"],
@@ -270,10 +571,10 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
             ],
             "edges": [
                 {
-                    "relationId": "edge-alpha-kruskal",
+                    "relationId": "edge-alpha-signal",
                     "kind": "related_to",
                     "sourceNodeId": "source:source-alpha",
-                    "targetNodeId": "concept-kruskal",
+                    "targetNodeId": "concept-durable-signal",
                     "label": "describes",
                     "evidenceIds": ["ev-alpha", "ev-stale"],
                     "updatedAt": generated_at
@@ -314,11 +615,11 @@ fn provider_workspace_rebuild_drops_invalid_refs_without_losing_valid_graph() {
     assert!(snapshot
         .nodes
         .iter()
-        .any(|node| node.node_id == "concept-kruskal"));
+        .any(|node| node.node_id == "concept-durable-signal"));
     assert!(snapshot
         .relations
         .iter()
-        .any(|relation| relation.relation_id == "edge-alpha-kruskal"));
+        .any(|relation| relation.relation_id == "edge-alpha-signal"));
     assert!(snapshot.memories.is_empty());
 }
 
@@ -554,6 +855,15 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
                     "label": "already shared endpoint",
                     "evidenceIds": ["ev-alpha", "ev-beta"],
                     "updatedAt": generated_at
+                },
+                {
+                    "relationId": "edge-provider-source-of",
+                    "kind": "source_of",
+                    "sourceNodeId": "concept-alpha",
+                    "targetNodeId": "concept-beta",
+                    "label": "provider source edge",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "updatedAt": generated_at
                 }
             ],
             "claims": [],
@@ -593,6 +903,10 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         .relations
         .iter()
         .any(|relation| relation.relation_id == "edge-multisource"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-provider-source-of"));
 
     let mut relation_undercovered = snapshot.clone();
     relation_undercovered
@@ -671,38 +985,233 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
 }
 
 #[test]
+fn provider_workspace_linking_caps_relations_claims_and_wiki_pages() {
+    let generated_at = 42;
+    let mut baseline = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    baseline.generated_at = generated_at;
+    baseline.sources = vec![
+        SourceRecord {
+            source_id: "source-alpha".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/alpha.md".into(),
+            source_path: "/tmp/alpha.md".into(),
+            markdown_path: "/tmp/alpha.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+        SourceRecord {
+            source_id: "source-beta".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/beta.md".into(),
+            source_path: "/tmp/beta.md".into(),
+            markdown_path: "/tmp/beta.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+    ];
+    baseline.evidence = vec![
+        EvidenceRef {
+            id: "ev-alpha".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Alpha evidence.".into(),
+            source_path: Some("/tmp/alpha.md".into()),
+            source_id: Some("source-alpha".into()),
+            markdown_path: Some("/tmp/alpha.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+        EvidenceRef {
+            id: "ev-beta".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Beta evidence.".into(),
+            source_path: Some("/tmp/beta.md".into()),
+            source_id: Some("source-beta".into()),
+            markdown_path: Some("/tmp/beta.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+    ];
+    baseline.nodes = vec![
+        BrainNodeRecord {
+            node_id: "concept-alpha".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Alpha".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-alpha".into()],
+            source_ids: vec!["source-alpha".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+        },
+        BrainNodeRecord {
+            node_id: "concept-beta".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Beta".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-beta".into()],
+            source_ids: vec!["source-beta".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+        },
+    ];
+    let edges = (0..30)
+        .map(|index| {
+            serde_json::json!({
+                "relationId": format!("edge-cross-{index:02}"),
+                "kind": "related_to",
+                "sourceNodeId": "concept-alpha",
+                "targetNodeId": "concept-beta",
+                "label": "connects",
+                "evidenceIds": ["ev-alpha", "ev-beta"],
+                "confidence": 0.9,
+                "updatedAt": generated_at
+            })
+        })
+        .collect::<Vec<_>>();
+    let claims = (0..10)
+        .map(|index| {
+            serde_json::json!({
+                "claimId": format!("claim-cross-{index:02}"),
+                "workspaceId": DEFAULT_WORKSPACE_ID,
+                "statement": format!("Alpha and beta claim {index}."),
+                "topicRefs": ["concept-alpha"],
+                "sourceRefs": ["source-alpha", "source-beta"],
+                "evidenceRefs": ["ev-alpha", "ev-beta"],
+                "status": "active",
+                "updatedAt": generated_at
+            })
+        })
+        .collect::<Vec<_>>();
+    let wiki_pages = (0..5)
+        .map(|index| {
+            serde_json::json!({
+                "pageId": format!("wiki-cross-{index:02}"),
+                "workspaceId": DEFAULT_WORKSPACE_ID,
+                "path": format!("wiki/cross-{index:02}.md"),
+                "title": format!("Cross {index}"),
+                "body": "Cross-source summary.",
+                "nodeRefs": ["concept-alpha"],
+                "sourceRefs": ["source-alpha", "source-beta"],
+                "evidenceRefs": ["ev-alpha", "ev-beta"],
+                "updatedAt": generated_at
+            })
+        })
+        .collect::<Vec<_>>();
+    let memories = (0..10)
+        .map(|index| {
+            serde_json::json!({
+                "memoryId": format!("memory-cross-{index:02}"),
+                "workspaceId": DEFAULT_WORKSPACE_ID,
+                "scope": "project",
+                "title": format!("Cross memory {index}"),
+                "body": "Workspace linking memories are not materialized from providers.",
+                "sourceRefs": ["source-alpha", "source-beta"],
+                "evidenceRefs": ["ev-alpha", "ev-beta"],
+                "createdAt": generated_at,
+                "updatedAt": generated_at
+            })
+        })
+        .collect::<Vec<_>>();
+    let raw = serde_json::json!({
+        "materializedGraph": {
+            "sources": [],
+            "evidence": [],
+            "nodes": [],
+            "edges": edges,
+            "claims": claims,
+            "memories": memories,
+            "wikiPages": wiki_pages,
+            "entities": [],
+            "extractions": []
+        }
+    })
+    .to_string();
+
+    let mut snapshot =
+        parse_provider_workspace_rebuild_snapshot(&raw).expect("parse workspace linking");
+    normalize_provider_workspace_linking_snapshot(
+        &mut snapshot,
+        DEFAULT_WORKSPACE_ID,
+        &baseline,
+        "source-alpha",
+        generated_at,
+    );
+
+    validate_provider_workspace_linking_snapshot(&snapshot, &baseline, "source-alpha")
+        .expect("capped workspace linking graph is valid");
+    assert_eq!(snapshot.relations.len(), 24);
+    assert_eq!(snapshot.claims.len(), 8);
+    assert!(snapshot.memories.is_empty());
+    assert_eq!(snapshot.wiki_pages.len(), 3);
+}
+
+#[test]
 fn workspace_linking_prompt_uses_only_active_workspace_source_chunks() {
     let temp = tempdir().expect("tempdir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     fs::create_dir_all(&workspace_root).expect("workspace root");
-    let valid_manifest = sample_manifest_with_source(&temp, "source-valid", "valid", 1);
+    let import_manifest = sample_manifest_with_source(&temp, "source-import", "import", 1);
+    let active_manifest = sample_manifest_with_source(&temp, "source-active", "active", 1);
     let stale_manifest = sample_manifest_with_source(&temp, "source-stale", "stale", 1);
-    let valid_markdown = "# Valid\n\nCurrent workspace source text.";
-    let stale_markdown = "# Stale\n\nStale source-index text must not enter rebuild prompt.";
-    let valid_chunks = chunk_source_markdown(&valid_manifest, valid_markdown);
+    let import_markdown = "# Import\n\nShared alpha imported source text.";
+    let active_markdown = "# Active\n\nActive candidate alpha source text.";
+    let stale_markdown = "# Stale\n\nStale alpha source-index text must not enter rebuild prompt.";
+    let import_chunks = chunk_source_markdown(&import_manifest, import_markdown);
+    let active_chunks = chunk_source_markdown(&active_manifest, active_markdown);
     let stale_chunks = chunk_source_markdown(&stale_manifest, stale_markdown);
-    upsert_source_chunks(&workspace_root, &valid_manifest, &valid_chunks)
-        .expect("write valid chunks");
+    upsert_source_chunks(&workspace_root, &import_manifest, &import_chunks)
+        .expect("write import chunks");
+    upsert_source_chunks(&workspace_root, &active_manifest, &active_chunks)
+        .expect("write active chunks");
     upsert_source_chunks(&workspace_root, &stale_manifest, &stale_chunks)
         .expect("write stale chunks");
 
     let baseline = BrainRepoSnapshot {
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         generated_at: 1,
-        sources: vec![SourceRecord {
-            source_id: valid_manifest.source_id.clone(),
-            workspace_id: DEFAULT_WORKSPACE_ID.into(),
-            original_path: valid_manifest.original_path.clone(),
-            source_path: valid_manifest.source_path.clone(),
-            markdown_path: valid_manifest.markdown_path.clone(),
-            format: "pdf".into(),
-            status: "ingested".into(),
-            page_count: 1,
-            description: String::new(),
-            user_context: String::new(),
-            ingest_instruction: String::new(),
-            updated_at: 1,
-        }],
+        sources: vec![
+            SourceRecord {
+                source_id: import_manifest.source_id.clone(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: import_manifest.original_path.clone(),
+                source_path: import_manifest.source_path.clone(),
+                markdown_path: import_manifest.markdown_path.clone(),
+                format: "pdf".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+            SourceRecord {
+                source_id: active_manifest.source_id.clone(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: active_manifest.original_path.clone(),
+                source_path: active_manifest.source_path.clone(),
+                markdown_path: active_manifest.markdown_path.clone(),
+                format: "pdf".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+        ],
         evidence: Vec::new(),
         nodes: Vec::new(),
         relations: Vec::new(),
@@ -715,29 +1224,147 @@ fn workspace_linking_prompt_uses_only_active_workspace_source_chunks() {
     };
     let context = build_import_evidence_context(
         &workspace_root,
-        &valid_manifest,
-        valid_markdown,
+        &import_manifest,
+        import_markdown,
         &baseline,
-        &valid_chunks,
+        &import_chunks,
     )
     .expect("context");
 
     let prompt = build_workspace_linking_prompt(
         &workspace_root,
         DEFAULT_WORKSPACE_ID,
-        &valid_manifest,
-        valid_markdown,
+        &import_manifest,
+        import_markdown,
         &baseline,
         &context,
     )
     .expect("prompt");
 
-    assert!(prompt.contains("Current workspace source text."));
+    assert!(prompt.contains("Active candidate alpha source text."));
     assert!(
         prompt.contains("Every returned edge must cite evidence from both endpoint source sides")
     );
+    assert!(prompt.contains("Do not return source_of edges"));
+    assert!(prompt.contains("Return memories as []"));
+    assert!(prompt.contains("grounded cross-source links such as shared concepts"));
+    assert!(!prompt.contains("algorithms, data structures"));
     assert!(!prompt.contains("Stale source-index text must not enter rebuild prompt."));
     assert!(!prompt.contains("source-stale"));
+}
+
+#[test]
+fn workspace_linking_prompt_uses_canonical_graph_only() {
+    let temp = tempdir().expect("tempdir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("artifacts/source-import/provider-graph-candidates"))
+        .expect("candidate artifact dir");
+    fs::write(
+        workspace_root.join("artifacts/source-import/provider-graph-candidates/raw.json"),
+        r#"{"rawNodeId":"raw-candidate-must-not-enter-linking-prompt"}"#,
+    )
+    .expect("raw candidate artifact");
+
+    let import_manifest = sample_manifest_with_source(&temp, "source-import", "import", 1);
+    let active_manifest = sample_manifest_with_source(&temp, "source-active", "active", 1);
+    let import_markdown = "# Import\n\nShared canonical imported source text.";
+    let active_markdown = "# Active\n\nShared canonical active source text.";
+    let import_chunks = chunk_source_markdown(&import_manifest, import_markdown);
+    let active_chunks = chunk_source_markdown(&active_manifest, active_markdown);
+    upsert_source_chunks(&workspace_root, &import_manifest, &import_chunks)
+        .expect("write import chunks");
+    upsert_source_chunks(&workspace_root, &active_manifest, &active_chunks)
+        .expect("write active chunks");
+
+    let baseline = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: vec![
+            SourceRecord {
+                source_id: import_manifest.source_id.clone(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: import_manifest.original_path.clone(),
+                source_path: import_manifest.source_path.clone(),
+                markdown_path: import_manifest.markdown_path.clone(),
+                format: "pdf".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+            SourceRecord {
+                source_id: active_manifest.source_id.clone(),
+                workspace_id: DEFAULT_WORKSPACE_ID.into(),
+                original_path: active_manifest.original_path.clone(),
+                source_path: active_manifest.source_path.clone(),
+                markdown_path: active_manifest.markdown_path.clone(),
+                format: "pdf".into(),
+                status: "ingested".into(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            },
+        ],
+        evidence: Vec::new(),
+        nodes: vec![
+            BrainNodeRecord {
+                node_id: "concept:source-import:canonical-alpha".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Canonical alpha".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: Vec::new(),
+                source_ids: vec![import_manifest.source_id.clone()],
+                confidence: Some(0.9),
+                updated_at: 1,
+            },
+            BrainNodeRecord {
+                node_id: "concept:source-active:canonical-beta".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Canonical beta".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: Vec::new(),
+                source_ids: vec![active_manifest.source_id.clone()],
+                confidence: Some(0.9),
+                updated_at: 1,
+            },
+        ],
+        relations: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    let context = build_import_evidence_context(
+        &workspace_root,
+        &import_manifest,
+        import_markdown,
+        &baseline,
+        &import_chunks,
+    )
+    .expect("context");
+
+    let prompt = build_workspace_linking_prompt(
+        &workspace_root,
+        DEFAULT_WORKSPACE_ID,
+        &import_manifest,
+        import_markdown,
+        &baseline,
+        &context,
+    )
+    .expect("prompt");
+
+    assert!(prompt.contains("concept:source-import:canonical-alpha"));
+    assert!(prompt.contains("concept:source-active:canonical-beta"));
+    assert!(!prompt.contains("raw-candidate-must-not-enter-linking-prompt"));
+    assert!(!prompt.contains("provider-graph-candidates"));
 }
 
 fn sample_parse_result() -> ParseResult {
@@ -2991,6 +3618,351 @@ fn source_rows_round_trip_paths_with_pipe_characters() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].manifest_path, manifest.manifest_path);
     assert_eq!(rows[0].project_id, project.summary.project_id);
+}
+
+#[test]
+fn source_ui_projection_caps_visible_nodes_and_edges() {
+    let project = synthetic_projection_project("project-source-ui", 1, 150, 180);
+    let original_relation_count = project.edges.len();
+    let projected = source_ui_graph_projection(project);
+    let visible_source_count = projected
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Source)
+        .count();
+    let visible_concept_count = projected
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+
+    assert_eq!(visible_source_count, 1);
+    assert!(visible_concept_count <= SOURCE_UI_VISIBLE_CONCEPT_LIMIT);
+    assert!(projected.edges.len() <= SOURCE_UI_VISIBLE_RELATION_LIMIT);
+    assert_eq!(visible_source_count + visible_concept_count, 17);
+    assert_eq!(projected.summary.hidden_concept_count, 134);
+    assert_eq!(
+        projected.summary.hidden_relation_count,
+        original_relation_count - projected.edges.len()
+    );
+    assert_projection_has_no_dangling_edges(&projected);
+    assert_projection_details_match_visible_graph(&projected);
+}
+
+#[test]
+fn workspace_ui_projection_caps_visible_nodes_and_edges() {
+    let project = synthetic_projection_project("workspace:projection-ui", 2, 75, 120);
+    let original_relation_count = project.edges.len();
+    let projected = workspace_ui_graph_projection(project);
+    let visible_source_count = projected
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Source)
+        .count();
+    let visible_concept_count = projected
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphNodeKind::Concept)
+        .count();
+
+    assert_eq!(visible_source_count, 2);
+    assert!(visible_concept_count <= WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT);
+    assert!(projected.edges.len() <= WORKSPACE_UI_VISIBLE_RELATION_LIMIT);
+    assert_eq!(projected.summary.hidden_concept_count, 15);
+    assert_eq!(
+        projected.summary.hidden_relation_count,
+        original_relation_count - projected.edges.len()
+    );
+    assert!(projected
+        .summary
+        .summary
+        .contains("Default projection shows 60 visible concept nodes"));
+    assert_projection_has_no_dangling_edges(&projected);
+    assert_projection_details_match_visible_graph(&projected);
+}
+
+#[test]
+fn workspace_ui_projection_handles_large_graph_under_target_time() {
+    let project = synthetic_projection_project("workspace:projection-ui-large", 4, 1_000, 1_400);
+    let start = std::time::Instant::now();
+    let projected = workspace_ui_graph_projection(project);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "UI projection took {:?}",
+        elapsed
+    );
+    assert!(
+        projected
+            .nodes
+            .iter()
+            .filter(|node| node.kind == GraphNodeKind::Concept)
+            .count()
+            <= WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT
+    );
+    assert!(projected.edges.len() <= WORKSPACE_UI_VISIBLE_RELATION_LIMIT);
+    assert_projection_has_no_dangling_edges(&projected);
+}
+
+#[test]
+fn context_pack_caps_selected_evidence_and_graph_facts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let snapshot = synthetic_context_pack_snapshot(20);
+    write_materialized_brain_repo(&workspace_root, &snapshot)
+        .expect("write synthetic context pack graph");
+    let reader = BrainReader::open_workspace_root(workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("open brain reader");
+
+    let start = std::time::Instant::now();
+    let default_pack = reader
+        .context_pack("alpha projection", 8_000)
+        .expect("default context pack");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "context pack assembly took {:?}",
+        elapsed
+    );
+    assert!(default_pack.evidence.len() <= 15);
+    assert!(default_pack.claims.len() + default_pack.relations.len() <= 12);
+    assert!(default_pack.nodes.len() <= 24);
+
+    let small_pack = reader
+        .context_pack("alpha projection", 1_500)
+        .expect("small context pack");
+    assert!(small_pack.evidence.len() <= 8);
+    assert!(small_pack.claims.len() + small_pack.relations.len() <= 5);
+    assert!(small_pack.nodes.len() <= 10);
+}
+
+#[test]
+fn context_pack_selected_node_bias_respects_budget_without_full_graph_export() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let snapshot = synthetic_context_pack_snapshot(20);
+    write_materialized_brain_repo(&workspace_root, &snapshot)
+        .expect("write synthetic context pack graph");
+    let reader = BrainReader::open_workspace_root(workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("open brain reader");
+
+    let pack = reader
+        .context_pack_with_selection("unmatched query", 1_500, Some("concept-alpha-019"))
+        .expect("selected node context pack");
+
+    assert!(pack
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-alpha-019"));
+    assert!(pack
+        .evidence
+        .iter()
+        .any(|evidence| evidence.id == "ev-alpha-019"));
+    assert!(pack.evidence.len() <= 8);
+    assert!(pack.claims.len() + pack.relations.len() <= 5);
+    assert!(pack.nodes.len() <= 10);
+    assert!(pack.nodes.len() < 20);
+}
+
+#[test]
+fn context_pack_falls_back_to_evidence_when_graph_has_no_match() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let mut snapshot = synthetic_context_pack_snapshot(3);
+    snapshot.nodes.clear();
+    snapshot.relations.clear();
+    snapshot.claims.clear();
+    write_materialized_brain_repo(&workspace_root, &snapshot)
+        .expect("write source-only context pack graph");
+    let reader = BrainReader::open_workspace_root(workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("open brain reader");
+
+    let pack = reader
+        .context_pack("projection evidence 1", 8_000)
+        .expect("source-only context pack");
+
+    assert!(pack.nodes.is_empty());
+    assert!(pack.relations.is_empty());
+    assert!(!pack.sources.is_empty());
+    assert!(pack.evidence.iter().any(|evidence| {
+        evidence.source_id.as_deref() == Some("source-alpha")
+            && evidence.snippet.contains("Alpha projection evidence")
+    }));
+}
+
+#[test]
+fn context_pack_excludes_ui_graph_state_and_raw_candidate_paths() {
+    let pack = BrainContextPack {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "alpha projection".into(),
+        token_budget: 8_000,
+        summary: "Synthetic pack.".into(),
+        wiki_pages: Vec::new(),
+        nodes: vec![BrainNodeRecord {
+            node_id: "concept-alpha".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Alpha Projection".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-alpha".into()],
+            source_ids: vec!["source-alpha".into()],
+            confidence: Some(0.9),
+            updated_at: 1,
+        }],
+        sources: vec![SourceRecord {
+            source_id: "source-alpha".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/Users/example/private/source.pdf".into(),
+            source_path: "/Users/example/private/source.pdf".into(),
+            markdown_path:
+                "/Users/example/private/artifacts/source-alpha/provider-graph-candidates/raw.json"
+                    .into(),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+        memories: Vec::new(),
+        entities: Vec::new(),
+        claims: vec![ClaimRecord {
+            claim_id: "claim-alpha".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            statement: "Alpha projection is evidence backed.".into(),
+            topic_refs: vec!["concept-alpha".into()],
+            source_refs: vec!["source-alpha".into()],
+            evidence_refs: vec!["ev-alpha".into()],
+            status: "supported".into(),
+            updated_at: 1,
+        }],
+        relations: Vec::new(),
+        evidence: vec![EvidenceRef {
+            id: "ev-alpha".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Alpha projection evidence.".into(),
+            source_path: Some("/Users/example/private/source.pdf".into()),
+            source_id: Some("source-alpha".into()),
+            markdown_path: Some(
+                "/Users/example/private/artifacts/source-alpha/provider-graph-source-raw-merged.json"
+                    .into(),
+            ),
+            image_path: None,
+            provenance: Some("synthetic context pack".into()),
+        }],
+        recent_events: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let mut artifact_metadata = ContextPackArtifactMetadataV0::from_sources(BTreeMap::from([(
+        "source-alpha".into(),
+        ContextPackSourceMetadataV0 {
+            content_hash: "fnv64:alpha".into(),
+            provider_route: "ollama:local".into(),
+            local_only: true,
+        },
+    )]));
+    artifact_metadata.evidence.insert(
+        "source-alpha".into(),
+        BTreeMap::from([(
+            "ev-alpha".into(),
+            ContextPackEvidenceMetadataV0 {
+                source_id: "source-alpha".into(),
+                page: 1,
+                region: Some("page:Page 1".into()),
+                span: Some("line:1".into()),
+                quoted_text: "Alpha projection evidence.".into(),
+                parse_confidence: hyprduck_engine_types::ContextPackParseConfidence::High,
+                content_hash: "fnv64:alpha".into(),
+                markdown_path: Some(
+                    "/Users/example/private/artifacts/source-alpha/provider-graph-candidates/raw.json"
+                        .into(),
+                ),
+                image_path: None,
+            },
+        )]),
+    );
+
+    let external = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
+        &pack,
+        "ctx-alpha",
+        "2026-05-20T00:00:00Z",
+        &artifact_metadata,
+    );
+    let json = serde_json::to_string(&external).expect("context pack json");
+
+    assert!(!json.contains("\"x\""));
+    assert!(!json.contains("\"y\""));
+    assert!(!json.contains("layout"));
+    assert!(!json.contains("canvas"));
+    assert!(!json.contains("selectedNodePosition"));
+    assert!(!json.contains("provider-graph-candidates"));
+    assert!(!json.contains("provider-graph-source-raw-merged"));
+    assert!(!json.contains("/Users/example"));
+}
+
+#[test]
+fn read_graph_snapshot_includes_materialization_report_counts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let output_root = temp.path().join("HyprDuck");
+    let workspace_root = output_root.join(DEFAULT_WORKSPACE_ID);
+    let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    snapshot.generated_at = 10;
+    snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-alpha".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Alpha".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: Vec::new(),
+        source_ids: vec!["source-alpha".into()],
+        confidence: Some(0.9),
+        updated_at: 10,
+    });
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized graph");
+    let artifact_root = workspace_root.join("artifacts/source-alpha");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    write_json_pretty(
+        &artifact_root.join("provider-graph-materialization.json"),
+        &serde_json::json!({
+            "sourceId": "source-alpha",
+            "status": "linked",
+            "stage": "linked",
+            "progress": 1.0,
+            "sourceGraphMaterialized": true,
+            "workspaceLinkingMaterialized": true,
+            "rawSourceGraphNodeCount": 151,
+            "rawSourceGraphRelationCount": 150,
+            "canonicalSourceGraphNodeCount": 32,
+            "canonicalSourceGraphRelationCount": 48,
+            "prunedSourceGraphNodeCount": 119,
+            "prunedSourceGraphRelationCount": 102,
+            "compactionStatus": "compacted"
+        }),
+    )
+    .expect("write materialization report");
+
+    let response = handle_read_graph_snapshot(hyprduck_engine_types::ReadGraphSnapshotRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(output_root.display().to_string()),
+        },
+    })
+    .expect("read graph snapshot");
+
+    let report = response
+        .graph_materialization_reports
+        .first()
+        .expect("materialization report");
+    assert_eq!(report.source_id, "source-alpha");
+    assert_eq!(report.status, "linked");
+    assert_eq!(report.progress, 1.0);
+    assert!(report.source_graph_materialized);
+    assert_eq!(report.raw_source_graph_node_count, 151);
+    assert_eq!(report.canonical_source_graph_node_count, 32);
+    assert_eq!(report.canonical_source_graph_relation_count, 48);
 }
 
 #[test]
@@ -5466,7 +6438,7 @@ fn workspace_answer_with_missing_selected_node_falls_back_to_question_match() {
         &aggregate,
         &AnswerProjectRequest {
             project_id: aggregate.summary.project_id.clone(),
-            node_id: Some("concept-kruskals-algorithm".into()),
+            node_id: Some("concept-stale-selection".into()),
             question: "What does the beta architecture context say?".into(),
         },
     )

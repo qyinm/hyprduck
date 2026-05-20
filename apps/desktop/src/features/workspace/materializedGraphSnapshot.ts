@@ -14,17 +14,46 @@ import type {
   WorkspaceSourceSummary,
 } from "./types";
 
+const WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT = 60;
+const WORKSPACE_UI_VISIBLE_RELATION_LIMIT = 90;
+
 export function materializedGraphSnapshotToWorkspaceEnvelope(
   snapshot: MaterializedGraphSnapshot,
 ): WorkspaceProjectEnvelope {
-  const visibleMaterializedNodes = snapshot.nodes.filter(
+  const displayableMaterializedNodes = snapshot.nodes.filter(
     (node) => !isDerivedMarkdownSourceNode(snapshot, node),
   );
-  const visibleNodeIds = new Set(visibleMaterializedNodes.map((node) => node.nodeId));
-  const visibleEdges = snapshot.edges.filter(
+  const displayableNodeIds = new Set(displayableMaterializedNodes.map((node) => node.nodeId));
+  const displayableEdges = snapshot.edges.filter(
     (edge) =>
-      visibleNodeIds.has(edge.sourceNodeId) &&
-      visibleNodeIds.has(edge.targetNodeId),
+      displayableNodeIds.has(edge.sourceNodeId) &&
+      displayableNodeIds.has(edge.targetNodeId),
+  );
+  const visibleMaterializedNodes = projectMaterializedNodesForUi(
+    displayableMaterializedNodes,
+    displayableEdges,
+  );
+  const visibleNodeIds = new Set(visibleMaterializedNodes.map((node) => node.nodeId));
+  const visibleEdges = projectMaterializedEdgesForUi(displayableEdges, visibleNodeIds);
+  const hiddenConceptCount =
+    displayableMaterializedNodes.filter((node) => workspaceNodeKind(node.kind) === "concept")
+      .length -
+    visibleMaterializedNodes.filter((node) => workspaceNodeKind(node.kind) === "concept").length;
+  const hiddenRelationCount = displayableEdges.length - visibleEdges.length;
+  const canonicalConceptCount = displayableMaterializedNodes.filter(
+    (node) => workspaceNodeKind(node.kind) === "concept",
+  ).length;
+  const visibleConceptCount = visibleMaterializedNodes.filter(
+    (node) => workspaceNodeKind(node.kind) === "concept",
+  ).length;
+  const compactionSummary =
+    canonicalConceptCount > visibleConceptCount
+      ? `${canonicalConceptCount} canonical concepts -> ${visibleConceptCount} visible concepts`
+      : null;
+  const graphMaterializationSummary = buildGraphMaterializationSummary(
+    snapshot,
+    visibleMaterializedNodes.length,
+    visibleEdges.length,
   );
   const visibleSourcePaths = visibleGraphSourcePaths(snapshot);
   const nodePositions = layoutNodePositions(visibleMaterializedNodes.length);
@@ -112,6 +141,10 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
         nodeCount: projectNodes.length,
         relationshipCount: edges.length,
         evidenceCount: Object.keys(evidenceById).length,
+        hiddenConceptCount,
+        hiddenRelationCount,
+        compactionSummary,
+        graphMaterializationSummary,
       },
       nodes: projectNodes,
       edges,
@@ -124,6 +157,98 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       sourceSummaryFromPath(snapshot, sourcePath, index),
     ),
   };
+}
+
+function buildGraphMaterializationSummary(
+  snapshot: MaterializedGraphSnapshot,
+  visibleNodeCount: number,
+  visibleRelationCount: number,
+) {
+  const reports = snapshot.graphMaterializationReports ?? [];
+  if (reports.length === 0) {
+    return null;
+  }
+  const totals = reports.reduce(
+    (summary, report) => {
+      summary.rawNodes += report.rawSourceGraphNodeCount ?? 0;
+      summary.rawRelations += report.rawSourceGraphRelationCount ?? 0;
+      summary.canonicalNodes += report.canonicalSourceGraphNodeCount ?? 0;
+      summary.canonicalRelations += report.canonicalSourceGraphRelationCount ?? 0;
+      return summary;
+    },
+    { rawNodes: 0, rawRelations: 0, canonicalNodes: 0, canonicalRelations: 0 },
+  );
+  const completeCount = reports.filter(
+    (report) => report.sourceGraphMaterialized && (report.progress ?? 0) >= 1,
+  ).length;
+  return `${totals.rawNodes} raw nodes -> ${totals.canonicalNodes} canonical nodes -> ${visibleNodeCount} visible nodes · ${totals.rawRelations} raw links -> ${totals.canonicalRelations} canonical links -> ${visibleRelationCount} visible links · ${completeCount}/${reports.length} sources complete`;
+}
+
+function projectMaterializedNodesForUi(
+  nodes: MaterializedGraphNodeRecord[],
+  edges: MaterializedGraphRelationRecord[],
+) {
+  const relatedCounts = buildMaterializedRelatedCounts(edges);
+  const conceptNodes = nodes
+    .filter((node) => workspaceNodeKind(node.kind) === "concept")
+    .sort((left, right) =>
+      materializedNodeSalience(right, relatedCounts) -
+        materializedNodeSalience(left, relatedCounts) ||
+      right.evidenceIds.length - left.evidenceIds.length ||
+      left.label.localeCompare(right.label) ||
+      left.nodeId.localeCompare(right.nodeId),
+    )
+    .slice(0, WORKSPACE_UI_VISIBLE_CONCEPT_LIMIT);
+  const visibleConceptIds = new Set(conceptNodes.map((node) => node.nodeId));
+  return nodes.filter(
+    (node) =>
+      workspaceNodeKind(node.kind) !== "concept" || visibleConceptIds.has(node.nodeId),
+  );
+}
+
+function projectMaterializedEdgesForUi(
+  edges: MaterializedGraphRelationRecord[],
+  visibleNodeIds: Set<string>,
+) {
+  return edges
+    .filter(
+      (edge) =>
+        visibleNodeIds.has(edge.sourceNodeId) &&
+        visibleNodeIds.has(edge.targetNodeId),
+    )
+    .sort((left, right) =>
+      materializedEdgeSalience(right) - materializedEdgeSalience(left) ||
+      right.evidenceIds.length - left.evidenceIds.length ||
+      (left.label || left.kind).localeCompare(right.label || right.kind) ||
+      left.relationId.localeCompare(right.relationId),
+    )
+    .slice(0, WORKSPACE_UI_VISIBLE_RELATION_LIMIT);
+}
+
+function buildMaterializedRelatedCounts(edges: MaterializedGraphRelationRecord[]) {
+  const counts: Record<string, number> = {};
+  for (const edge of edges) {
+    counts[edge.sourceNodeId] = (counts[edge.sourceNodeId] ?? 0) + 1;
+    counts[edge.targetNodeId] = (counts[edge.targetNodeId] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function materializedNodeSalience(
+  node: MaterializedGraphNodeRecord,
+  relatedCounts: Record<string, number>,
+) {
+  return (
+    node.evidenceIds.length * 100 +
+    (relatedCounts[node.nodeId] ?? 0) * 12 +
+    Math.round((node.confidence ?? 0) * 100) -
+    (node.label.length > 80 ? 50 : 0)
+  );
+}
+
+function materializedEdgeSalience(edge: MaterializedGraphRelationRecord) {
+  const kindScore = edge.kind === "source_of" || edge.kind === "derived_from" ? 20 : 10;
+  return edge.evidenceIds.length * 100 + kindScore + Math.round((edge.confidence ?? 0) * 100);
 }
 
 function correctionActionsForMaterializedNode(
