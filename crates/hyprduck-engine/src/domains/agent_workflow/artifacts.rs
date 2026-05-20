@@ -138,7 +138,11 @@ pub(crate) fn provider_workspace_linking_response_schema(
                         "edges": { "type": "array", "items": brain_relation_record_schema() },
                         "claims": { "type": "array", "items": claim_record_schema() },
                         "memories": { "type": "array", "items": memory_record_schema() },
-                        "wikiPages": { "type": "array", "items": wiki_page_schema() }
+                        "wikiPages": {
+                            "type": "array",
+                            "items": wiki_page_schema(),
+                            "maxItems": 0
+                        }
                     }
                 }
             }
@@ -509,6 +513,7 @@ mod tests {
         assert!(properties.get("claims").is_some());
         assert!(properties.get("memories").is_some());
         assert!(properties.get("wikiPages").is_some());
+        assert_eq!(properties["wikiPages"]["maxItems"], 0);
         assert!(properties.get("nodes").is_none());
         assert!(properties.get("sources").is_none());
         assert!(properties.get("evidence").is_none());

@@ -5,7 +5,6 @@ use crate::*;
 
 const WORKSPACE_LINKING_MAX_RELATIONS: usize = 24;
 const WORKSPACE_LINKING_MAX_CLAIMS: usize = 8;
-const WORKSPACE_LINKING_MAX_WIKI_PAGES: usize = 3;
 
 pub(crate) fn parse_provider_workspace_rebuild_snapshot(raw: &str) -> Result<BrainRepoSnapshot> {
     let value = extract_provider_json_value(raw)?;
@@ -294,16 +293,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 .any(|candidate| candidate != source_id)
     });
     snapshot.memories.clear();
-    snapshot.wiki_pages.retain(|page| {
-        page.source_refs
-            .iter()
-            .any(|candidate| candidate == source_id)
-            && page
-                .source_refs
-                .iter()
-                .any(|candidate| candidate != source_id)
-    });
-    cap_workspace_linking_wiki_pages(&mut snapshot.wiki_pages);
+    snapshot.wiki_pages.clear();
 }
 
 fn cap_workspace_linking_relations(relations: &mut Vec<BrainRelationRecord>) {
@@ -322,17 +312,6 @@ fn cap_workspace_linking_claims(claims: &mut Vec<ClaimRecord>) {
             .then(left.claim_id.cmp(&right.claim_id))
     });
     claims.truncate(WORKSPACE_LINKING_MAX_CLAIMS);
-}
-
-fn cap_workspace_linking_wiki_pages(wiki_pages: &mut Vec<WikiPage>) {
-    wiki_pages.sort_by(|left, right| {
-        right
-            .evidence_refs
-            .len()
-            .cmp(&left.evidence_refs.len())
-            .then(left.path.cmp(&right.path))
-    });
-    wiki_pages.truncate(WORKSPACE_LINKING_MAX_WIKI_PAGES);
 }
 
 fn workspace_linking_relation_score(relation: &BrainRelationRecord) -> usize {

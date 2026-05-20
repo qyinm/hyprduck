@@ -155,9 +155,10 @@ Task:
 - Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
 - Actively look for grounded cross-source links such as shared concepts, prerequisites, contrasts, refinements, dependencies, repeated claims, or related methods.
 - Return only records needed for cross-source linking. Return no new edges only when no grounded relationship exists after comparing the imported markdown with the workspace chunks.
-- Return at most 24 cross-source relations, 8 claims, and 3 wiki pages.
+- Return at most 24 cross-source relations and 8 claims.
 - Return memories as [].
-- Every returned edge, claim, memory, and wiki page must cite existing sourceIds/evidenceIds.
+- Return wikiPages as []; HyprDuck synthesizes wiki pages after validated linking.
+- Every returned edge and claim must cite existing sourceIds/evidenceIds.
 - Every returned edge must cite evidence from both endpoint source sides: at least one evidenceId from sourceId {source_id} and at least one evidenceId from the other endpoint's sourceIds.
 - Do not return sources, evidence, nodes, entities, or extractions. Endpoint nodes must already exist in the current graph.
 - Do not return source_of edges. HyprDuck owns source edges.
@@ -167,12 +168,12 @@ Task:
 
 Output shape:
 {{
-  "materializedGraph": {{
+    "materializedGraph": {{
     "generatedAt": <unix seconds or null>,
     "edges": [cross-source BrainRelationRecord...],
     "claims": [cross-source ClaimRecord...],
-    "memories": [cross-source MemoryRecord...],
-    "wikiPages": [cross-source WikiPage...]
+    "memories": [],
+    "wikiPages": []
   }}
 }}
 

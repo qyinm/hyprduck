@@ -985,7 +985,7 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
 }
 
 #[test]
-fn provider_workspace_linking_caps_relations_claims_and_wiki_pages() {
+fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
     let generated_at = 42;
     let mut baseline = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     baseline.generated_at = generated_at;
@@ -1155,7 +1155,7 @@ fn provider_workspace_linking_caps_relations_claims_and_wiki_pages() {
     assert_eq!(snapshot.relations.len(), 24);
     assert_eq!(snapshot.claims.len(), 8);
     assert!(snapshot.memories.is_empty());
-    assert_eq!(snapshot.wiki_pages.len(), 3);
+    assert!(snapshot.wiki_pages.is_empty());
 }
 
 #[test]

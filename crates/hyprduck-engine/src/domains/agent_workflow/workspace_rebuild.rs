@@ -23,6 +23,7 @@ const PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION: u32 = 1;
 const SOURCE_GRAPH_CHUNK_BATCH_MAX_CHARS: usize = 80_000;
 const SOURCE_GRAPH_CHUNK_BATCH_MAX_CHUNKS: usize = 40;
 const SOURCE_GRAPH_AUTO_BATCH_LIMIT: usize = 8;
+const SOURCE_GRAPH_CHUNK_PARALLELISM: usize = 4;
 const SOURCE_GRAPH_TARGET_CONCEPTS: usize = 18;
 const SOURCE_GRAPH_HARD_MAX_CONCEPTS: usize = 32;
 const SOURCE_GRAPH_HARD_MAX_RELATIONS: usize = 48;
@@ -144,6 +145,23 @@ pub(crate) struct ProviderGraphStageRunReport {
     pub(crate) relation_count: usize,
     #[serde(default)]
     pub(crate) error_message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceGraphChunkJob {
+    batch_index: usize,
+    run_id: String,
+    chunk_ids: Vec<String>,
+    evidence_refs: Vec<EvidenceRef>,
+    prompt: String,
+}
+
+struct SourceGraphChunkProviderResult {
+    batch_index: usize,
+    run_id: String,
+    chunk_ids: Vec<String>,
+    evidence_refs: Vec<EvidenceRef>,
+    response: Result<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -386,95 +404,153 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     report.chunk_processed = source_chunk_batches.len();
     report.chunk_skipped = source_chunk_plan.skipped_batch_count;
     report.chunk_total = source_chunk_batches.len();
+    let source_chunk_jobs = source_chunk_batches
+        .iter()
+        .enumerate()
+        .map(|(batch_index, batch)| {
+            let run_id = format!("{source_graph_run_id}-chunk-{:04}", batch_index + 1);
+            let chunk_ids = batch
+                .iter()
+                .map(|chunk| chunk.chunk_id.clone())
+                .collect::<Vec<_>>();
+            let evidence_refs = source_chunk_evidence_refs(batch);
+            let prompt = build_source_chunk_graph_prompt(
+                workspace_id,
+                manifest,
+                batch,
+                &evidence_refs,
+                &snapshot,
+                context,
+            )?;
+            Ok(SourceGraphChunkJob {
+                batch_index,
+                run_id,
+                chunk_ids,
+                evidence_refs,
+                prompt,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    report.provider_run_ids.extend(
+        source_chunk_jobs
+            .iter()
+            .map(|job| job.run_id.clone())
+            .collect::<Vec<_>>(),
+    );
+    write_json_pretty(&report_path, &report)?;
+
     let mut source_graph_snapshots = Vec::new();
     let mut stripped_source_of_relation_count = 0usize;
-    for (batch_index, batch) in source_chunk_batches.iter().enumerate() {
-        let chunk_run_id = format!("{source_graph_run_id}-chunk-{:04}", batch_index + 1);
-        report.provider_run_ids.push(chunk_run_id.clone());
-        let chunk_ids = batch
-            .iter()
-            .map(|chunk| chunk.chunk_id.clone())
-            .collect::<Vec<_>>();
-        let batch_evidence = source_chunk_evidence_refs(batch);
-        let chunk_prompt = build_source_chunk_graph_prompt(
-            workspace_id,
-            manifest,
-            batch,
-            &batch_evidence,
-            &snapshot,
-            context,
-        )?;
-        match run_provider_graph_stage(
+    for job_batch in source_chunk_jobs.chunks(SOURCE_GRAPH_CHUNK_PARALLELISM) {
+        let mut provider_results = run_source_graph_chunk_provider_jobs(
             workspace_root,
             workspace_id,
             manifest,
             &config,
-            &chunk_run_id,
-            &chunk_prompt,
-            provider_workspace_rebuild_response_schema(),
-        ) {
-            Ok(response) => match parse_and_validate_source_graph_response(
-                &response,
-                workspace_id,
-                &snapshot,
-                &manifest.source_id,
-                &batch_evidence,
-            ) {
-                Ok((mut source_graph_snapshot, provider_source_of_relation_count)) => {
-                    stripped_source_of_relation_count += provider_source_of_relation_count;
-                    strip_source_of_relations(&mut source_graph_snapshot);
-                    report.chunk_succeeded += 1;
-                    report.stage_runs.push(ProviderGraphStageRunReport {
-                        stage: "source_chunk_extract".into(),
-                        run_id: chunk_run_id.clone(),
-                        chunk_ids: chunk_ids.clone(),
-                        status: "validated".into(),
-                        retryable: false,
-                        node_count: source_graph_snapshot.nodes.len(),
-                        relation_count: source_graph_snapshot.relations.len(),
-                        error_message: None,
-                    });
-                    write_provider_graph_run_validation_report(
-                        workspace_root,
-                        &chunk_run_id,
-                        workspace_id,
-                        &manifest.source_id,
-                        "validated",
-                        source_graph_snapshot.nodes.len(),
-                        None,
-                    )?;
-                    write_json_pretty(
-                        &artifact_root
-                            .join("provider-graph-chunks")
-                            .join(format!("{chunk_run_id}.json")),
-                        &json!({
-                            "runId": chunk_run_id,
-                            "workspaceId": workspace_id,
-                            "sourceId": manifest.source_id,
-                            "stage": "source_chunk_extract",
-                            "status": "validated",
-                            "chunkIds": chunk_ids,
-                            "nodeCount": source_graph_snapshot.nodes.len(),
-                            "relationCount": source_graph_snapshot.relations.len(),
-                            "snapshot": source_graph_snapshot.clone(),
-                            "updatedAt": unix_timestamp_seconds(),
-                        }),
-                    )?;
-                    write_graph_candidate_batch_artifact(
-                        artifact_root,
-                        &source_graph_run_id,
-                        &chunk_run_id,
-                        workspace_id,
-                        &manifest.source_id,
-                        &chunk_ids,
-                        &source_graph_snapshot,
-                    )?;
-                    source_graph_snapshots.push(source_graph_snapshot);
-                }
+            job_batch,
+        );
+        provider_results.sort_by_key(|result| result.batch_index);
+        for provider_result in provider_results {
+            let chunk_run_id = provider_result.run_id;
+            let chunk_ids = provider_result.chunk_ids;
+            let batch_evidence = provider_result.evidence_refs;
+            match provider_result.response {
+                Ok(response) => match parse_and_validate_source_graph_response(
+                    &response,
+                    workspace_id,
+                    &snapshot,
+                    &manifest.source_id,
+                    &batch_evidence,
+                ) {
+                    Ok((mut source_graph_snapshot, provider_source_of_relation_count)) => {
+                        stripped_source_of_relation_count += provider_source_of_relation_count;
+                        strip_source_of_relations(&mut source_graph_snapshot);
+                        report.chunk_succeeded += 1;
+                        report.stage_runs.push(ProviderGraphStageRunReport {
+                            stage: "source_chunk_extract".into(),
+                            run_id: chunk_run_id.clone(),
+                            chunk_ids: chunk_ids.clone(),
+                            status: "validated".into(),
+                            retryable: false,
+                            node_count: source_graph_snapshot.nodes.len(),
+                            relation_count: source_graph_snapshot.relations.len(),
+                            error_message: None,
+                        });
+                        write_provider_graph_run_validation_report(
+                            workspace_root,
+                            &chunk_run_id,
+                            workspace_id,
+                            &manifest.source_id,
+                            "validated",
+                            source_graph_snapshot.nodes.len(),
+                            None,
+                        )?;
+                        write_json_pretty(
+                            &artifact_root
+                                .join("provider-graph-chunks")
+                                .join(format!("{chunk_run_id}.json")),
+                            &json!({
+                                "runId": chunk_run_id,
+                                "workspaceId": workspace_id,
+                                "sourceId": manifest.source_id,
+                                "stage": "source_chunk_extract",
+                                "status": "validated",
+                                "chunkIds": chunk_ids,
+                                "nodeCount": source_graph_snapshot.nodes.len(),
+                                "relationCount": source_graph_snapshot.relations.len(),
+                                "snapshot": source_graph_snapshot.clone(),
+                                "updatedAt": unix_timestamp_seconds(),
+                            }),
+                        )?;
+                        write_graph_candidate_batch_artifact(
+                            artifact_root,
+                            &source_graph_run_id,
+                            &chunk_run_id,
+                            workspace_id,
+                            &manifest.source_id,
+                            &chunk_ids,
+                            &source_graph_snapshot,
+                        )?;
+                        source_graph_snapshots.push(source_graph_snapshot);
+                    }
+                    Err(error) => {
+                        report.chunk_failed += 1;
+                        report.retryable = true;
+                        report.failed_reason = Some("source_chunk_validation_failed".into());
+                        report.stage_runs.push(ProviderGraphStageRunReport {
+                            stage: "source_chunk_extract".into(),
+                            run_id: chunk_run_id.clone(),
+                            chunk_ids: chunk_ids.clone(),
+                            status: "failed".into(),
+                            retryable: true,
+                            node_count: 0,
+                            relation_count: 0,
+                            error_message: Some(format!("{error:#}")),
+                        });
+                        write_provider_graph_run_validation_report(
+                            workspace_root,
+                            &chunk_run_id,
+                            workspace_id,
+                            &manifest.source_id,
+                            "failed",
+                            0,
+                            Some(format!("{error:#}")),
+                        )?;
+                        write_source_chunk_run_artifact(
+                            artifact_root,
+                            &chunk_run_id,
+                            workspace_id,
+                            &manifest.source_id,
+                            &chunk_ids,
+                            "failed",
+                            Some(format!("{error:#}")),
+                        )?;
+                    }
+                },
                 Err(error) => {
                     report.chunk_failed += 1;
                     report.retryable = true;
-                    report.failed_reason = Some("source_chunk_validation_failed".into());
+                    report.failed_reason = Some(provider_graph_failure_reason(&error).into());
                     report.stage_runs.push(ProviderGraphStageRunReport {
                         stage: "source_chunk_extract".into(),
                         run_id: chunk_run_id.clone(),
@@ -485,15 +561,6 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
                         relation_count: 0,
                         error_message: Some(format!("{error:#}")),
                     });
-                    write_provider_graph_run_validation_report(
-                        workspace_root,
-                        &chunk_run_id,
-                        workspace_id,
-                        &manifest.source_id,
-                        "failed",
-                        0,
-                        Some(format!("{error:#}")),
-                    )?;
                     write_source_chunk_run_artifact(
                         artifact_root,
                         &chunk_run_id,
@@ -504,35 +571,11 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
                         Some(format!("{error:#}")),
                     )?;
                 }
-            },
-            Err(error) => {
-                report.chunk_failed += 1;
-                report.retryable = true;
-                report.failed_reason = Some(provider_graph_failure_reason(&error).into());
-                report.stage_runs.push(ProviderGraphStageRunReport {
-                    stage: "source_chunk_extract".into(),
-                    run_id: chunk_run_id.clone(),
-                    chunk_ids: chunk_ids.clone(),
-                    status: "failed".into(),
-                    retryable: true,
-                    node_count: 0,
-                    relation_count: 0,
-                    error_message: Some(format!("{error:#}")),
-                });
-                write_source_chunk_run_artifact(
-                    artifact_root,
-                    &chunk_run_id,
-                    workspace_id,
-                    &manifest.source_id,
-                    &chunk_ids,
-                    "failed",
-                    Some(format!("{error:#}")),
-                )?;
             }
+            report.progress = source_graph_progress(&report);
+            report.updated_at = unix_timestamp_seconds();
+            write_json_pretty(&report_path, &report)?;
         }
-        report.progress = source_graph_progress(&report);
-        report.updated_at = unix_timestamp_seconds();
-        write_json_pretty(&report_path, &report)?;
     }
 
     if source_graph_snapshots.is_empty() {
@@ -1962,6 +2005,52 @@ fn run_provider_graph_stage(
         error_message: None,
     })?;
     Ok(response)
+}
+
+fn run_source_graph_chunk_provider_jobs(
+    workspace_root: &Path,
+    workspace_id: &str,
+    manifest: &SourceArtifactManifest,
+    config: &EngineConfig,
+    jobs: &[SourceGraphChunkJob],
+) -> Vec<SourceGraphChunkProviderResult> {
+    std::thread::scope(|scope| {
+        let handles = jobs
+            .iter()
+            .map(|job| {
+                scope.spawn(move || SourceGraphChunkProviderResult {
+                    batch_index: job.batch_index,
+                    run_id: job.run_id.clone(),
+                    chunk_ids: job.chunk_ids.clone(),
+                    evidence_refs: job.evidence_refs.clone(),
+                    response: run_provider_graph_stage(
+                        workspace_root,
+                        workspace_id,
+                        manifest,
+                        config,
+                        &job.run_id,
+                        &job.prompt,
+                        provider_workspace_rebuild_response_schema(),
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        handles
+            .into_iter()
+            .zip(jobs.iter())
+            .map(|(handle, job)| match handle.join() {
+                Ok(result) => result,
+                Err(_) => SourceGraphChunkProviderResult {
+                    batch_index: job.batch_index,
+                    run_id: job.run_id.clone(),
+                    chunk_ids: job.chunk_ids.clone(),
+                    evidence_refs: job.evidence_refs.clone(),
+                    response: Err(anyhow!("source chunk provider worker panicked")),
+                },
+            })
+            .collect()
+    })
 }
 
 fn write_graph_diff_artifact(
