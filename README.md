@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/site/favicon.svg" width="120" alt="HyprDuck">
+  <img src="docs/assets/hyprduck-disco.svg" width="120" alt="HyprDuck">
 </p>
 
 <h1 align="center">HyprDuck</h1>
