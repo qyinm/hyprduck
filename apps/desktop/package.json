@@ -73,6 +73,7 @@
     "afterSign": "scripts/notarize.cjs",
     "files": [
       "dist/**/*",
+      "main/**/*",
       "main.cjs",
       "preload.cjs",
       "package.json"
