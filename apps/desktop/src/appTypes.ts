@@ -1,4 +1,8 @@
-import type { WorkspaceProjectEnvelope } from "@/features/workspace/types";
+import type {
+  MaterializedGraphSnapshot,
+  WorkspaceProject,
+  WorkspaceProjectEnvelope,
+} from "@/features/workspace/types";
 
 export interface UiSnapshot {
   activeJob: ActiveJobSnapshot | null;
@@ -132,8 +136,106 @@ export interface DesktopMessage<T> {
 
 export type DesktopUnlisten = () => void;
 
+export interface WorkspaceCorrectionPayload {
+  projectId: string;
+  nodeId: string;
+  kind: string;
+  targetNodeId: string | null;
+  value: string | null;
+}
+
+export interface WorkspaceAnswerPayload {
+  projectId: string;
+  nodeId: string | null;
+  question: string;
+}
+
+export interface DesktopCommandMap {
+  app_snapshot: {
+    args: undefined;
+    result: UiSnapshot;
+  };
+  load_engine_config: {
+    args: undefined;
+    result: EngineConfigPayload;
+  };
+  save_engine_config: {
+    args: { payload: EngineConfigPayload };
+    result: EngineConfigPayload;
+  };
+  validate_engine_config: {
+    args: { payload?: EngineConfigPayload | null } | undefined;
+    result: ValidateProviderResponseData;
+  };
+  engine_readiness: {
+    args: undefined;
+    result: RuntimeReadinessResponseData;
+  };
+  brain_health: {
+    args: { workspace_id?: string | null } | undefined;
+    result: BrainHealthResponseData;
+  };
+  get_models_for_provider: {
+    args: { providerSlug: string };
+    result: string[];
+  };
+  load_workspace_project: {
+    args: { project_id?: string | null; workspace_id?: string | null };
+    result: WorkspaceProjectEnvelope;
+  };
+  load_materialized_graph_snapshot: {
+    args: { workspace_id?: string | null };
+    result: MaterializedGraphSnapshot;
+  };
+  pick_import_file: {
+    args: undefined;
+    result: FileSelection | null;
+  };
+  start_parse: {
+    args: { request: FileSelection };
+    result: void;
+  };
+  retry_failed_pages: {
+    args: undefined;
+    result: void;
+  };
+  cancel_parse: {
+    args: undefined;
+    result: void;
+  };
+  open_saved_output: {
+    args: { path: string; reveal: boolean };
+    result: void;
+  };
+  open_local_artifact: {
+    args: { path: string; reveal: boolean };
+    result: void;
+  };
+  apply_workspace_correction: {
+    args: { correction: WorkspaceCorrectionPayload };
+    result: WorkspaceProject;
+  };
+  answer_workspace_project: {
+    args: { request: WorkspaceAnswerPayload };
+    result: WorkspaceProject["answerByNodeId"][string];
+  };
+}
+
+export type DesktopCommand = keyof DesktopCommandMap;
+export type DesktopCommandArgs<K extends DesktopCommand> =
+  DesktopCommandMap[K]["args"];
+export type DesktopCommandParameters<K extends DesktopCommand> =
+  undefined extends DesktopCommandArgs<K>
+    ? [args?: Exclude<DesktopCommandArgs<K>, undefined>]
+    : [args: DesktopCommandArgs<K>];
+export type DesktopCommandResult<K extends DesktopCommand> =
+  DesktopCommandMap[K]["result"];
+
 export interface HyprDuckDesktopApi {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  invoke<K extends DesktopCommand>(
+    command: K,
+    ...args: DesktopCommandParameters<K>
+  ): Promise<DesktopCommandResult<K>>;
   listen<T>(
     eventName: string,
     handler: (message: DesktopMessage<T>) => void | Promise<void>,

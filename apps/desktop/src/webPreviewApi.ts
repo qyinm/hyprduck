@@ -8,6 +8,10 @@ import type {
   ActiveJobSnapshot,
   BrainEvent,
   BrainHealthResponseData,
+  DesktopCommand,
+  DesktopCommandArgs,
+  DesktopCommandParameters,
+  DesktopCommandResult,
   DesktopMessage,
   DesktopUnlisten,
   EngineConfigPayload,
@@ -20,6 +24,12 @@ import type {
   ValidateProviderResponseData,
   ValidationIssue,
 } from "@/appTypes";
+
+type WebPreviewCommandHandlers = {
+  [K in DesktopCommand]: (
+    args: DesktopCommandArgs<K>,
+  ) => DesktopCommandResult<K> | Promise<DesktopCommandResult<K>>;
+};
 
 const WEB_MOCK_PROVIDER_OPTIONS: ProviderOption[] = [
   {
@@ -302,228 +312,204 @@ function createWebMaterializedGraphSnapshot(): MaterializedGraphSnapshot {
 export function createWebMockApi(): HyprDuckDesktopApi {
   webMockValidation = deriveWebValidation(null);
 
-  return {
-    async invoke<T>(
-      command: string,
-      args: Record<string, unknown> = {},
-    ): Promise<T> {
-      switch (command) {
-        case "app_snapshot": {
-          return { ...webMockSnapshot } as T;
-        }
-        case "load_engine_config": {
-          return { ...webMockConfig, provider_options: [...WEB_MOCK_PROVIDER_OPTIONS] } as T;
-        }
-        case "validate_engine_config": {
-          const next = deriveWebValidation(
-            (args.payload as { payload?: EngineConfigPayload } | undefined)
-              ?.payload ?? null,
-          );
-          webMockValidation = next;
-          return { ...next } as T;
-        }
-        case "engine_readiness": {
-          return deriveWebReadiness() as T;
-        }
-        case "brain_health": {
-          return createWebBrainHealth() as T;
-        }
-        case "get_models_for_provider": {
-          const key = String(
-            (args.providerSlug as string | undefined) ??
-              webMockConfig.provider ??
-              "ollama",
-          );
-          return [...(WEB_MOCK_PROVIDER_MODELS[key] ?? WEB_MOCK_PROVIDER_MODELS.ollama)] as T;
-        }
-        case "load_workspace_project": {
-          const projectId = args.project_id as string | undefined;
-          const envelope = getWebWorkspaceFromSnapshot();
-          if (
-            !envelope.project ||
-            (projectId && envelope.project.summary.projectId !== projectId)
-          ) {
-            return { project: null, workspace_id: envelope.workspace_id, sources: envelope.sources } as T;
-          }
-          return { ...envelope } as T;
-        }
-        case "load_materialized_graph_snapshot": {
-          return createWebMaterializedGraphSnapshot() as T;
-        }
-        case "pick_import_file": {
-          return { ...WEB_MOCK_SAMPLE_FILE } as T;
-        }
-        case "start_parse": {
-          const request =
-            (args.request as { path?: string; format?: string } | undefined) ??
-            null;
-          const filePath = request?.path ?? WEB_MOCK_SAMPLE_FILE.path;
-          const format = request?.format ?? WEB_MOCK_SAMPLE_FILE.format;
-          const started: ActiveJobSnapshot = {
-            jobId: `preview-${Date.now()}`,
-            filePath,
-            format,
-            status: "running",
-            progressPercent: 0,
-            lastMessage: "Preview parse started.",
-          };
-          if (webMockParseTimer) {
-            clearTimeout(webMockParseTimer);
-          }
-          emitWebSnapshot({
-            ...webMockSnapshot,
-            activeJob: started,
-            lastResult: webMockSnapshot.lastResult,
-            progressLog: [
-              ...webMockSnapshot.progressLog,
-              {
-                phase: "parse",
-                message: "Using mocked web preview parser.",
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          });
-          webMockParseTimer = setTimeout(() => {
-            const completedSnapshot: UiSnapshot = {
-              ...webMockSnapshot,
-              activeJob: null,
-              lastProjectId: "preview:sample",
-              workspaceRevision: (webMockSnapshot.workspaceRevision ?? 0) + 1,
-              lastResult: {
-                savedOutputPath: `~/Library/Application Support/HyprDuck/web-preview/${new Date()
-                  .toISOString()
-                  .slice(0, 10)}.md`,
-                successCount: 2,
-                failedCount: 0,
-                markdown: WEB_MOCK_MARKDOWN,
-              },
-              progressLog: [
-                ...webMockSnapshot.progressLog,
-                {
-                  phase: "parse",
-                  message: "Preview parse completed.",
-                  timestamp: new Date().toISOString(),
-                },
-              ],
-            };
-            emitWebSnapshot(completedSnapshot);
-            webMockParseTimer = null;
-          }, 700);
-          return undefined as T;
-        }
-        case "retry_failed_pages": {
-          emitWebSnapshot({
-            ...webMockSnapshot,
-            progressLog: [
-              ...webMockSnapshot.progressLog,
-              {
-                phase: "retry",
-                message: "Preview failed-page retry completed.",
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          });
-          return undefined as T;
-        }
-        case "cancel_parse": {
-          if (webMockParseTimer) {
-            clearTimeout(webMockParseTimer);
-            webMockParseTimer = null;
-          }
-          const current = webMockSnapshot;
-          if (current.activeJob) {
-            emitWebSnapshot({
-              ...current,
-              activeJob: null,
-              progressLog: [
-                ...current.progressLog,
-                {
-                  phase: "parse",
-                  message: "Preview parse canceled.",
-                  timestamp: new Date().toISOString(),
-                },
-              ],
-            });
-          }
-          return undefined as T;
-        }
-        case "open_saved_output": {
-          const path = String((args.path as string | undefined) ?? "");
-          if (typeof window !== "undefined") {
-            window.alert(`Cannot open local files from web preview: ${path}`);
-          }
-          return undefined as T;
-        }
-        case "open_local_artifact": {
-          const path = String((args.path as string | undefined) ?? "");
-          if (typeof window !== "undefined") {
-            window.alert(`Cannot open local artifacts from web preview: ${path}`);
-          }
-          return undefined as T;
-        }
-        case "apply_workspace_correction": {
-          const workspace = getWebWorkspaceFromSnapshot();
-          if (!workspace.project) {
-            throw new Error("No workspace available in preview mode.");
-          }
-          return { ...workspace.project } as T;
-        }
-        case "answer_workspace_project": {
-          const request = args.request as
-            | WorkspaceAnswerProjectRequest
-            | undefined;
-          const workspace = getWebWorkspaceFromSnapshot();
-          if (!workspace.project) {
-            throw new Error("No workspace available in preview mode.");
-          }
-          const terms = String(request?.question ?? "")
-            .toLowerCase()
-            .split(/[^a-z0-9]+/)
-            .filter((term) => term.length > 1);
-          const answerEntries = Object.entries(workspace.project.answerByNodeId);
-          const scoredAnswers = answerEntries
-            .map(([nodeId, answer]) => {
-              const detail = workspace.project?.detailsByNodeId[nodeId];
-              const haystack = [
-                detail?.canonicalName,
-                detail?.description,
-                answer.text,
-                answer.explanation,
-                ...(answer.citations ?? []).map((citation) => citation.snippet),
-              ]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase();
-              const queryScore = terms.filter((term) => haystack.includes(term)).length;
-              const selectedBias = request?.nodeId === nodeId ? 1 : 0;
-              return { answer, queryScore, selectedBias };
-            })
-            .sort(
-              (left, right) =>
-                right.queryScore - left.queryScore ||
-                right.selectedBias - left.selectedBias,
-            );
-          const answer =
-            scoredAnswers.find((entry) => entry.queryScore > 0)?.answer ??
-            workspace.project.answerByNodeId["source:preview"] ??
-            scoredAnswers[0]?.answer;
-          if (!answer) {
-            throw new Error("No answer available for this workspace in preview mode.");
-          }
-          return { ...answer } as T;
-        }
-        case "save_engine_config": {
-          const payload = args.payload as EngineConfigPayload;
-          webMockConfig = {
-            ...webMockConfig,
-            ...payload,
-            provider_options: WEB_MOCK_PROVIDER_OPTIONS,
-          };
-          return { ...webMockConfig } as T;
-        }
-        default:
-          throw new Error(`web-preview: unsupported command "${command}".`);
+  const handlers: WebPreviewCommandHandlers = {
+    app_snapshot: () => ({ ...webMockSnapshot }),
+    load_engine_config: () => ({
+      ...webMockConfig,
+      provider_options: [...WEB_MOCK_PROVIDER_OPTIONS],
+    }),
+    validate_engine_config: (args) => {
+      const next = deriveWebValidation(args?.payload ?? null);
+      webMockValidation = next;
+      return { ...next };
+    },
+    engine_readiness: () => deriveWebReadiness(),
+    brain_health: () => createWebBrainHealth(),
+    get_models_for_provider: (args) => {
+      const key = args.providerSlug ?? webMockConfig.provider ?? "ollama";
+      return [...(WEB_MOCK_PROVIDER_MODELS[key] ?? WEB_MOCK_PROVIDER_MODELS.ollama)];
+    },
+    load_workspace_project: (args) => {
+      const envelope = getWebWorkspaceFromSnapshot();
+      if (
+        !envelope.project ||
+        (args.project_id && envelope.project.summary.projectId !== args.project_id)
+      ) {
+        return {
+          project: null,
+          workspace_id: envelope.workspace_id,
+          sources: envelope.sources,
+        };
       }
+      return { ...envelope };
+    },
+    load_materialized_graph_snapshot: () => createWebMaterializedGraphSnapshot(),
+    pick_import_file: () => ({ ...WEB_MOCK_SAMPLE_FILE }),
+    start_parse: (args) => {
+      const filePath = args.request.path;
+      const format = args.request.format;
+      const started: ActiveJobSnapshot = {
+        jobId: `preview-${Date.now()}`,
+        filePath,
+        format,
+        status: "running",
+        progressPercent: 0,
+        lastMessage: "Preview parse started.",
+      };
+      if (webMockParseTimer) {
+        clearTimeout(webMockParseTimer);
+      }
+      emitWebSnapshot({
+        ...webMockSnapshot,
+        activeJob: started,
+        lastResult: webMockSnapshot.lastResult,
+        progressLog: [
+          ...webMockSnapshot.progressLog,
+          {
+            phase: "parse",
+            message: "Using mocked web preview parser.",
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+      webMockParseTimer = setTimeout(() => {
+        const completedSnapshot: UiSnapshot = {
+          ...webMockSnapshot,
+          activeJob: null,
+          lastProjectId: "preview:sample",
+          workspaceRevision: (webMockSnapshot.workspaceRevision ?? 0) + 1,
+          lastResult: {
+            savedOutputPath: `~/Library/Application Support/HyprDuck/web-preview/${new Date()
+              .toISOString()
+              .slice(0, 10)}.md`,
+            successCount: 2,
+            failedCount: 0,
+            markdown: WEB_MOCK_MARKDOWN,
+          },
+          progressLog: [
+            ...webMockSnapshot.progressLog,
+            {
+              phase: "parse",
+              message: "Preview parse completed.",
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        };
+        emitWebSnapshot(completedSnapshot);
+        webMockParseTimer = null;
+      }, 700);
+    },
+    retry_failed_pages: () => {
+      emitWebSnapshot({
+        ...webMockSnapshot,
+        progressLog: [
+          ...webMockSnapshot.progressLog,
+          {
+            phase: "retry",
+            message: "Preview failed-page retry completed.",
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    },
+    cancel_parse: () => {
+      if (webMockParseTimer) {
+        clearTimeout(webMockParseTimer);
+        webMockParseTimer = null;
+      }
+      const current = webMockSnapshot;
+      if (current.activeJob) {
+        emitWebSnapshot({
+          ...current,
+          activeJob: null,
+          progressLog: [
+            ...current.progressLog,
+            {
+              phase: "parse",
+              message: "Preview parse canceled.",
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+    },
+    open_saved_output: (args) => {
+      if (typeof window !== "undefined") {
+        window.alert(`Cannot open local files from web preview: ${args.path}`);
+      }
+    },
+    open_local_artifact: (args) => {
+      if (typeof window !== "undefined") {
+        window.alert(`Cannot open local artifacts from web preview: ${args.path}`);
+      }
+    },
+    apply_workspace_correction: () => {
+      const workspace = getWebWorkspaceFromSnapshot();
+      if (!workspace.project) {
+        throw new Error("No workspace available in preview mode.");
+      }
+      return { ...workspace.project };
+    },
+    answer_workspace_project: (args) => {
+      const workspace = getWebWorkspaceFromSnapshot();
+      if (!workspace.project) {
+        throw new Error("No workspace available in preview mode.");
+      }
+      const terms = args.request.question
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((term) => term.length > 1);
+      const answerEntries = Object.entries(workspace.project.answerByNodeId);
+      const scoredAnswers = answerEntries
+        .map(([nodeId, answer]) => {
+          const detail = workspace.project?.detailsByNodeId[nodeId];
+          const haystack = [
+            detail?.canonicalName,
+            detail?.description,
+            answer.text,
+            answer.explanation,
+            ...(answer.citations ?? []).map((citation) => citation.snippet),
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          const queryScore = terms.filter((term) => haystack.includes(term)).length;
+          const selectedBias = args.request.nodeId === nodeId ? 1 : 0;
+          return { answer, queryScore, selectedBias };
+        })
+        .sort(
+          (left, right) =>
+            right.queryScore - left.queryScore ||
+            right.selectedBias - left.selectedBias,
+        );
+      const answer =
+        scoredAnswers.find((entry) => entry.queryScore > 0)?.answer ??
+        workspace.project.answerByNodeId["source:preview"] ??
+        scoredAnswers[0]?.answer;
+      if (!answer) {
+        throw new Error("No answer available for this workspace in preview mode.");
+      }
+      return { ...answer };
+    },
+    save_engine_config: (args) => {
+      webMockConfig = {
+        ...webMockConfig,
+        ...args.payload,
+        provider_options: WEB_MOCK_PROVIDER_OPTIONS,
+      };
+      return { ...webMockConfig };
+    },
+  };
+
+  return {
+    async invoke<K extends DesktopCommand>(
+      command: K,
+      ...args: DesktopCommandParameters<K>
+    ): Promise<DesktopCommandResult<K>> {
+      const handler = handlers[command] as (
+        args: DesktopCommandArgs<K>,
+      ) => DesktopCommandResult<K> | Promise<DesktopCommandResult<K>>;
+      return handler(args[0] as DesktopCommandArgs<K>);
     },
     listen<T>(
       eventName: string,

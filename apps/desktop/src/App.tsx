@@ -25,6 +25,10 @@ import {
 import {
   type BrainEvent,
   type BrainHealthResponseData,
+  type DesktopCommand,
+  type DesktopCommandArgs,
+  type DesktopCommandParameters,
+  type DesktopCommandResult,
   type DesktopMessage,
   type DesktopUnlisten,
   type EngineConfigPayload,
@@ -176,11 +180,11 @@ function getDesktopApi(): HyprDuckDesktopApi {
   return api;
 }
 
-async function invoke<T>(
-  command: string,
-  args: Record<string, unknown> = {},
-): Promise<T> {
-  return getDesktopApi().invoke<T>(command, args);
+async function invoke<K extends DesktopCommand>(
+  command: K,
+  ...args: DesktopCommandParameters<K>
+): Promise<DesktopCommandResult<K>> {
+  return getDesktopApi().invoke(command, ...args);
 }
 
 async function loadGraphWorkspaceEnvelope(
@@ -195,12 +199,9 @@ async function loadGraphWorkspaceEnvelopeResult(
   projectId?: string | null,
 ): Promise<WorkspaceLoadResult> {
   try {
-    const materializedSnapshot = await invoke<MaterializedGraphSnapshot>(
-      "load_materialized_graph_snapshot",
-      {
-        workspace_id: workspaceId ?? undefined,
-      },
-    );
+    const materializedSnapshot = await invoke("load_materialized_graph_snapshot", {
+      workspace_id: workspaceId ?? undefined,
+    });
     return {
       envelope: materializedGraphSnapshotToWorkspaceEnvelope(materializedSnapshot),
       source: "materialized",
@@ -208,7 +209,7 @@ async function loadGraphWorkspaceEnvelopeResult(
   } catch (materializedError) {
     try {
       return {
-        envelope: await invoke<WorkspaceProjectEnvelope>("load_workspace_project", {
+        envelope: await invoke("load_workspace_project", {
           project_id: projectId ?? null,
           workspace_id: workspaceId ?? null,
         }),
@@ -560,7 +561,7 @@ function SettingsPanel(props: {
 
   const handleProviderChange = async (providerId: string) => {
     setActiveProvider(providerId);
-    const models = await invoke<string[]>("get_models_for_provider", {
+    const models = await invoke("get_models_for_provider", {
       providerSlug: providerId,
     });
     if (models.length > 0) {
@@ -572,7 +573,7 @@ function SettingsPanel(props: {
 
   useEffect(() => {
     if (activeProvider) {
-      invoke<string[]>("get_models_for_provider", {
+      invoke("get_models_for_provider", {
         providerSlug: activeProvider,
       })
         .then((models) => setAvailableModels(models))
@@ -1119,11 +1120,11 @@ export function App() {
         initialBrainHealth,
       ] =
         await Promise.all([
-          invoke<UiSnapshot>("app_snapshot"),
-          invoke<EngineConfigPayload>("load_engine_config"),
-          invoke<ValidateProviderResponseData>("validate_engine_config"),
-          invoke<RuntimeReadinessResponseData>("engine_readiness"),
-          invoke<BrainHealthResponseData>("brain_health"),
+          invoke("app_snapshot"),
+          invoke("load_engine_config"),
+          invoke("validate_engine_config"),
+          invoke("engine_readiness"),
+          invoke("brain_health"),
         ]);
       setWorkspaceLoadState({
         status: "loading",
@@ -1217,12 +1218,12 @@ export function App() {
   }, [workspaceProject]);
 
   const chooseFile = async () => {
-    const selection = await invoke<FileSelection | null>("pick_import_file");
+    const selection = await invoke("pick_import_file");
     if (selection) {
       setSelectedFile(selection);
       setActivePanel("knowledge");
       try {
-        await invoke<void>("start_parse", {
+        await invoke("start_parse", {
           request: {
             path: selection.path,
             format: selection.format,
@@ -1239,7 +1240,7 @@ export function App() {
     if (!selectedFile) {
       return;
     }
-    await invoke<void>("start_parse", {
+    await invoke("start_parse", {
       request: {
         path: selectedFile.path,
         format: selectedFile.format,
@@ -1249,12 +1250,12 @@ export function App() {
   };
 
   const retryFailedPages = async () => {
-    await invoke<void>("retry_failed_pages");
+    await invoke("retry_failed_pages");
     setActivePanel("knowledge");
   };
 
   const cancelParse = async () => {
-    await invoke<void>("cancel_parse");
+    await invoke("cancel_parse");
   };
 
   const openSavedOutput = async (reveal: boolean) => {
@@ -1262,17 +1263,17 @@ export function App() {
     if (!path) {
       return;
     }
-    await invoke<void>("open_saved_output", { path, reveal });
+    await invoke("open_saved_output", { path, reveal });
   };
 
   const openLocalArtifact = async (path: string, reveal: boolean) => {
-    await invoke<void>("open_local_artifact", { path, reveal });
+    await invoke("open_local_artifact", { path, reveal });
   };
 
   const applyWorkspaceCorrection = async (
     request: WorkspaceApplyCorrectionRequest,
   ) => {
-    const appliedProject = await invoke<WorkspaceProject>("apply_workspace_correction", {
+    const appliedProject = await invoke("apply_workspace_correction", {
       correction: {
         projectId: request.projectId,
         nodeId: request.nodeId,
@@ -1296,51 +1297,38 @@ export function App() {
   const answerWorkspaceProject = async (
     request: WorkspaceAnswerProjectRequest,
   ) => {
-    return invoke<WorkspaceProject["answerByNodeId"][string]>(
-      "answer_workspace_project",
-      {
-        request: {
-          projectId: request.projectId,
-          nodeId: request.nodeId ?? null,
-          question: request.question,
-        },
+    return invoke("answer_workspace_project", {
+      request: {
+        projectId: request.projectId,
+        nodeId: request.nodeId ?? null,
+        question: request.question,
       },
-    );
+    });
   };
 
   const saveConfig = async (payload: EngineConfigPayload) => {
-    const saved = await invoke<EngineConfigPayload>("save_engine_config", {
+    const saved = await invoke("save_engine_config", {
       payload,
     });
-    const nextValidation = await invoke<ValidateProviderResponseData>(
-      "validate_engine_config",
-      { payload: saved },
-    );
-    const nextReadiness = await invoke<RuntimeReadinessResponseData>(
-      "engine_readiness",
-    );
+    const nextValidation = await invoke("validate_engine_config", { payload: saved });
+    const nextReadiness = await invoke("engine_readiness");
     setCurrentConfig(saved);
     setValidation(nextValidation);
     setReadiness(nextReadiness);
   };
 
   const validateConfig = async (payload: EngineConfigPayload | null) => {
-    const nextValidation = await invoke<ValidateProviderResponseData>(
-      "validate_engine_config",
-      { payload },
-    );
+    const nextValidation = await invoke("validate_engine_config", { payload });
     setValidation(nextValidation);
   };
 
   const refreshReadiness = async () => {
-    const nextReadiness = await invoke<RuntimeReadinessResponseData>(
-      "engine_readiness",
-    );
+    const nextReadiness = await invoke("engine_readiness");
     setReadiness(nextReadiness);
   };
 
   const refreshBrainHealth = async () => {
-    const nextHealth = await invoke<BrainHealthResponseData>("brain_health", {
+    const nextHealth = await invoke("brain_health", {
       workspace_id:
         loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
     });
