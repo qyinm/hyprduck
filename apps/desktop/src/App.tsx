@@ -2,16 +2,14 @@ import {
   Component,
   type ErrorInfo,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
 } from "react";
 import {
   ArrowLeft,
-  ChevronDown,
-  ChevronRight,
   History as HistoryIcon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,7 +24,6 @@ import {
   type BrainEvent,
   type BrainHealthResponseData,
   type DesktopCommand,
-  type DesktopCommandArgs,
   type DesktopCommandParameters,
   type DesktopCommandResult,
   type DesktopMessage,
@@ -49,8 +46,6 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
 import { materializedGraphSnapshotToWorkspaceEnvelope } from "@/features/workspace/materializedGraphSnapshot";
@@ -66,6 +61,7 @@ import type {
   WorkspaceProject,
 } from "@/features/workspace/types";
 import { cn } from "@/lib/utils";
+import { SettingsPanel, type SettingsTab } from "@/SettingsPanel";
 import { createWebMockApi } from "@/webPreviewApi";
 import {
   createEmptyWorkspaceProject,
@@ -73,7 +69,6 @@ import {
 } from "@/workspaceSourceHydration";
 
 type ActivePanel = "knowledge" | "settings";
-type SettingsTab = "general" | "ai";
 
 declare global {
   interface Window {
@@ -274,18 +269,6 @@ function WorkspaceSnapshotStatusBanner({
   );
 }
 
-function parseSummary(snapshot: UiSnapshot): string {
-  const result = snapshot.lastResult;
-  if (!result) {
-    return "No completed imports yet.";
-  }
-
-  const counts = `${result.successCount} succeeded / ${result.failedCount} failed`;
-  return result.savedOutputPath
-    ? `${counts} · ${result.savedOutputPath}`
-    : counts;
-}
-
 function sidebarButtonClass(active: boolean): string {
   return cn(
     "h-9 w-full justify-start gap-3 rounded-full border px-3 text-sm font-medium",
@@ -297,594 +280,6 @@ function sidebarButtonClass(active: boolean): string {
 
 function windowChromeButtonClass(): string {
   return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
-}
-
-function modelTaskGuidance(providerId: string, modelId: string) {
-  const model = modelId.toLowerCase();
-
-  if (providerId === "ollama") {
-    if (
-      model.includes("8b") ||
-      model.includes("ocr") ||
-      model.includes("llama3.1")
-    ) {
-      return {
-        tone: "warning",
-        title: "Local model caution",
-        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before relying on agent-ready outputs.",
-      };
-    }
-
-    return {
-      tone: "local",
-      title: "Local-first path",
-      body: "Good for private parsing and retrieval checks. Keep generated merge output disabled until the golden corpus is clean.",
-    };
-  }
-
-  return {
-    tone: "hosted",
-    title: "Hosted quality path",
-    body: "Recommended for high-recall page parsing, structured extraction, and merge verification when privacy policy allows hosted inference.",
-  };
-}
-
-function ImportPanel(props: {
-  snapshot: UiSnapshot;
-  selectedFile: FileSelection | null;
-  onChooseFile: () => Promise<void>;
-  onStartParse: () => Promise<void>;
-  onCancelParse: () => Promise<void>;
-  onOpenSavedOutput: (reveal: boolean) => Promise<void>;
-}) {
-  const {
-    snapshot,
-    selectedFile,
-    onChooseFile,
-    onStartParse,
-    onCancelParse,
-    onOpenSavedOutput,
-  } = props;
-  const fileName = selectedFile?.path
-    ? selectedFile.path.split("/").pop()
-    : null;
-  const canStart = Boolean(selectedFile) && !snapshot.activeJob;
-
-  return (
-    <div className="space-y-8">
-      {/* Import section */}
-      <section>
-        <h2 className="text-base font-semibold mb-1">Import</h2>
-        <p className="text-sm text-muted-foreground mb-3">
-          Pick a file and start parsing.
-        </p>
-
-        <div className="rounded-lg border border-dashed border-border bg-muted/10 p-6 mb-3">
-          <p className="font-medium">{fileName ?? "No file selected"}</p>
-          <p className="text-sm text-muted-foreground">
-            {selectedFile?.format.toUpperCase() ?? "PDF, DOCX, DOC supported"}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void onChooseFile()} type="button">
-            Choose file
-          </Button>
-          <Button
-            onClick={() => void onStartParse()}
-            disabled={!canStart}
-            type="button"
-          >
-            Start import
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!snapshot.activeJob}
-            onClick={() => void onCancelParse()}
-            type="button"
-          >
-            Cancel
-          </Button>
-        </div>
-      </section>
-
-      {/* Results section */}
-      <section>
-        <h2 className="text-base font-semibold mb-1">Latest output</h2>
-        <p className="text-sm text-muted-foreground mb-3">
-          Review results from your last completed import.
-        </p>
-
-        <p className="text-sm text-muted-foreground mb-2">
-          {parseSummary(snapshot)}
-        </p>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            disabled={!snapshot.lastResult?.savedOutputPath}
-            onClick={() => void onOpenSavedOutput(false)}
-            type="button"
-          >
-            Open markdown
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={!snapshot.lastResult?.savedOutputPath}
-            onClick={() => void onOpenSavedOutput(true)}
-            type="button"
-          >
-            Reveal in Finder
-          </Button>
-        </div>
-      </section>
-
-      {/* Markdown preview section */}
-      <section>
-        <h2 className="text-base font-semibold mb-3">Markdown preview</h2>
-        <pre className="max-h-72 overflow-auto rounded-lg border bg-muted/10 p-3 text-xs font-mono leading-relaxed">
-          {snapshot.lastResult?.markdown ?? "No markdown generated yet."}
-        </pre>
-      </section>
-    </div>
-  );
-}
-
-interface ProviderState {
-  apiKey: string;
-  baseUrl: string;
-  expanded: boolean;
-  showAdvanced: boolean;
-}
-
-function SettingsPanel(props: {
-  config: EngineConfigPayload | null;
-  validation: ValidateProviderResponseData | null;
-  readiness: RuntimeReadinessResponseData | null;
-  onSave: (payload: EngineConfigPayload) => Promise<void>;
-  onValidate: (payload: EngineConfigPayload | null) => Promise<void>;
-  onRefreshReadiness: () => Promise<void>;
-  tab: SettingsTab;
-  onTabChange: (tab: SettingsTab) => void;
-}) {
-  const {
-    config,
-    validation,
-    readiness,
-    onSave,
-    onValidate,
-    onRefreshReadiness,
-    tab,
-    onTabChange: setTab,
-  } = props;
-  const [promptTemplate, setPromptTemplate] = useState("General");
-  const [selectedModel, setSelectedModel] = useState("");
-  const [activeProvider, setActiveProvider] = useState("open_router");
-  const [providerStates, setProviderStates] = useState<
-    Map<string, ProviderState>
-  >(new Map());
-  const lastSavedSettingsSignature = useRef<string | null>(null);
-
-  function settingsSignature(payload: {
-    provider: string;
-    model_id: string;
-    api_key: string;
-    base_url: string | null;
-    prompt_template: string;
-  }) {
-    return JSON.stringify({
-      provider: payload.provider,
-      model_id: payload.model_id,
-      api_key: payload.api_key,
-      base_url: payload.base_url ?? null,
-      prompt_template: payload.prompt_template,
-    });
-  }
-
-  useEffect(() => {
-    if (config) {
-      setActiveProvider(config.provider);
-      setSelectedModel(config.model_id);
-      setPromptTemplate(config.prompt_template ?? "General");
-      lastSavedSettingsSignature.current = settingsSignature(config);
-      setProviderStates((prev) => {
-        const next = new Map(prev);
-        for (const opt of config.provider_options) {
-          const existing = prev.get(opt.id);
-          const isActive = opt.id === config.provider;
-          next.set(opt.id, {
-            apiKey: isActive ? config.api_key : existing?.apiKey ?? "",
-            baseUrl: isActive ? config.base_url ?? "" : existing?.baseUrl ?? "",
-            expanded: existing?.expanded ?? false,
-            showAdvanced: existing?.showAdvanced ?? false,
-          });
-        }
-        return next;
-      });
-    }
-  }, [config]);
-
-  const updateApiKey = (providerId: string, key: string) => {
-    setProviderStates((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(providerId) ?? {
-        apiKey: "",
-        baseUrl: "",
-        expanded: false,
-        showAdvanced: false,
-      };
-      next.set(providerId, { ...existing, apiKey: key });
-      return next;
-    });
-  };
-
-  const toggleExpanded = (providerId: string) => {
-    setProviderStates((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(providerId) ?? {
-        apiKey: "",
-        baseUrl: "",
-        expanded: false,
-        showAdvanced: false,
-      };
-      next.set(providerId, { ...existing, expanded: !existing.expanded });
-      return next;
-    });
-  };
-
-  const updateBaseUrl = (providerId: string, url: string) => {
-    setProviderStates((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(providerId) ?? {
-        apiKey: "",
-        baseUrl: "",
-        expanded: false,
-        showAdvanced: false,
-      };
-      next.set(providerId, { ...existing, baseUrl: url });
-      return next;
-    });
-  };
-
-  const toggleAdvanced = (providerId: string) => {
-    setProviderStates((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(providerId) ?? {
-        apiKey: "",
-        baseUrl: "",
-        expanded: false,
-        showAdvanced: false,
-      };
-      next.set(providerId, { ...existing, showAdvanced: !existing.showAdvanced });
-      return next;
-    });
-  };
-
-  const handleProviderChange = async (providerId: string) => {
-    setActiveProvider(providerId);
-    const models = await invoke("get_models_for_provider", {
-      providerSlug: providerId,
-    });
-    if (models.length > 0) {
-      setSelectedModel(models[0]);
-    }
-  };
-
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (activeProvider) {
-      invoke("get_models_for_provider", {
-        providerSlug: activeProvider,
-      })
-        .then((models) => setAvailableModels(models))
-        .catch(() => setAvailableModels([]));
-    }
-  }, [activeProvider]);
-
-  const activeApiKey = providerStates.get(activeProvider)?.apiKey ?? "";
-  const activeBaseUrl = providerStates.get(activeProvider)?.baseUrl ?? "";
-
-  // Auto-save whenever settings change
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!config) return;
-    const timer = setTimeout(() => {
-      const activeState = providerStates.get(activeProvider);
-      const payload: EngineConfigPayload = {
-        provider: activeProvider,
-        model_id: selectedModel,
-        api_key: activeApiKey,
-        base_url: activeState?.baseUrl || null,
-        prompt_template: promptTemplate,
-        provider_options: config?.provider_options ?? [],
-        model_options: availableModels,
-        prompt_template_options: config?.prompt_template_options ?? [],
-      };
-      const nextSignature = settingsSignature(payload);
-      if (nextSignature === lastSavedSettingsSignature.current) {
-        return;
-      }
-      lastSavedSettingsSignature.current = nextSignature;
-      setSaving(true);
-      onSave(payload)
-        .catch(() => {
-          lastSavedSettingsSignature.current = null;
-        })
-        .finally(() => setSaving(false));
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [
-    activeProvider,
-    selectedModel,
-    activeApiKey,
-    activeBaseUrl,
-    promptTemplate,
-    availableModels,
-    config,
-  ]);
-
-  if (!config) {
-    return (
-      <div>
-        <h2 className="text-base font-semibold mb-1">Settings</h2>
-        <p className="text-sm text-muted-foreground">
-          Loading engine configuration...
-        </p>
-      </div>
-    );
-  }
-
-  const modelGuidance = modelTaskGuidance(activeProvider, selectedModel);
-
-  return (
-    <div className="space-y-8">
-      {tab === "general" && (
-        <section>
-          <h2 className="text-base font-semibold mb-1">General</h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            Configure prompt templates and output behavior.
-          </p>
-          <div className="space-y-2">
-            <Label htmlFor="prompt-template-select">Prompt template</Label>
-            <select
-              id="prompt-template-select"
-              className="h-9 w-full rounded-md border border-input bg-background px-3"
-              value={promptTemplate}
-              onChange={(e) => setPromptTemplate(e.target.value)}
-            >
-              {(config.prompt_template_options ?? ["General"]).map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
-        </section>
-      )}
-
-      {tab === "ai" && (
-        <section className="space-y-8">
-          <div>
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold mb-1">Runtime readiness</h2>
-                <p className="text-sm text-muted-foreground">
-                  Local parser and provider checks for document processing.
-                </p>
-              </div>
-              <Button
-                onClick={() => void onRefreshReadiness()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Refresh
-              </Button>
-            </div>
-            <div className="grid gap-2">
-              {(readiness?.checks ?? []).map((check) => (
-                <div
-                  className="rounded-lg border border-border bg-secondary/50 p-3 text-xs leading-5"
-                  key={check.id}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium text-foreground">{check.label}</span>
-                    <span
-                      className={cn(
-                        "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                        check.ready
-                          ? "border-border text-foreground"
-                          : check.required
-                            ? "border-destructive/30 text-destructive"
-                            : "border-border text-muted-foreground",
-                      )}
-                    >
-                      {check.ready ? "Ready" : check.required ? "Issue" : "Optional"}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-muted-foreground">{check.message}</p>
-                </div>
-              ))}
-              {!readiness && (
-                <div className="rounded-lg border border-border bg-secondary/50 p-3 text-sm text-muted-foreground">
-                  Runtime status is loading.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Active Provider & Model Selector */}
-          <div>
-            <h2 className="text-base font-semibold mb-1">AI provider</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              Select the provider and model for parsing, extraction, merge
-              verification, and grounded answer workflows.
-            </p>
-            <div className="grid gap-4 grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="active-provider">Provider</Label>
-                <select
-                  id="active-provider"
-                  className="h-9 w-full rounded-md border border-input bg-background px-3"
-                  value={activeProvider}
-                  onChange={(e) => void handleProviderChange(e.target.value)}
-                >
-                  {config.provider_options.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="active-model">Model</Label>
-                <select
-                  id="active-model"
-                  className="h-9 w-full rounded-md border border-input bg-background px-3"
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                >
-                  {availableModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div
-              className={cn(
-                "mt-3 rounded-lg border px-3 py-2 text-xs leading-5",
-                modelGuidance.tone === "warning"
-                  ? "border-amber-200 bg-amber-50 text-amber-900"
-                  : "border-border bg-secondary/50 text-muted-foreground",
-              )}
-            >
-              <div className="font-medium text-foreground">
-                {modelGuidance.title}
-              </div>
-              <p>{modelGuidance.body}</p>
-            </div>
-          </div>
-
-          {/* Provider List */}
-          <div>
-            <h2 className="text-base font-semibold mb-4">Provider API keys</h2>
-            <div className="space-y-2">
-              {config.provider_options.map((opt) => {
-                const state = providerStates.get(opt.id) ?? {
-                  apiKey: "",
-                  baseUrl: "",
-                  expanded: false,
-                  showAdvanced: false,
-                };
-                return (
-                  <div
-                    key={opt.id}
-                    className="rounded-lg border bg-card text-card-foreground"
-                  >
-                    <div
-                      className="flex cursor-pointer items-center justify-between px-3 h-10"
-                      onClick={() => toggleExpanded(opt.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ")
-                          toggleExpanded(opt.id);
-                      }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium leading-none">
-                          {opt.label}
-                        </span>
-                        {activeProvider === opt.id && (
-                          <span className="rounded-full border border-border bg-secondary px-1.5 py-0 text-[10px] font-medium leading-none text-foreground">
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      {state.expanded ? (
-                        <ChevronDown
-                          size={12}
-                          className="text-muted-foreground shrink-0"
-                        />
-                      ) : (
-                        <ChevronRight
-                          size={12}
-                          className="text-muted-foreground shrink-0"
-                        />
-                      )}
-                    </div>
-                    {state.expanded && (
-                      <div className="border-t px-3 py-2">
-                        <div className="flex items-center gap-3">
-                          <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
-                            API Key
-                          </Label>
-                          <Input
-                            autoComplete="off"
-                            onChange={(e) =>
-                              updateApiKey(opt.id, e.target.value)
-                            }
-                            placeholder={
-                              opt.requires_api_key ? "Required" : "Optional"
-                            }
-                            type="password"
-                            value={state.apiKey}
-                            className="h-7 text-xs min-w-0"
-                          />
-                        </div>
-                        {opt.supports_base_url && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => toggleAdvanced(opt.id)}
-                              className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                            >
-                              {state.showAdvanced ? (
-                                <ChevronDown size={12} />
-                              ) : (
-                                <ChevronRight size={12} />
-                              )}
-                              Advanced
-                            </button>
-                            {state.showAdvanced && (
-                              <div className="flex items-center gap-2 mt-1.5">
-                                <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
-                                  Base URL
-                                </Label>
-                                <Input
-                                  autoComplete="off"
-                                  onChange={(e) =>
-                                    updateBaseUrl(opt.id, e.target.value)
-                                  }
-                                  placeholder={
-                                    opt.id === "ollama"
-                                      ? "http://localhost:11434"
-                                      : opt.id === "open_router"
-                                      ? "https://openrouter.ai/v1"
-                                      : "Optional"
-                                  }
-                                  type="text"
-                                  value={state.baseUrl}
-                                  className="h-7 text-xs min-w-0"
-                                />
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-      )}
-    </div>
-  );
 }
 
 function HistoryPanel(props: {
@@ -1236,34 +631,9 @@ export function App() {
     }
   };
 
-  const startParse = async () => {
-    if (!selectedFile) {
-      return;
-    }
-    await invoke("start_parse", {
-      request: {
-        path: selectedFile.path,
-        format: selectedFile.format,
-      },
-    });
-    setActivePanel("knowledge");
-  };
-
   const retryFailedPages = async () => {
     await invoke("retry_failed_pages");
     setActivePanel("knowledge");
-  };
-
-  const cancelParse = async () => {
-    await invoke("cancel_parse");
-  };
-
-  const openSavedOutput = async (reveal: boolean) => {
-    const path = snapshot.lastResult?.savedOutputPath;
-    if (!path) {
-      return;
-    }
-    await invoke("open_saved_output", { path, reveal });
   };
 
   const openLocalArtifact = async (path: string, reveal: boolean) => {
@@ -1317,11 +687,6 @@ export function App() {
     setReadiness(nextReadiness);
   };
 
-  const validateConfig = async (payload: EngineConfigPayload | null) => {
-    const nextValidation = await invoke("validate_engine_config", { payload });
-    setValidation(nextValidation);
-  };
-
   const refreshReadiness = async () => {
     const nextReadiness = await invoke("engine_readiness");
     setReadiness(nextReadiness);
@@ -1334,6 +699,14 @@ export function App() {
     });
     setBrainHealth(nextHealth);
   };
+
+  const loadProviderModels = useCallback(
+    (providerId: string) =>
+      invoke("get_models_for_provider", {
+        providerSlug: providerId,
+      }),
+    [],
+  );
 
   if (startupError) {
     return (
@@ -1561,12 +934,11 @@ export function App() {
             <SettingsPanel
               config={currentConfig}
               onSave={saveConfig}
-              onValidate={validateConfig}
               onRefreshReadiness={refreshReadiness}
+              onLoadProviderModels={loadProviderModels}
               readiness={readiness}
               validation={validation}
               tab={settingsTab}
-              onTabChange={setSettingsTab}
             />
           ) : activePanel === "knowledge" ? (
             <WorkspaceErrorBoundary>
