@@ -1,9 +1,16 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
-const { spawn, execFile } = require("node:child_process");
-const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { ensureHyprduckShellCommand, hostTriple } = require("./main/cli-shim.cjs");
+const {
+  EngineRuntime,
+  runOneShotEngineCommand: runOneShotEngineRequest,
+} = require("./main/engine-runtime.cjs");
+const {
+  maybeImportLegacySwiftConfig: importLegacySwiftConfig,
+} = require("./main/legacy-config.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const MAX_PROGRESS_LOG = 80;
@@ -67,7 +74,7 @@ app.whenReady().then(async () => {
     console.error("legacy config migration skipped:", error);
   }
   try {
-    ensureHyprduckShellCommand();
+    ensureHyprduckShellCommand(app);
   } catch (error) {
     console.error("hyprduck shell command setup skipped:", error);
   }
@@ -493,196 +500,6 @@ function applyRuntimeProgressLine(line) {
   }
 }
 
-class EngineRuntime {
-  constructor() {
-    this.child = null;
-    this.stdoutBuffer = "";
-    this.stderrBuffer = "";
-    this.active = null;
-    this.queue = [];
-    this.stopping = false;
-  }
-
-  run(expectedCommand, request, options = {}) {
-    return new Promise((resolve, reject) => {
-      this.queue.push({
-        id: uuidv7(),
-        expectedCommand,
-        request,
-        onEvent: options.onEvent ?? null,
-        resolve,
-        reject,
-      });
-      this.pump();
-    });
-  }
-
-  pump() {
-    if (this.active || this.queue.length === 0) {
-      return;
-    }
-    try {
-      this.ensureStarted();
-    } catch (error) {
-      const next = this.queue.shift();
-      next?.reject(error);
-      return;
-    }
-    this.active = this.queue.shift();
-    try {
-      this.child.stdin.write(
-        `${JSON.stringify({ id: this.active.id, ...this.active.request })}\n`,
-      );
-    } catch (error) {
-      const active = this.active;
-      this.active = null;
-      active?.reject(new Error(`failed writing engine request: ${error.message}`));
-      this.failRuntime("engine runtime stdin is unavailable");
-      this.pump();
-    }
-  }
-
-  ensureStarted() {
-    if (this.child && !this.child.killed) {
-      return;
-    }
-    this.stopping = false;
-    const child = spawn(resolveEnginePath(), ["serve"], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: engineEnvironment(),
-    });
-    this.child = child;
-    this.stdoutBuffer = "";
-    this.stderrBuffer = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => this.handleStdout(chunk));
-    child.stderr.on("data", (chunk) => this.handleStderr(chunk));
-    child.on("error", (error) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.failRuntime(`failed to spawn hyprduck-engine: ${error.message}`);
-    });
-    child.on("close", (code) => {
-      if (this.child !== child) {
-        return;
-      }
-      const message = this.stopping
-        ? "engine runtime stopped"
-        : `hyprduck-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
-      this.child = null;
-      this.stdoutBuffer = "";
-      this.stderrBuffer = "";
-      if (!this.stopping) {
-        this.failRuntime(message);
-      }
-    });
-  }
-
-  handleStdout(chunk) {
-    this.stdoutBuffer += chunk;
-    const lines = this.stdoutBuffer.split(/\r?\n/);
-    this.stdoutBuffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      this.completeActive(line);
-    }
-  }
-
-  handleStderr(chunk) {
-    this.stderrBuffer += chunk;
-    const lines = this.stderrBuffer.split(/\r?\n/);
-    this.stderrBuffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      this.handleRuntimeEvent(line);
-    }
-  }
-
-  handleRuntimeEvent(line) {
-    const active = this.active;
-    if (!active) {
-      return;
-    }
-    try {
-      const message = JSON.parse(line);
-      if (message.type === "event") {
-        if (message.id === active.id) {
-          active.onEvent?.(message.event);
-        }
-        return;
-      }
-    } catch {
-      // Legacy one-shot engine mode writes raw parse events to stderr.
-    }
-    active.onEvent?.(line);
-  }
-
-  completeActive(line) {
-    const active = this.active;
-    if (!active) {
-      return;
-    }
-    try {
-      const response = JSON.parse(line);
-      if (response.id !== active.id) {
-        active.reject(
-          new Error(`engine response id mismatch: expected ${active.id}, got ${response.id}`),
-        );
-        this.active = null;
-        this.stop();
-        return;
-      } else if (response.type === "event") {
-        active.onEvent?.(response.event);
-        return;
-      } else if (response.ok === false) {
-        active.reject(new Error(response.error?.message ?? "engine command failed"));
-        this.active = null;
-      } else if (response.command !== active.expectedCommand) {
-        active.reject(
-          new Error(
-            `engine response command mismatch: expected ${active.expectedCommand}, got ${response.command}`,
-          ),
-        );
-        this.active = null;
-      } else {
-        active.resolve(response);
-        this.active = null;
-      }
-    } catch (error) {
-      active.reject(new Error(`failed decoding engine response: ${error.message}`));
-      this.active = null;
-    }
-    this.pump();
-  }
-
-  failRuntime(message) {
-    const error = new Error(message);
-    if (this.active) {
-      this.active.reject(error);
-      this.active = null;
-    }
-    while (this.queue.length > 0) {
-      this.queue.shift().reject(error);
-    }
-  }
-
-  stop() {
-    this.stopping = true;
-    if (this.child) {
-      this.child.kill();
-      this.child = null;
-    }
-    this.failRuntime("engine runtime stopped");
-  }
-}
-
 function hyprduckApplicationSupportPath() {
   return path.join(app.getPath("appData"), "HyprDuck");
 }
@@ -938,77 +755,20 @@ function graphGenerationNonBlockingMessage(project) {
 
 function runEngineCommand(expectedCommand, request, options = {}) {
   if (!engineRuntime) {
-    engineRuntime = new EngineRuntime();
+    engineRuntime = new EngineRuntime({ spawnEngine: spawnEngineProcess });
   }
   return engineRuntime.run(expectedCommand, request, options);
 }
 
 function runOneShotEngineCommand(expectedCommand, request) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(resolveEnginePath(), [], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: engineEnvironment(),
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      reject(new Error(`failed to spawn hyprduck-engine: ${error.message}`));
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(lastNonEmptyLine(stderr) ?? `hyprduck-engine exited with status ${code}`));
-        return;
-      }
-      try {
-        const response = JSON.parse(stdout);
-        if (response.ok === false) {
-          reject(new Error(response.error?.message ?? "engine command failed"));
-          return;
-        }
-        if (response.command !== expectedCommand) {
-          reject(
-            new Error(
-              `engine response command mismatch: expected ${expectedCommand}, got ${response.command}`,
-            ),
-          );
-          return;
-        }
-        resolve(response);
-      } catch (error) {
-        reject(new Error(`failed decoding engine response: ${error.message}`));
-      }
-    });
-    child.stdin.end(JSON.stringify(request));
+  return runOneShotEngineRequest(expectedCommand, request, spawnEngineProcess);
+}
+
+function spawnEngineProcess(args) {
+  return spawn(resolveEnginePath(), args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: engineEnvironment(),
   });
-}
-
-function lastNonEmptyLine(value) {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .pop();
-}
-
-function uuidv7() {
-  const bytes = crypto.randomBytes(16);
-  let timestamp = BigInt(Date.now());
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = Number(timestamp & 0xffn);
-    timestamp >>= 8n;
-  }
-  bytes[6] = 0x70 | (bytes[6] & 0x0f);
-  bytes[8] = 0x80 | (bytes[8] & 0x3f);
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function applyProgressEvent(event) {
@@ -1173,6 +933,10 @@ function listOllamaVisionModels(visionPrefixes) {
   });
 }
 
+async function maybeImportLegacySwiftConfig() {
+  await importLegacySwiftConfig(app, runEngineCommand);
+}
+
 function resolveEnginePath() {
   if (process.env.HYPRDUCK_ENGINE_BIN) {
     return process.env.HYPRDUCK_ENGINE_BIN;
@@ -1190,265 +954,4 @@ function resolveEnginePath() {
   }
 
   return "hyprduck-engine";
-}
-
-function ensureHyprduckShellCommand() {
-  if (!app.isPackaged && process.env.HYPRDUCK_INSTALL_CLI_SHIM !== "1") {
-    return { installed: false, reason: "development-mode" };
-  }
-  if (process.platform === "win32") {
-    return { installed: false, reason: "unsupported-platform" };
-  }
-
-  const resolvedCliPath = resolveCliPath();
-  const cliPath = resolvedCliPath ? path.resolve(resolvedCliPath) : null;
-  if (!cliPath || !fs.existsSync(cliPath)) {
-    return { installed: false, reason: "missing-cli" };
-  }
-
-  const binDir = path.join(app.getPath("home"), ".local", "bin");
-  const shimPath = path.join(binDir, "hyprduck");
-  const pathReady = isDirectoryOnPath(binDir);
-  fs.mkdirSync(binDir, { recursive: true });
-
-  const existing = safeLstat(shimPath);
-  if (existing) {
-    if (!existing.isSymbolicLink()) {
-      console.warn(`hyprduck shell command already exists and was left unchanged: ${shimPath}`);
-      return { installed: false, pathReady, reason: "existing-path" };
-    }
-    const currentTarget = fs.readlinkSync(shimPath);
-    const resolvedTarget = path.resolve(path.dirname(shimPath), currentTarget);
-    if (resolvedTarget === path.resolve(cliPath)) {
-      return { installed: true, path: shimPath, pathReady };
-    }
-    if (!isManagedHyprduckCliTarget(resolvedTarget)) {
-      console.warn(`hyprduck shell command points elsewhere and was left unchanged: ${shimPath}`);
-      return { installed: false, pathReady, reason: "existing-symlink" };
-    }
-    fs.unlinkSync(shimPath);
-  }
-
-  fs.symlinkSync(cliPath, shimPath);
-  if (!pathReady) {
-    console.warn(`hyprduck shell command installed at ${shimPath}, but ${binDir} is not on PATH`);
-  }
-  return { installed: true, path: shimPath, pathReady };
-}
-
-function resolveCliPath() {
-  if (process.env.HYPRDUCK_CLI_BIN) {
-    return process.env.HYPRDUCK_CLI_BIN;
-  }
-
-  const cliName = `hyprduck-${hostTriple()}`;
-  const devPath = path.join(__dirname, "resources", "binaries", cliName);
-  if (fs.existsSync(devPath)) {
-    return devPath;
-  }
-
-  const packagedResourcesPath = process.resourcesPath || __dirname;
-  const packagedPath = path.join(packagedResourcesPath, "binaries", cliName);
-  if (fs.existsSync(packagedPath)) {
-    return packagedPath;
-  }
-
-  return null;
-}
-
-function isManagedHyprduckCliTarget(targetPath) {
-  const normalized = path.normalize(targetPath);
-  return (
-    path.basename(normalized) === `hyprduck-${hostTriple()}` &&
-    normalized.includes(`.app${path.sep}Contents${path.sep}Resources${path.sep}binaries${path.sep}`)
-  );
-}
-
-function isDirectoryOnPath(directory) {
-  const searchPath = process.env.PATH || "";
-  return searchPath
-    .split(path.delimiter)
-    .filter(Boolean)
-    .some((entry) => path.resolve(entry) === path.resolve(directory));
-}
-
-function safeLstat(targetPath) {
-  try {
-    return fs.lstatSync(targetPath);
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-function hostTriple() {
-  if (process.env.HYPRDUCK_TARGET_TRIPLE) {
-    return process.env.HYPRDUCK_TARGET_TRIPLE;
-  }
-  if (process.platform === "darwin" && process.arch === "arm64") return "aarch64-apple-darwin";
-  if (process.platform === "darwin" && process.arch === "x64") return "x86_64-apple-darwin";
-  if (process.platform === "linux" && process.arch === "x64") return "x86_64-unknown-linux-gnu";
-  if (process.platform === "win32" && process.arch === "x64") return "x86_64-pc-windows-msvc";
-  return `${process.arch}-${process.platform}`;
-}
-
-async function maybeImportLegacySwiftConfig() {
-  if (fs.existsSync(engineConfigPath())) {
-    return;
-  }
-  const payload = await readLegacySwiftPayload();
-  if (!payload) {
-    return;
-  }
-  await runEngineCommand("save_config", {
-    command: "save_config",
-    payload: { config: payload },
-  });
-}
-
-function engineConfigPath() {
-  if (process.env.HYPRDUCK_CONFIG_DIR) {
-    return path.join(process.env.HYPRDUCK_CONFIG_DIR, "engine-config.json");
-  }
-  return path.join(app.getPath("home"), ".hyprduck", "engine-config.json");
-}
-
-async function readLegacySwiftPayload() {
-  for (const plistPath of legacyPreferencePaths()) {
-    if (!fs.existsSync(plistPath)) {
-      continue;
-    }
-    const payload = await legacyPayloadFromPlist(plistPath);
-    if (payload) {
-      return payload;
-    }
-  }
-  return null;
-}
-
-function legacyPreferencePaths() {
-  const home = app.getPath("home");
-  return [
-    path.join(home, "Library", "Preferences", "app.HyprDuck.plist"),
-    path.join(home, "Library", "Preferences", "HyprDuck.plist"),
-  ];
-}
-
-async function legacyPayloadFromPlist(plistPath) {
-  const providerBlob = await plutilExtractRaw(plistPath, "ai_provider_config");
-  const templateBlob = await plutilExtractRaw(plistPath, "selected_prompt_template");
-  const legacyProvider = providerBlob ? parseLegacyProviderBlob(providerBlob) : {};
-
-  if (!legacyProvider.providerType && !templateBlob) {
-    return null;
-  }
-
-  const provider = engineProviderSlug(legacyProvider.providerType);
-  const supportedProvider = provider ?? "open_router";
-  const promptTemplate = templateBlob ? parseLegacyTemplateBlob(templateBlob) : "General";
-  const apiKey = provider
-    ? await selectLegacyApiKey(plistPath, provider, legacyProvider.apiKey)
-    : "";
-
-  return {
-    provider: supportedProvider,
-    model_id: provider
-      ? legacyProvider.modelId ?? defaultModelForProvider(provider)
-      : defaultModelForProvider(supportedProvider),
-    api_key: apiKey,
-    base_url: provider ? legacyProvider.baseUrl ?? null : null,
-    prompt_template: promptTemplate,
-    provider_options: [],
-    model_options: [],
-    prompt_template_options: [],
-  };
-}
-
-async function selectLegacyApiKey(plistPath, providerSlug, embeddedApiKey) {
-  if (embeddedApiKey?.trim()) {
-    return embeddedApiKey;
-  }
-  const defaultsKey =
-    providerSlug === "open_router"
-      ? "openrouter_api_key"
-      : providerSlug === "ollama"
-        ? "ollama_api_key"
-        : null;
-  if (defaultsKey) {
-    const defaultsValue = await plutilExtractRaw(plistPath, defaultsKey);
-    if (defaultsValue?.trim()) {
-      return defaultsValue;
-    }
-  }
-  const keychainValue = await legacyApiKeyFromKeychain(providerSlug);
-  return keychainValue?.trim() ? keychainValue : "";
-}
-
-function plutilExtractRaw(plistPath, key) {
-  return execFileText("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath]).catch(
-    () => null,
-  );
-}
-
-async function legacyApiKeyFromKeychain(providerSlug) {
-  const service =
-    providerSlug === "open_router"
-      ? "com.hyprduck.openrouter"
-      : providerSlug === "ollama"
-        ? "com.hyprduck.ollama"
-        : null;
-  if (!service) {
-    return null;
-  }
-  return execFileText("/usr/bin/security", [
-    "find-generic-password",
-    "-s",
-    service,
-    "-a",
-    "apikey",
-    "-w",
-  ]).catch(() => null);
-}
-
-function execFileText(command, args) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: "utf8" }, (error, stdout) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      const value = stdout.trim();
-      resolve(value || null);
-    });
-  });
-}
-
-function parseLegacyProviderBlob(blob) {
-  return JSON.parse(Buffer.from(blob, "base64").toString("utf8"));
-}
-
-function parseLegacyTemplateBlob(blob) {
-  return JSON.parse(Buffer.from(blob, "base64").toString("utf8"));
-}
-
-function engineProviderSlug(value) {
-  switch (value) {
-    case "OpenRouter":
-      return "open_router";
-    case "Ollama":
-      return "ollama";
-    default:
-      return null;
-  }
-}
-
-function defaultModelForProvider(providerSlug) {
-  switch (providerSlug) {
-    case "ollama":
-      return "qwen3-vl:8b";
-    default:
-      return "openai/gpt-4.1-mini";
-  }
 }

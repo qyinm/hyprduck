@@ -1,5 +1,6 @@
 mod artifacts;
 mod prompt;
+mod reports;
 mod response;
 mod validation;
 mod workspace_rebuild;
