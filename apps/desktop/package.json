@@ -21,6 +21,7 @@
     "frontend:dev": "vite",
     "frontend:typecheck": "tsc --noEmit",
     "frontend:build": "tsc --noEmit && vite build",
+    "check:desktop-contract": "node scripts/check-desktop-command-contract.cjs",
     "test:ia": "bun test tests/ia-ui.test.mjs",
     "sync:engine:debug": "../../scripts/sync-electron-engine.sh debug",
     "sync:engine:release": "../../scripts/sync-electron-engine.sh release"
