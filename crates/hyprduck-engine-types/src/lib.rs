@@ -975,7 +975,7 @@ impl ContextPackV0 {
             .iter()
             .map(|source| source.source_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let selected_evidence = pack
+        let selected_evidence_pairs = pack
             .evidence
             .iter()
             .filter_map(|evidence| {
@@ -984,8 +984,17 @@ impl ContextPackV0 {
                     &artifact_metadata.evidence,
                     &source_set_ids,
                 )
+                .map(|selected| (evidence.id.clone(), selected))
             })
             .collect::<Vec<_>>();
+        let selected_evidence = selected_evidence_pairs
+            .iter()
+            .map(|(_internal_id, evidence)| evidence.clone())
+            .collect::<Vec<_>>();
+        let selected_evidence_by_internal_id = selected_evidence_pairs
+            .iter()
+            .map(|(internal_id, evidence)| (internal_id.clone(), evidence.evidence_ref.clone()))
+            .collect::<BTreeMap<_, _>>();
         let selected_evidence_ids = selected_evidence
             .iter()
             .map(|evidence| evidence.evidence_ref.clone())
@@ -998,8 +1007,13 @@ impl ContextPackV0 {
                 let derived_from = claim
                     .evidence_refs
                     .iter()
-                    .filter(|evidence_ref| selected_evidence_ids.contains(*evidence_ref))
-                    .cloned()
+                    .filter_map(|evidence_ref| {
+                        if selected_evidence_ids.contains(evidence_ref) {
+                            Some(evidence_ref.clone())
+                        } else {
+                            selected_evidence_by_internal_id.get(evidence_ref).cloned()
+                        }
+                    })
                     .collect::<Vec<_>>();
                 if derived_from.is_empty() {
                     return None;
@@ -1023,9 +1037,12 @@ impl ContextPackV0 {
                 Some(source_id) => {
                     !source_metadata.contains_key(source_id)
                         || !source_set_ids.contains(source_id)
-                        || !artifact_metadata.evidence.get(source_id).is_some_and(
-                            |source_evidence| source_evidence.contains_key(&evidence.id),
+                        || resolve_context_pack_evidence_metadata(
+                            evidence,
+                            &artifact_metadata.evidence,
+                            &source_set_ids,
                         )
+                        .is_none()
                 }
                 None => true,
             })
@@ -1179,12 +1196,11 @@ impl ContextPackEvidenceV0 {
             return None;
         }
 
-        if let Some(metadata) = evidence_metadata
-            .get(&source_id)
-            .and_then(|source_evidence| source_evidence.get(&evidence.id))
+        if let Some((evidence_ref, metadata)) =
+            resolve_context_pack_evidence_metadata(evidence, evidence_metadata, source_set_ids)
         {
             return Some(Self {
-                evidence_ref: evidence.id.clone(),
+                evidence_ref,
                 source_id: metadata.source_id.clone(),
                 page: metadata.page,
                 region: metadata.region.clone(),
@@ -1196,6 +1212,49 @@ impl ContextPackEvidenceV0 {
             });
         }
         None
+    }
+}
+
+fn resolve_context_pack_evidence_metadata<'a>(
+    evidence: &EvidenceRef,
+    evidence_metadata: &'a BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
+    source_set_ids: &std::collections::BTreeSet<SourceId>,
+) -> Option<(String, &'a ContextPackEvidenceMetadataV0)> {
+    let source_id = evidence.source_id.as_ref()?;
+    if !source_set_ids.contains(source_id) {
+        return None;
+    }
+    let source_evidence = evidence_metadata.get(source_id)?;
+    if let Some(metadata) = source_evidence.get(&evidence.id) {
+        return Some((evidence.id.clone(), metadata));
+    }
+    let page = context_pack_evidence_page(evidence)?;
+    source_evidence
+        .iter()
+        .find(|(_evidence_ref, metadata)| metadata.page == page && metadata.source_id == *source_id)
+        .map(|(evidence_ref, metadata)| (evidence_ref.clone(), metadata))
+}
+
+fn context_pack_evidence_page(evidence: &EvidenceRef) -> Option<usize> {
+    evidence
+        .page_index
+        .map(|page_index| page_index + 1)
+        .or_else(|| parse_page_number_from_label(&evidence.page_label))
+}
+
+fn parse_page_number_from_label(label: &str) -> Option<usize> {
+    let normalized = label.to_ascii_lowercase();
+    let page_offset = normalized.rfind("page")?;
+    let after_page = &normalized[page_offset + "page".len()..];
+    let digits = after_page
+        .chars()
+        .skip_while(|character| !character.is_ascii_digit())
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
     }
 }
 
@@ -2468,6 +2527,114 @@ mod tests {
             external.suggested_next_reads[0].source_id,
             "src_agent_context"
         );
+    }
+
+    #[test]
+    fn context_pack_v0_maps_retrieved_chunk_to_indexed_page_evidence() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "fixture evidence".into(),
+            token_budget: 4000,
+            summary: "Retrieved source chunk summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "source-fixture".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/fixture-source.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/source-fixture/source.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/artifacts/source-fixture/source.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 3,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_fixture_evidence_mapping".into(),
+                workspace_id: "default".into(),
+                statement: "The fixture source discusses evidence mapping.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["source-fixture".into()],
+                evidence_refs: vec!["retrieved:source-fixture:chunk-1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "retrieved:source-fixture:chunk-1".into(),
+                page_label: "Fixture Source / Page 1".into(),
+                page_index: None,
+                snippet: "Evidence mapping is discussed on this page.".into(),
+                source_path: None,
+                source_id: Some("source-fixture".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: Some("retrieval".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let mut artifact_metadata =
+            ContextPackArtifactMetadataV0::from_sources(BTreeMap::from([(
+                "source-fixture".into(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: "fnv64:fixture".into(),
+                    provider_route: "ollama".into(),
+                    local_only: true,
+                },
+            )]));
+        artifact_metadata
+            .evidence
+            .entry("source-fixture".into())
+            .or_default()
+            .insert(
+                "ev-source-fixture-source-1".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "source-fixture".into(),
+                    page: 1,
+                    region: Some("page:Page 1".into()),
+                    span: Some("page".into()),
+                    quoted_text: "Evidence mapping is discussed on this page.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "fnv64:fixture".into(),
+                    markdown_path: None,
+                    image_path: None,
+                },
+            );
+
+        let external = ContextPackV0::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-18T09:00:00Z",
+            &artifact_metadata,
+        );
+
+        assert_eq!(external.selected_evidence.len(), 1);
+        assert_eq!(
+            external.selected_evidence[0].evidence_ref,
+            "ev-source-fixture-source-1"
+        );
+        assert_eq!(external.selected_evidence[0].source_id, "source-fixture");
+        assert_eq!(external.selected_evidence[0].page, 1);
+        assert_eq!(
+            external.selected_evidence[0].quoted_text,
+            "Evidence mapping is discussed on this page."
+        );
+        assert_eq!(external.selected_evidence[0].content_hash, "fnv64:fixture");
+        assert_eq!(
+            external.findings[0].derived_from,
+            vec!["ev-source-fixture-source-1"]
+        );
+        assert!(!external
+            .warnings
+            .iter()
+            .any(|warning| warning.warning_type == "evidence_missing_content_hash"));
     }
 
     #[test]
