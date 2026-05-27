@@ -35,12 +35,13 @@ HyprDuck compiles private documents into reusable, cited local context packs for
 
 ## MCP And Workspace Security
 
-- Keep MCP read-only by default.
-- Do not expose mutation, write, proposal, or approval tools in the default MCP surface.
-- Do not let production MCP reads accept arbitrary agent-provided paths.
-- Resolve production workspace access through approved canonical roots.
-- Keep development `rootDir` overrides gated, allowlisted, and protected against symlink or path escapes.
-- Redact local paths by default in agent-facing output.
+- Treat MCP as a first-class agent workflow surface, including controlled mutation for import, proposal, approval, correction, and save-back flows.
+- Do not require MCP to be read-only by default; mutating tools may appear in the normal MCP surface when they are explicit, well-scoped, and accurately annotated as mutating.
+- Keep mutating MCP tools narrow, auditable, and evidence-aware; prefer purpose-built tools such as `import_source`, `write_propose`, `write_commit`, and correction/save-back operations over generic filesystem or arbitrary command tools.
+- Do not let production MCP tools accept arbitrary agent-provided paths.
+- Resolve production workspace and import access through approved canonical roots.
+- Keep `rootDir` and import path overrides allowlisted and protected against symlink or path escapes.
+- Redact local paths by default in agent-facing output unless the user explicitly opts into local-path disclosure for debugging.
 
 ## Workflow Rules
 
