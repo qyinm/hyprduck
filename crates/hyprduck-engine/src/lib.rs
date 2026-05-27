@@ -13,28 +13,33 @@ use hyprduck_engine_types::{
     BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
     BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind,
     BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
-    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, ContextPackArtifactMetadataV0,
-    ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0, CorrectionAction, CorrectionKind,
-    DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceIndexV0, EvidenceRef,
+    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
+    CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef,
     GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
     GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
     MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, ProjectOverview, ProjectStatus,
+    ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview, ProjectStatus,
     ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest, ReadNodeResponseData,
     ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
     ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
     RelationEdgeDetail, RelationEdgeSummary, RelationKind, RetryFailedPagesRequest,
     RetryFailedPagesResponseData, SearchBrainRequest, SearchBrainResponseData,
-    SourceArtifactManifest, SourceBacking, SourceId, SourcePackV0, SourceRecord, SourceStatus,
-    SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
+    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceStatus, SourceSummary,
+    StructuredExtractionArtifact, StructuredExtractionClaim, StructuredExtractionEntity,
+    StructuredExtractionMemoryCandidate, StructuredExtractionPageRef, StructuredExtractionRelation,
+    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
+    WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData, WriteCommitRequest,
+    WriteCommitResponseData, WriteCommitResultItem, WriteListRequest, WriteListResponseData,
+    WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
+    WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
-use hyprduck_engine_types::{OutputAsset, ParseInput, ParseOptions, RetryPageArtifactUpdate};
+use hyprduck_engine_types::{
+    ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0,
+    EvidenceIndexV0, OutputAsset, ParseInput, ParseOptions, RetryPageArtifactUpdate, SourcePackV0,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(test)]
@@ -953,6 +958,288 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
         source_reports,
         recent_events,
     })
+}
+
+fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let writer = BrainWorkspaceWriter::open(root.clone())?;
+    let snapshot = read_materialized_brain_snapshot(&root, &request.scope.workspace_id)?;
+
+    validate_write_content_type(&request.content_type)?;
+    validate_evidence_refs(
+        &snapshot,
+        &request.scope.workspace_id,
+        &request.evidence_refs,
+    )?;
+
+    let now = unix_timestamp_seconds();
+    let proposal_id = format!("prop-{}", Uuid::now_v7().as_simple());
+    let proposal = AgentWriteProposal {
+        proposal_id: proposal_id.clone(),
+        content_type: request.content_type,
+        title: request.title,
+        body: request.body,
+        evidence_refs: request.evidence_refs,
+        created_at: now,
+        workspace_id: request.scope.workspace_id,
+    };
+    write_json_pretty(
+        &writer
+            .root()
+            .join("proposals")
+            .join(format!("{proposal_id}.json")),
+        &proposal,
+    )?;
+
+    Ok(WriteProposeResponseData {
+        proposal_id,
+        status: "pending".into(),
+        created_at: now,
+    })
+}
+
+fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitResponseData> {
+    validate_proposal_id(&request.proposal_id)?;
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let writer = BrainWorkspaceWriter::open(root.clone())?;
+    let proposal_path = root
+        .join("proposals")
+        .join(format!("{}.json", request.proposal_id));
+    if !proposal_path.exists() {
+        bail!(
+            "proposal {} was not found (already committed or rejected)",
+            request.proposal_id
+        );
+    }
+
+    let proposal: AgentWriteProposal = read_json_artifact(&proposal_path)?;
+    validate_committable_proposal(&proposal, &request)?;
+
+    let now = unix_timestamp_seconds();
+    let memory_id = format!("memory-{}", Uuid::now_v7().as_simple());
+    let event_id = format!("evt-{}", Uuid::now_v7().as_simple());
+
+    let memory = MemoryRecord {
+        memory_id: memory_id.clone(),
+        workspace_id: request.scope.workspace_id.clone(),
+        scope: BrainScope::Project,
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        source_refs: Vec::new(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        created_at: now,
+        updated_at: now,
+    };
+
+    let event = BrainEvent {
+        event_id: event_id.clone(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: request.scope.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::MemoryAccepted,
+        operation_type: Some("agent_session_write".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "hyprduck-mcp-write-agent".into(),
+        },
+        source_refs: Vec::new(),
+        source_markdown_refs: Vec::new(),
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: vec![memory_id.clone()],
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: vec![memory_id.clone()],
+        evidence_refs: proposal.evidence_refs.clone(),
+        payload_json: serde_json::to_string(&memory)?,
+        causality: BrainEventCausality::default(),
+        confidence: None,
+        policy_result: PolicyResult::accepted(),
+        created_at: now,
+    };
+
+    writer.repo().append_event(&event)?;
+    let mut memories = writer.repo().read_memory_records()?;
+    if let Some(existing) = memories.iter_mut().find(|m| m.memory_id == memory_id) {
+        *existing = memory.clone();
+    } else {
+        memories.push(memory.clone());
+    }
+    memories.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.memory_id.cmp(&right.memory_id))
+    });
+    writer.repo().write_memory_records(&memories)?;
+
+    fs::remove_file(&proposal_path).ok();
+
+    Ok(WriteCommitResponseData {
+        event_id,
+        memory_id,
+        stored_at: now,
+    })
+}
+
+fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommitAllResponseData> {
+    let mut results = Vec::new();
+    for proposal_id in &request.proposal_ids {
+        match handle_write_commit(WriteCommitRequest {
+            scope: request.scope.clone(),
+            proposal_id: proposal_id.clone(),
+        }) {
+            Ok(response) => results.push(WriteCommitResultItem {
+                proposal_id: proposal_id.clone(),
+                status: "committed".into(),
+                event_id: Some(response.event_id),
+                memory_id: Some(response.memory_id),
+                error: None,
+            }),
+            Err(error) => results.push(WriteCommitResultItem {
+                proposal_id: proposal_id.clone(),
+                status: "failed".into(),
+                event_id: None,
+                memory_id: None,
+                error: Some(error.to_string()),
+            }),
+        }
+    }
+    Ok(WriteCommitAllResponseData { results })
+}
+
+fn handle_write_list(request: WriteListRequest) -> Result<WriteListResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let proposals_dir = root.join("proposals");
+    if !proposals_dir.exists() {
+        return Ok(WriteListResponseData {
+            proposals: Vec::new(),
+        });
+    }
+    let mut proposals = Vec::new();
+    for entry in fs::read_dir(&proposals_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            if let Ok(proposal) = read_json_artifact::<Value>(&path) {
+                proposals.push(WriteProposalSummary {
+                    proposal_id: proposal["proposalId"].as_str().unwrap_or("").to_string(),
+                    content_type: proposal["contentType"]
+                        .as_str()
+                        .unwrap_or("memory")
+                        .to_string(),
+                    title: proposal["title"].as_str().unwrap_or("").to_string(),
+                    body: proposal["body"].as_str().unwrap_or("").to_string(),
+                    evidence_refs: proposal["evidenceRefs"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    created_at: proposal["createdAt"].as_u64().unwrap_or(0),
+                });
+            }
+        }
+    }
+    Ok(WriteListResponseData { proposals })
+}
+
+fn handle_write_reject(request: WriteRejectRequest) -> Result<WriteRejectResponseData> {
+    validate_proposal_id(&request.proposal_id)?;
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let _writer = BrainWorkspaceWriter::open(root.clone())?;
+    let proposal_path = root
+        .join("proposals")
+        .join(format!("{}.json", request.proposal_id));
+    if proposal_path.exists() {
+        fs::remove_file(&proposal_path)?;
+    }
+    Ok(WriteRejectResponseData {
+        proposal_id: request.proposal_id,
+        status: "rejected".into(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentWriteProposal {
+    proposal_id: String,
+    content_type: String,
+    title: String,
+    body: String,
+    evidence_refs: Vec<String>,
+    created_at: u64,
+    workspace_id: String,
+}
+
+fn validate_proposal_id(proposal_id: &str) -> Result<()> {
+    let suffix = proposal_id
+        .strip_prefix("prop-")
+        .ok_or_else(|| anyhow!("invalid proposalId: expected prop-<uuid>"))?;
+    if suffix.len() != 32 || !suffix.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!("invalid proposalId: expected prop-<uuid>");
+    }
+    Ok(())
+}
+
+fn validate_write_content_type(content_type: &str) -> Result<()> {
+    match content_type.trim() {
+        "memory" => Ok(()),
+        other => bail!("unsupported contentType {other}; supported contentType: memory"),
+    }
+}
+
+fn validate_evidence_refs(
+    snapshot: &BrainRepoSnapshot,
+    workspace_id: &str,
+    evidence_refs: &[String],
+) -> Result<()> {
+    if evidence_refs.is_empty() {
+        bail!("at least one evidence_ref is required");
+    }
+    let valid_ids: BTreeSet<&str> = snapshot.evidence.iter().map(|ev| ev.id.as_str()).collect();
+    for evidence_id in evidence_refs {
+        if !valid_ids.contains(evidence_id.as_str()) {
+            bail!(
+                "evidence_ref {} was not found in workspace {}",
+                evidence_id,
+                workspace_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_committable_proposal(
+    proposal: &AgentWriteProposal,
+    request: &WriteCommitRequest,
+) -> Result<()> {
+    validate_proposal_id(&proposal.proposal_id)?;
+    if proposal.proposal_id != request.proposal_id {
+        bail!("proposalId mismatch between request and proposal file");
+    }
+    if proposal.workspace_id != request.scope.workspace_id {
+        bail!("proposal workspaceId does not match request workspaceId");
+    }
+    validate_write_content_type(&proposal.content_type)?;
+    if proposal.title.trim().is_empty() {
+        bail!("proposal title must not be empty");
+    }
+    if proposal.body.trim().is_empty() {
+        bail!("proposal body must not be empty");
+    }
+
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let snapshot = read_materialized_brain_snapshot(&root, &request.scope.workspace_id)?;
+    validate_evidence_refs(
+        &snapshot,
+        &request.scope.workspace_id,
+        &proposal.evidence_refs,
+    )
 }
 
 fn brain_health_source_reports(

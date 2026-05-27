@@ -43,6 +43,11 @@ pub enum EngineCommand {
     ValidateProvider,
     ListProviderModels,
     CheckReadiness,
+    WritePropose,
+    WriteCommit,
+    WriteCommitAll,
+    WriteList,
+    WriteReject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +362,102 @@ pub struct BrainReadScope {
     pub workspace_id: WorkspaceId,
     #[serde(default)]
     pub root_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteProposeRequest {
+    pub scope: BrainReadScope,
+    pub content_type: String,
+    pub title: String,
+    pub body: String,
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteProposeResponseData {
+    pub proposal_id: String,
+    pub status: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteCommitRequest {
+    pub scope: BrainReadScope,
+    pub proposal_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteCommitResponseData {
+    pub event_id: String,
+    pub memory_id: String,
+    pub stored_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteCommitAllRequest {
+    pub scope: BrainReadScope,
+    pub proposal_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteCommitAllResponseData {
+    pub results: Vec<WriteCommitResultItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteCommitResultItem {
+    pub proposal_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(default)]
+    pub memory_id: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteListRequest {
+    pub scope: BrainReadScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteListResponseData {
+    pub proposals: Vec<WriteProposalSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteProposalSummary {
+    pub proposal_id: String,
+    pub content_type: String,
+    pub title: String,
+    pub body: String,
+    pub evidence_refs: Vec<String>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteRejectRequest {
+    pub scope: BrainReadScope,
+    pub proposal_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteRejectResponseData {
+    pub proposal_id: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1466,6 +1567,11 @@ pub enum EngineRequest {
     ValidateProvider(ValidateProviderRequest),
     ListProviderModels(ListProviderModelsRequest),
     CheckReadiness(CheckReadinessRequest),
+    WritePropose(WriteProposeRequest),
+    WriteCommit(WriteCommitRequest),
+    WriteCommitAll(WriteCommitAllRequest),
+    WriteList(WriteListRequest),
+    WriteReject(WriteRejectRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2003,7 +2109,31 @@ mod tests {
                 budget: Some(8000),
                 persist: false,
             }),
-            EngineRequest::GetBrainHealth(GetBrainHealthRequest { scope }),
+            EngineRequest::GetBrainHealth(GetBrainHealthRequest {
+                scope: scope.clone(),
+            }),
+            EngineRequest::WritePropose(WriteProposeRequest {
+                scope: scope.clone(),
+                content_type: "memory".into(),
+                title: "Agent-session write MCP".into(),
+                body: "Evidence-backed memory body".into(),
+                evidence_refs: vec!["ev-1".into()],
+            }),
+            EngineRequest::WriteCommit(WriteCommitRequest {
+                scope: scope.clone(),
+                proposal_id: "prop-1".into(),
+            }),
+            EngineRequest::WriteCommitAll(WriteCommitAllRequest {
+                scope: scope.clone(),
+                proposal_ids: vec!["prop-1".into(), "prop-2".into()],
+            }),
+            EngineRequest::WriteList(WriteListRequest {
+                scope: scope.clone(),
+            }),
+            EngineRequest::WriteReject(WriteRejectRequest {
+                scope,
+                proposal_id: "prop-1".into(),
+            }),
         ];
         for request in requests {
             let json = serde_json::to_string(&request).unwrap();

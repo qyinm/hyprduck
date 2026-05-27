@@ -11,6 +11,10 @@ impl BrainWorkspaceWriter {
         Ok(Self { repo, _lock: lock })
     }
 
+    pub(crate) fn repo(&self) -> &BrainArtifactRepository {
+        &self.repo
+    }
+
     pub(crate) fn root(&self) -> &Path {
         self.repo.root()
     }

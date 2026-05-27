@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
 #[test]
-fn mcp_server_exposes_read_only_brain_tools() {
+fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     let root_dir = std::env::temp_dir().join(format!("hyprduck-mcp-empty-{}", std::process::id()));
     let root_dir_arg = root_dir.to_string_lossy().to_string();
     let _ = fs::remove_dir_all(&root_dir);
@@ -83,25 +83,55 @@ fn mcp_server_exposes_read_only_brain_tools() {
             "read_graph_history",
             "read_graph_snapshot",
             "read_health",
+            "write_propose",
+            "write_commit",
+            "write_commit_all",
+            "write_list",
+            "write_reject",
         ]
     );
     assert_eq!(tools[0]["name"], "get_context_pack");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
-    assert!(tools
+    let read_only_by_name = tools
         .iter()
-        .all(|tool| tool["annotations"]["readOnlyHint"] == true));
+        .map(|tool| {
+            (
+                tool["name"].as_str().expect("tool name"),
+                tool["annotations"]["readOnlyHint"]
+                    .as_bool()
+                    .expect("readOnlyHint"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for name in [
+        "get_context_pack",
+        "read_context_pack",
+        "search_documents",
+        "search_brain",
+        "read_source",
+        "read_page_evidence",
+        "read_wiki_page",
+        "read_node",
+        "read_recent_events",
+        "read_graph_history",
+        "read_graph_snapshot",
+        "read_health",
+        "write_list",
+    ] {
+        assert_eq!(read_only_by_name[name], true, "{name} should be read-only");
+    }
+    for name in [
+        "write_propose",
+        "write_commit",
+        "write_commit_all",
+        "write_reject",
+    ] {
+        assert_eq!(read_only_by_name[name], false, "{name} should mutate state");
+    }
     assert!(tools
         .iter()
         .all(|tool| tool["annotations"]["destructiveHint"] == false));
-    let retired_surface_terms = [
-        "trust console",
-        "review queue",
-        "proposed-write",
-        "proposal",
-        "governance",
-        "write tool",
-        "rollback",
-    ];
+    let retired_surface_terms = ["trust console", "review queue", "governance", "rollback"];
     for tool in tools {
         let text = format!(
             "{} {}",

@@ -7,6 +7,8 @@ use hyprduck_engine_types::{
     BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadContextPackRequest,
     ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest,
     ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
+    WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -415,6 +417,35 @@ fn call_tool(
         "read_health" => {
             serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
         }
+        "write_propose" => {
+            let content_type = required_string(arguments, "contentType")?;
+            let title = required_string(arguments, "title")?;
+            let body = required_string(arguments, "body")?;
+            let evidence_refs = required_string_array(arguments, "evidenceRefs")?;
+            serde_json::to_value(client.write_propose(WriteProposeRequest {
+                scope,
+                content_type,
+                title,
+                body,
+                evidence_refs,
+            })?)?
+        }
+        "write_commit" => {
+            let proposal_id = required_string(arguments, "proposalId")?;
+            serde_json::to_value(client.write_commit(WriteCommitRequest { scope, proposal_id })?)?
+        }
+        "write_commit_all" => {
+            let proposal_ids = required_string_array(arguments, "proposalIds")?;
+            serde_json::to_value(client.write_commit_all(WriteCommitAllRequest {
+                scope,
+                proposal_ids,
+            })?)?
+        }
+        "write_list" => serde_json::to_value(client.write_list(WriteListRequest { scope })?)?,
+        "write_reject" => {
+            let proposal_id = required_string(arguments, "proposalId")?;
+            serde_json::to_value(client.write_reject(WriteRejectRequest { scope, proposal_id })?)?
+        }
         _ => return Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
     };
 
@@ -575,6 +606,21 @@ fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bo
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(_) => Err(anyhow!("argument {name} must be a boolean")),
         None => Ok(None),
+    }
+}
+
+fn required_string_array(arguments: &Map<String, Value>, name: &str) -> Result<Vec<String>> {
+    match arguments.get(name) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| match value {
+                Value::String(s) if !s.trim().is_empty() => Ok(s.clone()),
+                Value::String(_) => Err(anyhow!("element in {name} cannot be empty")),
+                _ => Err(anyhow!("each element in {name} must be a string")),
+            })
+            .collect(),
+        Some(_) => Err(anyhow!("argument {name} must be an array of strings")),
+        None => Err(anyhow!("missing required argument: {name}")),
     }
 }
 
@@ -820,6 +866,52 @@ fn tool_definitions() -> Vec<Value> {
             Vec::new(),
             true,
         ),
+        tool_definition(
+            "write_propose",
+            "Propose an evidence-backed knowledge item for approval. Evidence refs must exist in the current workspace snapshot.",
+            json!({
+                "contentType": { "type": "string", "description": "Content type (e.g., 'memory')." },
+                "title": { "type": "string", "description": "Human-readable title for the knowledge item." },
+                "body": { "type": "string", "description": "The knowledge content body." },
+                "evidenceRefs": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs from the current workspace snapshot that back this knowledge item." },
+            }),
+            vec!["contentType", "title", "body", "evidenceRefs"],
+            false,
+        ),
+        tool_definition(
+            "write_commit",
+            "Approve a pending proposal and persist it as a MemoryAccepted brain event.",
+            json!({
+                "proposalId": { "type": "string", "description": "Proposal ID returned by write_propose." },
+            }),
+            vec!["proposalId"],
+            false,
+        ),
+        tool_definition(
+            "write_commit_all",
+            "Approve multiple pending proposals in a single batch call.",
+            json!({
+                "proposalIds": { "type": "array", "items": { "type": "string" }, "description": "Array of proposal IDs to commit." },
+            }),
+            vec!["proposalIds"],
+            false,
+        ),
+        tool_definition(
+            "write_list",
+            "List all pending proposals.",
+            json!({}),
+            Vec::new(),
+            true,
+        ),
+        tool_definition(
+            "write_reject",
+            "Reject a pending proposal and remove it from the proposals directory.",
+            json!({
+                "proposalId": { "type": "string", "description": "Proposal ID to reject." },
+            }),
+            vec!["proposalId"],
+            false,
+        ),
     ]
 }
 
@@ -911,6 +1003,55 @@ mod tests {
             .into_os_string()
             .into_string()
             .expect("utf-8 canonical path")
+    }
+
+    #[test]
+    fn tool_definitions_expose_agent_session_write_tools_as_mutating_tools() {
+        let tools = tool_definitions();
+        let tool_by_name = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing tool {name}"))
+        };
+
+        for name in [
+            "write_propose",
+            "write_commit",
+            "write_commit_all",
+            "write_list",
+            "write_reject",
+        ] {
+            let tool = tool_by_name(name);
+            assert_eq!(tool["name"], name);
+            assert!(tool["inputSchema"]["properties"]
+                .get("workspaceId")
+                .is_some());
+        }
+        assert_eq!(
+            tool_by_name("write_propose")["inputSchema"]["required"],
+            json!(["contentType", "title", "body", "evidenceRefs"])
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["inputSchema"]["required"],
+            json!(["proposalIds"])
+        );
+        assert_eq!(
+            tool_by_name("write_propose")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_commit")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_reject")["annotations"]["readOnlyHint"],
+            false
+        );
     }
 
     #[test]

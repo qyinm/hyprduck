@@ -120,6 +120,26 @@ pub(crate) fn encode_success_response(
             EngineCommand::CheckReadiness,
             check_readiness(config_store),
         )),
+        EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::WritePropose,
+            crate::handle_write_propose(request)?,
+        )),
+        EngineRequest::WriteCommit(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::WriteCommit,
+            crate::handle_write_commit(request)?,
+        )),
+        EngineRequest::WriteCommitAll(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::WriteCommitAll,
+            crate::handle_write_commit_all(request)?,
+        )),
+        EngineRequest::WriteList(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::WriteList,
+            crate::handle_write_list(request)?,
+        )),
+        EngineRequest::WriteReject(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::WriteReject,
+            crate::handle_write_reject(request)?,
+        )),
     }
     .context("failed to encode engine response")?;
     Ok(response)
@@ -150,5 +170,10 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
         EngineRequest::ListProviderModels(_) => EngineCommand::ListProviderModels,
         EngineRequest::CheckReadiness(_) => EngineCommand::CheckReadiness,
+        EngineRequest::WritePropose(_) => EngineCommand::WritePropose,
+        EngineRequest::WriteCommit(_) => EngineCommand::WriteCommit,
+        EngineRequest::WriteCommitAll(_) => EngineCommand::WriteCommitAll,
+        EngineRequest::WriteList(_) => EngineCommand::WriteList,
+        EngineRequest::WriteReject(_) => EngineCommand::WriteReject,
     }
 }
