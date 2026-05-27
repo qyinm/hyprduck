@@ -154,8 +154,9 @@ MCP, and resource reads.
 
 ## MCP Surface
 
-`hyprduck mcp serve` exposes read-only tools:
+`hyprduck mcp serve` exposes read/search tools plus controlled mutating tools:
 
+- `import_source`
 - `get_context_pack`
 - `read_context_pack`
 - `search_documents`
@@ -168,6 +169,11 @@ MCP, and resource reads.
 - `read_graph_history`
 - `read_graph_snapshot`
 - `read_health`
+- `write_propose`
+- `write_commit`
+- `write_commit_all`
+- `write_list`
+- `write_reject`
 
 MCP tools return JSON as text content and preserve source, evidence, graph,
 memory, and event IDs for agent use.

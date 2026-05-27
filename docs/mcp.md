@@ -71,8 +71,15 @@ Tool responses redact absolute local filesystem paths by default. Debug clients
 can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
 paths.
 
+`import_source` is disabled unless the MCP server process is started with
+`HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` set to one or more canonical import roots.
+The server canonicalizes `sourcePath`, requires it to be a regular file under
+one of those roots, and imports it into HyprDuck's managed workspace artifacts.
+This import allowlist is separate from the development-only `rootDir` allowlist.
+
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
+| `import_source` | `sourcePath` | Import an allowlisted local PDF, DOCX, DOC, Markdown, or image file, then parse, compile, and expose Source Pack / Evidence Index artifacts for cited context. |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
 | `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
@@ -144,11 +151,12 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"import_source","arguments":{"workspaceId":"default","sourcePath":"/allowed/imports/source.md","format":"markdown"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
 
 A typical agent-chat approval flow for controlled graph/wiki/memory mutation is:
@@ -173,6 +181,9 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
   belongs to the write workflow. Approval happens through explicit
   `write_commit` / `write_commit_all` MCP calls, and rejected proposals are
   discarded without producing brain events.
+- `import_source` is a mutating tool. It accepts only regular files below
+  `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS`, never arbitrary agent-provided paths,
+  and returns managed source/evidence IDs rather than raw local paths.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
 - `rootDir` is disabled by default and, when explicitly enabled for development,

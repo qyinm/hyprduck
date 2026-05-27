@@ -71,6 +71,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     assert_eq!(
         names,
         vec![
+            "import_source",
             "get_context_pack",
             "read_context_pack",
             "search_documents",
@@ -90,8 +91,8 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
             "write_reject",
         ]
     );
-    assert_eq!(tools[0]["name"], "get_context_pack");
-    assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
+    assert_eq!(tools[0]["name"], "import_source");
+    assert_eq!(tools[0]["annotations"]["readOnlyHint"], false);
     let read_only_by_name = tools
         .iter()
         .map(|tool| {
@@ -121,6 +122,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         assert_eq!(read_only_by_name[name], true, "{name} should be read-only");
     }
     for name in [
+        "import_source",
         "write_propose",
         "write_commit",
         "write_commit_all",
@@ -665,6 +667,244 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     let status = child.wait().expect("server exit");
     assert!(status.success());
     let _ = std::fs::remove_dir_all(root_dir);
+}
+
+#[test]
+fn mcp_server_import_source_imports_allowlisted_markdown() {
+    let root_dir = temp_test_dir("hyprduck-mcp-import-workspace");
+    let import_root = temp_test_dir("hyprduck-mcp-import-source");
+    let root_dir_arg = root_dir.to_string_lossy().to_string();
+    let import_root_arg = import_root.to_string_lossy().to_string();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&import_root);
+    fs::create_dir_all(&root_dir).expect("temp root");
+    fs::create_dir_all(&import_root).expect("import root");
+    let source_path = import_root.join("agent-notes.md");
+    fs::write(
+        &source_path,
+        "# Agent Notes\n\nMCP import should create cited evidence for agents.\n",
+    )
+    .expect("source markdown");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "serve"])
+        .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
+        .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", &import_root_arg)
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mcp server should start");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+    initialize_mcp_session(&mut stdin, &mut reader);
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {
+                "name": "import_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourcePath": source_path.to_string_lossy(),
+                    "format": "markdown",
+                    "skipGraphGeneration": true
+                }
+            }
+        }),
+    );
+    let import_tool = read_message(&mut reader);
+    assert_eq!(import_tool["result"]["isError"], false, "{import_tool:#?}");
+    let text = import_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("import tool text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    let import_payload: Value = serde_json::from_str(text).expect("import payload");
+    assert_eq!(import_payload["workspaceId"], "default");
+    let source_id = import_payload["sourceId"]
+        .as_str()
+        .expect("import source id")
+        .to_string();
+    assert!(!source_id.trim().is_empty());
+    assert_eq!(
+        import_payload["sourcePack"]["schemaVersion"],
+        "hyprduck.source_pack.v0"
+    );
+    assert_eq!(
+        import_payload["evidenceIndex"]["schemaVersion"],
+        "hyprduck.evidence_index.v0"
+    );
+    assert!(import_payload["contextReady"]
+        .as_bool()
+        .expect("context ready"));
+    assert!(
+        import_payload["evidenceCount"]
+            .as_u64()
+            .expect("evidence count")
+            > 0
+    );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "read_page_evidence",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": source_id,
+                    "page": 1
+                }
+            }
+        }),
+    );
+    let evidence_tool = read_message(&mut reader);
+    assert_eq!(
+        evidence_tool["result"]["isError"], false,
+        "{evidence_tool:#?}"
+    );
+    let text = evidence_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evidence tool text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    let evidence_payload: Value = serde_json::from_str(text).expect("evidence payload");
+    assert!(
+        evidence_payload["evidence"]
+            .as_array()
+            .expect("evidence array")
+            .iter()
+            .any(|evidence| evidence["quotedText"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("MCP import should create cited evidence")),
+        "{evidence_payload:#?}"
+    );
+
+    drop(stdin);
+    let status = child.wait().expect("server exit");
+    assert!(status.success());
+    let _ = std::fs::remove_dir_all(root_dir);
+    let _ = std::fs::remove_dir_all(import_root);
+}
+
+#[test]
+fn mcp_server_import_source_rejects_source_path_outside_allowed_roots() {
+    let root_dir = temp_test_dir("hyprduck-mcp-import-reject-workspace");
+    let import_root = temp_test_dir("hyprduck-mcp-import-reject-source");
+    let outside_root = temp_test_dir("hyprduck-mcp-import-reject-outside");
+    let root_dir_arg = root_dir.to_string_lossy().to_string();
+    let import_root_arg = import_root.to_string_lossy().to_string();
+    let outside_root_arg = outside_root.to_string_lossy().to_string();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&import_root);
+    let _ = fs::remove_dir_all(&outside_root);
+    fs::create_dir_all(&root_dir).expect("temp root");
+    fs::create_dir_all(&import_root).expect("import root");
+    fs::create_dir_all(&outside_root).expect("outside root");
+    let outside_source = outside_root.join("outside.md");
+    fs::write(&outside_source, "# Outside\n\nNot allowlisted.\n").expect("outside source");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "serve"])
+        .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
+        .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", &import_root_arg)
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mcp server should start");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+    initialize_mcp_session(&mut stdin, &mut reader);
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 50,
+            "method": "tools/call",
+            "params": {
+                "name": "import_source",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourcePath": outside_source.to_string_lossy(),
+                    "format": "markdown"
+                }
+            }
+        }),
+    );
+    let import_tool = read_message(&mut reader);
+    assert_eq!(import_tool["result"]["isError"], true, "{import_tool:#?}");
+    let text = import_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("import rejection text");
+    assert!(text.contains("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"));
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    assert!(!text.contains(outside_root_arg.as_str()));
+
+    drop(stdin);
+    let status = child.wait().expect("server exit");
+    assert!(status.success());
+    let _ = std::fs::remove_dir_all(root_dir);
+    let _ = std::fs::remove_dir_all(import_root);
+    let _ = std::fs::remove_dir_all(outside_root);
+}
+
+fn initialize_mcp_session(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+) {
+    write_message(
+        stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "hyprduck-test", "version": "0.1.0" }
+            }
+        }),
+    );
+    let initialize = read_message(reader);
+    assert_eq!(initialize["result"]["serverInfo"]["name"], "hyprduck");
+    write_message(
+        stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }),
+    );
+}
+
+fn temp_test_dir(prefix: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
 
 fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {

@@ -4,17 +4,19 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadContextPackRequest,
-    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest,
-    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
-    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
-    WriteRejectRequest,
+    BrainReadScope, CompileProjectRequest, DocumentFormat, GetBrainHealthRequest,
+    GetContextPackRequest, ParseInput, ParseOptions, ParseOutputTarget, ParseRequest,
+    ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest,
+    ReadPageEvidenceRequest, ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest,
+    SearchBrainRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
+    WriteProposeRequest, WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
 const ROOT_DIR_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_ROOTS";
+const IMPORT_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS";
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
@@ -335,6 +337,71 @@ fn call_tool(
         .flatten();
 
     let value = match name {
+        "import_source" => {
+            let source_path = required_string(arguments, "sourcePath")?;
+            let source_path = validate_import_source_path(&source_path)?;
+            let format =
+                import_document_format(&source_path, optional_string(arguments, "format")?)?;
+            let name = optional_string(arguments, "name")?;
+            let skip_graph_generation =
+                optional_bool(arguments, "skipGraphGeneration")?.unwrap_or(true);
+            let parse = client.parse(
+                ParseRequest {
+                    version: "1".into(),
+                    input: ParseInput {
+                        path: source_path.display().to_string(),
+                        format,
+                    },
+                    template: "General".into(),
+                    options: ParseOptions::default(),
+                    output: Some(ParseOutputTarget {
+                        root_dir: scope.root_dir.clone(),
+                        name,
+                        workspace_id: Some(scope.workspace_id.clone()),
+                        source_id: None,
+                    }),
+                },
+                &mut |_progress| {},
+            )?;
+            let manifest = parse
+                .source_manifest
+                .ok_or_else(|| anyhow!("import_source parse did not produce a source manifest"))?;
+            let compile = client.compile_project(CompileProjectRequest {
+                source_markdown_path: manifest.markdown_path.clone(),
+                source_document_path: Some(manifest.source_path.clone()),
+                source_manifest_path: Some(manifest.manifest_path.clone()),
+                workspace_id: Some(scope.workspace_id.clone()),
+                source_id: Some(manifest.source_id.clone()),
+                skip_graph_generation: Some(skip_graph_generation),
+            })?;
+            let page_evidence = client.read_page_evidence(ReadPageEvidenceRequest {
+                scope,
+                source_id: compile.source_id.clone(),
+                page: None,
+            })?;
+            let evidence_count = page_evidence.evidence.len();
+            let content_hash = page_evidence
+                .evidence
+                .first()
+                .map(|evidence| evidence.content_hash.clone());
+            json!({
+                "workspaceId": compile.workspace_id,
+                "sourceId": compile.source_id,
+                "contentHash": content_hash,
+                "pageCount": parse.result.metadata.page_count,
+                "evidenceCount": evidence_count,
+                "contextReady": evidence_count > 0,
+                "sourcePack": {
+                    "schemaVersion": "hyprduck.source_pack.v0"
+                },
+                "evidenceIndex": {
+                    "schemaVersion": "hyprduck.evidence_index.v0"
+                },
+                "graphGenerationStatus": compile.graph_generation_status,
+                "graphGenerationSkippedReason": compile.graph_generation_skipped_reason,
+                "graphGenerationErrorMessage": compile.graph_generation_error_message,
+            })
+        }
         "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
             let limit = optional_usize(arguments, "limit")?;
@@ -567,6 +634,77 @@ fn allowed_root_dirs() -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
+fn validate_import_source_path(raw_path: &str) -> Result<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("argument sourcePath cannot be empty"));
+    }
+
+    let source = PathBuf::from(trimmed)
+        .canonicalize()
+        .with_context(|| "sourcePath does not exist or cannot be read")?;
+    if !source.is_file() {
+        return Err(anyhow!("sourcePath must point to a regular file"));
+    }
+
+    let roots = allowed_import_root_dirs()?;
+    if roots.iter().any(|root| source.starts_with(root)) {
+        Ok(source)
+    } else {
+        Err(anyhow!(
+            "sourcePath is outside HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"
+        ))
+    }
+}
+
+fn allowed_import_root_dirs() -> Result<Vec<PathBuf>> {
+    let raw = std::env::var_os(IMPORT_ALLOWED_ROOTS_ENV).ok_or_else(|| {
+        anyhow!("MCP import is disabled: set HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS to one or more approved roots")
+    })?;
+    let roots = std::env::split_paths(&raw)
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| {
+            let root = path
+                .canonicalize()
+                .with_context(|| "allowed import root does not exist or cannot be read")?;
+            if !root.is_dir() {
+                return Err(anyhow!("allowed import root must be a directory"));
+            }
+            Ok(root)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if roots.is_empty() {
+        return Err(anyhow!(
+            "MCP import is disabled: no allowed import roots configured"
+        ));
+    }
+    Ok(roots)
+}
+
+fn import_document_format(path: &Path, explicit: Option<String>) -> Result<DocumentFormat> {
+    let raw = explicit
+        .map(|value| value.to_ascii_lowercase())
+        .or_else(|| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+        });
+    match raw.as_deref() {
+        Some("pdf") => Ok(DocumentFormat::Pdf),
+        Some("docx") => Ok(DocumentFormat::Docx),
+        Some("doc") => Ok(DocumentFormat::Doc),
+        Some("md") | Some("markdown") => Ok(DocumentFormat::Markdown),
+        Some("image") | Some("png") | Some("jpg") | Some("jpeg") | Some("webp") | Some("heic")
+        | Some("tiff") => Ok(DocumentFormat::Image),
+        Some(other) => Err(anyhow!(
+            "unsupported import format: {other}; supported formats: pdf, docx, doc, markdown, image"
+        )),
+        None => Err(anyhow!(
+            "cannot infer import format; pass format as pdf, docx, doc, markdown, or image"
+        )),
+    }
+}
+
 fn canonicalize_mcp_root(path: impl AsRef<Path>) -> Result<PathBuf> {
     path.as_ref()
         .canonicalize()
@@ -750,6 +888,18 @@ fn resource_definitions() -> Vec<Value> {
 
 fn tool_definitions() -> Vec<Value> {
     vec![
+        tool_definition(
+            "import_source",
+            "Import an allowlisted local document into HyprDuck and make it available for cited context packs.",
+            json!({
+                "sourcePath": { "type": "string", "description": "Path to a local PDF, DOCX, DOC, Markdown, or image file under HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS." },
+                "name": { "type": "string", "description": "Optional display/output name for the imported source." },
+                "format": { "type": "string", "enum": ["pdf", "docx", "doc", "markdown", "image"], "description": "Optional import format. Defaults to extension inference." },
+                "skipGraphGeneration": { "type": "boolean", "description": "Skip provider-backed graph generation after import. Defaults to true for fast citation readiness." },
+            }),
+            vec!["sourcePath"],
+            false,
+        ),
         tool_definition(
             "get_context_pack",
             "Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace.",
@@ -990,11 +1140,17 @@ mod tests {
     fn clear_root_dir_env() {
         std::env::remove_var(ROOT_DIR_ENV);
         std::env::remove_var(ROOT_DIR_ALLOWED_ROOTS_ENV);
+        std::env::remove_var(IMPORT_ALLOWED_ROOTS_ENV);
     }
 
     fn set_allowed_roots(paths: &[&Path]) {
         let joined = std::env::join_paths(paths).expect("join allowed roots");
         std::env::set_var(ROOT_DIR_ALLOWED_ROOTS_ENV, joined);
+    }
+
+    fn set_allowed_import_roots(paths: &[&Path]) {
+        let joined = std::env::join_paths(paths).expect("join allowed import roots");
+        std::env::set_var(IMPORT_ALLOWED_ROOTS_ENV, joined);
     }
 
     fn canonical_path_string(path: &Path) -> String {
@@ -1016,6 +1172,7 @@ mod tests {
         };
 
         for name in [
+            "import_source",
             "write_propose",
             "write_commit",
             "write_commit_all",
@@ -1031,6 +1188,18 @@ mod tests {
         assert_eq!(
             tool_by_name("write_propose")["inputSchema"]["required"],
             json!(["contentType", "title", "body", "evidenceRefs"])
+        );
+        assert_eq!(
+            tool_by_name("import_source")["inputSchema"]["required"],
+            json!(["sourcePath"])
+        );
+        assert_eq!(
+            tool_by_name("import_source")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("import_source")["annotations"]["idempotentHint"],
+            false
         );
         assert_eq!(
             tool_by_name("write_commit_all")["inputSchema"]["required"],
@@ -1052,6 +1221,148 @@ mod tests {
             tool_by_name("write_reject")["annotations"]["readOnlyHint"],
             false
         );
+    }
+
+    #[test]
+    fn validate_import_source_path_accepts_file_inside_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let source = allowed.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let validated =
+            validate_import_source_path(&source.display().to_string()).expect("valid source path");
+
+        assert_eq!(validated, source.canonicalize().expect("canonical source"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_file_outside_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let source = outside.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let error = validate_import_source_path(&source.display().to_string())
+            .expect_err("outside source rejected");
+
+        assert!(error
+            .to_string()
+            .contains("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_directory() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let error = validate_import_source_path(&allowed.path().display().to_string())
+            .expect_err("directory source rejected");
+
+        assert!(error.to_string().contains("regular file"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_file_as_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let source = allowed.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[source.as_path()]);
+        let error = validate_import_source_path(&source.display().to_string())
+            .expect_err("file root rejected");
+
+        assert!(error.to_string().contains("must be a directory"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn validate_import_source_path_rejects_symlink_escape() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let allowed = temp.path().join("allowed");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&allowed).expect("allowed dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        let outside_file = outside.join("source.md");
+        let symlink = allowed.join("linked.md");
+        std::fs::write(&outside_file, "# Source\n").expect("outside source");
+        std::os::unix::fs::symlink(&outside_file, &symlink).expect("symlink");
+
+        set_allowed_import_roots(&[allowed.as_path()]);
+        let error = validate_import_source_path(&symlink.display().to_string())
+            .expect_err("symlink escape rejected");
+
+        assert!(error
+            .to_string()
+            .contains("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn import_document_format_infers_pdf() {
+        assert_eq!(
+            import_document_format(Path::new("source.pdf"), None).expect("pdf format"),
+            DocumentFormat::Pdf
+        );
+    }
+
+    #[test]
+    fn import_document_format_infers_markdown() {
+        assert_eq!(
+            import_document_format(Path::new("source.md"), None).expect("markdown format"),
+            DocumentFormat::Markdown
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.markdown"), None).expect("markdown format"),
+            DocumentFormat::Markdown
+        );
+    }
+
+    #[test]
+    fn import_document_format_infers_office_and_image_formats() {
+        assert_eq!(
+            import_document_format(Path::new("source.docx"), None).expect("docx format"),
+            DocumentFormat::Docx
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.doc"), None).expect("doc format"),
+            DocumentFormat::Doc
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.png"), None).expect("image format"),
+            DocumentFormat::Image
+        );
+    }
+
+    #[test]
+    fn import_document_format_uses_explicit_format() {
+        assert_eq!(
+            import_document_format(Path::new("source.txt"), Some("IMAGE".into()))
+                .expect("explicit image format"),
+            DocumentFormat::Image
+        );
+    }
+
+    #[test]
+    fn import_document_format_rejects_unknown_extension() {
+        let error = import_document_format(Path::new("source.txt"), None)
+            .expect_err("unknown extension rejected");
+        assert!(error.to_string().contains("unsupported import format"));
     }
 
     #[test]
