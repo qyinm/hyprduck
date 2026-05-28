@@ -52,3 +52,4 @@ docs/private
 docs/plans
 docs/dogfood-reports/
 dogfood-output/
+.codex/*
