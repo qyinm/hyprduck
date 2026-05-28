@@ -556,9 +556,6 @@ fn evidence_index_item(
     page: &PageArtifact,
     content_hash: &str,
 ) -> Option<hyprduck_engine_types::EvidenceIndexItemV0> {
-    if page.error_message.is_some() {
-        return None;
-    }
     let quoted_text = page
         .markdown_path
         .as_ref()
