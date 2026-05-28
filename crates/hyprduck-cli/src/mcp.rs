@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
@@ -22,13 +26,14 @@ pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let client = SubprocessEngineClient::default();
+    let state = McpServerState::default();
 
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_message(&client, &line) {
+        if let Some(response) = handle_message(&client, &state, &line) {
             serde_json::to_writer(&mut stdout, &response)
                 .context("failed to encode MCP response")?;
             stdout
@@ -41,7 +46,12 @@ pub fn run_mcp_server() -> Result<()> {
     Ok(())
 }
 
-fn handle_message(client: &dyn EngineClient, line: &str) -> Option<Value> {
+#[derive(Clone, Default)]
+struct McpServerState {
+    import_jobs: ImportJobRegistry,
+}
+
+fn handle_message(client: &dyn EngineClient, state: &McpServerState, line: &str) -> Option<Value> {
     let message = match serde_json::from_str::<Value>(line) {
         Ok(message) => message,
         Err(error) => {
@@ -69,7 +79,7 @@ fn handle_message(client: &dyn EngineClient, line: &str) -> Option<Value> {
         "initialize" => Some(success_response(id, initialize_result(&message))),
         "ping" => Some(success_response(id, json!({}))),
         "tools/list" => Some(success_response(id, json!({ "tools": tool_definitions() }))),
-        "tools/call" => Some(handle_tool_call(client, id, message.get("params"))),
+        "tools/call" => Some(handle_tool_call(client, state, id, message.get("params"))),
         "resources/list" => Some(success_response(
             id,
             json!({ "resources": resource_definitions() }),
@@ -117,7 +127,12 @@ fn initialize_result(message: &Value) -> Value {
     })
 }
 
-fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
+fn handle_tool_call(
+    client: &dyn EngineClient,
+    state: &McpServerState,
+    id: Value,
+    params: Option<&Value>,
+) -> Value {
     let params = params.unwrap_or(&Value::Null);
     let name = match params.get("name").and_then(Value::as_str) {
         Some(name) => name,
@@ -148,7 +163,7 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
         }
     };
 
-    let result = match call_tool(client, name, arguments) {
+    let result = match call_tool(client, state, name, arguments) {
         Ok(tool_result) => {
             let value = if include_local_paths {
                 tool_result.value
@@ -324,8 +339,437 @@ fn percent_decode(value: &str) -> Result<String> {
     String::from_utf8(decoded).context("resource uri contains invalid utf-8")
 }
 
+#[derive(Clone, Default)]
+struct ImportJobRegistry {
+    jobs: Arc<Mutex<BTreeMap<String, ImportJobSnapshot>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportJobSnapshot {
+    job_id: String,
+    workspace_id: String,
+    root_dir: Option<String>,
+    status: ImportJobStatus,
+    phase: ImportJobPhase,
+    progress_percent: u8,
+    source_id: Option<String>,
+    page_count: Option<usize>,
+    evidence_count: Option<usize>,
+    citation_ready: bool,
+    graph_ready: bool,
+    graph_status: Option<String>,
+    graph_generation_skipped_reason: Option<String>,
+    graph_generation_error_message: Option<String>,
+    warnings: Vec<String>,
+    error: Option<String>,
+    cancel_requested: bool,
+    created_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportJobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportJobPhase {
+    Queued,
+    Parsing,
+    CitationPackaging,
+    CitationReady,
+    GraphMaterializing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ImportJobRegistry {
+    fn insert(&self, job: ImportJobSnapshot) {
+        self.jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .insert(job.job_id.clone(), job);
+    }
+
+    fn get(&self, job_id: &str) -> Option<ImportJobSnapshot> {
+        self.jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .get(job_id)
+            .cloned()
+    }
+
+    fn update<F>(&self, job_id: &str, apply: F)
+    where
+        F: FnOnce(&mut ImportJobSnapshot),
+    {
+        if let Some(job) = self
+            .jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .get_mut(job_id)
+        {
+            apply(job);
+            job.updated_at = unix_timestamp_seconds();
+        }
+    }
+
+    fn update_active<F>(&self, job_id: &str, apply: F)
+    where
+        F: FnOnce(&mut ImportJobSnapshot),
+    {
+        self.update(job_id, |job| {
+            if job.status.is_terminal() {
+                return;
+            }
+            if job.cancel_requested {
+                job.status = ImportJobStatus::Cancelled;
+                job.phase = ImportJobPhase::Cancelled;
+                job.progress_percent = 100;
+                return;
+            }
+            apply(job);
+        });
+    }
+
+    fn cancel(&self, job_id: &str) -> Result<ImportJobSnapshot> {
+        let mut jobs = self.jobs.lock().expect("import job registry lock poisoned");
+        let job = jobs
+            .get_mut(job_id)
+            .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+        if !job.status.is_terminal() {
+            job.cancel_requested = true;
+            job.warnings.push(
+                "cancel_requested; running engine steps may finish before cancellation".into(),
+            );
+            if matches!(job.phase, ImportJobPhase::Queued) {
+                job.status = ImportJobStatus::Cancelled;
+                job.phase = ImportJobPhase::Cancelled;
+                job.progress_percent = 100;
+            }
+            job.updated_at = unix_timestamp_seconds();
+        }
+        Ok(job.clone())
+    }
+
+    fn mark_cancelled_if_requested(&self, job_id: &str) -> bool {
+        let mut jobs = self.jobs.lock().expect("import job registry lock poisoned");
+        let Some(job) = jobs.get_mut(job_id) else {
+            return false;
+        };
+        if !job.cancel_requested {
+            return false;
+        }
+        if !job.status.is_terminal() {
+            job.status = ImportJobStatus::Cancelled;
+            job.phase = ImportJobPhase::Cancelled;
+            job.progress_percent = 100;
+            job.updated_at = unix_timestamp_seconds();
+        }
+        true
+    }
+}
+
+impl ImportJobSnapshot {
+    fn queued(job_id: String, scope: &BrainReadScope) -> Self {
+        let now = unix_timestamp_seconds();
+        Self {
+            job_id,
+            workspace_id: scope.workspace_id.clone(),
+            root_dir: scope.root_dir.clone(),
+            status: ImportJobStatus::Queued,
+            phase: ImportJobPhase::Queued,
+            progress_percent: 0,
+            source_id: None,
+            page_count: None,
+            evidence_count: None,
+            citation_ready: false,
+            graph_ready: false,
+            graph_status: None,
+            graph_generation_skipped_reason: None,
+            graph_generation_error_message: None,
+            warnings: Vec::new(),
+            error: None,
+            cancel_requested: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "jobId": self.job_id,
+            "workspaceId": self.workspace_id,
+            "status": self.status.as_str(),
+            "phase": self.phase.as_str(),
+            "progressPercent": self.progress_percent,
+            "sourceId": self.source_id,
+            "pageCount": self.page_count,
+            "evidenceCount": self.evidence_count,
+            "citationReady": self.citation_ready,
+            "graphReady": self.graph_ready,
+            "graphStatus": self.graph_status,
+            "graphGenerationSkippedReason": self.graph_generation_skipped_reason,
+            "graphGenerationErrorMessage": self.graph_generation_error_message,
+            "warnings": self.warnings,
+            "error": self.error,
+            "cancelRequested": self.cancel_requested,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        })
+    }
+}
+
+impl ImportJobStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl ImportJobPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Parsing => "parsing",
+            Self::CitationPackaging => "citation_packaging",
+            Self::CitationReady => "citation_ready",
+            Self::GraphMaterializing => "graph_materializing",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+struct ImportJobRequest {
+    job_id: String,
+    scope: BrainReadScope,
+    source_path: PathBuf,
+    format: DocumentFormat,
+    name: Option<String>,
+    skip_graph_generation: bool,
+}
+
+fn next_import_job_id() -> String {
+    format!("import-{}-{}", std::process::id(), unix_timestamp_millis())
+}
+
+fn unix_timestamp_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn spawn_import_job(registry: ImportJobRegistry, request: ImportJobRequest) {
+    thread::spawn(move || {
+        if let Err(error) = run_import_job(&registry, &request) {
+            registry.update(&request.job_id, |job| {
+                if !matches!(job.status, ImportJobStatus::Cancelled) {
+                    job.status = ImportJobStatus::Failed;
+                    job.phase = ImportJobPhase::Failed;
+                    job.progress_percent = 100;
+                    job.error = Some(error.to_string());
+                }
+            });
+        }
+    });
+}
+
+fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> Result<()> {
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let client = SubprocessEngineClient::default();
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::Parsing;
+        job.progress_percent = 5;
+    });
+
+    let parse = client.parse(
+        ParseRequest {
+            version: "1".into(),
+            input: ParseInput {
+                path: request.source_path.display().to_string(),
+                format: request.format.clone(),
+            },
+            template: "General".into(),
+            options: ParseOptions::default(),
+            output: Some(ParseOutputTarget {
+                root_dir: request.scope.root_dir.clone(),
+                name: request.name.clone(),
+                workspace_id: Some(request.scope.workspace_id.clone()),
+                source_id: None,
+            }),
+        },
+        &mut |progress| {
+            let (phase, progress_percent) = import_phase_from_parse_progress(&progress);
+            registry.update_active(&request.job_id, |job| {
+                job.status = ImportJobStatus::Running;
+                job.phase = phase;
+                job.progress_percent = progress_percent;
+            });
+        },
+    )?;
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let manifest = parse
+        .source_manifest
+        .ok_or_else(|| anyhow!("import_source parse did not produce a source manifest"))?;
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::CitationPackaging;
+        job.progress_percent = 70;
+        job.source_id = Some(manifest.source_id.clone());
+        job.page_count = Some(parse.result.metadata.page_count);
+    });
+
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let compile = client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(request.scope.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: Some(true),
+    })?;
+    let page_evidence = client.read_page_evidence(ReadPageEvidenceRequest {
+        scope: request.scope.clone(),
+        source_id: compile.source_id.clone(),
+        page: None,
+    })?;
+    let evidence_count = page_evidence.evidence.len();
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::CitationReady;
+        job.progress_percent = if request.skip_graph_generation {
+            100
+        } else {
+            82
+        };
+        job.source_id = Some(compile.source_id.clone());
+        job.evidence_count = Some(evidence_count);
+        job.citation_ready = evidence_count > 0;
+        if request.skip_graph_generation {
+            job.status = ImportJobStatus::Completed;
+            job.phase = ImportJobPhase::Completed;
+            job.graph_ready = false;
+            job.graph_status = Some("skipped".into());
+            job.graph_generation_skipped_reason = Some("skipGraphGeneration requested".into());
+        }
+    });
+    if registry.mark_cancelled_if_requested(&request.job_id) || request.skip_graph_generation {
+        return Ok(());
+    }
+
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::GraphMaterializing;
+        job.progress_percent = 88;
+    });
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let graph_compile = client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(request.scope.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: Some(false),
+    })?;
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let graph_status = graph_compile.graph_generation_status.clone();
+    let graph_ready = graph_status_is_ready(graph_status.as_deref());
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Completed;
+        job.phase = ImportJobPhase::Completed;
+        job.progress_percent = 100;
+        job.graph_ready = graph_ready;
+        job.graph_status = graph_status.or_else(|| Some("unknown".into()));
+        job.graph_generation_skipped_reason = graph_compile.graph_generation_skipped_reason;
+        job.graph_generation_error_message = graph_compile.graph_generation_error_message;
+    });
+    Ok(())
+}
+
+fn graph_status_is_ready(status: Option<&str>) -> bool {
+    matches!(status, Some("rebuilt" | "partially_applied"))
+}
+
+fn import_phase_from_parse_progress(
+    progress: &hyprduck_engine_types::ParseProgress,
+) -> (ImportJobPhase, u8) {
+    use hyprduck_engine_types::ParseProgress;
+
+    match progress {
+        ParseProgress::Queued => (ImportJobPhase::Queued, 2),
+        ParseProgress::ConvertingPages { current, total } => (
+            ImportJobPhase::Parsing,
+            scaled_progress(*current as usize, *total as usize, 10, 35),
+        ),
+        ParseProgress::Parsing { current, total } => (
+            ImportJobPhase::Parsing,
+            scaled_progress(*current as usize, *total as usize, 35, 65),
+        ),
+        ParseProgress::Packaging => (ImportJobPhase::CitationPackaging, 68),
+        ParseProgress::Completed => (ImportJobPhase::CitationPackaging, 70),
+        ParseProgress::Failed { .. } => (ImportJobPhase::Failed, 100),
+    }
+}
+
+fn scaled_progress(current: usize, total: usize, start: u8, end: u8) -> u8 {
+    if total == 0 {
+        return start;
+    }
+    let span = end.saturating_sub(start) as usize;
+    let bounded_current = current.min(total);
+    (start as usize + (span * bounded_current / total)) as u8
+}
+
+fn ensure_import_job_scope(job: &ImportJobSnapshot, scope: &BrainReadScope) -> Result<()> {
+    if job.workspace_id != scope.workspace_id || job.root_dir != scope.root_dir {
+        return Err(anyhow!("import job not found in requested workspace scope"));
+    }
+    Ok(())
+}
+
 fn call_tool(
     client: &dyn EngineClient,
+    state: &McpServerState,
     name: &str,
     arguments: &Map<String, Value>,
 ) -> Result<McpToolResult> {
@@ -344,63 +788,41 @@ fn call_tool(
                 import_document_format(&source_path, optional_string(arguments, "format")?)?;
             let name = optional_string(arguments, "name")?;
             let skip_graph_generation =
-                optional_bool(arguments, "skipGraphGeneration")?.unwrap_or(true);
-            let parse = client.parse(
-                ParseRequest {
-                    version: "1".into(),
-                    input: ParseInput {
-                        path: source_path.display().to_string(),
-                        format,
-                    },
-                    template: "General".into(),
-                    options: ParseOptions::default(),
-                    output: Some(ParseOutputTarget {
-                        root_dir: scope.root_dir.clone(),
-                        name,
-                        workspace_id: Some(scope.workspace_id.clone()),
-                        source_id: None,
-                    }),
+                optional_bool(arguments, "skipGraphGeneration")?.unwrap_or(false);
+            let job_id = next_import_job_id();
+            let job = ImportJobSnapshot::queued(job_id.clone(), &scope);
+            state.import_jobs.insert(job.clone());
+            spawn_import_job(
+                state.import_jobs.clone(),
+                ImportJobRequest {
+                    job_id,
+                    scope,
+                    source_path,
+                    format,
+                    name,
+                    skip_graph_generation,
                 },
-                &mut |_progress| {},
-            )?;
-            let manifest = parse
-                .source_manifest
-                .ok_or_else(|| anyhow!("import_source parse did not produce a source manifest"))?;
-            let compile = client.compile_project(CompileProjectRequest {
-                source_markdown_path: manifest.markdown_path.clone(),
-                source_document_path: Some(manifest.source_path.clone()),
-                source_manifest_path: Some(manifest.manifest_path.clone()),
-                workspace_id: Some(scope.workspace_id.clone()),
-                source_id: Some(manifest.source_id.clone()),
-                skip_graph_generation: Some(skip_graph_generation),
-            })?;
-            let page_evidence = client.read_page_evidence(ReadPageEvidenceRequest {
-                scope,
-                source_id: compile.source_id.clone(),
-                page: None,
-            })?;
-            let evidence_count = page_evidence.evidence.len();
-            let content_hash = page_evidence
-                .evidence
-                .first()
-                .map(|evidence| evidence.content_hash.clone());
-            json!({
-                "workspaceId": compile.workspace_id,
-                "sourceId": compile.source_id,
-                "contentHash": content_hash,
-                "pageCount": parse.result.metadata.page_count,
-                "evidenceCount": evidence_count,
-                "contextReady": evidence_count > 0,
-                "sourcePack": {
-                    "schemaVersion": "hyprduck.source_pack.v0"
-                },
-                "evidenceIndex": {
-                    "schemaVersion": "hyprduck.evidence_index.v0"
-                },
-                "graphGenerationStatus": compile.graph_generation_status,
-                "graphGenerationSkippedReason": compile.graph_generation_skipped_reason,
-                "graphGenerationErrorMessage": compile.graph_generation_error_message,
-            })
+            );
+            job.to_value()
+        }
+        "import_status" => {
+            let job_id = required_string(arguments, "jobId")?;
+            let job = state
+                .import_jobs
+                .get(&job_id)
+                .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+            ensure_import_job_scope(&job, &scope)?;
+            job.to_value()
+        }
+        "import_cancel" => {
+            let job_id = required_string(arguments, "jobId")?;
+            let job = state
+                .import_jobs
+                .get(&job_id)
+                .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+            ensure_import_job_scope(&job, &scope)?;
+            let job = state.import_jobs.cancel(&job_id)?;
+            job.to_value()
         }
         "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
@@ -890,14 +1312,32 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         tool_definition(
             "import_source",
-            "Import an allowlisted local document into HyprDuck and make it available for cited context packs.",
+            "Start importing an allowlisted local document into HyprDuck and return an import job for polling.",
             json!({
                 "sourcePath": { "type": "string", "description": "Path to a local PDF, DOCX, DOC, Markdown, or image file under HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS." },
                 "name": { "type": "string", "description": "Optional display/output name for the imported source." },
                 "format": { "type": "string", "enum": ["pdf", "docx", "doc", "markdown", "image"], "description": "Optional import format. Defaults to extension inference." },
-                "skipGraphGeneration": { "type": "boolean", "description": "Skip provider-backed graph generation after import. Defaults to true for fast citation readiness." },
+                "skipGraphGeneration": { "type": "boolean", "description": "Skip provider-backed graph/wiki generation after citation-ready import. Defaults to false; citation readiness is reported before graph readiness." },
             }),
             vec!["sourcePath"],
+            false,
+        ),
+        tool_definition(
+            "import_status",
+            "Poll a HyprDuck import job until citationReady and, when enabled, graphReady.",
+            json!({
+                "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+            }),
+            vec!["jobId"],
+            true,
+        ),
+        tool_definition(
+            "import_cancel",
+            "Request cancellation for a HyprDuck import job.",
+            json!({
+                "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+            }),
+            vec!["jobId"],
             false,
         ),
         tool_definition(
@@ -1173,6 +1613,7 @@ mod tests {
 
         for name in [
             "import_source",
+            "import_cancel",
             "write_propose",
             "write_commit",
             "write_commit_all",
@@ -1202,6 +1643,22 @@ mod tests {
             false
         );
         assert_eq!(
+            tool_by_name("import_status")["inputSchema"]["required"],
+            json!(["jobId"])
+        );
+        assert_eq!(
+            tool_by_name("import_status")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            tool_by_name("import_cancel")["inputSchema"]["required"],
+            json!(["jobId"])
+        );
+        assert_eq!(
+            tool_by_name("import_cancel")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
             tool_by_name("write_commit_all")["inputSchema"]["required"],
             json!(["proposalIds"])
         );
@@ -1221,6 +1678,42 @@ mod tests {
             tool_by_name("write_reject")["annotations"]["readOnlyHint"],
             false
         );
+    }
+
+    #[test]
+    fn graph_ready_requires_materialized_graph_status() {
+        assert!(graph_status_is_ready(Some("rebuilt")));
+        assert!(graph_status_is_ready(Some("partially_applied")));
+        assert!(!graph_status_is_ready(Some("skipped")));
+        assert!(!graph_status_is_ready(Some("empty")));
+        assert!(!graph_status_is_ready(Some("failed")));
+        assert!(!graph_status_is_ready(Some("failed_no_materialization")));
+        assert!(!graph_status_is_ready(None));
+    }
+
+    #[test]
+    fn import_job_cancel_prevents_later_active_updates() {
+        let registry = ImportJobRegistry::default();
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let job_id = "import-test-cancel".to_string();
+        registry.insert(ImportJobSnapshot::queued(job_id.clone(), &scope));
+
+        let cancelled = registry.cancel(&job_id).expect("cancel job");
+        assert_eq!(cancelled.status, ImportJobStatus::Cancelled);
+        assert_eq!(cancelled.phase, ImportJobPhase::Cancelled);
+
+        registry.update_active(&job_id, |job| {
+            job.status = ImportJobStatus::Running;
+            job.phase = ImportJobPhase::Parsing;
+            job.progress_percent = 5;
+        });
+        let job = registry.get(&job_id).expect("job remains recorded");
+        assert_eq!(job.status, ImportJobStatus::Cancelled);
+        assert_eq!(job.phase, ImportJobPhase::Cancelled);
+        assert_eq!(job.progress_percent, 100);
     }
 
     #[test]

@@ -157,6 +157,8 @@ MCP, and resource reads.
 `hyprduck mcp serve` exposes read/search tools plus controlled mutating tools:
 
 - `import_source`
+- `import_status`
+- `import_cancel`
 - `get_context_pack`
 - `read_context_pack`
 - `search_documents`

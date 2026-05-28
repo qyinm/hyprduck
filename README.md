@@ -78,8 +78,8 @@ provenance, and agent-readable context.
 ## Current Status
 
 HyprDuck is in active development. The parser wedge, local workspace layout,
-Source Pack/Evidence Index artifacts, Context Pack v0, read-only MCP server, and
-document-context CLI aliases are implemented.
+Source Pack/Evidence Index artifacts, Context Pack v0, controlled MCP import/read
+surface, and document-context CLI aliases are implemented.
 
 The current demo path proves the protocol-level loop with a comparable MCP
 client dry run: import a known fixture, generate a schema-valid context pack,

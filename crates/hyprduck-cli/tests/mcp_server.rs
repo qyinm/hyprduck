@@ -72,6 +72,8 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         names,
         vec![
             "import_source",
+            "import_status",
+            "import_cancel",
             "get_context_pack",
             "read_context_pack",
             "search_documents",
@@ -106,6 +108,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .collect::<std::collections::BTreeMap<_, _>>();
     for name in [
         "get_context_pack",
+        "import_status",
         "read_context_pack",
         "search_documents",
         "search_brain",
@@ -123,6 +126,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     }
     for name in [
         "import_source",
+        "import_cancel",
         "write_propose",
         "write_commit",
         "write_commit_all",
@@ -731,24 +735,34 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
     assert!(!text.contains(import_root_arg.as_str()));
     let import_payload: Value = serde_json::from_str(text).expect("import payload");
     assert_eq!(import_payload["workspaceId"], "default");
-    let source_id = import_payload["sourceId"]
+    assert_eq!(import_payload["status"], "queued");
+    assert_eq!(import_payload["citationReady"], false);
+    let job_id = import_payload["jobId"]
+        .as_str()
+        .expect("import job id")
+        .to_string();
+    let status_payload = poll_import_until_citation_ready(
+        &mut stdin,
+        &mut reader,
+        &job_id,
+        "default",
+        root_dir_arg.clone(),
+    );
+    assert!(!status_payload.to_string().contains(root_dir_arg.as_str()));
+    assert!(!status_payload
+        .to_string()
+        .contains(import_root_arg.as_str()));
+    assert_eq!(status_payload["workspaceId"], "default");
+    assert_eq!(status_payload["citationReady"], true);
+    assert_eq!(status_payload["graphReady"], false);
+    assert_eq!(status_payload["graphStatus"], "skipped");
+    let source_id = status_payload["sourceId"]
         .as_str()
         .expect("import source id")
         .to_string();
     assert!(!source_id.trim().is_empty());
-    assert_eq!(
-        import_payload["sourcePack"]["schemaVersion"],
-        "hyprduck.source_pack.v0"
-    );
-    assert_eq!(
-        import_payload["evidenceIndex"]["schemaVersion"],
-        "hyprduck.evidence_index.v0"
-    );
-    assert!(import_payload["contextReady"]
-        .as_bool()
-        .expect("context ready"));
     assert!(
-        import_payload["evidenceCount"]
+        status_payload["evidenceCount"]
             .as_u64()
             .expect("evidence count")
             > 0
@@ -905,6 +919,49 @@ fn temp_test_dir(prefix: &str) -> std::path::PathBuf {
         .expect("system time")
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+fn poll_import_until_citation_ready(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+    job_id: &str,
+    workspace_id: &str,
+    root_dir: String,
+) -> Value {
+    let mut last_payload = Value::Null;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut attempt = 0;
+    while std::time::Instant::now() < deadline {
+        write_message(
+            stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4100 + attempt,
+                "method": "tools/call",
+                "params": {
+                    "name": "import_status",
+                    "arguments": {
+                        "workspaceId": workspace_id,
+                        "rootDir": root_dir.clone(),
+                        "jobId": job_id
+                    }
+                }
+            }),
+        );
+        let status_tool = read_message(reader);
+        assert_eq!(status_tool["result"]["isError"], false, "{status_tool:#?}");
+        let text = status_tool["result"]["content"][0]["text"]
+            .as_str()
+            .expect("status tool text");
+        let payload: Value = serde_json::from_str(text).expect("status payload");
+        if payload["citationReady"].as_bool().unwrap_or(false) {
+            return payload;
+        }
+        last_payload = payload;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        attempt += 1;
+    }
+    panic!("import job did not become citation-ready: {last_payload:#?}");
 }
 
 fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {

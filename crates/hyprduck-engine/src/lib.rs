@@ -276,10 +276,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     let mut graph_generation_skipped_reason = None;
     let mut graph_generation_error_message = None;
     if let Some(manifest) = &source_manifest {
-        let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
-            workspace_id: workspace_id.clone(),
-            root_dir: None,
-        })?;
+        let workspace_root = compile_workspace_root(manifest, &workspace_id)?;
         let chunks = chunk_source_markdown(manifest, &markdown);
         upsert_source_chunks(&workspace_root, manifest, &chunks)?;
     }
@@ -287,10 +284,7 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         .as_ref()
         .filter(|_| !request.skip_graph_generation.unwrap_or(false))
     {
-        let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
-            workspace_id: workspace_id.clone(),
-            root_dir: None,
-        })?;
+        let workspace_root = compile_workspace_root(manifest, &workspace_id)?;
         let chunks = chunk_source_markdown(manifest, &markdown);
         let snapshot = read_materialized_brain_snapshot(&workspace_root, &workspace_id)
             .unwrap_or_else(|_| empty_replayed_brain_snapshot(&workspace_id));
@@ -320,6 +314,28 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         graph_generation_status,
         graph_generation_skipped_reason,
         graph_generation_error_message,
+    })
+}
+
+fn compile_workspace_root(
+    manifest: &SourceArtifactManifest,
+    workspace_id: &str,
+) -> Result<PathBuf> {
+    if let Some(root) =
+        workspace_root_from_path_segments(&manifest.source_path, "sources", &manifest.source_id)
+            .or_else(|| {
+                workspace_root_from_path_segments(
+                    &manifest.markdown_path,
+                    "artifacts",
+                    &manifest.source_id,
+                )
+            })
+    {
+        return Ok(root);
+    }
+    resolve_brain_workspace_root(&BrainReadScope {
+        workspace_id: workspace_id.into(),
+        root_dir: None,
     })
 }
 

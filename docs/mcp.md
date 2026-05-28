@@ -79,7 +79,9 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
-| `import_source` | `sourcePath` | Import an allowlisted local PDF, DOCX, DOC, Markdown, or image file, then parse, compile, and expose Source Pack / Evidence Index artifacts for cited context. |
+| `import_source` | `sourcePath` | Start importing an allowlisted local PDF, DOCX, DOC, Markdown, or image file and return an import `jobId`. |
+| `import_status` | `jobId` | Poll an import job. Agents can use source evidence once `citationReady` is true; graph/wiki inspection follows `graphReady`. |
+| `import_cancel` | `jobId` | Request best-effort cancellation for a queued or running import job. |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
 | `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
@@ -152,12 +154,19 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"import_source","arguments":{"workspaceId":"default","sourcePath":"/allowed/imports/source.md","format":"markdown"}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"import_status","arguments":{"workspaceId":"default","jobId":"import-job-id-from-import_source"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
+
+`import_source` returns before parsing and graph/wiki materialization finish.
+Poll `import_status` until `citationReady` is true before asking for a
+Context Pack or page evidence. `graphReady` is a separate inspection signal for
+graph/wiki surfaces; a graph failure after citation readiness does not erase the
+source evidence.
 
 A typical agent-chat approval flow for controlled graph/wiki/memory mutation is:
 
@@ -183,7 +192,8 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
   discarded without producing brain events.
 - `import_source` is a mutating tool. It accepts only regular files below
   `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS`, never arbitrary agent-provided paths,
-  and returns managed source/evidence IDs rather than raw local paths.
+  and returns an import job with managed source/evidence IDs available through
+  `import_status` once citation readiness is reached.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
 - `rootDir` is disabled by default and, when explicitly enabled for development,
