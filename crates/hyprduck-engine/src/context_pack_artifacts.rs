@@ -1,11 +1,14 @@
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+#[cfg(test)]
+use hyprduck_engine_types::SourceId;
 use hyprduck_engine_types::{
     ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0,
-    EvidenceIndexV0, SourceId, SourcePackV0, SourceRecord,
+    EvidenceIndexV0, SourcePackV0, SourceRecord,
 };
 
 use crate::brain_repo::BrainArtifactRepository;

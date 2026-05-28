@@ -52,7 +52,7 @@ Example MCP client entry:
 }
 ```
 
-## Read Tools
+## Tools
 
 All tools accept an optional `workspaceId` argument. If omitted, `workspaceId`
 defaults to `default` and the engine resolves the local HyprDuck workspace root.
@@ -71,8 +71,17 @@ Tool responses redact absolute local filesystem paths by default. Debug clients
 can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
 paths.
 
+`import_source` is disabled unless the MCP server process is started with
+`HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` set to one or more canonical import roots.
+The server canonicalizes `sourcePath`, requires it to be a regular file under
+one of those roots, and imports it into HyprDuck's managed workspace artifacts.
+This import allowlist is separate from the development-only `rootDir` allowlist.
+
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
+| `import_source` | `sourcePath` | Start importing an allowlisted local PDF, DOCX, DOC, Markdown, or image file and return an import `jobId`. |
+| `import_status` | `jobId` | Poll an import job. Agents can use source evidence once `citationReady` is true; graph/wiki inspection follows `graphReady`. |
+| `import_cancel` | `jobId` | Request best-effort cancellation for a queued or running import job. |
 | `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
 | `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
@@ -85,6 +94,11 @@ paths.
 | `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |
+| `write_propose` | `contentType`, `title`, `body`, `evidenceRefs` | Stage an agent-proposed knowledge item after validating every evidence ref against the current workspace snapshot. |
+| `write_commit` | `proposalId` | Approve one pending proposal and persist it as a `MemoryAccepted` brain event. |
+| `write_commit_all` | `proposalIds` | Approve multiple pending proposals by explicit proposal ID list. |
+| `write_list` | none | List pending proposals without mutating state. |
+| `write_reject` | `proposalId` | Reject one pending proposal and remove it without creating a brain event. |
 
 ## Read Resources
 
@@ -139,18 +153,47 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"import_source","arguments":{"workspaceId":"default","sourcePath":"/allowed/imports/source.md","format":"markdown"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"import_status","arguments":{"workspaceId":"default","jobId":"import-job-id-from-import_source"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
+
+`import_source` returns before parsing and graph/wiki materialization finish.
+Poll `import_status` until `citationReady` is true before asking for a
+Context Pack or page evidence. `graphReady` is a separate inspection signal for
+graph/wiki surfaces; a graph failure after citation readiness does not erase the
+source evidence.
+
+A typical agent-chat approval flow for controlled graph/wiki/memory mutation is:
+
+1. Agent calls `write_propose` with evidence-backed content.
+2. HyprDuck validates `evidenceRefs` before staging the proposal.
+3. The chat UI asks the user to approve, reject, or approve a visible batch.
+4. Approval maps to `write_commit` or `write_commit_all`; rejection maps to `write_reject`.
+5. Approved memory writes append `MemoryAccepted` events and update `memory/records.json`, so later `search_brain` and `get_context_pack` calls can retrieve the saved knowledge.
 
 Tool results return JSON as text content so MCP clients can pass the complete
 source, evidence, node, claim, relation, memory, and event IDs back to agents.
 
 ## Security Notes
 
-- MCP is read-only by default; the default `tools/list` exposes only
-  read/search/inspect tools and no mutation tools.
+- MCP is a controlled read/write agent workflow surface, not a read-only API.
+  Agents may propose evidence-backed changes to HyprDuck knowledge state,
+  including memory today and graph/wiki save-back or correction flows as those
+  tools are exposed. Mutating tools must be narrow, auditable, accurately
+  annotated with `readOnlyHint: false`, and backed by explicit approval calls.
+- Pending proposal inspection such as `write_list` is read-only even though it
+  belongs to the write workflow. Approval happens through explicit
+  `write_commit` / `write_commit_all` MCP calls, and rejected proposals are
+  discarded without producing brain events.
+- `import_source` is a mutating tool. It accepts only regular files below
+  `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS`, never arbitrary agent-provided paths,
+  and returns an import job with managed source/evidence IDs available through
+  `import_status` once citation readiness is reached.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
 - `rootDir` is disabled by default and, when explicitly enabled for development,

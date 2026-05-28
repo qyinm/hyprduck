@@ -21,7 +21,10 @@ use hyprduck_engine_types::{
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
     RetryFailedPagesRequest, RetryFailedPagesResponseData, RuntimeReadinessResponseData,
     SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
-    ValidateProviderRequest, ValidateProviderResponseData,
+    ValidateProviderRequest, ValidateProviderResponseData, WriteCommitAllRequest,
+    WriteCommitAllResponseData, WriteCommitRequest, WriteCommitResponseData, WriteListRequest,
+    WriteListResponseData, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
+    WriteRejectResponseData,
 };
 
 pub trait EngineClient {
@@ -83,6 +86,14 @@ pub trait EngineClient {
         config: Option<EngineConfigPayload>,
     ) -> Result<ValidateProviderResponseData>;
     fn check_readiness(&self) -> Result<RuntimeReadinessResponseData>;
+    fn write_propose(&self, request: WriteProposeRequest) -> Result<WriteProposeResponseData>;
+    fn write_commit(&self, request: WriteCommitRequest) -> Result<WriteCommitResponseData>;
+    fn write_commit_all(
+        &self,
+        request: WriteCommitAllRequest,
+    ) -> Result<WriteCommitAllResponseData>;
+    fn write_list(&self, request: WriteListRequest) -> Result<WriteListResponseData>;
+    fn write_reject(&self, request: WriteRejectRequest) -> Result<WriteRejectResponseData>;
 }
 
 #[derive(Debug, Clone)]
@@ -457,6 +468,49 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<RuntimeReadinessResponseData, RuntimeReadinessResponseData>(
             EngineRequest::CheckReadiness(CheckReadinessRequest {}),
             EngineCommand::CheckReadiness,
+            None,
+        )
+    }
+
+    fn write_propose(&self, request: WriteProposeRequest) -> Result<WriteProposeResponseData> {
+        self.run_command::<WriteProposeResponseData, WriteProposeResponseData>(
+            EngineRequest::WritePropose(request),
+            EngineCommand::WritePropose,
+            None,
+        )
+    }
+
+    fn write_commit(&self, request: WriteCommitRequest) -> Result<WriteCommitResponseData> {
+        self.run_command::<WriteCommitResponseData, WriteCommitResponseData>(
+            EngineRequest::WriteCommit(request),
+            EngineCommand::WriteCommit,
+            None,
+        )
+    }
+
+    fn write_commit_all(
+        &self,
+        request: WriteCommitAllRequest,
+    ) -> Result<WriteCommitAllResponseData> {
+        self.run_command::<WriteCommitAllResponseData, WriteCommitAllResponseData>(
+            EngineRequest::WriteCommitAll(request),
+            EngineCommand::WriteCommitAll,
+            None,
+        )
+    }
+
+    fn write_list(&self, request: WriteListRequest) -> Result<WriteListResponseData> {
+        self.run_command::<WriteListResponseData, WriteListResponseData>(
+            EngineRequest::WriteList(request),
+            EngineCommand::WriteList,
+            None,
+        )
+    }
+
+    fn write_reject(&self, request: WriteRejectRequest) -> Result<WriteRejectResponseData> {
+        self.run_command::<WriteRejectResponseData, WriteRejectResponseData>(
+            EngineRequest::WriteReject(request),
+            EngineCommand::WriteReject,
             None,
         )
     }

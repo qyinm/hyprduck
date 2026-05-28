@@ -19,6 +19,251 @@ fn brain_health_is_clean_for_empty_workspace() {
 }
 
 #[test]
+fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-agent-write-1".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Agent-session write MCP stores approved knowledge.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-agent-write".into()),
+        markdown_path: Some("artifacts/source-agent-write/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "memory".into(),
+        title: "Agent-session write MCP".into(),
+        body: "Approved agent-session write MCP knowledge is reusable.".into(),
+        evidence_refs: vec!["ev-agent-write-1".into()],
+    })
+    .expect("propose write");
+
+    let pending = handle_write_list(WriteListRequest {
+        scope: scope.clone(),
+    })
+    .expect("list proposals");
+    assert_eq!(pending.proposals.len(), 1);
+    assert_eq!(pending.proposals[0].proposal_id, proposal.proposal_id);
+
+    let committed = handle_write_commit(WriteCommitRequest {
+        scope: scope.clone(),
+        proposal_id: proposal.proposal_id.clone(),
+    })
+    .expect("commit proposal");
+    assert!(committed.event_id.starts_with("evt-"));
+    assert!(committed.memory_id.starts_with("memory-"));
+    assert!(!workspace_root
+        .join("proposals")
+        .join(format!("{}.json", proposal.proposal_id))
+        .exists());
+
+    let events = fs::read_to_string(workspace_root.join("events/brain_events.jsonl"))
+        .expect("read event log");
+    assert!(events.contains("memory_accepted"));
+    assert!(events.contains("agent_session_write"));
+
+    let search = handle_search_brain(SearchBrainRequest {
+        scope: scope.clone(),
+        query: "reusable".into(),
+        limit: Some(10),
+    })
+    .expect("search brain");
+    assert!(search
+        .results
+        .iter()
+        .any(|result| result.id == committed.memory_id));
+
+    let pack = handle_get_context_pack(GetContextPackRequest {
+        scope,
+        query: "reusable".into(),
+        selected_node_id: None,
+        budget: Some(8000),
+        persist: false,
+    })
+    .expect("get context pack");
+    assert!(pack
+        .context_pack
+        .memories
+        .iter()
+        .any(|memory| memory.memory_id == committed.memory_id));
+}
+
+#[test]
+fn agent_session_write_rejects_unknown_evidence_ref() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: Vec::new(),
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty::<Vec<EvidenceRef>>(&workspace_root.join("graph/evidence.json"), &vec![])
+        .expect("write evidence");
+
+    let error = handle_write_propose(WriteProposeRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(temp.path().display().to_string()),
+        },
+        content_type: "memory".into(),
+        title: "Rejected".into(),
+        body: "Missing evidence should reject this proposal.".into(),
+        evidence_refs: vec!["missing-ev".into()],
+    })
+    .expect_err("unknown evidence rejected");
+    assert!(error.to_string().contains("missing-ev"));
+}
+
+#[test]
+fn agent_session_write_rejects_path_traversal_proposal_id() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("memory")).expect("memory dir");
+    write_json_pretty::<Vec<MemoryRecord>>(&workspace_root.join("memory/records.json"), &vec![])
+        .expect("write memory records");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let error = handle_write_reject(WriteRejectRequest {
+        scope,
+        proposal_id: "../memory/records".into(),
+    })
+    .expect_err("path traversal proposal id rejected");
+
+    assert!(error.to_string().contains("invalid proposalId"));
+    assert!(workspace_root.join("memory/records.json").exists());
+}
+
+#[test]
+fn agent_session_write_revalidates_evidence_on_commit() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-agent-write-stale".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Agent-session write MCP validates stale evidence.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-agent-write".into()),
+        markdown_path: Some("artifacts/source-agent-write/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let mut snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "memory".into(),
+        title: "Stale evidence".into(),
+        body: "This proposal should not commit after evidence changes.".into(),
+        evidence_refs: vec!["ev-agent-write-stale".into()],
+    })
+    .expect("propose write");
+
+    snapshot.evidence.clear();
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write stale manifest");
+    write_json_pretty::<Vec<EvidenceRef>>(&workspace_root.join("graph/evidence.json"), &vec![])
+        .expect("write stale evidence");
+
+    let error = handle_write_commit(WriteCommitRequest {
+        scope,
+        proposal_id: proposal.proposal_id,
+    })
+    .expect_err("stale evidence rejected");
+    assert!(error
+        .to_string()
+        .contains("ev-agent-write-stale was not found"));
+}
+
+#[test]
 fn brain_health_reports_source_readiness_metadata() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);

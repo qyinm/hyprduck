@@ -1,30 +1,39 @@
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    BrainReadScope, GetBrainHealthRequest, GetContextPackRequest, ReadContextPackRequest,
-    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest,
-    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    BrainReadScope, CompileProjectRequest, DocumentFormat, GetBrainHealthRequest,
+    GetContextPackRequest, ParseInput, ParseOptions, ParseOutputTarget, ParseRequest,
+    ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest,
+    ReadPageEvidenceRequest, ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest,
+    SearchBrainRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
+    WriteProposeRequest, WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
 const ROOT_DIR_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_ROOTS";
+const IMPORT_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS";
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let client = SubprocessEngineClient::default();
+    let state = McpServerState::default();
 
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_message(&client, &line) {
+        if let Some(response) = handle_message(&client, &state, &line) {
             serde_json::to_writer(&mut stdout, &response)
                 .context("failed to encode MCP response")?;
             stdout
@@ -37,7 +46,12 @@ pub fn run_mcp_server() -> Result<()> {
     Ok(())
 }
 
-fn handle_message(client: &dyn EngineClient, line: &str) -> Option<Value> {
+#[derive(Clone, Default)]
+struct McpServerState {
+    import_jobs: ImportJobRegistry,
+}
+
+fn handle_message(client: &dyn EngineClient, state: &McpServerState, line: &str) -> Option<Value> {
     let message = match serde_json::from_str::<Value>(line) {
         Ok(message) => message,
         Err(error) => {
@@ -65,7 +79,7 @@ fn handle_message(client: &dyn EngineClient, line: &str) -> Option<Value> {
         "initialize" => Some(success_response(id, initialize_result(&message))),
         "ping" => Some(success_response(id, json!({}))),
         "tools/list" => Some(success_response(id, json!({ "tools": tool_definitions() }))),
-        "tools/call" => Some(handle_tool_call(client, id, message.get("params"))),
+        "tools/call" => Some(handle_tool_call(client, state, id, message.get("params"))),
         "resources/list" => Some(success_response(
             id,
             json!({ "resources": resource_definitions() }),
@@ -113,7 +127,12 @@ fn initialize_result(message: &Value) -> Value {
     })
 }
 
-fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
+fn handle_tool_call(
+    client: &dyn EngineClient,
+    state: &McpServerState,
+    id: Value,
+    params: Option<&Value>,
+) -> Value {
     let params = params.unwrap_or(&Value::Null);
     let name = match params.get("name").and_then(Value::as_str) {
         Some(name) => name,
@@ -144,7 +163,7 @@ fn handle_tool_call(client: &dyn EngineClient, id: Value, params: Option<&Value>
         }
     };
 
-    let result = match call_tool(client, name, arguments) {
+    let result = match call_tool(client, state, name, arguments) {
         Ok(tool_result) => {
             let value = if include_local_paths {
                 tool_result.value
@@ -320,8 +339,437 @@ fn percent_decode(value: &str) -> Result<String> {
     String::from_utf8(decoded).context("resource uri contains invalid utf-8")
 }
 
+#[derive(Clone, Default)]
+struct ImportJobRegistry {
+    jobs: Arc<Mutex<BTreeMap<String, ImportJobSnapshot>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportJobSnapshot {
+    job_id: String,
+    workspace_id: String,
+    root_dir: Option<String>,
+    status: ImportJobStatus,
+    phase: ImportJobPhase,
+    progress_percent: u8,
+    source_id: Option<String>,
+    page_count: Option<usize>,
+    evidence_count: Option<usize>,
+    citation_ready: bool,
+    graph_ready: bool,
+    graph_status: Option<String>,
+    graph_generation_skipped_reason: Option<String>,
+    graph_generation_error_message: Option<String>,
+    warnings: Vec<String>,
+    error: Option<String>,
+    cancel_requested: bool,
+    created_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportJobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportJobPhase {
+    Queued,
+    Parsing,
+    CitationPackaging,
+    CitationReady,
+    GraphMaterializing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ImportJobRegistry {
+    fn insert(&self, job: ImportJobSnapshot) {
+        self.jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .insert(job.job_id.clone(), job);
+    }
+
+    fn get(&self, job_id: &str) -> Option<ImportJobSnapshot> {
+        self.jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .get(job_id)
+            .cloned()
+    }
+
+    fn update<F>(&self, job_id: &str, apply: F)
+    where
+        F: FnOnce(&mut ImportJobSnapshot),
+    {
+        if let Some(job) = self
+            .jobs
+            .lock()
+            .expect("import job registry lock poisoned")
+            .get_mut(job_id)
+        {
+            apply(job);
+            job.updated_at = unix_timestamp_seconds();
+        }
+    }
+
+    fn update_active<F>(&self, job_id: &str, apply: F)
+    where
+        F: FnOnce(&mut ImportJobSnapshot),
+    {
+        self.update(job_id, |job| {
+            if job.status.is_terminal() {
+                return;
+            }
+            if job.cancel_requested {
+                job.status = ImportJobStatus::Cancelled;
+                job.phase = ImportJobPhase::Cancelled;
+                job.progress_percent = 100;
+                return;
+            }
+            apply(job);
+        });
+    }
+
+    fn cancel(&self, job_id: &str) -> Result<ImportJobSnapshot> {
+        let mut jobs = self.jobs.lock().expect("import job registry lock poisoned");
+        let job = jobs
+            .get_mut(job_id)
+            .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+        if !job.status.is_terminal() {
+            job.cancel_requested = true;
+            job.warnings.push(
+                "cancel_requested; running engine steps may finish before cancellation".into(),
+            );
+            if matches!(job.phase, ImportJobPhase::Queued) {
+                job.status = ImportJobStatus::Cancelled;
+                job.phase = ImportJobPhase::Cancelled;
+                job.progress_percent = 100;
+            }
+            job.updated_at = unix_timestamp_seconds();
+        }
+        Ok(job.clone())
+    }
+
+    fn mark_cancelled_if_requested(&self, job_id: &str) -> bool {
+        let mut jobs = self.jobs.lock().expect("import job registry lock poisoned");
+        let Some(job) = jobs.get_mut(job_id) else {
+            return false;
+        };
+        if !job.cancel_requested {
+            return false;
+        }
+        if !job.status.is_terminal() {
+            job.status = ImportJobStatus::Cancelled;
+            job.phase = ImportJobPhase::Cancelled;
+            job.progress_percent = 100;
+            job.updated_at = unix_timestamp_seconds();
+        }
+        true
+    }
+}
+
+impl ImportJobSnapshot {
+    fn queued(job_id: String, scope: &BrainReadScope) -> Self {
+        let now = unix_timestamp_seconds();
+        Self {
+            job_id,
+            workspace_id: scope.workspace_id.clone(),
+            root_dir: scope.root_dir.clone(),
+            status: ImportJobStatus::Queued,
+            phase: ImportJobPhase::Queued,
+            progress_percent: 0,
+            source_id: None,
+            page_count: None,
+            evidence_count: None,
+            citation_ready: false,
+            graph_ready: false,
+            graph_status: None,
+            graph_generation_skipped_reason: None,
+            graph_generation_error_message: None,
+            warnings: Vec::new(),
+            error: None,
+            cancel_requested: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "jobId": self.job_id,
+            "workspaceId": self.workspace_id,
+            "status": self.status.as_str(),
+            "phase": self.phase.as_str(),
+            "progressPercent": self.progress_percent,
+            "sourceId": self.source_id,
+            "pageCount": self.page_count,
+            "evidenceCount": self.evidence_count,
+            "citationReady": self.citation_ready,
+            "graphReady": self.graph_ready,
+            "graphStatus": self.graph_status,
+            "graphGenerationSkippedReason": self.graph_generation_skipped_reason,
+            "graphGenerationErrorMessage": self.graph_generation_error_message,
+            "warnings": self.warnings,
+            "error": self.error,
+            "cancelRequested": self.cancel_requested,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        })
+    }
+}
+
+impl ImportJobStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl ImportJobPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Parsing => "parsing",
+            Self::CitationPackaging => "citation_packaging",
+            Self::CitationReady => "citation_ready",
+            Self::GraphMaterializing => "graph_materializing",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+struct ImportJobRequest {
+    job_id: String,
+    scope: BrainReadScope,
+    source_path: PathBuf,
+    format: DocumentFormat,
+    name: Option<String>,
+    skip_graph_generation: bool,
+}
+
+fn next_import_job_id() -> String {
+    format!("import-{}-{}", std::process::id(), unix_timestamp_millis())
+}
+
+fn unix_timestamp_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn spawn_import_job(registry: ImportJobRegistry, request: ImportJobRequest) {
+    thread::spawn(move || {
+        if let Err(error) = run_import_job(&registry, &request) {
+            registry.update(&request.job_id, |job| {
+                if !matches!(job.status, ImportJobStatus::Cancelled) {
+                    job.status = ImportJobStatus::Failed;
+                    job.phase = ImportJobPhase::Failed;
+                    job.progress_percent = 100;
+                    job.error = Some(error.to_string());
+                }
+            });
+        }
+    });
+}
+
+fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> Result<()> {
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let client = SubprocessEngineClient::default();
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::Parsing;
+        job.progress_percent = 5;
+    });
+
+    let parse = client.parse(
+        ParseRequest {
+            version: "1".into(),
+            input: ParseInput {
+                path: request.source_path.display().to_string(),
+                format: request.format.clone(),
+            },
+            template: "General".into(),
+            options: ParseOptions::default(),
+            output: Some(ParseOutputTarget {
+                root_dir: request.scope.root_dir.clone(),
+                name: request.name.clone(),
+                workspace_id: Some(request.scope.workspace_id.clone()),
+                source_id: None,
+            }),
+        },
+        &mut |progress| {
+            let (phase, progress_percent) = import_phase_from_parse_progress(&progress);
+            registry.update_active(&request.job_id, |job| {
+                job.status = ImportJobStatus::Running;
+                job.phase = phase;
+                job.progress_percent = progress_percent;
+            });
+        },
+    )?;
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let manifest = parse
+        .source_manifest
+        .ok_or_else(|| anyhow!("import_source parse did not produce a source manifest"))?;
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::CitationPackaging;
+        job.progress_percent = 70;
+        job.source_id = Some(manifest.source_id.clone());
+        job.page_count = Some(parse.result.metadata.page_count);
+    });
+
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let compile = client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(request.scope.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: Some(true),
+    })?;
+    let page_evidence = client.read_page_evidence(ReadPageEvidenceRequest {
+        scope: request.scope.clone(),
+        source_id: compile.source_id.clone(),
+        page: None,
+    })?;
+    let evidence_count = page_evidence.evidence.len();
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::CitationReady;
+        job.progress_percent = if request.skip_graph_generation {
+            100
+        } else {
+            82
+        };
+        job.source_id = Some(compile.source_id.clone());
+        job.evidence_count = Some(evidence_count);
+        job.citation_ready = evidence_count > 0;
+        if request.skip_graph_generation {
+            job.status = ImportJobStatus::Completed;
+            job.phase = ImportJobPhase::Completed;
+            job.graph_ready = false;
+            job.graph_status = Some("skipped".into());
+            job.graph_generation_skipped_reason = Some("skipGraphGeneration requested".into());
+        }
+    });
+    if registry.mark_cancelled_if_requested(&request.job_id) || request.skip_graph_generation {
+        return Ok(());
+    }
+
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Running;
+        job.phase = ImportJobPhase::GraphMaterializing;
+        job.progress_percent = 88;
+    });
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let graph_compile = client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(request.scope.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: Some(false),
+    })?;
+    if registry.mark_cancelled_if_requested(&request.job_id) {
+        return Ok(());
+    }
+
+    let graph_status = graph_compile.graph_generation_status.clone();
+    let graph_ready = graph_status_is_ready(graph_status.as_deref());
+    registry.update_active(&request.job_id, |job| {
+        job.status = ImportJobStatus::Completed;
+        job.phase = ImportJobPhase::Completed;
+        job.progress_percent = 100;
+        job.graph_ready = graph_ready;
+        job.graph_status = graph_status.or_else(|| Some("unknown".into()));
+        job.graph_generation_skipped_reason = graph_compile.graph_generation_skipped_reason;
+        job.graph_generation_error_message = graph_compile.graph_generation_error_message;
+    });
+    Ok(())
+}
+
+fn graph_status_is_ready(status: Option<&str>) -> bool {
+    matches!(status, Some("rebuilt" | "partially_applied"))
+}
+
+fn import_phase_from_parse_progress(
+    progress: &hyprduck_engine_types::ParseProgress,
+) -> (ImportJobPhase, u8) {
+    use hyprduck_engine_types::ParseProgress;
+
+    match progress {
+        ParseProgress::Queued => (ImportJobPhase::Queued, 2),
+        ParseProgress::ConvertingPages { current, total } => (
+            ImportJobPhase::Parsing,
+            scaled_progress(*current as usize, *total as usize, 10, 35),
+        ),
+        ParseProgress::Parsing { current, total } => (
+            ImportJobPhase::Parsing,
+            scaled_progress(*current as usize, *total as usize, 35, 65),
+        ),
+        ParseProgress::Packaging => (ImportJobPhase::CitationPackaging, 68),
+        ParseProgress::Completed => (ImportJobPhase::CitationPackaging, 70),
+        ParseProgress::Failed { .. } => (ImportJobPhase::Failed, 100),
+    }
+}
+
+fn scaled_progress(current: usize, total: usize, start: u8, end: u8) -> u8 {
+    if total == 0 {
+        return start;
+    }
+    let span = end.saturating_sub(start) as usize;
+    let bounded_current = current.min(total);
+    (start as usize + (span * bounded_current / total)) as u8
+}
+
+fn ensure_import_job_scope(job: &ImportJobSnapshot, scope: &BrainReadScope) -> Result<()> {
+    if job.workspace_id != scope.workspace_id || job.root_dir != scope.root_dir {
+        return Err(anyhow!("import job not found in requested workspace scope"));
+    }
+    Ok(())
+}
+
 fn call_tool(
     client: &dyn EngineClient,
+    state: &McpServerState,
     name: &str,
     arguments: &Map<String, Value>,
 ) -> Result<McpToolResult> {
@@ -333,6 +781,49 @@ fn call_tool(
         .flatten();
 
     let value = match name {
+        "import_source" => {
+            let source_path = required_string(arguments, "sourcePath")?;
+            let source_path = validate_import_source_path(&source_path)?;
+            let format =
+                import_document_format(&source_path, optional_string(arguments, "format")?)?;
+            let name = optional_string(arguments, "name")?;
+            let skip_graph_generation =
+                optional_bool(arguments, "skipGraphGeneration")?.unwrap_or(false);
+            let job_id = next_import_job_id();
+            let job = ImportJobSnapshot::queued(job_id.clone(), &scope);
+            state.import_jobs.insert(job.clone());
+            spawn_import_job(
+                state.import_jobs.clone(),
+                ImportJobRequest {
+                    job_id,
+                    scope,
+                    source_path,
+                    format,
+                    name,
+                    skip_graph_generation,
+                },
+            );
+            job.to_value()
+        }
+        "import_status" => {
+            let job_id = required_string(arguments, "jobId")?;
+            let job = state
+                .import_jobs
+                .get(&job_id)
+                .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+            ensure_import_job_scope(&job, &scope)?;
+            job.to_value()
+        }
+        "import_cancel" => {
+            let job_id = required_string(arguments, "jobId")?;
+            let job = state
+                .import_jobs
+                .get(&job_id)
+                .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
+            ensure_import_job_scope(&job, &scope)?;
+            let job = state.import_jobs.cancel(&job_id)?;
+            job.to_value()
+        }
         "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
             let limit = optional_usize(arguments, "limit")?;
@@ -414,6 +905,35 @@ fn call_tool(
         }
         "read_health" => {
             serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
+        }
+        "write_propose" => {
+            let content_type = required_string(arguments, "contentType")?;
+            let title = required_string(arguments, "title")?;
+            let body = required_string(arguments, "body")?;
+            let evidence_refs = required_string_array(arguments, "evidenceRefs")?;
+            serde_json::to_value(client.write_propose(WriteProposeRequest {
+                scope,
+                content_type,
+                title,
+                body,
+                evidence_refs,
+            })?)?
+        }
+        "write_commit" => {
+            let proposal_id = required_string(arguments, "proposalId")?;
+            serde_json::to_value(client.write_commit(WriteCommitRequest { scope, proposal_id })?)?
+        }
+        "write_commit_all" => {
+            let proposal_ids = required_string_array(arguments, "proposalIds")?;
+            serde_json::to_value(client.write_commit_all(WriteCommitAllRequest {
+                scope,
+                proposal_ids,
+            })?)?
+        }
+        "write_list" => serde_json::to_value(client.write_list(WriteListRequest { scope })?)?,
+        "write_reject" => {
+            let proposal_id = required_string(arguments, "proposalId")?;
+            serde_json::to_value(client.write_reject(WriteRejectRequest { scope, proposal_id })?)?
         }
         _ => return Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
     };
@@ -536,6 +1056,77 @@ fn allowed_root_dirs() -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
+fn validate_import_source_path(raw_path: &str) -> Result<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("argument sourcePath cannot be empty"));
+    }
+
+    let source = PathBuf::from(trimmed)
+        .canonicalize()
+        .with_context(|| "sourcePath does not exist or cannot be read")?;
+    if !source.is_file() {
+        return Err(anyhow!("sourcePath must point to a regular file"));
+    }
+
+    let roots = allowed_import_root_dirs()?;
+    if roots.iter().any(|root| source.starts_with(root)) {
+        Ok(source)
+    } else {
+        Err(anyhow!(
+            "sourcePath is outside HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"
+        ))
+    }
+}
+
+fn allowed_import_root_dirs() -> Result<Vec<PathBuf>> {
+    let raw = std::env::var_os(IMPORT_ALLOWED_ROOTS_ENV).ok_or_else(|| {
+        anyhow!("MCP import is disabled: set HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS to one or more approved roots")
+    })?;
+    let roots = std::env::split_paths(&raw)
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| {
+            let root = path
+                .canonicalize()
+                .with_context(|| "allowed import root does not exist or cannot be read")?;
+            if !root.is_dir() {
+                return Err(anyhow!("allowed import root must be a directory"));
+            }
+            Ok(root)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if roots.is_empty() {
+        return Err(anyhow!(
+            "MCP import is disabled: no allowed import roots configured"
+        ));
+    }
+    Ok(roots)
+}
+
+fn import_document_format(path: &Path, explicit: Option<String>) -> Result<DocumentFormat> {
+    let raw = explicit
+        .map(|value| value.to_ascii_lowercase())
+        .or_else(|| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+        });
+    match raw.as_deref() {
+        Some("pdf") => Ok(DocumentFormat::Pdf),
+        Some("docx") => Ok(DocumentFormat::Docx),
+        Some("doc") => Ok(DocumentFormat::Doc),
+        Some("md") | Some("markdown") => Ok(DocumentFormat::Markdown),
+        Some("image") | Some("png") | Some("jpg") | Some("jpeg") | Some("webp") | Some("heic")
+        | Some("tiff") => Ok(DocumentFormat::Image),
+        Some(other) => Err(anyhow!(
+            "unsupported import format: {other}; supported formats: pdf, docx, doc, markdown, image"
+        )),
+        None => Err(anyhow!(
+            "cannot infer import format; pass format as pdf, docx, doc, markdown, or image"
+        )),
+    }
+}
+
 fn canonicalize_mcp_root(path: impl AsRef<Path>) -> Result<PathBuf> {
     path.as_ref()
         .canonicalize()
@@ -575,6 +1166,21 @@ fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bo
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(_) => Err(anyhow!("argument {name} must be a boolean")),
         None => Ok(None),
+    }
+}
+
+fn required_string_array(arguments: &Map<String, Value>, name: &str) -> Result<Vec<String>> {
+    match arguments.get(name) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| match value {
+                Value::String(s) if !s.trim().is_empty() => Ok(s.clone()),
+                Value::String(_) => Err(anyhow!("element in {name} cannot be empty")),
+                _ => Err(anyhow!("each element in {name} must be a string")),
+            })
+            .collect(),
+        Some(_) => Err(anyhow!("argument {name} must be an array of strings")),
+        None => Err(anyhow!("missing required argument: {name}")),
     }
 }
 
@@ -705,6 +1311,36 @@ fn resource_definitions() -> Vec<Value> {
 fn tool_definitions() -> Vec<Value> {
     vec![
         tool_definition(
+            "import_source",
+            "Start importing an allowlisted local document into HyprDuck and return an import job for polling.",
+            json!({
+                "sourcePath": { "type": "string", "description": "Path to a local PDF, DOCX, DOC, Markdown, or image file under HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS." },
+                "name": { "type": "string", "description": "Optional display/output name for the imported source." },
+                "format": { "type": "string", "enum": ["pdf", "docx", "doc", "markdown", "image"], "description": "Optional import format. Defaults to extension inference." },
+                "skipGraphGeneration": { "type": "boolean", "description": "Skip provider-backed graph/wiki generation after citation-ready import. Defaults to false; citation readiness is reported before graph readiness." },
+            }),
+            vec!["sourcePath"],
+            false,
+        ),
+        tool_definition(
+            "import_status",
+            "Poll a HyprDuck import job until citationReady and, when enabled, graphReady.",
+            json!({
+                "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+            }),
+            vec!["jobId"],
+            true,
+        ),
+        tool_definition(
+            "import_cancel",
+            "Request cancellation for a HyprDuck import job.",
+            json!({
+                "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+            }),
+            vec!["jobId"],
+            false,
+        ),
+        tool_definition(
             "get_context_pack",
             "Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace.",
             json!({
@@ -820,6 +1456,52 @@ fn tool_definitions() -> Vec<Value> {
             Vec::new(),
             true,
         ),
+        tool_definition(
+            "write_propose",
+            "Propose an evidence-backed knowledge item for approval. Evidence refs must exist in the current workspace snapshot.",
+            json!({
+                "contentType": { "type": "string", "description": "Content type (e.g., 'memory')." },
+                "title": { "type": "string", "description": "Human-readable title for the knowledge item." },
+                "body": { "type": "string", "description": "The knowledge content body." },
+                "evidenceRefs": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs from the current workspace snapshot that back this knowledge item." },
+            }),
+            vec!["contentType", "title", "body", "evidenceRefs"],
+            false,
+        ),
+        tool_definition(
+            "write_commit",
+            "Approve a pending proposal and persist it as a MemoryAccepted brain event.",
+            json!({
+                "proposalId": { "type": "string", "description": "Proposal ID returned by write_propose." },
+            }),
+            vec!["proposalId"],
+            false,
+        ),
+        tool_definition(
+            "write_commit_all",
+            "Approve multiple pending proposals in a single batch call.",
+            json!({
+                "proposalIds": { "type": "array", "items": { "type": "string" }, "description": "Array of proposal IDs to commit." },
+            }),
+            vec!["proposalIds"],
+            false,
+        ),
+        tool_definition(
+            "write_list",
+            "List all pending proposals.",
+            json!({}),
+            Vec::new(),
+            true,
+        ),
+        tool_definition(
+            "write_reject",
+            "Reject a pending proposal and remove it from the proposals directory.",
+            json!({
+                "proposalId": { "type": "string", "description": "Proposal ID to reject." },
+            }),
+            vec!["proposalId"],
+            false,
+        ),
     ]
 }
 
@@ -898,11 +1580,17 @@ mod tests {
     fn clear_root_dir_env() {
         std::env::remove_var(ROOT_DIR_ENV);
         std::env::remove_var(ROOT_DIR_ALLOWED_ROOTS_ENV);
+        std::env::remove_var(IMPORT_ALLOWED_ROOTS_ENV);
     }
 
     fn set_allowed_roots(paths: &[&Path]) {
         let joined = std::env::join_paths(paths).expect("join allowed roots");
         std::env::set_var(ROOT_DIR_ALLOWED_ROOTS_ENV, joined);
+    }
+
+    fn set_allowed_import_roots(paths: &[&Path]) {
+        let joined = std::env::join_paths(paths).expect("join allowed import roots");
+        std::env::set_var(IMPORT_ALLOWED_ROOTS_ENV, joined);
     }
 
     fn canonical_path_string(path: &Path) -> String {
@@ -911,6 +1599,263 @@ mod tests {
             .into_os_string()
             .into_string()
             .expect("utf-8 canonical path")
+    }
+
+    #[test]
+    fn tool_definitions_expose_agent_session_write_tools_as_mutating_tools() {
+        let tools = tool_definitions();
+        let tool_by_name = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing tool {name}"))
+        };
+
+        for name in [
+            "import_source",
+            "import_cancel",
+            "write_propose",
+            "write_commit",
+            "write_commit_all",
+            "write_list",
+            "write_reject",
+        ] {
+            let tool = tool_by_name(name);
+            assert_eq!(tool["name"], name);
+            assert!(tool["inputSchema"]["properties"]
+                .get("workspaceId")
+                .is_some());
+        }
+        assert_eq!(
+            tool_by_name("write_propose")["inputSchema"]["required"],
+            json!(["contentType", "title", "body", "evidenceRefs"])
+        );
+        assert_eq!(
+            tool_by_name("import_source")["inputSchema"]["required"],
+            json!(["sourcePath"])
+        );
+        assert_eq!(
+            tool_by_name("import_source")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("import_source")["annotations"]["idempotentHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("import_status")["inputSchema"]["required"],
+            json!(["jobId"])
+        );
+        assert_eq!(
+            tool_by_name("import_status")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            tool_by_name("import_cancel")["inputSchema"]["required"],
+            json!(["jobId"])
+        );
+        assert_eq!(
+            tool_by_name("import_cancel")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["inputSchema"]["required"],
+            json!(["proposalIds"])
+        );
+        assert_eq!(
+            tool_by_name("write_propose")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_commit")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("write_reject")["annotations"]["readOnlyHint"],
+            false
+        );
+    }
+
+    #[test]
+    fn graph_ready_requires_materialized_graph_status() {
+        assert!(graph_status_is_ready(Some("rebuilt")));
+        assert!(graph_status_is_ready(Some("partially_applied")));
+        assert!(!graph_status_is_ready(Some("skipped")));
+        assert!(!graph_status_is_ready(Some("empty")));
+        assert!(!graph_status_is_ready(Some("failed")));
+        assert!(!graph_status_is_ready(Some("failed_no_materialization")));
+        assert!(!graph_status_is_ready(None));
+    }
+
+    #[test]
+    fn import_job_cancel_prevents_later_active_updates() {
+        let registry = ImportJobRegistry::default();
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let job_id = "import-test-cancel".to_string();
+        registry.insert(ImportJobSnapshot::queued(job_id.clone(), &scope));
+
+        let cancelled = registry.cancel(&job_id).expect("cancel job");
+        assert_eq!(cancelled.status, ImportJobStatus::Cancelled);
+        assert_eq!(cancelled.phase, ImportJobPhase::Cancelled);
+
+        registry.update_active(&job_id, |job| {
+            job.status = ImportJobStatus::Running;
+            job.phase = ImportJobPhase::Parsing;
+            job.progress_percent = 5;
+        });
+        let job = registry.get(&job_id).expect("job remains recorded");
+        assert_eq!(job.status, ImportJobStatus::Cancelled);
+        assert_eq!(job.phase, ImportJobPhase::Cancelled);
+        assert_eq!(job.progress_percent, 100);
+    }
+
+    #[test]
+    fn validate_import_source_path_accepts_file_inside_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let source = allowed.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let validated =
+            validate_import_source_path(&source.display().to_string()).expect("valid source path");
+
+        assert_eq!(validated, source.canonicalize().expect("canonical source"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_file_outside_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let source = outside.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let error = validate_import_source_path(&source.display().to_string())
+            .expect_err("outside source rejected");
+
+        assert!(error
+            .to_string()
+            .contains("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_directory() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+
+        set_allowed_import_roots(&[allowed.path()]);
+        let error = validate_import_source_path(&allowed.path().display().to_string())
+            .expect_err("directory source rejected");
+
+        assert!(error.to_string().contains("regular file"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn validate_import_source_path_rejects_file_as_allowed_root() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let allowed = tempfile::tempdir().expect("allowed dir");
+        let source = allowed.path().join("source.md");
+        std::fs::write(&source, "# Source\n").expect("source file");
+
+        set_allowed_import_roots(&[source.as_path()]);
+        let error = validate_import_source_path(&source.display().to_string())
+            .expect_err("file root rejected");
+
+        assert!(error.to_string().contains("must be a directory"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn validate_import_source_path_rejects_symlink_escape() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let allowed = temp.path().join("allowed");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&allowed).expect("allowed dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        let outside_file = outside.join("source.md");
+        let symlink = allowed.join("linked.md");
+        std::fs::write(&outside_file, "# Source\n").expect("outside source");
+        std::os::unix::fs::symlink(&outside_file, &symlink).expect("symlink");
+
+        set_allowed_import_roots(&[allowed.as_path()]);
+        let error = validate_import_source_path(&symlink.display().to_string())
+            .expect_err("symlink escape rejected");
+
+        assert!(error
+            .to_string()
+            .contains("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS"));
+        clear_root_dir_env();
+    }
+
+    #[test]
+    fn import_document_format_infers_pdf() {
+        assert_eq!(
+            import_document_format(Path::new("source.pdf"), None).expect("pdf format"),
+            DocumentFormat::Pdf
+        );
+    }
+
+    #[test]
+    fn import_document_format_infers_markdown() {
+        assert_eq!(
+            import_document_format(Path::new("source.md"), None).expect("markdown format"),
+            DocumentFormat::Markdown
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.markdown"), None).expect("markdown format"),
+            DocumentFormat::Markdown
+        );
+    }
+
+    #[test]
+    fn import_document_format_infers_office_and_image_formats() {
+        assert_eq!(
+            import_document_format(Path::new("source.docx"), None).expect("docx format"),
+            DocumentFormat::Docx
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.doc"), None).expect("doc format"),
+            DocumentFormat::Doc
+        );
+        assert_eq!(
+            import_document_format(Path::new("source.png"), None).expect("image format"),
+            DocumentFormat::Image
+        );
+    }
+
+    #[test]
+    fn import_document_format_uses_explicit_format() {
+        assert_eq!(
+            import_document_format(Path::new("source.txt"), Some("IMAGE".into()))
+                .expect("explicit image format"),
+            DocumentFormat::Image
+        );
+    }
+
+    #[test]
+    fn import_document_format_rejects_unknown_extension() {
+        let error = import_document_format(Path::new("source.txt"), None)
+            .expect_err("unknown extension rejected");
+        assert!(error.to_string().contains("unsupported import format"));
     }
 
     #[test]

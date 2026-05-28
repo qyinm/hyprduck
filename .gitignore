@@ -49,3 +49,6 @@ apps/desktop/resources/binaries/
 
 # private docs
 docs/private
+docs/plans
+docs/dogfood-reports/
+dogfood-output/

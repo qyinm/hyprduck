@@ -23,24 +23,40 @@ impl BrainArtifactRepository {
     }
 
     pub(crate) fn ensure_workspace_dirs(&self) -> Result<()> {
-        for dir in [self.root.join("events"), self.root.join("memory")] {
+        for dir in [
+            self.root.join("events"),
+            self.root.join("memory"),
+            self.root.join("proposals"),
+        ] {
             fs::create_dir_all(&dir)
                 .with_context(|| format!("failed creating {}", dir.display()))?;
         }
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn append_event(&self, event: &BrainEvent) -> Result<()> {
-        append_brain_event_jsonl(&self.root.join("events/brain_events.jsonl"), event)
+        let path = self.root.join("events/brain_events.jsonl");
+        let line =
+            serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed creating {}", parent.display()))?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("failed opening {}", path.display()))?;
+        writeln!(file, "{line}").with_context(|| format!("failed writing {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed syncing {}", path.display()))?;
+        Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn read_memory_records(&self) -> Result<Vec<MemoryRecord>> {
         self.read_optional_json_artifact("memory/records.json")
     }
 
-    #[cfg(test)]
     pub(crate) fn write_memory_records(&self, memories: &[MemoryRecord]) -> Result<()> {
         write_json_pretty(&self.root.join("memory/records.json"), &memories)
     }
@@ -239,24 +255,4 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             path.display()
         )
     })
-}
-
-#[cfg(test)]
-pub(crate) fn append_brain_event_jsonl(path: &Path, event: &BrainEvent) -> Result<()> {
-    let line = serde_json::to_string(event).context("failed to encode brain event JSONL row")?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed creating {}", parent.display()))?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(|| format!("failed opening {}", path.display()))?;
-    file.write_all(line.as_bytes())
-        .with_context(|| format!("failed writing {}", path.display()))?;
-    file.write_all(b"\n")
-        .with_context(|| format!("failed writing {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("failed syncing {}", path.display()))
 }

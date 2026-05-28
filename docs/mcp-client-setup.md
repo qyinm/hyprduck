@@ -3,9 +3,11 @@
 Agent-facing setup and verification gates are tracked in
 [`docs/agents/mcp-client-setup.md`](agents/mcp-client-setup.md).
 
-HyprDuck exposes private document context through a local, read-only MCP stdio
-server. The server is intended for agent clients that can call `get_context_pack`,
-`search_documents`, `read_source`, `read_page_evidence`, and `read_health`.
+HyprDuck exposes private document context through a local MCP stdio server. The
+server is intended for agent clients that can call `import_source`,
+`import_status`, `get_context_pack`, `search_documents`, `read_source`,
+`read_page_evidence`, and `read_health`, plus controlled write-proposal tools
+when the user approves agent-authored knowledge changes.
 
 Production installs should use the short `hyprduck` command. Open HyprDuck once
 first; the app installs or refreshes the command at `~/.local/bin/hyprduck`.
@@ -91,6 +93,15 @@ disabled unless the server process is started with both
 `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and an allowlist in
 `HYPRDUCK_MCP_ALLOWED_ROOTS`.
 
+`import_source` uses a separate import allowlist. Start the MCP server with
+`HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` when an agent should be allowed to import
+local files, and pass a `sourcePath` that canonicalizes under one of those roots.
+The tool starts an import job and returns `jobId` immediately. Poll
+`import_status` until `citationReady` is true, then use `get_context_pack`,
+`read_page_evidence`, or `read_source`. `graphReady` is separate and may become
+true later; graph failure after citation readiness does not remove source
+evidence. Local paths are redacted by default.
+
 ## Verification Prompt
 
 After installing a client, use a prompt like:
@@ -102,6 +113,9 @@ get_context_pack, then cite sourceId, page, and evidenceRef for every claim.
 
 The expected agent behavior is:
 
+- Optionally import a user-approved local file with `import_source` when the
+  source is not already in HyprDuck, then poll `import_status` until
+  `citationReady` is true.
 - Build a Context Pack v0 with `get_context_pack`.
 - Quote or summarize only from selected evidence.
 - Cite `sourceId`, page, and `evidenceRef`.
