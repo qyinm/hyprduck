@@ -645,7 +645,6 @@ pub struct GraphHistoryEntry {
     pub snapshot_id: String,
     pub materialized_at: u64,
     pub event_id: String,
-    pub rollback_target: GraphRollbackTarget,
     #[serde(default)]
     pub operation_type: Option<String>,
     #[serde(default)]
@@ -659,15 +658,6 @@ pub struct GraphHistoryEntry {
     pub claim_count: usize,
     pub memory_count: usize,
     pub wiki_page_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphRollbackTarget {
-    pub snapshot_id: String,
-    pub event_id: String,
-    pub materialized_version: u64,
-    pub replay_selector: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2405,6 +2395,34 @@ mod tests {
             decoded.data.results[0].kind,
             BrainSearchResultKind::WikiPage
         );
+    }
+
+    #[test]
+    fn graph_history_response_does_not_expose_rollback_target() {
+        let response = EngineSuccess::new(
+            EngineCommand::ReadGraphHistory,
+            ReadGraphHistoryResponseData {
+                states: vec![GraphHistoryEntry {
+                    snapshot_id: "snapshot-a".into(),
+                    materialized_at: 10,
+                    event_id: "event-a".into(),
+                    operation_type: Some("graph_snapshot_commit".into()),
+                    source_run_ids: Vec::new(),
+                    source_markdown_refs: Vec::new(),
+                    storage_locations: vec!["hyprduck.sqlite:graphqlite".into()],
+                    node_count: 1,
+                    edge_count: 0,
+                    claim_count: 0,
+                    memory_count: 0,
+                    wiki_page_count: 0,
+                }],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(!json.contains("rollbackTarget"));
+        assert!(!json.contains("replaySelector"));
     }
 
     #[test]

@@ -5,9 +5,8 @@ use std::path::Path;
 use anyhow::Result;
 use hyprduck_engine_types::{
     BrainEvent, BrainEventKind, BrainRepoSnapshot, GraphHistoryEntry,
-    GraphMaterializationReportSummary, GraphRollbackTarget, ReadGraphHistoryRequest,
-    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadRecentEventsRequest,
+    GraphMaterializationReportSummary, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
+    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadRecentEventsRequest,
 };
 use serde_json::Value;
 
@@ -194,7 +193,6 @@ fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<Grap
         snapshot_id: snapshot_id.clone(),
         materialized_at,
         event_id: event.event_id.clone(),
-        rollback_target: graph_rollback_target(&snapshot_id, &event.event_id, materialized_at),
         operation_type: event.operation_type.clone(),
         source_run_ids: graph_history_source_run_ids(&event),
         source_markdown_refs: event.source_markdown_refs.clone(),
@@ -230,19 +228,6 @@ fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<Grap
             .or_else(|| json_usize(&fallback_payload, "wikiPageCount"))
             .unwrap_or(0),
     })
-}
-
-fn graph_rollback_target(
-    snapshot_id: &str,
-    event_id: &str,
-    materialized_version: u64,
-) -> GraphRollbackTarget {
-    GraphRollbackTarget {
-        snapshot_id: snapshot_id.to_string(),
-        event_id: event_id.to_string(),
-        materialized_version,
-        replay_selector: format!("--event {event_id}"),
-    }
 }
 
 pub(crate) fn graph_history_source_run_ids(event: &BrainEvent) -> Vec<String> {
