@@ -6,10 +6,11 @@ const path = require("node:path");
 
 const { AgentTerminalSessionManager } = require("../main/agent-terminal-sessions.cjs");
 
-test("listAgents keeps generic shell disabled", () => {
+test("listAgents exposes the default shell without adding arbitrary commands", () => {
   const manager = new AgentTerminalSessionManager();
   const result = manager.listAgents();
-  assert.equal(result.shell.available, false);
+  assert.equal(result.shell.available, true);
+  assert.equal(typeof result.shell.path, "string");
   assert.equal(result.agents.some((agent) => agent.id === "generic_shell"), false);
 });
 
@@ -24,6 +25,19 @@ test("createSession rejects arbitrary command fields", async () => {
 test("createSession rejects unknown agent ids", async () => {
   const manager = new AgentTerminalSessionManager();
   await assert.rejects(() => manager.createSession({ agentId: "zsh" }), /unknown/);
+});
+
+test("createSession opens a default shell session for kind shell", async () => {
+  const backend = createFakeBackend({ handoffStatus: "attached" });
+  const manager = new AgentTerminalSessionManager({ backend });
+
+  const session = await manager.createSession({ kind: "shell" });
+
+  assert.equal(session.status, "running");
+  assert.equal(session.agent.id, "terminal_shell");
+  assert.equal(session.agent.detected, true);
+  assert.equal(backend.calls.create[0].agent.id, "terminal_shell");
+  assert.equal(backend.calls.create[0].agent.launchArgs[0], "-l");
 });
 
 test("createSession redacts local manifest paths from agent handoff", async () => {

@@ -30,7 +30,8 @@ interface AgentTerminalProps {
   nodeId: string | null;
   onClose: () => void;
   onCreateSession: (args: {
-    agentId: AgentTerminalAgent["id"];
+    kind?: "agent" | "shell";
+    agentId?: AgentTerminalAgent["id"];
     nodeId: string | null;
   }) => Promise<AgentTerminalSession>;
   onListenAgentTerminalEvents: (
@@ -342,6 +343,22 @@ export function AgentTerminal(props: AgentTerminalProps) {
     }
   }
 
+  async function launchShell() {
+    if (!agentList?.shell.available) {
+      setError(agentList?.shell.reason ?? "No executable default shell was found.");
+      return;
+    }
+    setError(null);
+    try {
+      const session = await onCreateSession({ kind: "shell", nodeId });
+      setSessions((current) => [...current, session]);
+      setActiveSessionId(session.id);
+      setPickerOpen(false);
+    } catch (launchError) {
+      setError(String(launchError));
+    }
+  }
+
   async function closeSession(sessionId: string) {
     setSessions((current) => current.filter((session) => session.id !== sessionId));
     setActiveSessionId((current) => {
@@ -438,6 +455,9 @@ export function AgentTerminal(props: AgentTerminalProps) {
                 <AgentTerminalPickerMenu
                   agents={agentList?.agents ?? []}
                   onLaunchAgent={launchAgent}
+                  onLaunchShell={launchShell}
+                  shellAvailable={agentList?.shell.available ?? false}
+                  shellReason={agentList?.shell.reason ?? null}
                 />
               ) : null}
             </div>
@@ -460,6 +480,18 @@ export function AgentTerminal(props: AgentTerminalProps) {
         ) : (
           <div className="flex h-full items-center justify-center">
             <div className="grid w-full max-w-sm gap-2">
+              {agentList?.shell.available ? (
+                <Button
+                  className="h-11 justify-start gap-3 border-zinc-700 bg-zinc-900 px-3 text-left font-sans text-sm font-semibold text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
+                  onClick={() => void launchShell()}
+                  title={agentList.shell.path ?? undefined}
+                  type="button"
+                  variant="outline"
+                >
+                  <SquareTerminal size={18} className="shrink-0 text-zinc-300" />
+                  <span className="min-w-0 flex-1 truncate">New Terminal</span>
+                </Button>
+              ) : null}
               {(agentList?.agents ?? [])
                 .filter((agent) => agent.detected)
                 .slice(0, 4)
@@ -499,14 +531,23 @@ function isApplePlatform() {
 }
 
 function TerminalMenuAction(props: {
+  disabled?: boolean;
   icon: ReactNode;
   label: string;
+  onClick?: () => void;
   shortcut: string;
 }) {
-  const { icon, label, shortcut } = props;
+  const { disabled = false, icon, label, onClick, shortcut } = props;
   return (
     <button
-      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] font-semibold text-zinc-100 transition hover:bg-zinc-800"
+      className={cn(
+        "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] font-semibold transition",
+        disabled
+          ? "cursor-not-allowed text-zinc-600"
+          : "text-zinc-100 hover:bg-zinc-800",
+      )}
+      disabled={disabled}
+      onClick={onClick}
       type="button"
     >
       <span className="grid size-3.5 shrink-0 place-items-center text-zinc-300">
@@ -523,16 +564,27 @@ function TerminalMenuAction(props: {
 function AgentTerminalPickerMenu(props: {
   agents: AgentTerminalAgent[];
   onLaunchAgent: (agent: AgentTerminalAgent) => void | Promise<void>;
+  onLaunchShell: () => void | Promise<void>;
+  shellAvailable: boolean;
+  shellReason: string | null;
 }) {
-  const { agents, onLaunchAgent } = props;
+  const { agents, onLaunchAgent, onLaunchShell, shellAvailable, shellReason } =
+    props;
   return (
     <div className="absolute right-0 top-8 z-50 w-48 rounded-lg border border-zinc-700/90 bg-zinc-950/95 p-1 font-sans shadow-[0_14px_36px_rgba(0,0,0,0.42)]">
       <div className="grid gap-0.5">
         <TerminalMenuAction
+          disabled={!shellAvailable}
           icon={<SquareTerminal size={14} />}
           label="New Terminal"
+          onClick={() => void onLaunchShell()}
           shortcut="⌘T"
         />
+        {!shellAvailable && shellReason ? (
+          <span className="px-2 pb-1 text-[10px] text-zinc-600">
+            {shellReason}
+          </span>
+        ) : null}
       </div>
       <div className="my-1 h-px bg-zinc-800" />
       <div className="grid gap-0.5">

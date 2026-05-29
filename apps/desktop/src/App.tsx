@@ -681,10 +681,12 @@ export function App() {
   };
 
   const createAgentTerminalSession = async (args: {
-    agentId: AgentTerminalAgent["id"];
+    kind?: "agent" | "shell";
+    agentId?: AgentTerminalAgent["id"];
     nodeId: string | null;
   }): Promise<AgentTerminalSession> => {
     return invoke("agent_terminal_create_session", {
+      kind: args.kind ?? "agent",
       agentId: args.agentId,
       workspaceId: loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
       projectId: workspaceProject?.summary.projectId ?? null,

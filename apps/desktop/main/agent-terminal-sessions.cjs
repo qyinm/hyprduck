@@ -12,6 +12,7 @@ const {
   assertExternalFallbackReady,
   createExternalGhosttyFallback,
 } = require("./agent-terminal-fallbacks.cjs");
+const fs = require("node:fs");
 
 const FORBIDDEN_COMMAND_FIELDS = new Set([
   "command",
@@ -32,22 +33,26 @@ class AgentTerminalSessionManager {
   }
 
   listAgents() {
+    const shell = resolveDefaultShell(process.env);
     return {
       agents: detectSupportedAgents(),
       shell: {
-        available: false,
-        reason: "Generic shell/custom commands are disabled in Agent Terminal v1.",
+        available: Boolean(shell),
+        label: shell ? "New Terminal" : null,
+        command: shell?.command ?? null,
+        path: shell?.path ?? null,
+        reason: shell ? null : "No executable default shell was found.",
       },
     };
   }
 
   async createSession(args = {}) {
     rejectCommandPayload(args);
-    const agentId = assertKnownAgentId(args.agentId ?? args.agent_id);
-    const agent = detectSupportedAgents().find((candidate) => candidate.id === agentId);
-    if (!agent?.detected) {
-      throw new Error(`${agent?.label ?? agentId} is not detected on PATH`);
-    }
+    const kind = args.kind ?? args.type ?? "agent";
+    const agent =
+      kind === "shell"
+        ? createShellTerminalAgent(process.env)
+        : resolveDetectedAgent(args.agentId ?? args.agent_id);
 
     const workspaceState = this.getWorkspaceState();
     const handoff = assertContextHandoffReady(
@@ -184,6 +189,62 @@ class AgentTerminalSessionManager {
   }
 }
 
+function resolveDetectedAgent(agentIdCandidate) {
+  const agentId = assertKnownAgentId(agentIdCandidate);
+  const agent = detectSupportedAgents().find((candidate) => candidate.id === agentId);
+  if (!agent?.detected) {
+    throw new Error(`${agent?.label ?? agentId} is not detected on PATH`);
+  }
+  return agent;
+}
+
+function createShellTerminalAgent(env) {
+  const shell = resolveDefaultShell(env);
+  if (!shell) {
+    throw new Error("No executable default shell was found.");
+  }
+  return {
+    id: "terminal_shell",
+    label: "Terminal",
+    detected: true,
+    support: "supported",
+    commands: [shell.command],
+    command: shell.command,
+    path: shell.path,
+    launchArgs: ["-l"],
+    confidence: "high",
+    disabledReason: null,
+  };
+}
+
+function resolveDefaultShell(env) {
+  const candidates = [
+    env.SHELL,
+    process.platform === "win32" ? null : "/bin/zsh",
+    process.platform === "win32" ? null : "/bin/bash",
+    process.platform === "win32" ? "cmd.exe" : "/bin/sh",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (!isExecutableFile(candidate)) {
+      continue;
+    }
+    return {
+      command: candidate.split(/[\\/]/).pop(),
+      path: candidate,
+    };
+  }
+  return null;
+}
+
+function isExecutableFile(candidate) {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function rejectCommandPayload(args) {
   for (const field of FORBIDDEN_COMMAND_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(args, field)) {
@@ -225,7 +286,9 @@ function serializeSession(session) {
 
 module.exports = {
   AgentTerminalSessionManager,
+  createShellTerminalAgent,
   rejectCommandPayload,
+  resolveDefaultShell,
   resolveHandoffState,
   serializeSession,
 };

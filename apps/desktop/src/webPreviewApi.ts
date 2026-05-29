@@ -157,7 +157,10 @@ const WEB_MOCK_AGENT_LIST: AgentTerminalListResult = {
   ],
   shell: {
     available: false,
-    reason: "Generic shell/custom commands are disabled in Agent Terminal v1.",
+    label: null,
+    command: null,
+    path: null,
+    reason: "Web preview cannot host native terminal sessions.",
   },
 };
 let webMockRecentEvents: BrainEvent[] = [
@@ -551,9 +554,23 @@ export function createWebMockApi(): HyprDuckDesktopApi {
     },
     agent_terminal_list_agents: () => WEB_MOCK_AGENT_LIST,
     agent_terminal_create_session: (args) => {
-      const agent = WEB_MOCK_AGENT_LIST.agents.find(
-        (candidate) => candidate.id === args.agentId,
-      );
+      const agent =
+        args.kind === "shell"
+          ? {
+              id: "terminal_shell" as const,
+              label: "Terminal",
+              detected: true,
+              support: "supported" as const,
+              commands: ["zsh"],
+              command: "zsh",
+              path: "/bin/zsh",
+              launchArgs: ["-l"],
+              confidence: "high" as const,
+              disabledReason: null,
+            }
+          : WEB_MOCK_AGENT_LIST.agents.find(
+              (candidate) => candidate.id === args.agentId,
+            );
       if (!agent?.detected) {
         throw new Error(`${agent?.label ?? args.agentId} is not detected.`);
       }

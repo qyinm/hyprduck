@@ -163,11 +163,31 @@ export interface AgentTerminalAgent {
   disabledReason: string | null;
 }
 
+export interface AgentTerminalShell {
+  id: "terminal_shell";
+  label: string;
+  detected: boolean;
+  support: "supported";
+  commands: string[];
+  command: string | null;
+  path: string | null;
+  launchArgs: string[];
+  confidence: "high" | "missing";
+  disabledReason: string | null;
+}
+
+export type AgentTerminalSessionTarget =
+  | AgentTerminalAgent
+  | AgentTerminalShell;
+
 export interface AgentTerminalListResult {
   agents: AgentTerminalAgent[];
   shell: {
-    available: false;
-    reason: string;
+    available: boolean;
+    label: string | null;
+    command: string | null;
+    path: string | null;
+    reason: string | null;
   };
 }
 
@@ -196,7 +216,7 @@ export interface AgentTerminalContextHandoff {
 export interface AgentTerminalSession {
   id: string;
   backendSessionId?: string;
-  agent: AgentTerminalAgent;
+  agent: AgentTerminalSessionTarget;
   handoff: AgentTerminalContextHandoff;
   handoffState?: "writable" | "blocked" | "external_confirmation_required";
   backend: {
@@ -211,7 +231,7 @@ export interface AgentTerminalSession {
     type: "external_ghostty";
     label: string;
     available: boolean;
-    agentId: AgentTerminalAgent["id"];
+    agentId: AgentTerminalSessionTarget["id"];
     agentCommand: string | null;
     attachInstructions: string[];
   };
@@ -302,7 +322,8 @@ export interface DesktopCommandMap {
   };
   agent_terminal_create_session: {
     args: {
-      agentId: AgentTerminalAgent["id"];
+      kind?: "agent" | "shell";
+      agentId?: AgentTerminalAgent["id"];
       workspaceId?: string | null;
       projectId?: string | null;
       nodeId?: string | null;

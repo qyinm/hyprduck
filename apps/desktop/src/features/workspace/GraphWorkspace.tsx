@@ -40,7 +40,8 @@ interface GraphWorkspaceProps {
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onCreateAgentTerminalSession: (args: {
-    agentId: AgentTerminalAgent["id"];
+    kind?: "agent" | "shell";
+    agentId?: AgentTerminalAgent["id"];
     nodeId: string | null;
   }) => Promise<AgentTerminalSession>;
   onListenAgentTerminalEvents: (
