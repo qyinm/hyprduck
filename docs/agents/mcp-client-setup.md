@@ -49,6 +49,10 @@ The first successful proof must record:
   `import_status` reaches `citation_ready` with `citationReady: true`, returns
   a `sourceId`, and reports nonzero evidence count without leaking local paths;
 - first answer includes at least one `sourceId`, page, and `evidenceRef`;
+- `get_context_pack` returns `contextPack.schemaVersion` as
+  `hyprduck.context_pack.v1`, includes `selectedEvidence[].evidenceType`, and
+  includes `retrievalTrace.evidenceTypeTrace`;
+- `contextPackV0` remains present for compatibility with older agent clients;
 - second query reuses the same source set or performs a follow-up evidence read;
 - failure class, if any.
 

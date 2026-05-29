@@ -82,7 +82,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `import_source` | `sourcePath` | Start importing an allowlisted local PDF, DOCX, DOC, Markdown, or image file and return an import `jobId`. |
 | `import_status` | `jobId` | Poll an import job. Agents can use source evidence once `citationReady` is true; graph/wiki inspection follows `graphReady`. |
 | `import_cancel` | `jobId` | Request best-effort cancellation for a queued or running import job. |
-| `get_context_pack` | `query` | Build an agent-ready document context pack with selected sources, evidence, findings, warnings, and retrieval trace. |
+| `get_context_pack` | `query` | Build an agent-ready Context Pack v1 with selected sources, typed evidence, findings, warnings, and retrieval trace. |
 | `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
 | `search_brain` | `query` | Compatibility alias for `search_documents`. |
@@ -117,6 +117,28 @@ prevents symlink and path-prefix escapes. By default, resource reads resolve
 inside the application-supported HyprDuck workspace root and do not require full
 local paths. Resource responses return public HyprDuck resource URIs without
 `rootDir` query parameters.
+
+## Typed Evidence Contract
+
+New imports write `evidence_index.json` with
+`schemaVersion: "hyprduck.evidence_index.v1"`. Source Pack stays on v0. The
+Evidence Index v1 item contract adds `evidenceType` so agents can distinguish
+text evidence from tables, image regions, OCR, captions, summaries, claims, and
+relationships as those producers become available.
+
+`get_context_pack` returns:
+
+- `contextPack`: the primary Context Pack v1 payload.
+- `contextPackV1`: the same explicit v1 payload for clients that do not want to
+  rely on the primary alias.
+- `contextPackV0`: a compatibility projection for older clients.
+
+Context Pack v1 selected evidence includes `evidenceType`, and
+`retrievalTrace.evidenceTypeTrace` reports how many evidence items of each type
+were considered and selected. Legacy Evidence Index v0 artifacts are still read
+and converted to `text` evidence. Unsupported Evidence Index schema versions are
+reported as `evidence_index_schema_mismatch` warnings instead of being treated
+as unreadable files.
 
 ## Materialized Snapshot Read Path
 
