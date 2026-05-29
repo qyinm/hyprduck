@@ -3,8 +3,8 @@ use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::{
     BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, ClaimRecord,
-    EntityRecord, PolicyResult, SourceFormat, SourceRecord, SourceStatus, WikiPage,
-    BRAIN_EVENT_SCHEMA_VERSION,
+    EntityRecord, PolicyResult, SourceFormat, SourceRecord, SourceStatus,
+    StructuredExtractionArtifact, WikiPage, BRAIN_EVENT_SCHEMA_VERSION,
 };
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
@@ -753,20 +753,22 @@ fn persist_graph_snapshot_in_transaction(
 
     let graph_nodes = current_graph_nodes(snapshot);
     for node in &graph_nodes {
+        let metadata = node_graph_metadata(snapshot, node);
         graph
             .upsert_node(
                 &node.node_id,
-                node_graph_properties(&snapshot.workspace_id, node),
+                node_graph_properties(&snapshot.workspace_id, node, &metadata),
                 brain_node_label(node.kind),
             )
             .with_context(|| format!("failed upserting GraphQLite node {}", node.node_id))?;
     }
     for relation in &snapshot.relations {
+        let metadata = relation_graph_metadata(snapshot, relation);
         graph
             .upsert_edge(
                 &relation.source_node_id,
                 &relation.target_node_id,
-                relation_graph_properties(&snapshot.workspace_id, relation),
+                relation_graph_properties(&snapshot.workspace_id, relation, &metadata),
                 brain_relation_type(relation.kind),
             )
             .with_context(|| {
@@ -781,6 +783,93 @@ fn persist_graph_snapshot_in_transaction(
         node_count: graph_nodes.len(),
         relation_count: snapshot.relations.len(),
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GraphRecordMetadata {
+    source_ids: Vec<String>,
+    producer_run_ids: Vec<String>,
+    status: String,
+}
+
+fn node_graph_metadata(
+    snapshot: &BrainRepoSnapshot,
+    node: &BrainNodeRecord,
+) -> GraphRecordMetadata {
+    let mut source_ids = node.source_ids.clone();
+    if node.kind == BrainNodeKind::Source && source_ids.is_empty() {
+        if let Some(source_id) = node.node_id.strip_prefix("source:") {
+            source_ids.push(source_id.to_string());
+        }
+    }
+    source_ids.sort();
+    source_ids.dedup();
+
+    let status = snapshot
+        .claims
+        .iter()
+        .find(|claim| claim.claim_id == node.node_id)
+        .map(|claim| claim.status.clone())
+        .unwrap_or_else(|| "active".into());
+    let producer_run_ids = producer_run_ids_for_refs(snapshot, &node.evidence_ids, &source_ids);
+
+    GraphRecordMetadata {
+        source_ids,
+        producer_run_ids,
+        status,
+    }
+}
+
+fn relation_graph_metadata(
+    snapshot: &BrainRepoSnapshot,
+    relation: &BrainRelationRecord,
+) -> GraphRecordMetadata {
+    let evidence_source_ids = snapshot
+        .evidence
+        .iter()
+        .filter(|evidence| relation.evidence_ids.contains(&evidence.id))
+        .filter_map(|evidence| evidence.source_id.clone());
+    let endpoint_source_ids = [&relation.source_node_id, &relation.target_node_id]
+        .into_iter()
+        .filter_map(|node_id| node_id.strip_prefix("source:").map(ToOwned::to_owned));
+    let mut source_ids = evidence_source_ids
+        .chain(endpoint_source_ids)
+        .collect::<Vec<_>>();
+    source_ids.sort();
+    source_ids.dedup();
+    let producer_run_ids = producer_run_ids_for_refs(snapshot, &relation.evidence_ids, &source_ids);
+
+    GraphRecordMetadata {
+        source_ids,
+        producer_run_ids,
+        status: "active".into(),
+    }
+}
+
+fn producer_run_ids_for_refs(
+    snapshot: &BrainRepoSnapshot,
+    evidence_ids: &[String],
+    source_ids: &[String],
+) -> Vec<String> {
+    let mut producer_run_ids = snapshot
+        .extractions
+        .iter()
+        .filter(|extraction| {
+            source_ids.contains(&extraction.source_id)
+                || extraction
+                    .source_refs
+                    .iter()
+                    .any(|source_id| source_ids.contains(source_id))
+                || extraction
+                    .evidence_refs
+                    .iter()
+                    .any(|evidence| evidence_ids.contains(&evidence.id))
+        })
+        .map(|extraction| extraction.artifact_id.clone())
+        .collect::<Vec<_>>();
+    producer_run_ids.sort();
+    producer_run_ids.dedup();
+    producer_run_ids
 }
 
 fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
@@ -1126,6 +1215,7 @@ fn validate_record_evidence_refs(
 fn node_graph_properties(
     workspace_id: &str,
     node: &BrainNodeRecord,
+    metadata: &GraphRecordMetadata,
 ) -> Vec<(String, PropertyValue)> {
     vec![
         (
@@ -1156,7 +1246,23 @@ fn node_graph_properties(
         (
             "source_ids_json".into(),
             PropertyValue::Text(
-                serde_json::to_string(&node.source_ids).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&metadata.source_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "producer_run_id".into(),
+            PropertyValue::Text(
+                metadata
+                    .producer_run_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "producer_run_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&metadata.producer_run_ids).unwrap_or_else(|_| "[]".into()),
             ),
         ),
         (
@@ -1168,6 +1274,10 @@ fn node_graph_properties(
             ),
         ),
         (
+            "status".into(),
+            PropertyValue::Text(metadata.status.clone()),
+        ),
+        (
             "updated_at".into(),
             PropertyValue::Integer(node.updated_at as i64),
         ),
@@ -1177,6 +1287,7 @@ fn node_graph_properties(
 fn relation_graph_properties(
     workspace_id: &str,
     relation: &BrainRelationRecord,
+    metadata: &GraphRecordMetadata,
 ) -> Vec<(String, PropertyValue)> {
     vec![
         (
@@ -1199,6 +1310,28 @@ fn relation_graph_properties(
             ),
         ),
         (
+            "source_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&metadata.source_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "producer_run_id".into(),
+            PropertyValue::Text(
+                metadata
+                    .producer_run_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "producer_run_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&metadata.producer_run_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
             "confidence".into(),
             PropertyValue::Text(
                 relation
@@ -1206,6 +1339,10 @@ fn relation_graph_properties(
                     .map(|value| value.to_string())
                     .unwrap_or_default(),
             ),
+        ),
+        (
+            "status".into(),
+            PropertyValue::Text(metadata.status.clone()),
         ),
         (
             "updated_at".into(),
@@ -1507,7 +1644,34 @@ mod tests {
                 status: "active".into(),
                 updated_at: 10,
             }],
-            extractions: Vec::new(),
+            extractions: vec![StructuredExtractionArtifact {
+                artifact_id: "provider-run-alpha".into(),
+                workspace_id: "workspace-default".into(),
+                source_id: "source-a".into(),
+                extractor: "test-extractor".into(),
+                extractor_model: Some("test-model".into()),
+                source_refs: vec!["source-a".into()],
+                page_refs: Vec::new(),
+                entities: Vec::new(),
+                topics: Vec::new(),
+                claims: Vec::new(),
+                relations: Vec::new(),
+                memories: Vec::new(),
+                evidence_refs: vec![EvidenceRef {
+                    id: "evidence-a".into(),
+                    page_label: "p1".into(),
+                    page_index: Some(0),
+                    snippet: "Alpha relates to beta.".into(),
+                    source_path: Some("sources/source-a.pdf".into()),
+                    source_id: Some("source-a".into()),
+                    markdown_path: Some("sources/source-a.md".into()),
+                    image_path: None,
+                    provenance: Some("test extraction".into()),
+                }],
+                confidence: Some(0.7),
+                provenance: "test".into(),
+                created_at: 10,
+            }],
             events: vec![test_brain_event(
                 "event-a",
                 "workspace-default",
@@ -1532,6 +1696,8 @@ mod tests {
                 .expect("graph counts"),
             report
         );
+        assert_graph_node_metadata(&store, "node-a");
+        assert_graph_edge_metadata(&store, "claim-alpha", "source:source-a", "CITES");
         let hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)
             .expect("hybrid retrieve");
@@ -1603,6 +1769,88 @@ mod tests {
             )
             .context("query brain event count")?;
         Ok(count)
+    }
+
+    fn assert_graph_node_metadata(store: &KnowledgeStore, node_id: &str) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        let rows = graph
+            .connection()
+            .cypher_builder(
+                "MATCH (n {id: $node_id})
+                 RETURN n.evidence_ids_json AS evidence_ids_json,
+                        n.source_ids_json AS source_ids_json,
+                        n.producer_run_id AS producer_run_id,
+                        n.producer_run_ids_json AS producer_run_ids_json,
+                        n.confidence AS confidence,
+                        n.status AS status,
+                        n.updated_at AS updated_at",
+            )
+            .param("node_id", node_id)
+            .run()
+            .expect("query graph node metadata");
+        let row = rows.get(0).expect("graph node metadata row");
+        assert_string_array(row, "evidence_ids_json", &["evidence-a"]);
+        assert_string_array(row, "source_ids_json", &["source-a"]);
+        assert_eq!(
+            row.get::<String>("producer_run_id")
+                .expect("producer run id"),
+            "provider-run-alpha"
+        );
+        assert_string_array(row, "producer_run_ids_json", &["provider-run-alpha"]);
+        assert_eq!(row.get::<f64>("confidence").expect("confidence"), 0.9);
+        assert_eq!(row.get::<String>("status").expect("status"), "active");
+        assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
+    }
+
+    fn assert_graph_edge_metadata(
+        store: &KnowledgeStore,
+        source_node_id: &str,
+        target_node_id: &str,
+        relation_type: &str,
+    ) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        let rows = graph
+            .connection()
+            .cypher_builder(&format!(
+                "MATCH (a {{id: $source_node_id}})-[r:{relation_type}]->(b {{id: $target_node_id}})
+                 RETURN r.evidence_ids_json AS evidence_ids_json,
+                        r.source_ids_json AS source_ids_json,
+                        r.producer_run_id AS producer_run_id,
+                        r.producer_run_ids_json AS producer_run_ids_json,
+                        r.confidence AS confidence,
+                        r.status AS status,
+                        r.updated_at AS updated_at"
+            ))
+            .param("source_node_id", source_node_id)
+            .param("target_node_id", target_node_id)
+            .run()
+            .expect("query graph edge metadata");
+        let row = rows.get(0).expect("graph edge metadata row");
+        assert_string_array(row, "evidence_ids_json", &["evidence-a"]);
+        assert_string_array(row, "source_ids_json", &["source-a"]);
+        assert_eq!(
+            row.get::<String>("producer_run_id")
+                .expect("producer run id"),
+            "provider-run-alpha"
+        );
+        assert_string_array(row, "producer_run_ids_json", &["provider-run-alpha"]);
+        assert_eq!(row.get::<f64>("confidence").expect("confidence"), 0.8);
+        assert_eq!(row.get::<String>("status").expect("status"), "active");
+        assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
+    }
+
+    fn assert_string_array(row: &graphqlite::Row, column: &str, expected: &[&str]) {
+        let values = match row.get_value(column).expect("array column exists") {
+            graphqlite::Value::Array(values) => values
+                .iter()
+                .map(|value| match value {
+                    graphqlite::Value::String(value) => value.clone(),
+                    other => panic!("unexpected array value for {column}: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("unexpected value for {column}: {other:?}"),
+        };
+        assert_eq!(values, expected);
     }
 
     fn test_brain_event(event_id: &str, workspace_id: &str, evidence_refs: &[&str]) -> BrainEvent {
