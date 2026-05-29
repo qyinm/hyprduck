@@ -124,6 +124,7 @@ use domains::ingest::output_package::{
 };
 #[cfg(test)]
 use domains::ingest::output_package::{build_source_id, write_source_manifest};
+use domains::knowledge_store::KnowledgeStore;
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,
@@ -995,6 +996,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    let _knowledge_store_health =
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?.health()?;
     let repo = BrainArtifactRepository::new(root.clone());
     if !repo.brain_manifest_path().exists() {
         return Ok(GetBrainHealthResponseData {
