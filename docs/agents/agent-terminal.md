@@ -27,7 +27,9 @@ The handoff tells the selected agent to call HyprDuck MCP `get_context_pack` bef
 
 ## Backend gates
 
-The default backend is intentionally disabled until the native terminal spike passes. It returns an `external_ghostty` fallback so the product can still validate the HyprDuck evidence-to-agent loop.
+HyprDuck Desktop now uses a real PTY backend by default when `node-pty` is available. The backend launches only detected agent commands from the allowlisted registry, streams process output to the renderer terminal, accepts keyboard input, handles resize, and keeps external Ghostty available as a fallback.
+
+The Ghostty-native backend remains an optional spike path:
 
 To probe a native Ghostty backend:
 
@@ -46,11 +48,11 @@ The native backend must implement:
 - `subscribe`
 - `snapshotStatus`
 
-The spike is not accepted until a packaged desktop build can run a real process-backed Codex session with full-screen TUI rendering, approval flow interaction, resize, copy/paste, and clean termination.
+The Ghostty spike is not accepted until a packaged desktop build can run a real process-backed Codex session with full-screen TUI rendering, approval flow interaction, resize, copy/paste, and clean termination. Until then, the PTY backend is the embedded implementation path.
 
 ## External Ghostty fallback
 
-When native embedding is unavailable, HyprDuck returns an explicit external Ghostty fallback plan. The fallback includes the selected agent command and the same context attach instructions used by the embedded flow.
+When embedded PTY or native Ghostty embedding is unavailable, HyprDuck returns an explicit external Ghostty fallback plan. The fallback includes the selected agent command and the same context attach instructions used by the embedded flow.
 
 This fallback is an official v1 path, not an error state. It preserves terminal fidelity while keeping HyprDuck focused on context/evidence attachment.
 
@@ -65,12 +67,15 @@ The renderer remains sandboxed with `contextIsolation: true`, `nodeIntegration: 
 Run the focused checks:
 
 ```sh
-bun run --cwd apps/desktop check:agent-terminal-backend
-bun run --cwd apps/desktop test:agent-detection
-bun run --cwd apps/desktop test:agent-terminal-sessions
-bun run --cwd apps/desktop test:agent-terminal-ghostty
-bun run --cwd apps/desktop test:agent-terminal-fallbacks
-bun run --cwd apps/desktop frontend:typecheck
+cd apps/desktop
+bun run check:agent-terminal-backend
+bun run test:agent-detection
+bun run test:agent-terminal-sessions
+node --test tests/agent-terminal-pty.test.cjs
+bun run test:agent-terminal-ghostty
+bun run test:agent-terminal-fallbacks
+bun run smoke:agent-terminal-pty:electron
+bun run frontend:typecheck
 ```
 
 Before broad rollout, dogfood Codex and at least one second agent. Record evidence that the pre-prompt handoff shows MCP status, workspace ID, selected context/evidence scope, and attach instructions in both embedded and external Ghostty fallback paths.
