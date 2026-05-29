@@ -42,6 +42,18 @@ pub(crate) struct KnowledgeGraphPersistReport {
     pub(crate) relation_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct HybridRetrievalHit {
+    pub(crate) evidence_id: String,
+    pub(crate) source_id: String,
+    pub(crate) evidence_type: String,
+    pub(crate) snippet: String,
+    pub(crate) lexical_rank: f64,
+    pub(crate) graph_neighbor_count: i64,
+    pub(crate) score: f64,
+}
+
 impl KnowledgeStore {
     pub(crate) fn default_path_for_root(root: &Path) -> PathBuf {
         root.join(KNOWLEDGE_DB_FILE_NAME)
@@ -103,6 +115,113 @@ impl KnowledgeStore {
                 Err(error)
             }
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn hybrid_retrieve(
+        &self,
+        workspace_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<HybridRetrievalHit>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let graph_neighbor_counts = evidence_graph_neighbor_counts(&graph, workspace_id)?;
+        let fts_query = fts_phrase_query(query);
+        if fts_query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut statement = graph
+            .connection()
+            .sqlite_connection()
+            .prepare(
+                "SELECT
+                    f.evidence_id,
+                    f.source_id,
+                    f.evidence_type,
+                    f.text,
+                    bm25(evidence_fts) AS lexical_rank
+                 FROM evidence_fts f
+                 JOIN evidence_items e ON e.evidence_id = f.evidence_id
+                 WHERE e.workspace_id = ?1 AND evidence_fts MATCH ?2
+                 ORDER BY lexical_rank ASC
+                 LIMIT ?3",
+            )
+            .context("failed preparing hybrid retrieval query")?;
+        let mut rows = statement
+            .query((workspace_id, fts_query.as_str(), limit as i64))
+            .context("failed running hybrid retrieval query")?;
+        let mut hits = Vec::new();
+        while let Some(row) = rows.next().context("failed reading hybrid retrieval row")? {
+            let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+            let source_id: String = row.get(1).context("failed reading source id")?;
+            let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+            let snippet: String = row.get(3).context("failed reading evidence text")?;
+            let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
+            let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+            let typed_evidence_boost = if evidence_type == "text_evidence" {
+                0.05
+            } else {
+                0.0
+            };
+            let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+            hits.push(HybridRetrievalHit {
+                evidence_id,
+                source_id,
+                evidence_type,
+                snippet,
+                lexical_rank,
+                graph_neighbor_count,
+                score: -lexical_rank + typed_evidence_boost + graph_boost,
+            });
+        }
+        if hits.is_empty() {
+            let mut fallback_statement = graph
+                .connection()
+                .sqlite_connection()
+                .prepare(
+                    "SELECT evidence_id, source_id, evidence_type, snippet
+                     FROM evidence_items
+                     WHERE snippet LIKE '%' || ?1 || '%'
+                     LIMIT ?2",
+                )
+                .context("failed preparing hybrid retrieval fallback query")?;
+            let mut fallback_rows = fallback_statement
+                .query((query, limit as i64))
+                .context("failed running hybrid retrieval fallback query")?;
+            while let Some(row) = fallback_rows
+                .next()
+                .context("failed reading hybrid retrieval fallback row")?
+            {
+                let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+                let source_id: String = row.get(1).context("failed reading source id")?;
+                let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+                let snippet: String = row.get(3).context("failed reading evidence text")?;
+                let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+                let typed_evidence_boost = if evidence_type == "text_evidence" {
+                    0.05
+                } else {
+                    0.0
+                };
+                let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+                hits.push(HybridRetrievalHit {
+                    evidence_id,
+                    source_id,
+                    evidence_type,
+                    snippet,
+                    lexical_rank: 0.0,
+                    graph_neighbor_count,
+                    score: typed_evidence_boost + graph_boost,
+                });
+            }
+        }
+        hits.sort_by(|left, right| {
+            right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(hits)
     }
 
     #[cfg(test)]
@@ -340,6 +459,57 @@ impl KnowledgeStore {
             .get::<i64>("schema_version")
             .context("failed reading knowledge schema version")
     }
+}
+
+#[allow(dead_code)]
+fn evidence_graph_neighbor_counts(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<std::collections::BTreeMap<String, i64>> {
+    let mut counts = std::collections::BTreeMap::new();
+    for node in graph
+        .get_all_nodes(None)
+        .context("failed reading GraphQLite nodes for hybrid retrieval")?
+    {
+        let graphqlite::Value::Object(properties) = node else {
+            continue;
+        };
+        let Some(graphqlite::Value::String(node_workspace_id)) = properties.get("workspace_id")
+        else {
+            continue;
+        };
+        if node_workspace_id != workspace_id {
+            continue;
+        }
+        let Some(graphqlite::Value::String(node_id)) = properties.get("id") else {
+            continue;
+        };
+        let Some(graphqlite::Value::String(evidence_ids_json)) =
+            properties.get("evidence_ids_json")
+        else {
+            continue;
+        };
+        let evidence_ids =
+            serde_json::from_str::<Vec<String>>(evidence_ids_json).unwrap_or_default();
+        if evidence_ids.is_empty() {
+            continue;
+        }
+        let _ = node_id;
+        let degree = 1;
+        for evidence_id in evidence_ids {
+            *counts.entry(evidence_id).or_insert(0) += degree;
+        }
+    }
+    Ok(counts)
+}
+
+#[allow(dead_code)]
+fn fts_phrase_query(query: &str) -> String {
+    query
+        .replace('"', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn persist_graph_snapshot_in_transaction(
@@ -932,6 +1102,12 @@ mod tests {
                 .expect("graph counts"),
             report
         );
+        let hits = store
+            .hybrid_retrieve("workspace-default", "Alpha", 5)
+            .expect("hybrid retrieve");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].evidence_id, "evidence-a");
+        assert_eq!(hits[0].graph_neighbor_count, 1);
     }
 
     #[test]
