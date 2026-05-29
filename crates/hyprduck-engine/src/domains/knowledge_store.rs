@@ -58,6 +58,26 @@ pub(crate) struct HybridRetrievalHit {
     pub(crate) score: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct RelationalEvidenceProof {
+    pub(crate) evidence_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) source_id: String,
+    pub(crate) page_index: Option<i64>,
+    pub(crate) page_label: String,
+    pub(crate) evidence_type: String,
+    pub(crate) snippet: String,
+    pub(crate) source_path_redacted: String,
+    pub(crate) markdown_path_redacted: String,
+    pub(crate) image_path_redacted: String,
+    pub(crate) provenance: String,
+    pub(crate) producer_run_id: String,
+    pub(crate) confidence: Option<f64>,
+    pub(crate) status: String,
+    pub(crate) created_at: i64,
+}
+
 impl KnowledgeStore {
     pub(crate) fn default_path_for_root(root: &Path) -> PathBuf {
         root.join(KNOWLEDGE_DB_FILE_NAME)
@@ -400,6 +420,69 @@ impl KnowledgeStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         Ok(hits)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn resolve_evidence_proof(
+        &self,
+        workspace_id: &str,
+        evidence_id: &str,
+    ) -> Result<RelationalEvidenceProof> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sqlite = graph.connection().sqlite_connection();
+        let mut statement = sqlite
+            .prepare(
+                "SELECT
+                    evidence_id,
+                    workspace_id,
+                    source_id,
+                    page_index,
+                    page_label,
+                    evidence_type,
+                    snippet,
+                    source_path_redacted,
+                    markdown_path_redacted,
+                    image_path_redacted,
+                    provenance,
+                    producer_run_id,
+                    confidence,
+                    status,
+                    created_at
+                 FROM evidence_items
+                 WHERE workspace_id = ?1 AND evidence_id = ?2",
+            )
+            .context("failed preparing relational evidence proof query")?;
+        let mut rows = statement
+            .query((workspace_id, evidence_id))
+            .context("failed querying relational evidence proof")?;
+        let Some(row) = rows
+            .next()
+            .context("failed reading relational evidence proof row")?
+        else {
+            return Err(anyhow!(
+                "missing relational evidence row {} in workspace {}",
+                evidence_id,
+                workspace_id
+            ));
+        };
+
+        Ok(RelationalEvidenceProof {
+            evidence_id: row.get(0).context("read evidence_id")?,
+            workspace_id: row.get(1).context("read workspace_id")?,
+            source_id: row.get(2).context("read source_id")?,
+            page_index: row.get(3).context("read page_index")?,
+            page_label: row.get(4).context("read page_label")?,
+            evidence_type: row.get(5).context("read evidence_type")?,
+            snippet: row.get(6).context("read snippet")?,
+            source_path_redacted: row.get(7).context("read source_path_redacted")?,
+            markdown_path_redacted: row.get(8).context("read markdown_path_redacted")?,
+            image_path_redacted: row.get(9).context("read image_path_redacted")?,
+            provenance: row.get(10).context("read provenance")?,
+            producer_run_id: row.get(11).context("read producer_run_id")?,
+            confidence: row.get(12).context("read confidence")?,
+            status: row.get(13).context("read status")?,
+            created_at: row.get(14).context("read created_at")?,
+        })
     }
 
     #[cfg(test)]
@@ -1698,6 +1781,7 @@ mod tests {
         );
         assert_graph_node_metadata(&store, "node-a");
         assert_graph_edge_metadata(&store, "claim-alpha", "source:source-a", "CITES");
+        assert_relational_proof_ignores_graph_metadata_tamper(&store);
         let hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)
             .expect("hybrid retrieve");
@@ -1837,6 +1921,39 @@ mod tests {
         assert_eq!(row.get::<f64>("confidence").expect("confidence"), 0.8);
         assert_eq!(row.get::<String>("status").expect("status"), "active");
         assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
+    }
+
+    fn assert_relational_proof_ignores_graph_metadata_tamper(store: &KnowledgeStore) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .upsert_node(
+                "node-a",
+                [
+                    ("workspace_id", "workspace-default"),
+                    ("evidence_ids_json", "[\"graph-only-evidence\"]"),
+                    ("source_ids_json", "[\"graph-only-source\"]"),
+                ],
+                "Concept",
+            )
+            .expect("tamper GraphQLite node metadata");
+
+        let proof = store
+            .resolve_evidence_proof("workspace-default", "evidence-a")
+            .expect("resolve relational evidence proof");
+        assert_eq!(proof.evidence_id, "evidence-a");
+        assert_eq!(proof.source_id, "source-a");
+        assert_eq!(proof.page_index, Some(0));
+        assert_eq!(proof.page_label, "p1");
+        assert_eq!(proof.evidence_type, "text_evidence");
+        assert_eq!(proof.snippet, "Alpha relates to beta.");
+        assert_eq!(proof.status, "active");
+
+        let error = store
+            .resolve_evidence_proof("workspace-default", "graph-only-evidence")
+            .expect_err("graph-only evidence ref must not resolve proof");
+        assert!(error
+            .to_string()
+            .contains("missing relational evidence row graph-only-evidence"));
     }
 
     fn assert_string_array(row: &graphqlite::Row, column: &str, expected: &[&str]) {
