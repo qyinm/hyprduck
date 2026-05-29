@@ -21,6 +21,10 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import claudeIconUrl from "../../../resources/icons/claude-color.svg?url";
+import hermesIconUrl from "../../../resources/icons/hermesagent.svg?url";
+import openAiIconUrl from "../../../resources/icons/openai.svg?url";
+import piAgentIconUrl from "../../../resources/icons/pi-agent.svg?url";
 
 interface AgentTerminalProps {
   nodeId: string | null;
@@ -521,16 +525,16 @@ function TerminalMenuAction(props: {
 
 function AgentMenuIcon(props: { agentId: AgentTerminalAgent["id"] }) {
   const { agentId } = props;
-  const iconClass = "grid size-5 shrink-0 place-items-center text-[13px] font-bold";
+  const iconClass = "size-5 shrink-0 object-contain";
   switch (agentId) {
     case "codex":
-      return <span className={cn(iconClass, "text-zinc-100")}>◌</span>;
+      return <img alt="" className={iconClass} src={openAiIconUrl} />;
     case "claude_code":
-      return <span className={cn(iconClass, "text-orange-400")}>✺</span>;
+      return <img alt="" className={iconClass} src={claudeIconUrl} />;
     case "pi_agent":
-      return <span className={cn(iconClass, "text-zinc-100")}>Pi</span>;
+      return <img alt="" className={iconClass} src={piAgentIconUrl} />;
     case "hermes":
-      return <span className={cn(iconClass, "text-zinc-100")}>H</span>;
+      return <img alt="" className={iconClass} src={hermesIconUrl} />;
     default:
       return <SquareTerminal size={18} className="shrink-0 text-zinc-400" />;
   }
