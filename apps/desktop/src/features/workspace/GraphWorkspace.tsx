@@ -1021,6 +1021,20 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     onOpenAgentTerminal,
     onInputChange,
   } = props;
+  const [terminalContentVisible, setTerminalContentVisible] = useState(false);
+
+  useEffect(() => {
+    if (!agentTerminalOpen) {
+      setTerminalContentVisible(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setTerminalContentVisible(true);
+    }, 190);
+    return () => window.clearTimeout(timer);
+  }, [agentTerminalOpen]);
+
+  const showTerminalContent = agentTerminalOpen && terminalContentVisible;
 
   return (
     <form
@@ -1047,17 +1061,20 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         className={cn(
           "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
           agentTerminalOpen
-            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl p-0"
+            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl"
             : "flex h-14 items-center gap-2 rounded-full px-3",
+          showTerminalContent ? "p-0" : "flex items-end gap-2 px-3 pb-2",
         )}
       >
-        {agentTerminalOpen ? (
-          agentTerminal
+        {showTerminalContent ? (
+          <div className="h-full w-full opacity-100 transition-opacity duration-150">
+            {agentTerminal}
+          </div>
         ) : (
           <>
             <input
               aria-label="Open Agent Terminal"
-              className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+              className="h-10 min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
               onChange={(event) => onInputChange(event.target.value)}
               onFocus={onOpenAgentTerminal}
               placeholder="Open Agent Terminal..."
@@ -1070,7 +1087,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
             ) : null}
             <Button
               aria-label="Open Agent Terminal"
-              className="size-9 rounded-full"
+              className="mb-0.5 size-9 rounded-full"
               disabled={false}
               size="icon"
               type="submit"
