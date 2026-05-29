@@ -9,11 +9,12 @@ use hyprduck_engine_types::{
     BrainContextPack, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
     BrainRepoSnapshot, BrainScope, ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0,
     ContextPackParseConfidence, ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef,
-    EvidenceType, KnowledgeProject, SourceArtifactManifest, SourceFormat, SourceRecord,
-    SourceStatus, WikiPage,
+    EvidenceType, KnowledgeProject, PageEvidenceV0, ReadNodeResponseData,
+    ReadPageEvidenceResponseData, ReadSourceResponseData, SourceArtifactManifest, SourceFormat,
+    SourceRecord, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -684,6 +685,135 @@ impl KnowledgeStore {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn read_source_from_db(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> Result<Option<ReadSourceResponseData>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let Some(source) = load_context_pack_source_row(&graph, workspace_id, source_id)? else {
+            return Ok(None);
+        };
+        let evidence = load_evidence_refs_for_source(&graph, workspace_id, source_id, None)?;
+        let wiki_page = load_wiki_page_for_source(&graph, workspace_id, source_id)?;
+        Ok(Some(ReadSourceResponseData {
+            source: source_record_from_context_row(source),
+            wiki_page,
+            evidence,
+        }))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_page_evidence_from_db(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+        page: Option<usize>,
+    ) -> Result<Option<ReadPageEvidenceResponseData>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let Some(source) = load_context_pack_source_row(&graph, workspace_id, source_id)? else {
+            return Ok(None);
+        };
+        let rows = load_context_pack_evidence_rows_for_source(
+            &graph,
+            workspace_id,
+            source_id,
+            page.map(|page| page.saturating_sub(1) as i64),
+        )?;
+        let content_hash = source.content_hash.clone();
+        let mut evidence = rows
+            .into_iter()
+            .map(|row| PageEvidenceV0 {
+                evidence_ref: row.evidence_id,
+                source_id: row.source_id,
+                page: row.page_index.unwrap_or(0).max(0) as usize + 1,
+                region: format!("page:{}", row.page_index.unwrap_or(0).max(0) + 1),
+                span: None,
+                quoted_text: row.snippet,
+                parse_confidence: db_parse_confidence(row.confidence),
+                content_hash: content_hash.clone(),
+                markdown_path: non_empty_string(row.markdown_path_redacted),
+                image_path: non_empty_string(row.image_path_redacted),
+            })
+            .collect::<Vec<_>>();
+        evidence.sort_by(|left, right| {
+            left.page
+                .cmp(&right.page)
+                .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
+        });
+        Ok(Some(ReadPageEvidenceResponseData {
+            source: source_record_from_context_row(source),
+            evidence,
+            warnings: Vec::new(),
+        }))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_wiki_page_from_db(
+        &self,
+        workspace_id: &str,
+        path: &str,
+    ) -> Result<Option<WikiPage>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        load_wiki_page_by_path(&graph, workspace_id, path)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_node_from_db(
+        &self,
+        workspace_id: &str,
+        node_id: &str,
+    ) -> Result<Option<ReadNodeResponseData>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let node_value = graph
+            .get_all_nodes(None)
+            .context("failed reading GraphQLite nodes")?
+            .into_iter()
+            .find(|node| {
+                let graphqlite::Value::Object(properties) = node else {
+                    return false;
+                };
+                matches!(properties.get("id"), Some(graphqlite::Value::String(id)) if id == node_id)
+            });
+        let Some(graphqlite::Value::Object(properties)) = node_value else {
+            return Ok(None);
+        };
+        let row_workspace_id = object_string(&properties, "workspace_id");
+        if row_workspace_id != workspace_id {
+            return Ok(None);
+        }
+        let evidence_ids = object_string_array(&properties, "evidence_ids_json");
+        let source_ids = object_string_array(&properties, "source_ids_json");
+        let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &evidence_ids)?;
+        if evidence.is_empty() {
+            for source_id in &source_ids {
+                evidence.extend(load_evidence_refs_for_source(
+                    &graph,
+                    workspace_id,
+                    source_id,
+                    None,
+                )?);
+            }
+        }
+        let node = BrainNodeRecord {
+            node_id: node_id.into(),
+            kind: parse_brain_node_kind(&object_string(&properties, "kind")),
+            label: object_string(&properties, "label"),
+            scope: parse_brain_scope(&object_string(&properties, "scope")),
+            aliases: object_string_array(&properties, "aliases_json"),
+            evidence_ids,
+            source_ids,
+            confidence: object_optional_f32(&properties, "confidence"),
+            updated_at: object_i64(&properties, "updated_at").max(0) as u64,
+        };
+        Ok(Some(ReadNodeResponseData {
+            node,
+            evidence,
+            relations: Vec::new(),
+        }))
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn resolve_evidence_proof(
         &self,
         workspace_id: &str,
@@ -1156,6 +1286,217 @@ fn load_context_pack_source_row(
     }))
 }
 
+fn load_context_pack_evidence_rows_for_source(
+    graph: &Graph,
+    workspace_id: &str,
+    source_id: &str,
+    page_index: Option<i64>,
+) -> Result<Vec<ContextPackEvidenceRow>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT
+                evidence_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                source_path_redacted,
+                markdown_path_redacted,
+                image_path_redacted,
+                provenance,
+                confidence
+             FROM evidence_items
+             WHERE workspace_id = ?1
+               AND source_id = ?2
+               AND (?3 IS NULL OR page_index = ?3)
+               AND status = 'active'
+             ORDER BY page_index ASC, evidence_id ASC",
+        )
+        .context("failed preparing source evidence rows query")?;
+    let mut rows = statement
+        .query((workspace_id, source_id, page_index))
+        .context("failed querying source evidence rows")?;
+    let mut evidence_rows = Vec::new();
+    while let Some(row) = rows.next().context("failed reading source evidence row")? {
+        evidence_rows.push(ContextPackEvidenceRow {
+            evidence_id: row.get(0).context("read source evidence id")?,
+            source_id: row.get(1).context("read source evidence source")?,
+            page_index: row.get(2).context("read source evidence page index")?,
+            page_label: row.get(3).context("read source evidence page label")?,
+            evidence_type: row.get(4).context("read source evidence type")?,
+            snippet: row.get(5).context("read source evidence snippet")?,
+            source_path_redacted: row.get(6).context("read source evidence source path")?,
+            markdown_path_redacted: row.get(7).context("read source evidence markdown path")?,
+            image_path_redacted: row.get(8).context("read source evidence image path")?,
+            provenance: row.get(9).context("read source evidence provenance")?,
+            confidence: row.get(10).context("read source evidence confidence")?,
+        });
+    }
+    Ok(evidence_rows)
+}
+
+fn load_evidence_refs_for_source(
+    graph: &Graph,
+    workspace_id: &str,
+    source_id: &str,
+    page_index: Option<i64>,
+) -> Result<Vec<EvidenceRef>> {
+    Ok(
+        load_context_pack_evidence_rows_for_source(graph, workspace_id, source_id, page_index)?
+            .into_iter()
+            .map(|row| EvidenceRef {
+                id: row.evidence_id,
+                page_label: row.page_label,
+                page_index: row.page_index.map(|page_index| page_index.max(0) as usize),
+                snippet: row.snippet,
+                source_path: non_empty_string(row.source_path_redacted),
+                source_id: Some(row.source_id),
+                markdown_path: non_empty_string(row.markdown_path_redacted),
+                image_path: non_empty_string(row.image_path_redacted),
+                provenance: non_empty_string(row.provenance),
+            })
+            .collect(),
+    )
+}
+
+fn load_evidence_refs_by_ids(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_ids: &[String],
+) -> Result<Vec<EvidenceRef>> {
+    let mut evidence = Vec::new();
+    for evidence_id in evidence_ids {
+        if let Some(row) = load_context_pack_evidence_row(graph, workspace_id, evidence_id)? {
+            evidence.push(EvidenceRef {
+                id: row.evidence_id,
+                page_label: row.page_label,
+                page_index: row.page_index.map(|page_index| page_index.max(0) as usize),
+                snippet: row.snippet,
+                source_path: non_empty_string(row.source_path_redacted),
+                source_id: Some(row.source_id),
+                markdown_path: non_empty_string(row.markdown_path_redacted),
+                image_path: non_empty_string(row.image_path_redacted),
+                provenance: non_empty_string(row.provenance),
+            });
+        }
+    }
+    Ok(evidence)
+}
+
+fn load_wiki_page_for_source(
+    graph: &Graph,
+    workspace_id: &str,
+    source_id: &str,
+) -> Result<Option<WikiPage>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT wiki_page_id, path, title, body, evidence_refs_json, updated_at
+             FROM wiki_pages
+             WHERE workspace_id = ?1
+               AND approval_status IN ('materialized', 'approved')
+               AND evidence_refs_json <> '[]'
+             ORDER BY updated_at DESC",
+        )
+        .context("failed preparing wiki page source query")?;
+    let mut rows = statement
+        .query([workspace_id])
+        .context("failed querying wiki page source rows")?;
+    while let Some(row) = rows.next().context("failed reading wiki page source row")? {
+        let evidence_refs_json: String = row.get(4).context("read wiki evidence refs")?;
+        let evidence_refs =
+            serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+        if !wiki_evidence_refs_source(graph, workspace_id, &evidence_refs, source_id)? {
+            continue;
+        }
+        return Ok(Some(WikiPage {
+            page_id: row.get(0).context("read wiki id")?,
+            workspace_id: workspace_id.into(),
+            path: row.get(1).context("read wiki path")?,
+            title: row.get(2).context("read wiki title")?,
+            body: row.get(3).context("read wiki body")?,
+            node_refs: Vec::new(),
+            source_refs: vec![source_id.into()],
+            evidence_refs,
+            updated_at: row.get::<_, i64>(5).context("read wiki updated at")?.max(0) as u64,
+        }));
+    }
+    Ok(None)
+}
+
+fn load_wiki_page_by_path(
+    graph: &Graph,
+    workspace_id: &str,
+    path: &str,
+) -> Result<Option<WikiPage>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT wiki_page_id, title, body, evidence_refs_json, updated_at
+             FROM wiki_pages
+             WHERE workspace_id = ?1
+               AND path = ?2
+               AND approval_status IN ('materialized', 'approved')
+             LIMIT 1",
+        )
+        .context("failed preparing wiki page by path query")?;
+    let mut rows = statement
+        .query((workspace_id, path))
+        .context("failed querying wiki page by path")?;
+    let Some(row) = rows.next().context("failed reading wiki page by path")? else {
+        return Ok(None);
+    };
+    Ok(Some(WikiPage {
+        page_id: row.get(0).context("read wiki id")?,
+        workspace_id: workspace_id.into(),
+        path: path.into(),
+        title: row.get(1).context("read wiki title")?,
+        body: row.get(2).context("read wiki body")?,
+        node_refs: Vec::new(),
+        source_refs: Vec::new(),
+        evidence_refs: serde_json::from_str::<Vec<String>>(
+            &row.get::<_, String>(3).context("read wiki evidence refs")?,
+        )
+        .unwrap_or_default(),
+        updated_at: row.get::<_, i64>(4).context("read wiki updated at")?.max(0) as u64,
+    }))
+}
+
+fn wiki_evidence_refs_source(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_refs: &[String],
+    source_id: &str,
+) -> Result<bool> {
+    for evidence_ref in evidence_refs {
+        if load_context_pack_evidence_row(graph, workspace_id, evidence_ref)?
+            .is_some_and(|row| row.source_id == source_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn source_record_from_context_row(source: ContextPackSourceRow) -> SourceRecord {
+    SourceRecord {
+        source_id: source.source_id,
+        workspace_id: source.workspace_id,
+        original_path: source.original_path_redacted,
+        source_path: source.source_path_redacted,
+        markdown_path: source.markdown_path_redacted,
+        format: SourceFormat::from(source.format),
+        status: SourceStatus::from(source.status),
+        page_count: source.page_count.max(0) as usize,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: source.updated_at.max(0) as u64,
+    }
+}
+
 fn db_parse_confidence(confidence: Option<f64>) -> ContextPackParseConfidence {
     match confidence {
         Some(value) if value >= 0.8 => ContextPackParseConfidence::High,
@@ -1176,6 +1517,85 @@ fn db_context_evidence_type(evidence_type: &str) -> EvidenceType {
         "claim_evidence" => EvidenceType::Claim,
         "relationship_evidence" => EvidenceType::Relationship,
         _ => EvidenceType::Unknown,
+    }
+}
+
+fn parse_brain_node_kind(kind: &str) -> BrainNodeKind {
+    match kind {
+        "source" => BrainNodeKind::Source,
+        "memory" => BrainNodeKind::Memory,
+        "wiki_page" => BrainNodeKind::WikiPage,
+        "person" => BrainNodeKind::Person,
+        "company" => BrainNodeKind::Company,
+        "project" => BrainNodeKind::Project,
+        "product" => BrainNodeKind::Product,
+        "team" => BrainNodeKind::Team,
+        "event" => BrainNodeKind::Event,
+        "decision" => BrainNodeKind::Decision,
+        "task" => BrainNodeKind::Task,
+        "claim" => BrainNodeKind::Claim,
+        "topic" => BrainNodeKind::Topic,
+        _ => BrainNodeKind::Concept,
+    }
+}
+
+fn parse_brain_scope(scope: &str) -> BrainScope {
+    match scope {
+        "personal" => BrainScope::Personal,
+        "team" => BrainScope::Team,
+        "company" => BrainScope::Company,
+        _ => BrainScope::Project,
+    }
+}
+
+fn parse_optional_f32(value: &str) -> Option<f32> {
+    if value.is_empty() {
+        None
+    } else {
+        value.parse::<f32>().ok()
+    }
+}
+
+fn object_string(properties: &HashMap<String, graphqlite::Value>, key: &str) -> String {
+    match properties.get(key) {
+        Some(graphqlite::Value::String(value)) => value.clone(),
+        Some(graphqlite::Value::Integer(value)) => value.to_string(),
+        Some(graphqlite::Value::Float(value)) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn object_i64(properties: &HashMap<String, graphqlite::Value>, key: &str) -> i64 {
+    match properties.get(key) {
+        Some(graphqlite::Value::Integer(value)) => *value,
+        Some(graphqlite::Value::Float(value)) => *value as i64,
+        Some(graphqlite::Value::String(value)) => value.parse::<i64>().unwrap_or_default(),
+        _ => 0,
+    }
+}
+
+fn object_optional_f32(properties: &HashMap<String, graphqlite::Value>, key: &str) -> Option<f32> {
+    match properties.get(key) {
+        Some(graphqlite::Value::Float(value)) => Some(*value as f32),
+        Some(graphqlite::Value::Integer(value)) => Some(*value as f32),
+        Some(graphqlite::Value::String(value)) => parse_optional_f32(value),
+        _ => None,
+    }
+}
+
+fn object_string_array(properties: &HashMap<String, graphqlite::Value>, key: &str) -> Vec<String> {
+    match properties.get(key) {
+        Some(graphqlite::Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| match value {
+                graphqlite::Value::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        Some(graphqlite::Value::String(value)) => {
+            serde_json::from_str::<Vec<String>>(value).unwrap_or_default()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -3459,6 +3879,34 @@ mod tests {
             .selected
             .get("text")
             .is_some_and(|count| *count >= 1));
+        let source_response = store
+            .read_source_from_db("workspace-default", "source-a")
+            .expect("read source from DB")
+            .expect("source response");
+        assert_eq!(source_response.source.source_id, "source-a");
+        assert_eq!(source_response.evidence.len(), 2);
+        assert_eq!(
+            source_response
+                .wiki_page
+                .as_ref()
+                .map(|page| page.page_id.as_str()),
+            Some("wiki-alpha")
+        );
+        let page_response = store
+            .read_page_evidence_from_db("workspace-default", "source-a", Some(1))
+            .expect("read page evidence from DB")
+            .expect("page evidence response");
+        assert_eq!(page_response.source.source_id, "source-a");
+        assert_eq!(page_response.evidence.len(), 1);
+        assert_eq!(page_response.evidence[0].evidence_ref, "evidence-a");
+        let wiki_page = store
+            .read_wiki_page_from_db("workspace-default", "wiki/alpha")
+            .expect("read wiki page from DB")
+            .expect("wiki page");
+        assert_eq!(wiki_page.page_id, "wiki-alpha");
+        let _ = store
+            .read_node_from_db("workspace-default", "node-a")
+            .expect("read node from DB");
         update_evidence_status(&store, "evidence-b", "failed");
         let filtered_hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)

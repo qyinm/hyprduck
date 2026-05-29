@@ -667,6 +667,13 @@ fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainRespons
 }
 
 fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(response) =
+        store.read_source_from_db(&request.scope.workspace_id, &request.source_id)?
+    {
+        return Ok(response);
+    }
     let reader = BrainReader::open(&request.scope)?;
     let source = reader
         .snapshot
@@ -706,6 +713,16 @@ fn handle_read_page_evidence(
 ) -> Result<ReadPageEvidenceResponseData> {
     if request.page == Some(0) {
         bail!("argument page must be a positive 1-based integer");
+    }
+
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(response) = store.read_page_evidence_from_db(
+        &request.scope.workspace_id,
+        &request.source_id,
+        request.page,
+    )? {
+        return Ok(response);
     }
 
     let reader = BrainReader::open(&request.scope)?;
@@ -755,12 +772,24 @@ fn handle_read_page_evidence(
 }
 
 fn handle_read_wiki_page(request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(page) = store.read_wiki_page_from_db(&request.scope.workspace_id, &request.path)? {
+        return Ok(ReadWikiPageResponseData { page });
+    }
     let reader = BrainReader::open(&request.scope)?;
     let page = reader.read_wiki_page(&request.path)?;
     Ok(ReadWikiPageResponseData { page })
 }
 
 fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(response) =
+        store.read_node_from_db(&request.scope.workspace_id, &request.node_id)?
+    {
+        return Ok(response);
+    }
     let reader = BrainReader::open(&request.scope)?;
     let node = reader
         .snapshot
@@ -830,6 +859,21 @@ fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextP
         generated_at,
         &artifact_metadata,
     );
+    let context_pack_v1 = if request.selected_node_id.is_none() {
+        let root = resolve_brain_workspace_root(&request.scope)?;
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+        store
+            .assemble_context_pack_v1_from_db(
+                &request.scope.workspace_id,
+                &request.query,
+                budget,
+                context_pack_v1.pack_id.clone(),
+                context_pack_v1.generated_at.clone(),
+            )
+            .unwrap_or(context_pack_v1)
+    } else {
+        context_pack_v1
+    };
     let persisted_context_pack_path = if request.persist {
         Some(persist_context_pack_v1(&request.scope, &context_pack_v1)?)
     } else {
