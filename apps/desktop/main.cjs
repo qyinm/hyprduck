@@ -11,6 +11,7 @@ const {
 const {
   maybeImportLegacySwiftConfig: importLegacySwiftConfig,
 } = require("./main/legacy-config.cjs");
+const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const MAX_PROGRESS_LOG = 80;
@@ -30,6 +31,7 @@ let mainWindow = null;
 let engineRuntime = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
+let agentTerminalSessions = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -101,6 +103,14 @@ app.on("will-quit", () => {
 });
 
 function registerIpcHandlers() {
+  agentTerminalSessions = new AgentTerminalSessionManager({
+    getWorkspaceState: () => ({
+      workspaceId: snapshot.lastWorkspaceId ?? "default",
+      projectId: snapshot.lastProjectId ?? null,
+      sourceId: snapshot.lastSourceId ?? null,
+      sourceManifestPath: snapshot.lastSourceManifestPath ?? null,
+    }),
+  });
   ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {
     switch (command) {
       case "app_snapshot":
@@ -164,6 +174,18 @@ function registerIpcHandlers() {
           command: "answer_project",
           payload: args.request,
         }).then((response) => response.data.answer);
+      case "agent_terminal_list_agents":
+        return agentTerminalSessions.listAgents(args);
+      case "agent_terminal_create_session":
+        return agentTerminalSessions.createSession(args);
+      case "agent_terminal_snapshot_session":
+        return agentTerminalSessions.snapshotSession(args);
+      case "agent_terminal_write_session":
+        return agentTerminalSessions.writeSession(args);
+      case "agent_terminal_resize_session":
+        return agentTerminalSessions.resizeSession(args);
+      case "agent_terminal_kill_session":
+        return agentTerminalSessions.killSession(args);
       case "start_parse":
         return startParse(args.request);
       case "retry_failed_pages":
