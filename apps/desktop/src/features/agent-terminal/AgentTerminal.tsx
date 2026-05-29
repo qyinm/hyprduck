@@ -353,16 +353,6 @@ export function AgentTerminal(props: AgentTerminalProps) {
             <RotateCcw size={14} />
           </Button>
           <Button
-            aria-label="New agent tab"
-            className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-            onClick={() => setPickerOpen((value) => !value)}
-            size="icon"
-            type="button"
-            variant="ghost"
-          >
-            <Plus size={15} />
-          </Button>
-          <Button
             aria-label="Close Agent Terminal"
             className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             onClick={onClose}
@@ -376,34 +366,52 @@ export function AgentTerminal(props: AgentTerminalProps) {
       </header>
 
       {sessions.length > 0 ? (
-        <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-zinc-800 bg-zinc-900 px-3">
-          {sessions.map((session) => (
-            <div
-              className={cn(
-                "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
-                session.id === activeSessionId
-                  ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-                  : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
-              )}
-              key={session.id}
+        <div className="relative h-10 shrink-0 border-b border-zinc-800 bg-zinc-900">
+          <div className="flex h-full items-center gap-1 overflow-x-auto px-3">
+            {sessions.map((session) => (
+              <div
+                className={cn(
+                  "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
+                  session.id === activeSessionId
+                    ? "border-zinc-600 bg-zinc-800 text-zinc-100"
+                    : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
+                )}
+                key={session.id}
+              >
+                <button
+                  className="min-w-0 flex-1 truncate text-left"
+                  onClick={() => setActiveSessionId(session.id)}
+                  type="button"
+                >
+                  {session.agent.label}
+                </button>
+                <button
+                  aria-label={`Close ${session.agent.label} tab`}
+                  className="grid size-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
+                  onClick={() => void closeSession(session.id)}
+                  type="button"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+            <Button
+              aria-label="New agent tab"
+              className="size-7 shrink-0 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              onClick={() => setPickerOpen((value) => !value)}
+              size="icon"
+              type="button"
+              variant="ghost"
             >
-              <button
-                className="min-w-0 flex-1 truncate text-left"
-                onClick={() => setActiveSessionId(session.id)}
-                type="button"
-              >
-                {session.agent.label}
-              </button>
-              <button
-                aria-label={`Close ${session.agent.label} tab`}
-                className="grid size-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
-                onClick={() => void closeSession(session.id)}
-                type="button"
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
+              <Plus size={14} />
+            </Button>
+          </div>
+          {pickerOpen ? (
+            <AgentTerminalPickerMenu
+              agents={agentList?.agents ?? []}
+              onLaunchAgent={launchAgent}
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -445,48 +453,6 @@ export function AgentTerminal(props: AgentTerminalProps) {
           </div>
         )}
 
-        {pickerOpen ? (
-          <div className="absolute right-3 top-3 w-72 rounded-xl border border-zinc-700/90 bg-zinc-950/95 p-2 font-sans shadow-[0_18px_48px_rgba(0,0,0,0.45)]">
-            <div className="grid gap-1">
-              <TerminalMenuAction
-                icon={<SquareTerminal size={18} />}
-                label="New Terminal"
-                shortcut="⌘T"
-              />
-            </div>
-            <div className="my-2 h-px bg-zinc-800" />
-            <div className="grid gap-1">
-              {(agentList?.agents ?? []).map((agent) => (
-                <button
-                  className={cn(
-                    "flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold transition",
-                    agent.detected
-                      ? "text-zinc-100 hover:bg-zinc-800"
-                      : "cursor-not-allowed text-zinc-600",
-                  )}
-                  disabled={!agent.detected}
-                  key={agent.id}
-                  onClick={() => void launchAgent(agent)}
-                  title={agent.path ?? agent.disabledReason ?? undefined}
-                  type="button"
-                >
-                  <AgentMenuIcon agentId={agent.id} />
-                  <span className="min-w-0 flex-1 truncate">{agent.label}</span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-2 border-t border-zinc-800 pt-2">
-              <button
-                className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold text-zinc-500"
-                disabled
-                type="button"
-              >
-                <Settings size={18} />
-                <span>Agent settings...</span>
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       {error ? (
@@ -510,21 +476,72 @@ function TerminalMenuAction(props: {
   const { icon, label, shortcut } = props;
   return (
     <button
-      className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold text-zinc-100 transition hover:bg-zinc-800"
+      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] font-semibold text-zinc-100 transition hover:bg-zinc-800"
       type="button"
     >
-      <span className="grid size-5 shrink-0 place-items-center text-zinc-300">
+      <span className="grid size-3.5 shrink-0 place-items-center text-zinc-300">
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="shrink-0 text-xs font-medium text-zinc-500">{shortcut}</span>
+      <span className="shrink-0 text-[10px] font-medium text-zinc-500">
+        {shortcut}
+      </span>
     </button>
+  );
+}
+
+function AgentTerminalPickerMenu(props: {
+  agents: AgentTerminalAgent[];
+  onLaunchAgent: (agent: AgentTerminalAgent) => void | Promise<void>;
+}) {
+  const { agents, onLaunchAgent } = props;
+  return (
+    <div className="absolute right-3 top-9 z-20 w-48 rounded-lg border border-zinc-700/90 bg-zinc-950/95 p-1 font-sans shadow-[0_14px_36px_rgba(0,0,0,0.42)]">
+      <div className="grid gap-0.5">
+        <TerminalMenuAction
+          icon={<SquareTerminal size={14} />}
+          label="New Terminal"
+          shortcut="⌘T"
+        />
+      </div>
+      <div className="my-1 h-px bg-zinc-800" />
+      <div className="grid gap-0.5">
+        {agents.map((agent) => (
+          <button
+            className={cn(
+              "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] font-semibold transition",
+              agent.detected
+                ? "text-zinc-100 hover:bg-zinc-800"
+                : "cursor-not-allowed text-zinc-600",
+            )}
+            disabled={!agent.detected}
+            key={agent.id}
+            onClick={() => void onLaunchAgent(agent)}
+            title={agent.path ?? agent.disabledReason ?? undefined}
+            type="button"
+          >
+            <AgentMenuIcon agentId={agent.id} />
+            <span className="min-w-0 flex-1 truncate">{agent.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 border-t border-zinc-800 pt-1">
+        <button
+          className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] font-semibold text-zinc-500"
+          disabled
+          type="button"
+        >
+          <Settings size={14} />
+          <span>Agent settings...</span>
+        </button>
+      </div>
+    </div>
   );
 }
 
 function AgentMenuIcon(props: { agentId: AgentTerminalAgent["id"] }) {
   const { agentId } = props;
-  const iconClass = "size-6 shrink-0 object-contain";
+  const iconClass = "size-5 shrink-0 object-contain";
   switch (agentId) {
     case "codex":
       return (
