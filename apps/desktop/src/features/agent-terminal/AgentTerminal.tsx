@@ -3,8 +3,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
-  FilePlus2,
-  Globe2,
   Plus,
   RotateCcw,
   Settings,
@@ -451,16 +449,6 @@ export function AgentTerminal(props: AgentTerminalProps) {
                 icon={<SquareTerminal size={18} />}
                 label="New Terminal"
                 shortcut="⌘T"
-              />
-              <TerminalMenuAction
-                icon={<Globe2 size={18} />}
-                label="New Browser Tab"
-                shortcut="⌘⇧B"
-              />
-              <TerminalMenuAction
-                icon={<FilePlus2 size={18} />}
-                label="New Markdown"
-                shortcut="⌘⇧M"
               />
             </div>
             <div className="my-2 h-px bg-zinc-800" />
