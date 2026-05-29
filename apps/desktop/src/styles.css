@@ -211,21 +211,24 @@ body {
   -webkit-app-region: no-drag;
 }
 
-@keyframes agent-terminal-expand {
+@keyframes agent-terminal-grow-up {
   from {
-    clip-path: inset(calc(100% - 3.5rem) 0 0 0 round 9999px);
-    opacity: 0.92;
+    height: 3.5rem;
+    border-radius: 9999px;
+    opacity: 0.96;
   }
   to {
-    clip-path: inset(0 0 0 0 round 1.75rem);
+    height: min(34rem, calc(100% - 5rem));
+    border-radius: 1.75rem;
     opacity: 1;
   }
 }
 
 .agent-terminal-shell {
-  animation: agent-terminal-expand 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  height: min(34rem, calc(100% - 5rem));
+  animation: agent-terminal-grow-up 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: bottom center;
-  will-change: clip-path, opacity;
+  will-change: height, border-radius, opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
