@@ -3356,6 +3356,7 @@ impl KnowledgeProjectStore {
         project: &KnowledgeProject,
         manifest: &SourceArtifactManifest,
     ) -> Result<()> {
+        KnowledgeStore::open(self.path.clone())?.persist_source_manifest(project, manifest)?;
         let manifest_json =
             serde_json::to_string(manifest).context("failed to encode source manifest snapshot")?;
         let manifest_base64 = base64::engine::general_purpose::STANDARD.encode(manifest_json);

@@ -11,6 +11,15 @@ mod workspace_answer;
 
 use common::*;
 
+fn count_table_rows(store: &KnowledgeProjectStore, table: &str) -> usize {
+    store
+        .run_sql(&format!("SELECT COUNT(*) FROM {table};"))
+        .expect("count table rows")
+        .trim()
+        .parse()
+        .expect("parse row count")
+}
+
 #[test]
 fn default_project_store_migrates_legacy_db_to_canonical_name() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -92,6 +101,44 @@ fn default_project_store_preserves_legacy_project_source_and_correction_rows() {
             .expect("load migrated corrections")
             .len(),
         1
+    );
+}
+
+#[test]
+fn source_import_persists_canonical_db_rows_and_fts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeProjectStore::new(temp.path().join("hyprduck.sqlite"));
+    let markdown = "# Source import\n\n## Page 1\n\nCanonical source evidence persists.\n";
+    let (project, manifest) =
+        compile_manifest_fixture_project_with_source(&temp, markdown, "source-db", "alpha", 10);
+    let request = CompileProjectRequest {
+        source_markdown_path: temp.path().join("sample.md").display().to_string(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: None,
+    };
+
+    store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save project and canonical source rows");
+
+    assert_eq!(count_table_rows(&store, "import_jobs"), 1);
+    assert_eq!(count_table_rows(&store, "sources"), 1);
+    assert_eq!(count_table_rows(&store, "source_pages"), 1);
+    assert!(count_table_rows(&store, "evidence_items") > 0);
+    assert!(count_table_rows(&store, "evidence_fts") > 0);
+    assert!(store
+        .run_sql("SELECT manifest_json FROM sources WHERE source_id = 'source-db';")
+        .expect("read manifest json")
+        .contains("\"source_id\":\"source-db\""));
+    assert_eq!(
+        store
+            .run_sql("SELECT source_path_redacted FROM sources WHERE source_id = 'source-db';")
+            .expect("read redacted source path")
+            .trim(),
+        "alpha.pdf"
     );
 }
 
