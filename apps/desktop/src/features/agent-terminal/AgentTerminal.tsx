@@ -427,16 +427,15 @@ export function AgentTerminal(props: AgentTerminalProps) {
                 .slice(0, 4)
                 .map((agent) => (
                   <Button
-                    className="justify-between border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
+                    className="h-11 justify-start gap-3 border-zinc-700 bg-zinc-900 px-3 text-left font-sans text-sm font-semibold text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
                     key={agent.id}
                     onClick={() => void launchAgent(agent)}
+                    title={agent.path ?? undefined}
                     type="button"
                     variant="outline"
                   >
-                    <span className="truncate">{agent.label}</span>
-                    <Badge variant="outline" className="border-zinc-700 text-zinc-300">
-                      {agent.command}
-                    </Badge>
+                    <AgentMenuIcon agentId={agent.id} />
+                    <span className="min-w-0 flex-1 truncate">{agent.label}</span>
                   </Button>
                 ))}
               {loadingAgents ? (
@@ -525,16 +524,28 @@ function TerminalMenuAction(props: {
 
 function AgentMenuIcon(props: { agentId: AgentTerminalAgent["id"] }) {
   const { agentId } = props;
-  const iconClass = "size-5 shrink-0 object-contain";
+  const iconClass = "size-6 shrink-0 object-contain";
   switch (agentId) {
     case "codex":
-      return <img alt="" className={iconClass} src={openAiIconUrl} />;
+      return (
+        <img
+          alt=""
+          className={cn(iconClass, "brightness-0 invert opacity-90")}
+          src={openAiIconUrl}
+        />
+      );
     case "claude_code":
       return <img alt="" className={iconClass} src={claudeIconUrl} />;
     case "pi_agent":
       return <img alt="" className={iconClass} src={piAgentIconUrl} />;
     case "hermes":
-      return <img alt="" className={iconClass} src={hermesIconUrl} />;
+      return (
+        <img
+          alt=""
+          className={cn(iconClass, "brightness-0 invert opacity-90")}
+          src={hermesIconUrl}
+        />
+      );
     default:
       return <SquareTerminal size={18} className="shrink-0 text-zinc-400" />;
   }
