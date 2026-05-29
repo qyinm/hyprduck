@@ -804,8 +804,44 @@ pub struct BrainContextPack {
 }
 
 pub const CONTEXT_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.context_pack.v0";
+pub const CONTEXT_PACK_V1_SCHEMA_VERSION: &str = "hyprduck.context_pack.v1";
 pub const SOURCE_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.source_pack.v0";
 pub const EVIDENCE_INDEX_V0_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v0";
+pub const EVIDENCE_INDEX_V1_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceType {
+    Text,
+    Table,
+    ImageRegion,
+    Ocr,
+    Caption,
+    Summary,
+    Claim,
+    Relationship,
+    Unknown,
+}
+
+impl EvidenceType {
+    pub fn legacy_default() -> Self {
+        Self::Text
+    }
+
+    pub fn as_trace_key(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Table => "table",
+            Self::ImageRegion => "image_region",
+            Self::Ocr => "ocr",
+            Self::Caption => "caption",
+            Self::Summary => "summary",
+            Self::Claim => "claim",
+            Self::Relationship => "relationship",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -869,6 +905,23 @@ pub struct ContextPackEvidenceV0 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceV1 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub selection_reason: String,
+    pub content_hash: String,
+    pub evidence_type: EvidenceType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContextPackFindingV0 {
     pub finding_id: String,
     pub statement: String,
@@ -904,6 +957,26 @@ pub struct ContextPackRetrievalTraceV0 {
     pub chunks_selected: usize,
     pub budget_requested: usize,
     pub budget_used: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceTypeTraceV1 {
+    #[serde(default)]
+    pub considered: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub selected: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackRetrievalTraceV1 {
+    pub strategy: String,
+    pub chunks_considered: usize,
+    pub chunks_selected: usize,
+    pub budget_requested: usize,
+    pub budget_used: usize,
+    pub evidence_type_trace: ContextPackEvidenceTypeTraceV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -997,6 +1070,39 @@ pub struct EvidenceIndexV0 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexItemV1 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    pub evidence_type: EvidenceType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexV1 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub content_hash: String,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub evidence: Vec<EvidenceIndexItemV1>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub generated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContextPackV0 {
     pub schema_version: String,
     pub pack_id: String,
@@ -1008,6 +1114,22 @@ pub struct ContextPackV0 {
     pub findings: Vec<ContextPackFindingV0>,
     pub warnings: Vec<ContextPackWarningV0>,
     pub retrieval_trace: ContextPackRetrievalTraceV0,
+    pub suggested_next_reads: Vec<ContextPackSuggestedNextReadV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackV1 {
+    pub schema_version: String,
+    pub pack_id: String,
+    pub workspace_id: WorkspaceId,
+    pub query: String,
+    pub generated_at: String,
+    pub source_set: Vec<ContextPackSourceV0>,
+    pub selected_evidence: Vec<ContextPackEvidenceV1>,
+    pub findings: Vec<ContextPackFindingV0>,
+    pub warnings: Vec<ContextPackWarningV0>,
+    pub retrieval_trace: ContextPackRetrievalTraceV1,
     pub suggested_next_reads: Vec<ContextPackSuggestedNextReadV0>,
 }
 
@@ -2262,6 +2384,98 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str() == Some(field)));
         }
+    }
+
+    #[test]
+    fn evidence_index_v1_schema_requires_evidence_type() {
+        let evidence_index_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/evidence-index-v1.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&evidence_index_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", evidence_index_path.display())
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema["properties"]["schemaVersion"]["const"],
+            EVIDENCE_INDEX_V1_SCHEMA_VERSION
+        );
+        let evidence_required = schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("evidence required");
+        assert!(evidence_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceType")));
+        assert!(schema
+            .pointer("/$defs/evidence/properties/evidenceType/enum")
+            .and_then(Value::as_array)
+            .expect("evidence type enum")
+            .iter()
+            .any(|value| value.as_str() == Some("table")));
+    }
+
+    #[test]
+    fn context_pack_v1_schema_requires_typed_evidence_trace() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/context-pack-v1.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", schema_path.display())),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema["properties"]["schemaVersion"]["const"],
+            CONTEXT_PACK_V1_SCHEMA_VERSION
+        );
+        let evidence_required = schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("selected evidence required");
+        assert!(evidence_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceType")));
+        let trace_required = schema
+            .pointer("/$defs/retrievalTrace/required")
+            .and_then(Value::as_array)
+            .expect("retrieval trace required");
+        assert!(trace_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceTypeTrace")));
+    }
+
+    #[test]
+    fn evidence_index_v1_round_trip_preserves_evidence_type() {
+        let evidence_index = EvidenceIndexV1 {
+            schema_version: EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            provider_route: "local_demo".into(),
+            local_only: true,
+            evidence: vec![EvidenceIndexItemV1 {
+                evidence_ref: "ev-source-alpha-table-1".into(),
+                source_id: "source-alpha".into(),
+                page: 1,
+                region: "page:Page 1".into(),
+                span: Some("page".into()),
+                quoted_text: "| A | B |\n| - | - |\n| 1 | 2 |".into(),
+                parse_confidence: ContextPackParseConfidence::High,
+                content_hash: "fnv64:abc123".into(),
+                markdown_path: Some("/tmp/source-alpha/page_1.md".into()),
+                image_path: Some("/tmp/source-alpha/page_1.png".into()),
+                evidence_type: EvidenceType::Table,
+            }],
+            warnings: Vec::new(),
+            generated_at: 42,
+        };
+
+        let json = serde_json::to_string(&evidence_index).unwrap();
+        assert!(json.contains("\"evidenceType\":\"table\""));
+        let decoded: EvidenceIndexV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, evidence_index);
     }
 
     #[test]
