@@ -524,6 +524,7 @@ fn context_pack_excludes_ui_graph_state_and_raw_candidate_paths() {
                         .into(),
                 ),
                 image_path: None,
+                evidence_type: hyprduck_engine_types::EvidenceType::Text,
             },
         )]),
     );

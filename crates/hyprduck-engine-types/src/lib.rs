@@ -1157,6 +1157,8 @@ pub struct ContextPackEvidenceMetadataV0 {
     pub markdown_path: Option<String>,
     #[serde(default)]
     pub image_path: Option<String>,
+    #[serde(default = "EvidenceType::legacy_default")]
+    pub evidence_type: EvidenceType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -2698,6 +2700,7 @@ mod tests {
                     content_hash: "sha256:abc123".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -2949,6 +2952,7 @@ mod tests {
                     content_hash: "fnv64:fixture".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -3057,6 +3061,7 @@ mod tests {
                     content_hash: "sha256:visual-table".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -3189,6 +3194,7 @@ mod tests {
                     content_hash: "fnv64:alpha".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
         artifact_metadata
@@ -3207,6 +3213,7 @@ mod tests {
                     content_hash: "fnv64:beta".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 

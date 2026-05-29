@@ -109,7 +109,7 @@ use chat_openai_compatible_client::{
     parse_openai_compatible_json_schema_with_timeout, provider_unavailable,
 };
 use context_pack_artifacts::{
-    build_context_pack_artifact_metadata, read_evidence_index_v0, read_source_pack_v0,
+    build_context_pack_artifact_metadata, read_evidence_index_artifact, read_source_pack_v0,
 };
 #[cfg(test)]
 use context_pack_artifacts::{build_context_pack_source_metadata, fnv1a64};
@@ -1328,7 +1328,7 @@ fn brain_health_source_report(
     }
 
     let mut evidence_index_read_failed = false;
-    let evidence_index = match read_evidence_index_v0(repo, &source.source_id) {
+    let evidence_index = match read_evidence_index_artifact(repo, &source.source_id) {
         Ok(evidence_index) => evidence_index,
         Err(_error) => {
             evidence_index_read_failed = true;
@@ -1337,20 +1337,22 @@ fn brain_health_source_report(
         }
     };
     let valid_evidence_index = evidence_index.as_ref().filter(|index| {
-        index.schema_version == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
-            && index.source_id == source.source_id
-            && index.workspace_id == source.workspace_id
+        (index.schema_version() == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+            || index.schema_version() == hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION)
+            && index.source_id() == Some(source.source_id.as_str())
+            && index.workspace_id() == Some(source.workspace_id.as_str())
     });
     match evidence_index.as_ref() {
         Some(index)
-            if index.schema_version != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION =>
+            if index.schema_version() != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+                && index.schema_version() != hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION =>
         {
             push_health_warning(&mut warnings, "evidence_index_schema_mismatch");
         }
-        Some(index) if index.source_id != source.source_id => {
+        Some(index) if index.source_id() != Some(source.source_id.as_str()) => {
             push_health_warning(&mut warnings, "evidence_index_source_mismatch");
         }
-        Some(index) if index.workspace_id != source.workspace_id => {
+        Some(index) if index.workspace_id() != Some(source.workspace_id.as_str()) => {
             push_health_warning(&mut warnings, "evidence_index_workspace_mismatch");
         }
         None if !evidence_index_read_failed => {
@@ -1361,18 +1363,20 @@ fn brain_health_source_report(
 
     if let Some(index) = valid_evidence_index {
         if provider_route == "unknown" {
-            provider_route = index.provider_route.clone();
-            local_only = Some(index.local_only);
+            if let Some(route) = index.provider_route() {
+                provider_route = route.to_string();
+            }
+            local_only = index.local_only();
         }
         if let Some(pack_hash) = content_hash.as_deref() {
-            if pack_hash == index.content_hash {
+            if Some(pack_hash) == index.content_hash() {
                 content_hash_status = "current".into();
             } else {
                 content_hash_status = "mismatch".into();
                 push_health_warning(&mut warnings, "content_hash_mismatch");
             }
-        } else {
-            content_hash = Some(index.content_hash.clone());
+        } else if let Some(index_hash) = index.content_hash() {
+            content_hash = Some(index_hash.to_string());
             content_hash_status = "evidence_index_only".into();
         }
     }

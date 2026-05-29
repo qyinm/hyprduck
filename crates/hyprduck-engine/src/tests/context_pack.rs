@@ -184,6 +184,82 @@ fn context_pack_artifact_metadata_sanitizes_unreadable_artifact_warnings() {
 }
 
 #[test]
+fn context_pack_artifact_metadata_reports_unsupported_evidence_index_schema() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-future-schema");
+    let source_root = workspace_root.join("sources/src-future-schema");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-future-schema",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:future-source",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v99",
+            "evidence": [{"futureField": true}]
+        })
+        .to_string(),
+    )
+    .expect("future evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-future-schema".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    assert!(metadata
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "evidence_index_schema_mismatch"
+            && warning.message.contains("hyprduck.evidence_index.v99")));
+    assert!(!metadata
+        .warnings
+        .iter()
+        .any(|warning| warning.warning_type == "evidence_index_unreadable"));
+}
+
+#[test]
 fn context_pack_artifact_metadata_prefers_source_pack_and_evidence_index() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
@@ -283,6 +359,105 @@ fn context_pack_artifact_metadata_prefers_source_pack_and_evidence_index() {
     assert_eq!(
         evidence.parse_confidence,
         hyprduck_engine_types::ContextPackParseConfidence::High
+    );
+    assert_eq!(
+        evidence.evidence_type,
+        hyprduck_engine_types::EvidenceType::Text
+    );
+}
+
+#[test]
+fn context_pack_artifact_metadata_reads_v1_evidence_type() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-table");
+    let source_root = workspace_root.join("sources/src-table");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&source_root).expect("source root");
+    let source_path = source_root.join("source.md");
+    let markdown_path = artifact_root.join("source.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, b"markdown bytes").expect("write markdown");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-table",
+            "originalFilename": "source.md",
+            "originalPath": "source.md",
+            "sourcePath": source_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:table",
+            "format": "markdown",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v1",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "src-table",
+            "contentHash": "fnv64:table",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "evidence-table",
+                "sourceId": "src-table",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "| A | B |",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:table",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null,
+                "evidenceType": "table"
+            }],
+            "warnings": [],
+            "generatedAt": 42
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let metadata = build_context_pack_artifact_metadata(
+        &workspace_root,
+        &[SourceRecord {
+            source_id: "src-table".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "source.md".into(),
+            source_path: source_path.display().to_string(),
+            markdown_path: markdown_path.display().to_string(),
+            format: hyprduck_engine_types::SourceFormat::markdown(),
+            status: hyprduck_engine_types::SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }],
+    );
+
+    let evidence = metadata
+        .evidence
+        .get("src-table")
+        .and_then(|source_evidence| source_evidence.get("evidence-table"))
+        .expect("v1 evidence metadata");
+    assert_eq!(
+        evidence.evidence_type,
+        hyprduck_engine_types::EvidenceType::Table
     );
 }
 
