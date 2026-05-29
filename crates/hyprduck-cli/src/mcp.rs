@@ -369,21 +369,23 @@ struct ImportJobSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImportJobStatus {
-    Queued,
-    Running,
-    Completed,
+    Imported,
+    Parsing,
+    Packaging,
+    CitationReady,
+    ContextReady,
     Failed,
     Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImportJobPhase {
-    Queued,
+    Imported,
     Parsing,
-    CitationPackaging,
+    Packaging,
     CitationReady,
-    GraphMaterializing,
-    Completed,
+    ContextMaterializing,
+    ContextReady,
     Failed,
     Cancelled,
 }
@@ -447,7 +449,7 @@ impl ImportJobRegistry {
             job.warnings.push(
                 "cancel_requested; running engine steps may finish before cancellation".into(),
             );
-            if matches!(job.phase, ImportJobPhase::Queued) {
+            if matches!(job.phase, ImportJobPhase::Imported) {
                 job.status = ImportJobStatus::Cancelled;
                 job.phase = ImportJobPhase::Cancelled;
                 job.progress_percent = 100;
@@ -482,8 +484,8 @@ impl ImportJobSnapshot {
             job_id,
             workspace_id: scope.workspace_id.clone(),
             root_dir: scope.root_dir.clone(),
-            status: ImportJobStatus::Queued,
-            phase: ImportJobPhase::Queued,
+            status: ImportJobStatus::Imported,
+            phase: ImportJobPhase::Imported,
             progress_percent: 0,
             source_id: None,
             page_count: None,
@@ -528,28 +530,33 @@ impl ImportJobSnapshot {
 impl ImportJobStatus {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Completed => "completed",
+            Self::Imported => "imported",
+            Self::Parsing => "parsing",
+            Self::Packaging => "packaging",
+            Self::CitationReady => "citation_ready",
+            Self::ContextReady => "context_ready",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
     }
 
     fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::ContextReady | Self::Failed | Self::Cancelled
+        )
     }
 }
 
 impl ImportJobPhase {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Queued => "queued",
+            Self::Imported => "imported",
             Self::Parsing => "parsing",
-            Self::CitationPackaging => "citation_packaging",
+            Self::Packaging => "packaging",
             Self::CitationReady => "citation_ready",
-            Self::GraphMaterializing => "graph_materializing",
-            Self::Completed => "completed",
+            Self::ContextMaterializing => "context_materializing",
+            Self::ContextReady => "context_ready",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
@@ -605,7 +612,7 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
 
     let client = SubprocessEngineClient::default();
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::Running;
+        job.status = ImportJobStatus::Parsing;
         job.phase = ImportJobPhase::Parsing;
         job.progress_percent = 5;
     });
@@ -629,7 +636,16 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         &mut |progress| {
             let (phase, progress_percent) = import_phase_from_parse_progress(&progress);
             registry.update_active(&request.job_id, |job| {
-                job.status = ImportJobStatus::Running;
+                job.status = match phase {
+                    ImportJobPhase::Imported => ImportJobStatus::Imported,
+                    ImportJobPhase::Parsing => ImportJobStatus::Parsing,
+                    ImportJobPhase::Packaging => ImportJobStatus::Packaging,
+                    ImportJobPhase::Failed => ImportJobStatus::Failed,
+                    ImportJobPhase::CitationReady
+                    | ImportJobPhase::ContextMaterializing
+                    | ImportJobPhase::ContextReady
+                    | ImportJobPhase::Cancelled => job.status,
+                };
                 job.phase = phase;
                 job.progress_percent = progress_percent;
             });
@@ -643,8 +659,8 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         .source_manifest
         .ok_or_else(|| anyhow!("import_source parse did not produce a source manifest"))?;
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::Running;
-        job.phase = ImportJobPhase::CitationPackaging;
+        job.status = ImportJobStatus::Packaging;
+        job.phase = ImportJobPhase::Packaging;
         job.progress_percent = 70;
         job.source_id = Some(manifest.source_id.clone());
         job.page_count = Some(parse.result.metadata.page_count);
@@ -669,7 +685,7 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
     })?;
     let evidence_count = page_evidence.evidence.len();
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::Running;
+        job.status = ImportJobStatus::CitationReady;
         job.phase = ImportJobPhase::CitationReady;
         job.progress_percent = if request.skip_graph_generation {
             100
@@ -680,8 +696,8 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         job.evidence_count = Some(evidence_count);
         job.citation_ready = evidence_count > 0;
         if request.skip_graph_generation {
-            job.status = ImportJobStatus::Completed;
-            job.phase = ImportJobPhase::Completed;
+            job.status = ImportJobStatus::ContextReady;
+            job.phase = ImportJobPhase::ContextReady;
             job.graph_ready = false;
             job.graph_status = Some("skipped".into());
             job.graph_generation_skipped_reason = Some("skipGraphGeneration requested".into());
@@ -692,8 +708,8 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
     }
 
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::Running;
-        job.phase = ImportJobPhase::GraphMaterializing;
+        job.status = ImportJobStatus::CitationReady;
+        job.phase = ImportJobPhase::ContextMaterializing;
         job.progress_percent = 88;
     });
     if registry.mark_cancelled_if_requested(&request.job_id) {
@@ -715,8 +731,8 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
     let graph_status = graph_compile.graph_generation_status.clone();
     let graph_ready = graph_status_is_ready(graph_status.as_deref());
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::Completed;
-        job.phase = ImportJobPhase::Completed;
+        job.status = ImportJobStatus::ContextReady;
+        job.phase = ImportJobPhase::ContextReady;
         job.progress_percent = 100;
         job.graph_ready = graph_ready;
         job.graph_status = graph_status.or_else(|| Some("unknown".into()));
@@ -736,7 +752,7 @@ fn import_phase_from_parse_progress(
     use hyprduck_engine_types::ParseProgress;
 
     match progress {
-        ParseProgress::Queued => (ImportJobPhase::Queued, 2),
+        ParseProgress::Queued => (ImportJobPhase::Imported, 2),
         ParseProgress::ConvertingPages { current, total } => (
             ImportJobPhase::Parsing,
             scaled_progress(*current as usize, *total as usize, 10, 35),
@@ -745,8 +761,8 @@ fn import_phase_from_parse_progress(
             ImportJobPhase::Parsing,
             scaled_progress(*current as usize, *total as usize, 35, 65),
         ),
-        ParseProgress::Packaging => (ImportJobPhase::CitationPackaging, 68),
-        ParseProgress::Completed => (ImportJobPhase::CitationPackaging, 70),
+        ParseProgress::Packaging => (ImportJobPhase::Packaging, 68),
+        ParseProgress::Completed => (ImportJobPhase::Packaging, 70),
         ParseProgress::Failed { .. } => (ImportJobPhase::Failed, 100),
     }
 }
@@ -1692,6 +1708,44 @@ mod tests {
     }
 
     #[test]
+    fn import_job_status_strings_use_hyprduck_lifecycle_names() {
+        assert_eq!(ImportJobStatus::Imported.as_str(), "imported");
+        assert_eq!(ImportJobStatus::Parsing.as_str(), "parsing");
+        assert_eq!(ImportJobStatus::Packaging.as_str(), "packaging");
+        assert_eq!(ImportJobStatus::CitationReady.as_str(), "citation_ready");
+        assert_eq!(ImportJobStatus::ContextReady.as_str(), "context_ready");
+        assert_eq!(ImportJobStatus::Failed.as_str(), "failed");
+        assert_eq!(ImportJobStatus::Cancelled.as_str(), "cancelled");
+    }
+
+    #[test]
+    fn queued_import_job_serializes_as_imported_state() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let job = ImportJobSnapshot::queued("import-test".into(), &scope);
+        let value = job.to_value();
+
+        assert_eq!(value["status"], json!("imported"));
+        assert_eq!(value["phase"], json!("imported"));
+        assert_eq!(value["citationReady"], json!(false));
+        assert_eq!(value["graphReady"], json!(false));
+        assert_eq!(value["progressPercent"], json!(0));
+    }
+
+    #[test]
+    fn import_job_terminal_states_are_context_ready_failed_or_cancelled() {
+        assert!(!ImportJobStatus::Imported.is_terminal());
+        assert!(!ImportJobStatus::Parsing.is_terminal());
+        assert!(!ImportJobStatus::Packaging.is_terminal());
+        assert!(!ImportJobStatus::CitationReady.is_terminal());
+        assert!(ImportJobStatus::ContextReady.is_terminal());
+        assert!(ImportJobStatus::Failed.is_terminal());
+        assert!(ImportJobStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
     fn import_job_cancel_prevents_later_active_updates() {
         let registry = ImportJobRegistry::default();
         let scope = BrainReadScope {
@@ -1706,7 +1760,7 @@ mod tests {
         assert_eq!(cancelled.phase, ImportJobPhase::Cancelled);
 
         registry.update_active(&job_id, |job| {
-            job.status = ImportJobStatus::Running;
+            job.status = ImportJobStatus::Parsing;
             job.phase = ImportJobPhase::Parsing;
             job.progress_percent = 5;
         });
