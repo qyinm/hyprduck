@@ -10,30 +10,30 @@ use base64::Engine;
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
-    BrainHealthStatus, BrainKnowledgeStoreReport, BrainNodeKind, BrainNodeRecord, BrainReadScope,
-    BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult,
-    BrainSearchResultKind, ClaimRecord, CompileProjectRequest, CompileProjectResponseData,
-    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
-    EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
-    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
-    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
-    MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview, ProjectStatus,
-    ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest, ReadNodeResponseData,
-    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, RetryFailedPagesRequest,
-    RetryFailedPagesResponseData, SearchBrainRequest, SearchBrainResponseData,
-    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceStatus, SourceSummary,
-    StructuredExtractionArtifact, StructuredExtractionClaim, StructuredExtractionEntity,
-    StructuredExtractionMemoryCandidate, StructuredExtractionPageRef, StructuredExtractionRelation,
-    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
-    WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData, WriteCommitRequest,
-    WriteCommitResponseData, WriteCommitResultItem, WriteListRequest, WriteListResponseData,
-    WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
-    WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
+    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainGovernanceReport,
+    BrainHealthSourceReport, BrainHealthStatus, BrainKnowledgeStoreReport, BrainNodeKind,
+    BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
+    BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord, CompileProjectRequest,
+    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
+    EngineFailure, EntityRecord, EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData,
+    GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest,
+    LoadProjectResponseData, MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata,
+    ParseRequest, ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview,
+    ProjectStatus, ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest,
+    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
+    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
+    SourceStatus, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData,
+    WriteCommitRequest, WriteCommitResponseData, WriteCommitResultItem, WriteListRequest,
+    WriteListResponseData, WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData,
+    WriteRejectRequest, WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{
@@ -1064,6 +1064,7 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
+            governance: Some(brain_governance_report()),
             knowledge_store: Some(knowledge_store_report),
             source_reports: Vec::new(),
             recent_events: Vec::new(),
@@ -1095,10 +1096,21 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             BrainHealthStatus::AttentionNeeded
         },
         attention_count,
+        governance: Some(brain_governance_report()),
         knowledge_store: Some(knowledge_store_report),
         source_reports,
         recent_events,
     })
+}
+
+fn brain_governance_report() -> BrainGovernanceReport {
+    BrainGovernanceReport {
+        storage_locality: "local_workspace".into(),
+        interaction_surface: "desktop_mcp".into(),
+        evidence_governed: true,
+        mutating_tools_require_evidence: true,
+        local_path_disclosure_default: "redacted".into(),
+    }
 }
 
 fn brain_knowledge_store_report(

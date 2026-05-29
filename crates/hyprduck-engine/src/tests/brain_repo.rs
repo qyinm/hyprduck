@@ -14,6 +14,12 @@ fn brain_health_is_clean_for_empty_workspace() {
 
     assert_eq!(health.status, BrainHealthStatus::Clean);
     assert_eq!(health.attention_count, 0);
+    let governance = health.governance.as_ref().expect("governance report");
+    assert_eq!(governance.storage_locality, "local_workspace");
+    assert_eq!(governance.interaction_surface, "desktop_mcp");
+    assert!(governance.evidence_governed);
+    assert!(governance.mutating_tools_require_evidence);
+    assert_eq!(governance.local_path_disclosure_default, "redacted");
     let store = health
         .knowledge_store
         .as_ref()

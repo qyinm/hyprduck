@@ -131,7 +131,7 @@ fn initialize_result(message: &Value) -> Value {
             "title": "HyprDuck Local Context",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "HyprDuck exposes local document context artifacts through read, search, context-pack, snapshot, and health tools. Use get_context_pack first, then search_documents or open cited sources, page evidence, wiki pages, nodes, or event history as needed."
+        "instructions": "HyprDuck exposes local, desktop-first, evidence-governed document context through read, search, context-pack, snapshot, and health tools. Use get_context_pack first, then search_documents or open cited sources, page evidence, wiki pages, nodes, or event history as needed."
     })
 }
 
@@ -1247,19 +1247,54 @@ fn validate_mcp_write_content_type(content_type: &str) -> Result<()> {
 }
 
 fn redact_local_paths(value: Value) -> Value {
+    redact_local_paths_with_key(None, value)
+}
+
+fn redact_local_paths_with_key(key: Option<&str>, value: Value) -> Value {
     match value {
+        Value::String(value) if should_redact_path_field(key, &value) => {
+            Value::String("[redacted-local-path]".into())
+        }
         Value::String(value) if is_absolute_local_path(&value) => {
             Value::String("[redacted-local-path]".into())
         }
         Value::String(value) => Value::String(redact_local_path_text(&value)),
-        Value::Array(values) => Value::Array(values.into_iter().map(redact_local_paths).collect()),
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact_local_paths_with_key(key, value))
+                .collect(),
+        ),
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(key, value)| (key, redact_local_paths(value)))
+                .map(|(key, value)| {
+                    let redacted = redact_local_paths_with_key(Some(&key), value);
+                    (key, redacted)
+                })
                 .collect(),
         ),
         value => value,
     }
+}
+
+fn should_redact_path_field(key: Option<&str>, value: &str) -> bool {
+    let Some(key) = key else {
+        return false;
+    };
+    if value.trim().is_empty() {
+        return false;
+    }
+    matches!(
+        key,
+        "originalPath"
+            | "sourcePath"
+            | "markdownPath"
+            | "imagePath"
+            | "artifactRoot"
+            | "manifestPath"
+            | "sourcePaths"
+            | "persistedContextPackPath"
+    )
 }
 
 fn redact_local_path_text(value: &str) -> String {

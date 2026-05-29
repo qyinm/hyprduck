@@ -1620,11 +1620,23 @@ pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
     #[serde(default)]
+    pub governance: Option<BrainGovernanceReport>,
+    #[serde(default)]
     pub knowledge_store: Option<BrainKnowledgeStoreReport>,
     #[serde(default)]
     pub source_reports: Vec<BrainHealthSourceReport>,
     #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainGovernanceReport {
+    pub storage_locality: String,
+    pub interaction_surface: String,
+    pub evidence_governed: bool,
+    pub mutating_tools_require_evidence: bool,
+    pub local_path_disclosure_default: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

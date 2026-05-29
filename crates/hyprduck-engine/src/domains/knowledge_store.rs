@@ -90,6 +90,9 @@ struct ContextPackEvidenceRow {
 struct ContextPackSourceRow {
     source_id: String,
     workspace_id: String,
+    original_path: String,
+    source_path: String,
+    markdown_path: String,
     original_path_redacted: String,
     source_path_redacted: String,
     markdown_path_redacted: String,
@@ -2002,6 +2005,9 @@ fn load_context_pack_source_row(
             "SELECT
                 source_id,
                 workspace_id,
+                original_path,
+                source_path,
+                markdown_path,
                 original_path_redacted,
                 source_path_redacted,
                 markdown_path_redacted,
@@ -2030,18 +2036,27 @@ fn load_context_pack_source_row(
     Ok(Some(ContextPackSourceRow {
         source_id: row.get(0).context("read context source id")?,
         workspace_id: row.get(1).context("read context source workspace")?,
-        original_path_redacted: row.get(2).context("read context source original path")?,
-        source_path_redacted: row.get(3).context("read context source source path")?,
-        markdown_path_redacted: row.get(4).context("read context source markdown path")?,
-        format: row.get(5).context("read context source format")?,
-        status: row.get(6).context("read context source status")?,
-        page_count: row.get(7).context("read context source page count")?,
-        provider_route: row.get(8).context("read context source provider route")?,
+        original_path: row.get(2).context("read context source original path")?,
+        source_path: row.get(3).context("read context source source path")?,
+        markdown_path: row.get(4).context("read context source markdown path")?,
+        original_path_redacted: row
+            .get(5)
+            .context("read context source original path redacted")?,
+        source_path_redacted: row
+            .get(6)
+            .context("read context source source path redacted")?,
+        markdown_path_redacted: row
+            .get(7)
+            .context("read context source markdown path redacted")?,
+        format: row.get(8).context("read context source format")?,
+        status: row.get(9).context("read context source status")?,
+        page_count: row.get(10).context("read context source page count")?,
+        provider_route: row.get(11).context("read context source provider route")?,
         provider_locality: row
-            .get(9)
+            .get(12)
             .context("read context source provider locality")?,
-        content_hash: row.get(10).context("read context source content hash")?,
-        updated_at: row.get(11).context("read context source updated at")?,
+        content_hash: row.get(13).context("read context source content hash")?,
+        updated_at: row.get(14).context("read context source updated at")?,
     }))
 }
 
@@ -2243,9 +2258,9 @@ fn source_record_from_context_row(source: ContextPackSourceRow) -> SourceRecord 
     SourceRecord {
         source_id: source.source_id,
         workspace_id: source.workspace_id,
-        original_path: source.original_path_redacted,
-        source_path: source.source_path_redacted,
-        markdown_path: source.markdown_path_redacted,
+        original_path: source.original_path,
+        source_path: source.source_path,
+        markdown_path: source.markdown_path,
         format: SourceFormat::from(source.format),
         status: SourceStatus::from(source.status),
         page_count: source.page_count.max(0) as usize,
@@ -3580,6 +3595,9 @@ fn persist_snapshot_sources_in_transaction(
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
     for source in &snapshot.sources {
+        let original_path_redacted = redact_path_for_agent(&source.original_path);
+        let source_path_redacted = redact_path_for_agent(&source.source_path);
+        let markdown_path_redacted = redact_path_for_agent(&source.markdown_path);
         sqlite
             .execute(
                 "INSERT INTO sources (
@@ -3590,19 +3608,25 @@ fn persist_snapshot_sources_in_transaction(
                     original_path,
                     source_path,
                     markdown_path,
+                    original_path_redacted,
+                    source_path_redacted,
+                    markdown_path_redacted,
                     format,
                     status,
                     page_count,
                     success_count,
                     failed_count,
                     updated_at
-                ) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 0, ?10)
+                ) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, 0, ?13)
                 ON CONFLICT(source_id) DO UPDATE SET
                     workspace_id=excluded.workspace_id,
                     title=excluded.title,
                     original_path=excluded.original_path,
                     source_path=excluded.source_path,
                     markdown_path=excluded.markdown_path,
+                    original_path_redacted=excluded.original_path_redacted,
+                    source_path_redacted=excluded.source_path_redacted,
+                    markdown_path_redacted=excluded.markdown_path_redacted,
                     format=excluded.format,
                     status=excluded.status,
                     page_count=excluded.page_count,
@@ -3614,6 +3638,9 @@ fn persist_snapshot_sources_in_transaction(
                     source.original_path.as_str(),
                     source.source_path.as_str(),
                     source.markdown_path.as_str(),
+                    original_path_redacted.as_str(),
+                    source_path_redacted.as_str(),
+                    markdown_path_redacted.as_str(),
                     source.format.as_str(),
                     source.status.as_str(),
                     source.page_count as i64,

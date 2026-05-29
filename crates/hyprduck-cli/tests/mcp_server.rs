@@ -219,6 +219,14 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     let payload: Value = serde_json::from_str(text).expect("health payload");
     assert_eq!(payload["status"], "clean");
     assert_eq!(payload["attentionCount"], 0);
+    assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
+    assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
+    assert_eq!(payload["governance"]["evidenceGoverned"], true);
+    assert_eq!(payload["governance"]["mutatingToolsRequireEvidence"], true);
+    assert_eq!(
+        payload["governance"]["localPathDisclosureDefault"],
+        "redacted"
+    );
 
     write_mcp_snapshot_workspace(&root_dir);
     write_message(
@@ -384,7 +392,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .as_array()
         .expect("search results")
         .iter()
-        .any(|result| result["id"] == "source-mcp"));
+        .any(|result| result["id"] == "source-mcp" || result["id"] == "evidence-mcp"));
 
     write_message(
         &mut stdin,
@@ -1005,7 +1013,7 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(
         workspace.join("brain-manifest.json"),
         format!(
-            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
+            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"# MCP Snapshot\n\nLocal path: {root}\n","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
             root = workspace.display()
         ),
     )
