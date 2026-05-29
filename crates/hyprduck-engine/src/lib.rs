@@ -3744,6 +3744,7 @@ impl KnowledgeProjectStore {
             let workspace_root = fallback_workspace_root(&self.path, workspace_id);
             let mut snapshot = empty_replayed_brain_snapshot(workspace_id);
             snapshot.generated_at = unix_timestamp_seconds();
+            KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
             return write_materialized_brain_repo(&workspace_root, &snapshot);
         }
         let workspace_root = workspace_root_for_rows(&rows)
@@ -3762,6 +3763,7 @@ impl KnowledgeProjectStore {
             &existing_nodes,
             &existing_relations,
         );
+        KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
         write_materialized_brain_repo(&workspace_root, &snapshot)
     }
 

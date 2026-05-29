@@ -156,6 +156,16 @@ fn handle_load_project_defaults_to_workspace_graph_aggregate() {
         .nodes
         .iter()
         .any(|node| node.id == "source:source-a"));
+    let graph_store =
+        KnowledgeStore::open(store_path.clone()).expect("open canonical GraphQLite project store");
+    let projection = graph_store
+        .read_graph_canvas_projection_from_db(DEFAULT_WORKSPACE_ID)
+        .expect("read GraphQLite workspace projection")
+        .expect("workspace graph persisted to GraphQLite");
+    assert!(projection
+        .0
+        .iter()
+        .any(|node| node.node_id == "source:source-a"));
 }
 
 #[test]
