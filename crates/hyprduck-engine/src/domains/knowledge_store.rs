@@ -1,5 +1,9 @@
 use anyhow::{anyhow, Context, Result};
-use graphqlite::Graph;
+use graphqlite::{Graph, PropertyValue};
+use hyprduck_engine_types::{
+    BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
+    BrainScope,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +32,12 @@ pub(crate) struct GraphqliteGateReport {
     pub(crate) cypher_ready: bool,
     pub(crate) rollback_ready: bool,
     pub(crate) graph_schema_version: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct KnowledgeGraphPersistReport {
+    pub(crate) node_count: usize,
+    pub(crate) relation_count: usize,
 }
 
 impl KnowledgeStore {
@@ -59,6 +69,69 @@ impl KnowledgeStore {
             graph_schema_version: gate.graph_schema_version,
             graphqlite_loaded: gate.loaded,
             graphqlite_transactional: gate.rollback_ready,
+        })
+    }
+
+    pub(crate) fn persist_graph_snapshot(
+        &self,
+        snapshot: &BrainRepoSnapshot,
+    ) -> Result<KnowledgeGraphPersistReport> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        graph
+            .connection()
+            .sqlite_connection()
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("failed starting GraphQLite graph snapshot transaction")?;
+
+        let result = persist_graph_snapshot_in_transaction(&graph, snapshot);
+        match result {
+            Ok(report) => {
+                graph
+                    .connection()
+                    .sqlite_connection()
+                    .execute_batch("COMMIT")
+                    .context("failed committing GraphQLite graph snapshot")?;
+                Ok(report)
+            }
+            Err(error) => {
+                let _ = graph
+                    .connection()
+                    .sqlite_connection()
+                    .execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn graph_snapshot_counts(
+        &self,
+        workspace_id: &str,
+    ) -> Result<KnowledgeGraphPersistReport> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let node_count = graph
+            .connection()
+            .cypher_builder("MATCH (n {workspace_id: $workspace_id}) RETURN count(n) AS count")
+            .param("workspace_id", workspace_id)
+            .run()
+            .context("failed counting GraphQLite nodes")?
+            .get(0)
+            .and_then(|row| row.get::<i64>("count").ok())
+            .unwrap_or_default() as usize;
+        let relation_count = graph
+            .connection()
+            .cypher_builder(
+                "MATCH (n {workspace_id: $workspace_id})-[r]->(m {workspace_id: $workspace_id}) RETURN count(r) AS count",
+            )
+            .param("workspace_id", workspace_id)
+            .run()
+            .context("failed counting GraphQLite relations")?
+            .get(0)
+            .and_then(|row| row.get::<i64>("count").ok())
+            .unwrap_or_default() as usize;
+        Ok(KnowledgeGraphPersistReport {
+            node_count,
+            relation_count,
         })
     }
 
@@ -242,6 +315,232 @@ impl KnowledgeStore {
     }
 }
 
+fn persist_graph_snapshot_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<KnowledgeGraphPersistReport> {
+    graph
+        .connection()
+        .cypher_builder("MATCH (n {workspace_id: $workspace_id}) DETACH DELETE n")
+        .param("workspace_id", snapshot.workspace_id.as_str())
+        .run()
+        .context("failed clearing GraphQLite workspace graph")?;
+
+    for node in &snapshot.nodes {
+        graph
+            .upsert_node(
+                &node.node_id,
+                node_graph_properties(&snapshot.workspace_id, node),
+                brain_node_label(node.kind),
+            )
+            .with_context(|| format!("failed upserting GraphQLite node {}", node.node_id))?;
+    }
+    for relation in &snapshot.relations {
+        graph
+            .upsert_edge(
+                &relation.source_node_id,
+                &relation.target_node_id,
+                relation_graph_properties(&snapshot.workspace_id, relation),
+                brain_relation_type(relation.kind),
+            )
+            .with_context(|| {
+                format!(
+                    "failed upserting GraphQLite relation {}",
+                    relation.relation_id
+                )
+            })?;
+    }
+
+    Ok(KnowledgeGraphPersistReport {
+        node_count: snapshot.nodes.len(),
+        relation_count: snapshot.relations.len(),
+    })
+}
+
+fn node_graph_properties(
+    workspace_id: &str,
+    node: &BrainNodeRecord,
+) -> Vec<(String, PropertyValue)> {
+    vec![
+        (
+            "workspace_id".into(),
+            PropertyValue::Text(workspace_id.into()),
+        ),
+        (
+            "kind".into(),
+            PropertyValue::Text(brain_node_kind_slug(node.kind).into()),
+        ),
+        ("label".into(), PropertyValue::Text(node.label.clone())),
+        (
+            "scope".into(),
+            PropertyValue::Text(brain_scope_slug(node.scope).into()),
+        ),
+        (
+            "aliases_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&node.aliases).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "evidence_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&node.evidence_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "source_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&node.source_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "confidence".into(),
+            PropertyValue::Text(
+                node.confidence
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "updated_at".into(),
+            PropertyValue::Integer(node.updated_at as i64),
+        ),
+    ]
+}
+
+fn relation_graph_properties(
+    workspace_id: &str,
+    relation: &BrainRelationRecord,
+) -> Vec<(String, PropertyValue)> {
+    vec![
+        (
+            "workspace_id".into(),
+            PropertyValue::Text(workspace_id.into()),
+        ),
+        (
+            "relation_id".into(),
+            PropertyValue::Text(relation.relation_id.clone()),
+        ),
+        (
+            "kind".into(),
+            PropertyValue::Text(brain_relation_kind_slug(relation.kind).into()),
+        ),
+        ("label".into(), PropertyValue::Text(relation.label.clone())),
+        (
+            "evidence_ids_json".into(),
+            PropertyValue::Text(
+                serde_json::to_string(&relation.evidence_ids).unwrap_or_else(|_| "[]".into()),
+            ),
+        ),
+        (
+            "confidence".into(),
+            PropertyValue::Text(
+                relation
+                    .confidence
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "updated_at".into(),
+            PropertyValue::Integer(relation.updated_at as i64),
+        ),
+    ]
+}
+
+fn brain_node_label(kind: BrainNodeKind) -> &'static str {
+    match kind {
+        BrainNodeKind::Source => "Source",
+        BrainNodeKind::Memory => "Memory",
+        BrainNodeKind::WikiPage => "WikiPage",
+        BrainNodeKind::Person => "Person",
+        BrainNodeKind::Company => "Company",
+        BrainNodeKind::Project => "Project",
+        BrainNodeKind::Product => "Product",
+        BrainNodeKind::Team => "Team",
+        BrainNodeKind::Event => "Event",
+        BrainNodeKind::Decision => "Decision",
+        BrainNodeKind::Task => "Task",
+        BrainNodeKind::Claim => "Claim",
+        BrainNodeKind::Topic => "Topic",
+        BrainNodeKind::Concept => "Concept",
+    }
+}
+
+fn brain_node_kind_slug(kind: BrainNodeKind) -> &'static str {
+    match kind {
+        BrainNodeKind::Source => "source",
+        BrainNodeKind::Memory => "memory",
+        BrainNodeKind::WikiPage => "wiki_page",
+        BrainNodeKind::Person => "person",
+        BrainNodeKind::Company => "company",
+        BrainNodeKind::Project => "project",
+        BrainNodeKind::Product => "product",
+        BrainNodeKind::Team => "team",
+        BrainNodeKind::Event => "event",
+        BrainNodeKind::Decision => "decision",
+        BrainNodeKind::Task => "task",
+        BrainNodeKind::Claim => "claim",
+        BrainNodeKind::Topic => "topic",
+        BrainNodeKind::Concept => "concept",
+    }
+}
+
+fn brain_scope_slug(scope: BrainScope) -> &'static str {
+    match scope {
+        BrainScope::Personal => "personal",
+        BrainScope::Project => "project",
+        BrainScope::Team => "team",
+        BrainScope::Company => "company",
+    }
+}
+
+fn brain_relation_type(kind: BrainRelationKind) -> &'static str {
+    match kind {
+        BrainRelationKind::Mentions => "MENTIONS",
+        BrainRelationKind::Supports => "SUPPORTS",
+        BrainRelationKind::Contradicts => "CONTRADICTS",
+        BrainRelationKind::Supersedes => "SUPERSEDES",
+        BrainRelationKind::SameAs => "SAME_AS",
+        BrainRelationKind::WorksAt => "WORKS_AT",
+        BrainRelationKind::Founded => "FOUNDED",
+        BrainRelationKind::InvestedIn => "INVESTED_IN",
+        BrainRelationKind::Advises => "ADVISES",
+        BrainRelationKind::Attended => "ATTENDED",
+        BrainRelationKind::Owns => "OWNS",
+        BrainRelationKind::ResponsibleFor => "RESPONSIBLE_FOR",
+        BrainRelationKind::Decided => "DECIDED",
+        BrainRelationKind::Blocks => "BLOCKS",
+        BrainRelationKind::DependsOn => "DEPENDS_ON",
+        BrainRelationKind::SourceOf => "SOURCE_OF",
+        BrainRelationKind::DerivedFrom => "DERIVED_FROM",
+        BrainRelationKind::RelatedTo => "RELATED_TO",
+    }
+}
+
+fn brain_relation_kind_slug(kind: BrainRelationKind) -> &'static str {
+    match kind {
+        BrainRelationKind::Mentions => "mentions",
+        BrainRelationKind::Supports => "supports",
+        BrainRelationKind::Contradicts => "contradicts",
+        BrainRelationKind::Supersedes => "supersedes",
+        BrainRelationKind::SameAs => "same_as",
+        BrainRelationKind::WorksAt => "works_at",
+        BrainRelationKind::Founded => "founded",
+        BrainRelationKind::InvestedIn => "invested_in",
+        BrainRelationKind::Advises => "advises",
+        BrainRelationKind::Attended => "attended",
+        BrainRelationKind::Owns => "owns",
+        BrainRelationKind::ResponsibleFor => "responsible_for",
+        BrainRelationKind::Decided => "decided",
+        BrainRelationKind::Blocks => "blocks",
+        BrainRelationKind::DependsOn => "depends_on",
+        BrainRelationKind::SourceOf => "source_of",
+        BrainRelationKind::DerivedFrom => "derived_from",
+        BrainRelationKind::RelatedTo => "related_to",
+    }
+}
+
 pub(crate) fn validate_graphqlite_gate(graph: &Graph) -> Result<GraphqliteGateReport> {
     graph
         .connection()
@@ -315,5 +614,76 @@ mod tests {
         assert!(report.loaded);
         assert!(report.cypher_ready);
         assert!(report.rollback_ready);
+    }
+
+    #[test]
+    fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: "workspace-default".into(),
+            generated_at: 10,
+            sources: Vec::new(),
+            nodes: vec![
+                BrainNodeRecord {
+                    node_id: "node-a".into(),
+                    kind: BrainNodeKind::Concept,
+                    label: "Alpha".into(),
+                    scope: BrainScope::Project,
+                    aliases: Vec::new(),
+                    evidence_ids: vec!["evidence-a".into()],
+                    source_ids: vec!["source-a".into()],
+                    confidence: Some(0.9),
+                    updated_at: 10,
+                },
+                BrainNodeRecord {
+                    node_id: "node-b".into(),
+                    kind: BrainNodeKind::Concept,
+                    label: "Beta".into(),
+                    scope: BrainScope::Project,
+                    aliases: Vec::new(),
+                    evidence_ids: Vec::new(),
+                    source_ids: Vec::new(),
+                    confidence: None,
+                    updated_at: 10,
+                },
+            ],
+            relations: vec![BrainRelationRecord {
+                relation_id: "rel-a".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-a".into(),
+                target_node_id: "node-b".into(),
+                label: "relates".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            }],
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        let report = store
+            .persist_graph_snapshot(&snapshot)
+            .expect("persist graph snapshot");
+
+        assert_eq!(
+            report,
+            KnowledgeGraphPersistReport {
+                node_count: 2,
+                relation_count: 1,
+            }
+        );
+        assert_eq!(
+            store
+                .graph_snapshot_counts("workspace-default")
+                .expect("graph counts"),
+            report
+        );
     }
 }
