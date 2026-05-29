@@ -2,6 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::EvidenceRef;
+#[cfg(test)]
+use hyprduck_engine_types::{
+    BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, PolicyResult,
+    BRAIN_EVENT_SCHEMA_VERSION,
+};
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
     BrainScope,
@@ -518,6 +523,7 @@ fn persist_graph_snapshot_in_transaction(
 ) -> Result<KnowledgeGraphPersistReport> {
     persist_snapshot_sources_in_transaction(graph, snapshot)?;
     persist_evidence_snapshot_in_transaction(graph, snapshot)?;
+    persist_brain_events_snapshot_in_transaction(graph, snapshot)?;
     validate_snapshot_evidence_refs(snapshot)?;
     graph
         .connection()
@@ -700,6 +706,66 @@ fn persist_evidence_snapshot_in_transaction(
             .with_context(|| format!("failed indexing evidence row {}", evidence.id))?;
     }
 
+    Ok(())
+}
+
+fn persist_brain_events_snapshot_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "DELETE FROM brain_events WHERE workspace_id = ?1",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing relational brain event rows")?;
+
+    for event in &snapshot.events {
+        let actor_json =
+            serde_json::to_string(&event.actor).context("failed encoding brain event actor")?;
+        let evidence_refs_json = serde_json::to_string(&event.evidence_refs)
+            .context("failed encoding brain event evidence refs")?;
+        let operation_type = event
+            .operation_type
+            .clone()
+            .unwrap_or_else(|| format!("{:?}", event.event_type).to_ascii_lowercase());
+        let payload_json = if event.payload_json.trim().is_empty() {
+            "{}"
+        } else {
+            event.payload_json.as_str()
+        };
+
+        sqlite
+            .execute(
+                "INSERT INTO brain_events (
+                    event_id,
+                    workspace_id,
+                    actor_json,
+                    operation_type,
+                    evidence_refs_json,
+                    payload_json,
+                    created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    workspace_id=excluded.workspace_id,
+                    actor_json=excluded.actor_json,
+                    operation_type=excluded.operation_type,
+                    evidence_refs_json=excluded.evidence_refs_json,
+                    payload_json=excluded.payload_json,
+                    created_at=excluded.created_at",
+                (
+                    event.event_id.as_str(),
+                    event.workspace_id.as_str(),
+                    actor_json.as_str(),
+                    operation_type.as_str(),
+                    evidence_refs_json.as_str(),
+                    payload_json,
+                    event.created_at as i64,
+                ),
+            )
+            .with_context(|| format!("failed inserting brain event row {}", event.event_id))?;
+    }
     Ok(())
 }
 
@@ -1082,7 +1148,11 @@ mod tests {
             entities: Vec::new(),
             claims: Vec::new(),
             extractions: Vec::new(),
-            events: Vec::new(),
+            events: vec![test_brain_event(
+                "event-a",
+                "workspace-default",
+                &["evidence-a"],
+            )],
         };
 
         let report = store
@@ -1108,6 +1178,10 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].evidence_id, "evidence-a");
         assert_eq!(hits[0].graph_neighbor_count, 1);
+        assert_eq!(
+            brain_event_count(&store, "workspace-default").expect("brain event count"),
+            1
+        );
     }
 
     #[test]
@@ -1137,7 +1211,11 @@ mod tests {
             entities: Vec::new(),
             claims: Vec::new(),
             extractions: Vec::new(),
-            events: Vec::new(),
+            events: vec![test_brain_event(
+                "event-invalid",
+                "workspace-default",
+                &["missing-evidence"],
+            )],
         };
 
         let error = store
@@ -1147,5 +1225,54 @@ mod tests {
         assert!(error
             .to_string()
             .contains("references missing relational evidence row missing-evidence"));
+        assert_eq!(
+            brain_event_count(&store, "workspace-default").expect("brain event count"),
+            0
+        );
+    }
+
+    fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+        let graph = Graph::open(&store.path).context("open graph")?;
+        let count = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM brain_events WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .context("query brain event count")?;
+        Ok(count)
+    }
+
+    fn test_brain_event(event_id: &str, workspace_id: &str, evidence_refs: &[&str]) -> BrainEvent {
+        BrainEvent {
+            event_id: event_id.into(),
+            schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+            workspace_id: workspace_id.into(),
+            scope: BrainScope::Project,
+            event_type: BrainEventKind::GraphMaterialized,
+            operation_type: Some("graph_materialized".into()),
+            actor: BrainActor {
+                actor_type: BrainActorType::Agent,
+                actor_id: "test-agent".into(),
+            },
+            source_refs: Vec::new(),
+            source_markdown_refs: Vec::new(),
+            node_refs: Vec::new(),
+            relation_refs: Vec::new(),
+            claim_refs: Vec::new(),
+            memory_refs: Vec::new(),
+            target_node_ids: Vec::new(),
+            target_edge_ids: Vec::new(),
+            target_claim_ids: Vec::new(),
+            target_memory_ids: Vec::new(),
+            evidence_refs: evidence_refs.iter().map(|value| (*value).into()).collect(),
+            payload_json: "{}".into(),
+            causality: BrainEventCausality::default(),
+            confidence: None,
+            policy_result: PolicyResult::materialized(),
+            created_at: 10,
+        }
     }
 }
