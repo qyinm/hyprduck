@@ -446,8 +446,8 @@ fn write_source_pack_and_evidence_index(
         created_at: manifest.created_at,
         updated_at: manifest.updated_at,
     };
-    let evidence_index = hyprduck_engine_types::EvidenceIndexV0 {
-        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+    let evidence_index = hyprduck_engine_types::EvidenceIndexV1 {
+        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
         workspace_id: manifest.workspace_id.clone(),
         source_id: manifest.source_id.clone(),
         content_hash: content_hash.to_string(),
@@ -555,8 +555,8 @@ fn evidence_index_item(
     manifest: &SourceArtifactManifest,
     page: &PageArtifact,
     content_hash: &str,
-) -> Option<hyprduck_engine_types::EvidenceIndexItemV0> {
-    let quoted_text = page
+) -> Option<hyprduck_engine_types::EvidenceIndexItemV1> {
+    let raw_text = page
         .markdown_path
         .as_ref()
         .and_then(|path| fs::read_to_string(path).ok())
@@ -564,12 +564,21 @@ fn evidence_index_item(
             page.plain_text_path
                 .as_ref()
                 .and_then(|path| fs::read_to_string(path).ok())
-        })?;
-    let quoted_text = excerpt(&quoted_text, 280);
+        })
+        .unwrap_or_default();
+    let evidence_type = infer_evidence_type(page, &raw_text);
+    let quoted_text = excerpt(&raw_text, 280);
+    let quoted_text = if quoted_text.trim().is_empty()
+        && evidence_type == hyprduck_engine_types::EvidenceType::ImageRegion
+    {
+        format!("Image region evidence for {}.", page.label)
+    } else {
+        quoted_text
+    };
     if quoted_text.trim().is_empty() {
         return None;
     }
-    Some(hyprduck_engine_types::EvidenceIndexItemV0 {
+    Some(hyprduck_engine_types::EvidenceIndexItemV1 {
         evidence_ref: format!("ev-{}-source-{}", manifest.source_id, page.index + 1),
         source_id: manifest.source_id.clone(),
         page: page.index + 1,
@@ -580,7 +589,42 @@ fn evidence_index_item(
         content_hash: content_hash.to_string(),
         markdown_path: page.markdown_path.clone(),
         image_path: page.image_path.clone(),
+        evidence_type,
     })
+}
+
+fn infer_evidence_type(page: &PageArtifact, raw_text: &str) -> hyprduck_engine_types::EvidenceType {
+    if page
+        .markdown_path
+        .as_ref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .is_some_and(|markdown| contains_markdown_table(&markdown))
+    {
+        return hyprduck_engine_types::EvidenceType::Table;
+    }
+
+    if raw_text.trim().is_empty() && page.image_path.is_some() && page.error_message.is_none() {
+        return hyprduck_engine_types::EvidenceType::ImageRegion;
+    }
+
+    hyprduck_engine_types::EvidenceType::Text
+}
+
+fn contains_markdown_table(markdown: &str) -> bool {
+    let mut previous_has_pipe = false;
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        let has_pipe = trimmed.matches('|').count() >= 2;
+        let is_separator = has_pipe
+            && trimmed.chars().all(|character| {
+                matches!(character, '|' | '-' | ':' | ' ') || character.is_whitespace()
+            });
+        if previous_has_pipe && is_separator {
+            return true;
+        }
+        previous_has_pipe = has_pipe;
+    }
+    false
 }
 
 fn file_content_hash(path: &Path) -> Result<String> {

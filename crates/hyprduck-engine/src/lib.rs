@@ -109,7 +109,7 @@ use chat_openai_compatible_client::{
     parse_openai_compatible_json_schema_with_timeout, provider_unavailable,
 };
 use context_pack_artifacts::{
-    build_context_pack_artifact_metadata, read_evidence_index_v0, read_source_pack_v0,
+    build_context_pack_artifact_metadata, read_evidence_index_artifact, read_source_pack_v0,
 };
 #[cfg(test)]
 use context_pack_artifacts::{build_context_pack_source_metadata, fnv1a64};
@@ -813,34 +813,43 @@ fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextP
     };
     let artifact_metadata =
         build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
+    let pack_id = format!("ctx_{}", uuid::Uuid::now_v7().simple());
+    let generated_at = current_iso_timestamp_utc();
     let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
         &context_pack,
-        format!("ctx_{}", uuid::Uuid::now_v7().simple()),
-        current_iso_timestamp_utc(),
+        pack_id.clone(),
+        generated_at.clone(),
+        &artifact_metadata,
+    );
+    let context_pack_v1 = hyprduck_engine_types::ContextPackV1::from_brain_context_pack(
+        &context_pack,
+        pack_id,
+        generated_at,
         &artifact_metadata,
     );
     let persisted_context_pack_path = if request.persist {
-        Some(persist_context_pack_v0(&request.scope, &context_pack_v0)?)
+        Some(persist_context_pack_v1(&request.scope, &context_pack_v1)?)
     } else {
         None
     };
     Ok(GetContextPackResponseData {
         context_pack,
+        context_pack_v1,
         context_pack_v0,
         persisted_context_pack_path,
     })
 }
 
-fn persist_context_pack_v0(
+fn persist_context_pack_v1(
     scope: &BrainReadScope,
-    context_pack: &hyprduck_engine_types::ContextPackV0,
+    context_pack: &hyprduck_engine_types::ContextPackV1,
 ) -> Result<String> {
     let workspace_root = resolve_brain_workspace_root(scope)?;
     let history_dir = workspace_root.join("context_packs");
     fs::create_dir_all(&history_dir)
         .with_context(|| format!("failed creating {}", history_dir.display()))?;
     let json =
-        serde_json::to_string_pretty(context_pack).context("failed encoding context pack v0")?;
+        serde_json::to_string_pretty(context_pack).context("failed encoding context pack v1")?;
     let history_path = history_dir.join(format!("{}.json", context_pack.pack_id));
     fs::write(&history_path, &json)
         .with_context(|| format!("failed writing {}", history_path.display()))?;
@@ -862,15 +871,27 @@ fn handle_read_context_pack(
         }
         None => "context_pack.json".into(),
     };
-    let context_pack: hyprduck_engine_types::ContextPackV0 = repo
+    let value: Value = repo
         .read_json_artifact(&path)
         .map_err(|_| anyhow!("persisted context pack could not be read or decoded"))?;
-    if context_pack.schema_version != hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION {
-        bail!(
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let context_pack = match schema_version {
+        hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION => serde_json::from_value(value)
+            .map_err(|_| anyhow!("persisted context pack could not be read or decoded"))?,
+        hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION => {
+            let context_pack_v1: hyprduck_engine_types::ContextPackV1 =
+                serde_json::from_value(value)
+                    .map_err(|_| anyhow!("persisted context pack could not be read or decoded"))?;
+            context_pack_v0_from_v1(context_pack_v1)
+        }
+        _ => bail!(
             "persisted context pack schemaVersion {} is unsupported",
-            context_pack.schema_version
-        );
-    }
+            schema_version
+        ),
+    };
     if let Some(pack_id) = request.pack_id.as_deref() {
         if context_pack.pack_id != pack_id {
             bail!(
@@ -888,6 +909,44 @@ fn handle_read_context_pack(
         );
     }
     Ok(ReadContextPackResponseData { context_pack })
+}
+
+fn context_pack_v0_from_v1(
+    context_pack: hyprduck_engine_types::ContextPackV1,
+) -> hyprduck_engine_types::ContextPackV0 {
+    hyprduck_engine_types::ContextPackV0 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+        pack_id: context_pack.pack_id,
+        workspace_id: context_pack.workspace_id,
+        query: context_pack.query,
+        generated_at: context_pack.generated_at,
+        source_set: context_pack.source_set,
+        selected_evidence: context_pack
+            .selected_evidence
+            .into_iter()
+            .map(|evidence| hyprduck_engine_types::ContextPackEvidenceV0 {
+                evidence_ref: evidence.evidence_ref,
+                source_id: evidence.source_id,
+                page: evidence.page,
+                region: evidence.region,
+                span: evidence.span,
+                quoted_text: evidence.quoted_text,
+                parse_confidence: evidence.parse_confidence,
+                selection_reason: evidence.selection_reason,
+                content_hash: evidence.content_hash,
+            })
+            .collect(),
+        findings: context_pack.findings,
+        warnings: context_pack.warnings,
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+            strategy: context_pack.retrieval_trace.strategy,
+            chunks_considered: context_pack.retrieval_trace.chunks_considered,
+            chunks_selected: context_pack.retrieval_trace.chunks_selected,
+            budget_requested: context_pack.retrieval_trace.budget_requested,
+            budget_used: context_pack.retrieval_trace.budget_used,
+        },
+        suggested_next_reads: context_pack.suggested_next_reads,
+    }
 }
 
 fn validate_context_pack_id(pack_id: &str) -> Result<()> {
@@ -1328,7 +1387,7 @@ fn brain_health_source_report(
     }
 
     let mut evidence_index_read_failed = false;
-    let evidence_index = match read_evidence_index_v0(repo, &source.source_id) {
+    let evidence_index = match read_evidence_index_artifact(repo, &source.source_id) {
         Ok(evidence_index) => evidence_index,
         Err(_error) => {
             evidence_index_read_failed = true;
@@ -1337,20 +1396,24 @@ fn brain_health_source_report(
         }
     };
     let valid_evidence_index = evidence_index.as_ref().filter(|index| {
-        index.schema_version == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
-            && index.source_id == source.source_id
-            && index.workspace_id == source.workspace_id
+        (index.schema_version() == hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+            || index.schema_version() == hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION)
+            && index.source_id() == Some(source.source_id.as_str())
+            && index.workspace_id() == Some(source.workspace_id.as_str())
     });
     match evidence_index.as_ref() {
         Some(index)
-            if index.schema_version != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION =>
+            if index.schema_version()
+                != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+                && index.schema_version()
+                    != hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION =>
         {
             push_health_warning(&mut warnings, "evidence_index_schema_mismatch");
         }
-        Some(index) if index.source_id != source.source_id => {
+        Some(index) if index.source_id() != Some(source.source_id.as_str()) => {
             push_health_warning(&mut warnings, "evidence_index_source_mismatch");
         }
-        Some(index) if index.workspace_id != source.workspace_id => {
+        Some(index) if index.workspace_id() != Some(source.workspace_id.as_str()) => {
             push_health_warning(&mut warnings, "evidence_index_workspace_mismatch");
         }
         None if !evidence_index_read_failed => {
@@ -1361,18 +1424,20 @@ fn brain_health_source_report(
 
     if let Some(index) = valid_evidence_index {
         if provider_route == "unknown" {
-            provider_route = index.provider_route.clone();
-            local_only = Some(index.local_only);
+            if let Some(route) = index.provider_route() {
+                provider_route = route.to_string();
+            }
+            local_only = index.local_only();
         }
         if let Some(pack_hash) = content_hash.as_deref() {
-            if pack_hash == index.content_hash {
+            if Some(pack_hash) == index.content_hash() {
                 content_hash_status = "current".into();
             } else {
                 content_hash_status = "mismatch".into();
                 push_health_warning(&mut warnings, "content_hash_mismatch");
             }
-        } else {
-            content_hash = Some(index.content_hash.clone());
+        } else if let Some(index_hash) = index.content_hash() {
+            content_hash = Some(index_hash.to_string());
             content_hash_status = "evidence_index_only".into();
         }
     }

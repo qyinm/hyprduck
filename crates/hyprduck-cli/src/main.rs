@@ -12,10 +12,10 @@ use cli::{Cli, Commands, GraphStateSelector};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainReadScope, CompileProjectRequest, ContextPackParseConfidence, DocumentFormat,
-    EvidenceIndexItemV0, EvidenceIndexV0, GetContextPackRequest, GraphHistoryEntry, IngestStatus,
-    PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
-    ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
-    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V0_SCHEMA_VERSION,
+    EvidenceIndexItemV1, EvidenceIndexV1, EvidenceType, GetContextPackRequest, GraphHistoryEntry,
+    IngestStatus, PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress,
+    ParseRequest, ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
+    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V1_SCHEMA_VERSION,
     SOURCE_PACK_V0_SCHEMA_VERSION,
 };
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ const DEMO_MARKDOWN: &str = r#"# HyprDuck Demo Contract
 The demo document says agents should cite source, page, and evidence IDs when
 they answer from private documents.
 
-The reusable artifact is a local Context Pack v0 generated from a Source Pack
+The reusable artifact is a local Context Pack v1 generated from a Source Pack
 and Evidence Index.
 "#;
 
@@ -281,11 +281,16 @@ fn run_demo(command: cli::DemoCommand) -> Result<()> {
     println!("source-pack: {}", report.source_pack_path.display());
     println!("evidence-index: {}", report.evidence_index_path.display());
     println!("context-pack: {}", report.context_pack_path);
-    println!("context-pack-v0: {}", report.schema_version);
-    println!("context-pack-v0-sources: {}", report.source_count);
-    println!("context-pack-v0-evidence: {}", report.evidence_count);
-    println!("context-pack-v0-findings: {}", report.finding_count);
-    println!("context-pack-v0-warnings: {}", report.warning_count);
+    println!("context-pack-v1: {}", report.v1_schema_version);
+    println!("context-pack-v1-sources: {}", report.v1_source_count);
+    println!("context-pack-v1-evidence: {}", report.v1_evidence_count);
+    println!("context-pack-v1-findings: {}", report.v1_finding_count);
+    println!("context-pack-v1-warnings: {}", report.v1_warning_count);
+    println!("context-pack-v0: {}", report.v0_schema_version);
+    println!("context-pack-v0-sources: {}", report.v0_source_count);
+    println!("context-pack-v0-evidence: {}", report.v0_evidence_count);
+    println!("context-pack-v0-findings: {}", report.v0_finding_count);
+    println!("context-pack-v0-warnings: {}", report.v0_warning_count);
     println!("elapsed-ms: {}", started.elapsed().as_millis());
     println!(
         "next: hyprduck context --root {} --workspace {DEMO_WORKSPACE_ID} --write-context-pack \"{}\"",
@@ -299,11 +304,16 @@ struct DemoReport {
     source_pack_path: PathBuf,
     evidence_index_path: PathBuf,
     context_pack_path: String,
-    schema_version: String,
-    source_count: usize,
-    evidence_count: usize,
-    finding_count: usize,
-    warning_count: usize,
+    v1_schema_version: String,
+    v1_source_count: usize,
+    v1_evidence_count: usize,
+    v1_finding_count: usize,
+    v1_warning_count: usize,
+    v0_schema_version: String,
+    v0_source_count: usize,
+    v0_evidence_count: usize,
+    v0_finding_count: usize,
+    v0_warning_count: usize,
 }
 
 fn run_demo_with_root(root: &Path, fixture_path: &Path, query: &str) -> Result<DemoReport> {
@@ -328,7 +338,8 @@ fn run_demo_with_root(root: &Path, fixture_path: &Path, query: &str) -> Result<D
         budget: Some(4000),
         persist: true,
     })?;
-    let context_pack = context_response.context_pack_v0;
+    let context_pack_v1 = context_response.context_pack_v1;
+    let context_pack_v0 = context_response.context_pack_v0;
     let context_pack_path = context_response
         .persisted_context_pack_path
         .ok_or_else(|| anyhow::anyhow!("demo context pack was not persisted"))?;
@@ -337,11 +348,16 @@ fn run_demo_with_root(root: &Path, fixture_path: &Path, query: &str) -> Result<D
         source_pack_path: PathBuf::from(&manifest.artifact_root).join("source_pack.json"),
         evidence_index_path: PathBuf::from(&manifest.artifact_root).join("evidence_index.json"),
         context_pack_path,
-        schema_version: context_pack.schema_version,
-        source_count: context_pack.source_set.len(),
-        evidence_count: context_pack.selected_evidence.len(),
-        finding_count: context_pack.findings.len(),
-        warning_count: context_pack.warnings.len(),
+        v1_schema_version: context_pack_v1.schema_version,
+        v1_source_count: context_pack_v1.source_set.len(),
+        v1_evidence_count: context_pack_v1.selected_evidence.len(),
+        v1_finding_count: context_pack_v1.findings.len(),
+        v1_warning_count: context_pack_v1.warnings.len(),
+        v0_schema_version: context_pack_v0.schema_version,
+        v0_source_count: context_pack_v0.source_set.len(),
+        v0_evidence_count: context_pack_v0.selected_evidence.len(),
+        v0_finding_count: context_pack_v0.findings.len(),
+        v0_warning_count: context_pack_v0.warnings.len(),
     })
 }
 
@@ -426,14 +442,14 @@ fn write_demo_source_artifacts(root: &Path, fixture_path: &Path) -> Result<Sourc
         created_at: now,
         updated_at: now,
     };
-    let evidence_index = EvidenceIndexV0 {
-        schema_version: EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+    let evidence_index = EvidenceIndexV1 {
+        schema_version: EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
         workspace_id: DEMO_WORKSPACE_ID.into(),
         source_id: DEMO_SOURCE_ID.into(),
         content_hash: content_hash.clone(),
         provider_route: "local_demo".into(),
         local_only: true,
-        evidence: vec![EvidenceIndexItemV0 {
+        evidence: vec![EvidenceIndexItemV1 {
             evidence_ref: format!("ev-{DEMO_SOURCE_ID}-source-1"),
             source_id: DEMO_SOURCE_ID.into(),
             page: 1,
@@ -444,6 +460,7 @@ fn write_demo_source_artifacts(root: &Path, fixture_path: &Path) -> Result<Sourc
             content_hash,
             markdown_path: Some(page_markdown_path.display().to_string()),
             image_path: None,
+            evidence_type: EvidenceType::Text,
         }],
         warnings: Vec::new(),
         generated_at: now,
@@ -547,11 +564,29 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                 persist,
             })?;
             let context_pack_v0 = &response.context_pack_v0;
+            let context_pack_v1 = &response.context_pack_v1;
             let pack = response.context_pack;
             println!("{}", pack.summary);
             for warning in &pack.warnings {
                 println!("warning: {warning}");
             }
+            println!("context-pack-v1: {}", context_pack_v1.schema_version);
+            println!(
+                "context-pack-v1-sources: {}",
+                context_pack_v1.source_set.len()
+            );
+            println!(
+                "context-pack-v1-evidence: {}",
+                context_pack_v1.selected_evidence.len()
+            );
+            println!(
+                "context-pack-v1-findings: {}",
+                context_pack_v1.findings.len()
+            );
+            println!(
+                "context-pack-v1-warnings: {}",
+                context_pack_v1.warnings.len()
+            );
             println!("context-pack-v0: {}", context_pack_v0.schema_version);
             println!(
                 "context-pack-v0-sources: {}",
@@ -570,7 +605,7 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
                 context_pack_v0.warnings.len()
             );
             if let Some(path) = &response.persisted_context_pack_path {
-                println!("context-pack-v0-path: {path}");
+                println!("context-pack-path: {path}");
             }
             println!("wiki-pages: {}", pack.wiki_pages.len());
             println!("nodes: {}", pack.nodes.len());

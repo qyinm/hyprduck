@@ -804,8 +804,44 @@ pub struct BrainContextPack {
 }
 
 pub const CONTEXT_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.context_pack.v0";
+pub const CONTEXT_PACK_V1_SCHEMA_VERSION: &str = "hyprduck.context_pack.v1";
 pub const SOURCE_PACK_V0_SCHEMA_VERSION: &str = "hyprduck.source_pack.v0";
 pub const EVIDENCE_INDEX_V0_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v0";
+pub const EVIDENCE_INDEX_V1_SCHEMA_VERSION: &str = "hyprduck.evidence_index.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceType {
+    Text,
+    Table,
+    ImageRegion,
+    Ocr,
+    Caption,
+    Summary,
+    Claim,
+    Relationship,
+    Unknown,
+}
+
+impl EvidenceType {
+    pub fn legacy_default() -> Self {
+        Self::Text
+    }
+
+    pub fn as_trace_key(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Table => "table",
+            Self::ImageRegion => "image_region",
+            Self::Ocr => "ocr",
+            Self::Caption => "caption",
+            Self::Summary => "summary",
+            Self::Claim => "claim",
+            Self::Relationship => "relationship",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -869,6 +905,23 @@ pub struct ContextPackEvidenceV0 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceV1 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub selection_reason: String,
+    pub content_hash: String,
+    pub evidence_type: EvidenceType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContextPackFindingV0 {
     pub finding_id: String,
     pub statement: String,
@@ -904,6 +957,26 @@ pub struct ContextPackRetrievalTraceV0 {
     pub chunks_selected: usize,
     pub budget_requested: usize,
     pub budget_used: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackEvidenceTypeTraceV1 {
+    #[serde(default)]
+    pub considered: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub selected: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackRetrievalTraceV1 {
+    pub strategy: String,
+    pub chunks_considered: usize,
+    pub chunks_selected: usize,
+    pub budget_requested: usize,
+    pub budget_used: usize,
+    pub evidence_type_trace: ContextPackEvidenceTypeTraceV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -997,6 +1070,39 @@ pub struct EvidenceIndexV0 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexItemV1 {
+    pub evidence_ref: String,
+    pub source_id: SourceId,
+    pub page: usize,
+    pub region: String,
+    #[serde(default)]
+    pub span: Option<String>,
+    pub quoted_text: String,
+    pub parse_confidence: ContextPackParseConfidence,
+    pub content_hash: String,
+    #[serde(default)]
+    pub markdown_path: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    pub evidence_type: EvidenceType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceIndexV1 {
+    pub schema_version: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub content_hash: String,
+    pub provider_route: String,
+    pub local_only: bool,
+    pub evidence: Vec<EvidenceIndexItemV1>,
+    pub warnings: Vec<SourcePackWarningV0>,
+    pub generated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContextPackV0 {
     pub schema_version: String,
     pub pack_id: String,
@@ -1008,6 +1114,22 @@ pub struct ContextPackV0 {
     pub findings: Vec<ContextPackFindingV0>,
     pub warnings: Vec<ContextPackWarningV0>,
     pub retrieval_trace: ContextPackRetrievalTraceV0,
+    pub suggested_next_reads: Vec<ContextPackSuggestedNextReadV0>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackV1 {
+    pub schema_version: String,
+    pub pack_id: String,
+    pub workspace_id: WorkspaceId,
+    pub query: String,
+    pub generated_at: String,
+    pub source_set: Vec<ContextPackSourceV0>,
+    pub selected_evidence: Vec<ContextPackEvidenceV1>,
+    pub findings: Vec<ContextPackFindingV0>,
+    pub warnings: Vec<ContextPackWarningV0>,
+    pub retrieval_trace: ContextPackRetrievalTraceV1,
     pub suggested_next_reads: Vec<ContextPackSuggestedNextReadV0>,
 }
 
@@ -1035,6 +1157,8 @@ pub struct ContextPackEvidenceMetadataV0 {
     pub markdown_path: Option<String>,
     #[serde(default)]
     pub image_path: Option<String>,
+    #[serde(default = "EvidenceType::legacy_default")]
+    pub evidence_type: EvidenceType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1245,6 +1369,46 @@ impl ContextPackV0 {
     }
 }
 
+impl ContextPackV1 {
+    pub fn from_brain_context_pack(
+        pack: &BrainContextPack,
+        pack_id: impl Into<String>,
+        generated_at: impl Into<String>,
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let v0 =
+            ContextPackV0::from_brain_context_pack(pack, pack_id, generated_at, artifact_metadata);
+        let selected_evidence = v0
+            .selected_evidence
+            .iter()
+            .map(|evidence| ContextPackEvidenceV1::from_v0(evidence, artifact_metadata))
+            .collect::<Vec<_>>();
+        let evidence_type_trace =
+            ContextPackEvidenceTypeTraceV1::from_pack(pack, &selected_evidence, artifact_metadata);
+
+        Self {
+            schema_version: CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
+            pack_id: v0.pack_id,
+            workspace_id: v0.workspace_id,
+            query: v0.query,
+            generated_at: v0.generated_at,
+            source_set: v0.source_set,
+            selected_evidence,
+            findings: v0.findings,
+            warnings: v0.warnings,
+            retrieval_trace: ContextPackRetrievalTraceV1 {
+                strategy: v0.retrieval_trace.strategy,
+                chunks_considered: v0.retrieval_trace.chunks_considered,
+                chunks_selected: v0.retrieval_trace.chunks_selected,
+                budget_requested: v0.retrieval_trace.budget_requested,
+                budget_used: v0.retrieval_trace.budget_used,
+                evidence_type_trace,
+            },
+            suggested_next_reads: v0.suggested_next_reads,
+        }
+    }
+}
+
 fn context_pack_internal_warning_type(warning: &str) -> &'static str {
     let normalized = warning.to_ascii_lowercase();
     if normalized.contains("budget") && normalized.contains("truncat") {
@@ -1316,6 +1480,78 @@ impl ContextPackEvidenceV0 {
     }
 }
 
+impl ContextPackEvidenceV1 {
+    fn from_v0(
+        evidence: &ContextPackEvidenceV0,
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let evidence_type = artifact_metadata
+            .evidence
+            .get(&evidence.source_id)
+            .and_then(|source_evidence| source_evidence.get(&evidence.evidence_ref))
+            .map(|metadata| metadata.evidence_type)
+            .unwrap_or_else(EvidenceType::legacy_default);
+
+        Self {
+            evidence_ref: evidence.evidence_ref.clone(),
+            source_id: evidence.source_id.clone(),
+            page: evidence.page,
+            region: evidence.region.clone(),
+            span: evidence.span.clone(),
+            quoted_text: evidence.quoted_text.clone(),
+            parse_confidence: evidence.parse_confidence.clone(),
+            selection_reason: evidence.selection_reason.clone(),
+            content_hash: evidence.content_hash.clone(),
+            evidence_type,
+        }
+    }
+}
+
+impl ContextPackEvidenceTypeTraceV1 {
+    fn from_pack(
+        pack: &BrainContextPack,
+        selected_evidence: &[ContextPackEvidenceV1],
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let mut considered = BTreeMap::new();
+        for evidence in &pack.evidence {
+            let evidence_type = evidence
+                .source_id
+                .as_ref()
+                .and_then(|source_id| artifact_metadata.evidence.get(source_id))
+                .and_then(|source_evidence| {
+                    source_evidence.get(&evidence.id).or_else(|| {
+                        let page = context_pack_evidence_page(evidence)?;
+                        source_evidence.values().find(|metadata| {
+                            metadata.page == page
+                                && evidence
+                                    .source_id
+                                    .as_ref()
+                                    .is_some_and(|source_id| metadata.source_id == *source_id)
+                        })
+                    })
+                })
+                .map(|metadata| metadata.evidence_type)
+                .unwrap_or_else(EvidenceType::legacy_default);
+            *considered
+                .entry(evidence_type.as_trace_key().to_string())
+                .or_insert(0) += 1;
+        }
+
+        let mut selected = BTreeMap::new();
+        for evidence in selected_evidence {
+            *selected
+                .entry(evidence.evidence_type.as_trace_key().to_string())
+                .or_insert(0) += 1;
+        }
+
+        Self {
+            considered,
+            selected,
+        }
+    }
+}
+
 fn resolve_context_pack_evidence_metadata<'a>(
     evidence: &EvidenceRef,
     evidence_metadata: &'a BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
@@ -1363,6 +1599,7 @@ fn parse_page_number_from_label(label: &str) -> Option<usize> {
 #[serde(rename_all = "camelCase")]
 pub struct GetContextPackResponseData {
     pub context_pack: BrainContextPack,
+    pub context_pack_v1: ContextPackV1,
     pub context_pack_v0: ContextPackV0,
     #[serde(default)]
     pub persisted_context_pack_path: Option<String>,
@@ -2265,6 +2502,98 @@ mod tests {
     }
 
     #[test]
+    fn evidence_index_v1_schema_requires_evidence_type() {
+        let evidence_index_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/evidence-index-v1.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&evidence_index_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", evidence_index_path.display())
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema["properties"]["schemaVersion"]["const"],
+            EVIDENCE_INDEX_V1_SCHEMA_VERSION
+        );
+        let evidence_required = schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("evidence required");
+        assert!(evidence_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceType")));
+        assert!(schema
+            .pointer("/$defs/evidence/properties/evidenceType/enum")
+            .and_then(Value::as_array)
+            .expect("evidence type enum")
+            .iter()
+            .any(|value| value.as_str() == Some("table")));
+    }
+
+    #[test]
+    fn context_pack_v1_schema_requires_typed_evidence_trace() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/context-pack-v1.schema.json");
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&schema_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", schema_path.display())),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema["properties"]["schemaVersion"]["const"],
+            CONTEXT_PACK_V1_SCHEMA_VERSION
+        );
+        let evidence_required = schema
+            .pointer("/$defs/evidence/required")
+            .and_then(Value::as_array)
+            .expect("selected evidence required");
+        assert!(evidence_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceType")));
+        let trace_required = schema
+            .pointer("/$defs/retrievalTrace/required")
+            .and_then(Value::as_array)
+            .expect("retrieval trace required");
+        assert!(trace_required
+            .iter()
+            .any(|value| value.as_str() == Some("evidenceTypeTrace")));
+    }
+
+    #[test]
+    fn evidence_index_v1_round_trip_preserves_evidence_type() {
+        let evidence_index = EvidenceIndexV1 {
+            schema_version: EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
+            workspace_id: "default".into(),
+            source_id: "source-alpha".into(),
+            content_hash: "fnv64:abc123".into(),
+            provider_route: "local_demo".into(),
+            local_only: true,
+            evidence: vec![EvidenceIndexItemV1 {
+                evidence_ref: "ev-source-alpha-table-1".into(),
+                source_id: "source-alpha".into(),
+                page: 1,
+                region: "page:Page 1".into(),
+                span: Some("page".into()),
+                quoted_text: "| A | B |\n| - | - |\n| 1 | 2 |".into(),
+                parse_confidence: ContextPackParseConfidence::High,
+                content_hash: "fnv64:abc123".into(),
+                markdown_path: Some("/tmp/source-alpha/page_1.md".into()),
+                image_path: Some("/tmp/source-alpha/page_1.png".into()),
+                evidence_type: EvidenceType::Table,
+            }],
+            warnings: Vec::new(),
+            generated_at: 42,
+        };
+
+        let json = serde_json::to_string(&evidence_index).unwrap();
+        assert!(json.contains("\"evidenceType\":\"table\""));
+        let decoded: EvidenceIndexV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, evidence_index);
+    }
+
+    #[test]
     fn source_pack_and_evidence_index_round_trip() {
         let warning = SourcePackWarningV0 {
             warning_type: "page_parse_failed".into(),
@@ -2484,6 +2813,7 @@ mod tests {
                     content_hash: "sha256:abc123".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -2516,6 +2846,117 @@ mod tests {
             vec!["ev_src_agent_context_p1_b1"]
         );
         assert_eq!(external.warnings[0].warning_type, "budget_truncated");
+    }
+
+    #[test]
+    fn context_pack_v1_projects_selected_evidence_types_and_trace() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "agent reuse".into(),
+            token_budget: 4000,
+            summary: "Agent context reuse summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "src_agent_context".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/agent-context.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/src_agent_context.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/sources/src_agent_context.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 2,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_agent_reuse".into(),
+                workspace_id: "default".into(),
+                statement: "Context packs can be reused by agents.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_agent_context".into()],
+                evidence_refs: vec!["ev_src_agent_context_p1_b1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_src_agent_context_p1_b1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Context packs are reusable by coding agents.".into(),
+                source_path: None,
+                source_id: Some("src_agent_context".into()),
+                markdown_path: Some("/tmp/HyprDuck/default/sources/src_agent_context.md".into()),
+                image_path: Some("/tmp/HyprDuck/default/artifacts/page_1.png".into()),
+                provenance: Some("markdown_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let source_metadata = BTreeMap::from([(
+            "src_agent_context".into(),
+            ContextPackSourceMetadataV0 {
+                content_hash: "sha256:abc123".into(),
+                provider_route: "ollama".into(),
+                local_only: true,
+            },
+        )]);
+        let mut artifact_metadata = ContextPackArtifactMetadataV0::from_sources(source_metadata);
+        artifact_metadata
+            .evidence
+            .entry("src_agent_context".into())
+            .or_default()
+            .insert(
+                "ev_src_agent_context_p1_b1".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "src_agent_context".into(),
+                    page: 1,
+                    region: Some("page:Page 1".into()),
+                    span: Some("page".into()),
+                    quoted_text: "Indexed source evidence quote.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "sha256:abc123".into(),
+                    markdown_path: None,
+                    image_path: None,
+                    evidence_type: EvidenceType::Table,
+                },
+            );
+
+        let external = ContextPackV1::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-29T00:00:00Z",
+            &artifact_metadata,
+        );
+
+        assert_eq!(external.schema_version, CONTEXT_PACK_V1_SCHEMA_VERSION);
+        assert_eq!(
+            external.selected_evidence[0].evidence_type,
+            EvidenceType::Table
+        );
+        assert_eq!(
+            external
+                .retrieval_trace
+                .evidence_type_trace
+                .selected
+                .get("table"),
+            Some(&1)
+        );
+        assert!(
+            external
+                .retrieval_trace
+                .evidence_type_trace
+                .considered
+                .values()
+                .sum::<usize>()
+                >= 1
+        );
     }
 
     #[test]
@@ -2735,6 +3176,7 @@ mod tests {
                     content_hash: "fnv64:fixture".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -2843,6 +3285,7 @@ mod tests {
                     content_hash: "sha256:visual-table".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 
@@ -2975,6 +3418,7 @@ mod tests {
                     content_hash: "fnv64:alpha".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
         artifact_metadata
@@ -2993,6 +3437,7 @@ mod tests {
                     content_hash: "fnv64:beta".into(),
                     markdown_path: None,
                     image_path: None,
+                    evidence_type: EvidenceType::Text,
                 },
             );
 

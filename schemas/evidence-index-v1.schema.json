@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/evidence-index-v1.schema.json",
+  "title": "HyprDuck Evidence Index v1",
+  "description": "Import-time index mapping typed evidence refs to source/page/region excerpts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "workspaceId",
+    "sourceId",
+    "contentHash",
+    "providerRoute",
+    "localOnly",
+    "evidence",
+    "warnings",
+    "generatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "hyprduck.evidence_index.v1" },
+    "workspaceId": { "$ref": "#/$defs/nonEmptyString" },
+    "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+    "contentHash": { "$ref": "#/$defs/nonEmptyString" },
+    "providerRoute": { "$ref": "#/$defs/nonEmptyString" },
+    "localOnly": { "type": "boolean" },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "generatedAt": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nullableNonEmptyString": {
+      "anyOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "type": "null" }
+      ]
+    },
+    "evidenceType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "table",
+        "image_region",
+        "ocr",
+        "caption",
+        "summary",
+        "claim",
+        "relationship",
+        "unknown"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceRef",
+        "sourceId",
+        "page",
+        "region",
+        "span",
+        "quotedText",
+        "parseConfidence",
+        "contentHash",
+        "markdownPath",
+        "imagePath",
+        "evidenceType"
+      ],
+      "properties": {
+        "evidenceRef": { "$ref": "#/$defs/nonEmptyString" },
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "page": { "type": "integer", "minimum": 1 },
+        "region": { "$ref": "#/$defs/nonEmptyString" },
+        "span": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "quotedText": { "$ref": "#/$defs/nonEmptyString" },
+        "parseConfidence": { "enum": ["high", "medium", "low", "unknown"] },
+        "contentHash": { "$ref": "#/$defs/nonEmptyString" },
+        "markdownPath": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "imagePath": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "evidenceType": {
+          "type": "string",
+          "enum": [
+            "text",
+            "table",
+            "image_region",
+            "ocr",
+            "caption",
+            "summary",
+            "claim",
+            "relationship",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "severity", "message", "page"],
+      "properties": {
+        "type": { "$ref": "#/$defs/nonEmptyString" },
+        "severity": { "enum": ["low", "medium", "high"] },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "page": {
+          "anyOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

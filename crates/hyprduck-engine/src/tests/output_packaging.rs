@@ -46,21 +46,95 @@ fn output_packaging_falls_back_to_next_root_when_primary_root_is_unwritable() {
     assert_eq!(source_pack.page_count, 1);
     assert!(source_pack.content_hash.starts_with("fnv64:"));
 
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
-    .expect("evidence index");
+    .expect("parse evidence index v1");
     assert_eq!(
         evidence_index.schema_version,
-        hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+        hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION
     );
     assert_eq!(evidence_index.source_id, manifest.source_id);
     assert_eq!(evidence_index.content_hash, source_pack.content_hash);
     assert_eq!(evidence_index.evidence.len(), 1);
     assert_eq!(evidence_index.evidence[0].page, 1);
+    assert_eq!(
+        evidence_index.evidence[0].evidence_type,
+        hyprduck_engine_types::EvidenceType::Text
+    );
     assert!(evidence_index.evidence[0]
         .quoted_text
         .contains("Grounded evidence"));
+}
+
+#[test]
+fn output_package_marks_markdown_tables_as_table_evidence() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.markdown =
+        "# Sample import\n\n## Page 1\n\n| Metric | Value |\n| - | - |\n| Revenue | 42 |\n".into();
+    result.pages[0].markdown = Some("| Metric | Value |\n| - | - |\n| Revenue | 42 |\n".into());
+    result.pages[0].plain_text = Some("Metric Value Revenue 42".into());
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("output manifest");
+
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("parse evidence index v1");
+    assert_eq!(evidence_index.evidence.len(), 1);
+    assert_eq!(
+        evidence_index.evidence[0].evidence_type,
+        hyprduck_engine_types::EvidenceType::Table
+    );
+}
+
+#[test]
+fn output_package_marks_image_only_pages_as_image_region_evidence() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback_root = temp.path().join("output-root");
+    let request = sample_parse_request(&temp);
+    let mut result = sample_parse_result();
+    result.markdown = "# Sample import\n\n## Page 1\n\n![Page 1](images/page_1.png)\n".into();
+    result.pages[0].markdown = None;
+    result.pages[0].plain_text = None;
+    result.pages[0].image_asset_path = Some("images/page_1.png".into());
+    result.pages[0].error_message = None;
+
+    let manifest = write_output_package_with_fallback(
+        std::slice::from_ref(&fallback_root),
+        "sample-import",
+        "123",
+        &request,
+        &result,
+        &sample_engine_config(),
+    )
+    .expect("output manifest");
+
+    let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
+        &fs::read_to_string(evidence_index_path).expect("evidence index json"),
+    )
+    .expect("parse evidence index v1");
+    assert_eq!(evidence_index.evidence.len(), 1);
+    assert_eq!(
+        evidence_index.evidence[0].evidence_type,
+        hyprduck_engine_types::EvidenceType::ImageRegion
+    );
+    assert!(evidence_index.evidence[0]
+        .quoted_text
+        .contains("Image region evidence for Page 1"));
 }
 
 #[test]
@@ -127,7 +201,7 @@ fn output_packaging_records_partial_import_warnings_in_artifacts() {
     let source_pack: hyprduck_engine_types::SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
             .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -174,7 +248,7 @@ fn output_packaging_indexes_fallback_markdown_for_warned_pages() {
     let source_pack: hyprduck_engine_types::SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
             .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -249,7 +323,7 @@ fn retry_failed_page_updates_artifacts_and_regenerates_evidence_index() {
         &fs::read_to_string(&response.source_pack_path).expect("source pack json"),
     )
     .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(&response.evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -328,7 +402,7 @@ fn retry_failed_page_failure_preserves_existing_partial_artifacts() {
         &fs::read_to_string(&response.source_pack_path).expect("source pack json"),
     )
     .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(&response.evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -378,7 +452,7 @@ fn output_packaging_records_all_page_failure_status() {
     let source_pack: hyprduck_engine_types::SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
             .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -416,7 +490,7 @@ fn output_packaging_records_ollama_as_local_provider() {
     let source_pack: hyprduck_engine_types::SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
             .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -453,7 +527,7 @@ fn output_packaging_marks_remote_ollama_as_not_local_only() {
     let source_pack: hyprduck_engine_types::SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(source_pack_path).expect("source pack json"))
             .expect("source pack");
-    let evidence_index: hyprduck_engine_types::EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: hyprduck_engine_types::EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");

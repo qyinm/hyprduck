@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use hyprduck_engine_types::{
-    EngineConfigPayload, EngineSuccess, EvidenceIndexV0, ParseResponseData,
+    EngineConfigPayload, EngineSuccess, EvidenceIndexV1, EvidenceType, ParseResponseData,
     RuntimeReadinessResponseData, SourcePackV0,
 };
 use serde_json::json;
@@ -180,7 +180,7 @@ fn assert_source_artifacts(result: &ParseResponseData, format: &str) {
     assert!(source_pack.pages[0].image_path.is_some());
 
     let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
-    let evidence_index: EvidenceIndexV0 = serde_json::from_str(
+    let evidence_index: EvidenceIndexV1 = serde_json::from_str(
         &fs::read_to_string(&evidence_index_path).expect("evidence index json"),
     )
     .expect("evidence index");
@@ -190,7 +190,7 @@ fn assert_source_artifacts(result: &ParseResponseData, format: &str) {
     );
     assert_eq!(
         evidence_index.schema_version,
-        hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+        hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION
     );
     assert_eq!(source_pack.workspace_id, manifest.workspace_id);
     assert_eq!(evidence_index.workspace_id, manifest.workspace_id);
@@ -203,6 +203,7 @@ fn assert_source_artifacts(result: &ParseResponseData, format: &str) {
         assert_eq!(evidence_index.evidence.len(), 1, "{format} evidence count");
         assert_eq!(evidence_index.evidence[0].source_id, manifest.source_id);
         assert_eq!(evidence_index.evidence[0].page, 1);
+        assert_eq!(evidence_index.evidence[0].evidence_type, EvidenceType::Text);
         assert!(!evidence_index.evidence[0].evidence_ref.is_empty());
         assert!(!evidence_index.evidence[0].quoted_text.trim().is_empty());
         assert_eq!(
