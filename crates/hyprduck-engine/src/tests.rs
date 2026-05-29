@@ -31,6 +31,94 @@ fn import_job_readiness(store: &KnowledgeProjectStore, source_id: &str) -> Strin
         .to_string()
 }
 
+fn materialized_test_event(snapshot: &BrainRepoSnapshot, event_id: &str) -> BrainEvent {
+    BrainEvent {
+        event_id: event_id.into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: snapshot.workspace_id.clone(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_materialized".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "test-agent".into(),
+        },
+        source_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: Vec::new(),
+        target_node_ids: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: materialized_graph_event_payload_json(
+            snapshot.generated_at,
+            &snapshot.sources,
+            &snapshot.nodes,
+            &snapshot.relations,
+            &snapshot.evidence,
+            &snapshot.memories,
+            &snapshot.wiki_pages,
+            &snapshot.entities,
+            &snapshot.claims,
+            &snapshot.extractions,
+        )
+        .expect("materialized graph payload"),
+        causality: BrainEventCausality {
+            caused_by_source_ids: snapshot
+                .sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            snapshot_id: Some(format!("snapshot-{event_id}")),
+            materialized_version: Some(snapshot.generated_at),
+            ..Default::default()
+        },
+        confidence: Some("test".into()),
+        policy_result: "materialized".into(),
+        created_at: snapshot.generated_at,
+    }
+}
+
 #[test]
 fn default_project_store_migrates_legacy_db_to_canonical_name() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -160,91 +248,10 @@ fn latest_readable_marker_classifies_json_artifacts_as_migration_input() {
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
     let mut snapshot = synthetic_context_pack_snapshot(1);
     snapshot.generated_at = 42;
-    snapshot.events = vec![BrainEvent {
-        event_id: "event-materialized-json-role".into(),
-        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        scope: BrainScope::Project,
-        event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some("graph_materialized".into()),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: "test-agent".into(),
-        },
-        source_refs: snapshot
-            .sources
-            .iter()
-            .map(|source| source.source_id.clone())
-            .collect(),
-        source_markdown_refs: snapshot
-            .sources
-            .iter()
-            .map(|source| source.markdown_path.clone())
-            .collect(),
-        node_refs: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        relation_refs: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        claim_refs: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        memory_refs: Vec::new(),
-        target_node_ids: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        target_edge_ids: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        target_claim_ids: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        target_memory_ids: Vec::new(),
-        evidence_refs: snapshot
-            .evidence
-            .iter()
-            .map(|evidence| evidence.id.clone())
-            .collect(),
-        payload_json: materialized_graph_event_payload_json(
-            snapshot.generated_at,
-            &snapshot.sources,
-            &snapshot.nodes,
-            &snapshot.relations,
-            &snapshot.evidence,
-            &snapshot.memories,
-            &snapshot.wiki_pages,
-            &snapshot.entities,
-            &snapshot.claims,
-            &snapshot.extractions,
-        )
-        .expect("materialized graph payload"),
-        causality: BrainEventCausality {
-            caused_by_source_ids: snapshot
-                .sources
-                .iter()
-                .map(|source| source.source_id.clone())
-                .collect(),
-            snapshot_id: Some("snapshot-json-artifact-role".into()),
-            materialized_version: Some(snapshot.generated_at),
-            ..Default::default()
-        },
-        confidence: Some("test".into()),
-        policy_result: "materialized".into(),
-        created_at: snapshot.generated_at,
-    }];
+    snapshot.events = vec![materialized_test_event(
+        &snapshot,
+        "event-materialized-json-role",
+    )];
 
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized state");
 
@@ -260,6 +267,85 @@ fn latest_readable_marker_classifies_json_artifacts_as_migration_input() {
         .expect("materialized files array")
         .iter()
         .any(|path| path == "brain-manifest.json"));
+}
+
+#[test]
+fn brain_reader_open_migrates_existing_materialized_json_into_sqlite() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    ensure_materialized_brain_repo_dirs(&workspace_root).expect("materialized dirs");
+
+    let mut snapshot = synthetic_context_pack_snapshot(1);
+    snapshot.generated_at = 43;
+    snapshot.wiki_pages = vec![WikiPage {
+        page_id: "wiki-alpha".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        path: "wiki/topics/alpha.md".into(),
+        title: "Alpha Migration".into(),
+        body: "Alpha migration wiki body.".into(),
+        node_refs: vec!["concept-alpha-000".into()],
+        source_refs: vec!["source-alpha".into()],
+        evidence_refs: vec!["ev-alpha-000".into()],
+        updated_at: snapshot.generated_at,
+    }];
+    snapshot.events = vec![materialized_test_event(
+        &snapshot,
+        "event-migrate-json-artifacts",
+    )];
+
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty(&workspace_root.join("graph/nodes.json"), &snapshot.nodes)
+        .expect("write nodes");
+    write_json_pretty(
+        &workspace_root.join("graph/edges.json"),
+        &snapshot.relations,
+    )
+    .expect("write edges");
+    write_json_pretty(
+        &workspace_root.join("graph/evidence.json"),
+        &snapshot.evidence,
+    )
+    .expect("write evidence");
+    write_json_pretty(
+        &workspace_root.join("graph/entities.json"),
+        &snapshot.entities,
+    )
+    .expect("write entities");
+    write_json_pretty(&workspace_root.join("graph/claims.json"), &snapshot.claims)
+        .expect("write claims");
+    write_json_pretty(
+        &workspace_root.join("memory/records.json"),
+        &snapshot.memories,
+    )
+    .expect("write memories");
+    write_brain_events_jsonl(
+        &workspace_root.join("events/brain_events.jsonl"),
+        &snapshot.events,
+    )
+    .expect("write events");
+    assert!(!workspace_root.join("hyprduck.sqlite").exists());
+
+    let reader = BrainReader::open_workspace_root(workspace_root.clone(), DEFAULT_WORKSPACE_ID)
+        .expect("open reader and migrate artifacts");
+    assert_eq!(reader.snapshot.nodes, snapshot.nodes);
+
+    let store = KnowledgeProjectStore::new(workspace_root.join("hyprduck.sqlite"));
+    assert_eq!(count_table_rows(&store, "sources"), 1);
+    assert_eq!(count_table_rows(&store, "source_pages"), 1);
+    assert_eq!(count_table_rows(&store, "wiki_pages"), 1);
+    assert_eq!(count_table_rows(&store, "brain_events"), 1);
+    assert!(count_table_rows(&store, "evidence_items") > 0);
+    assert!(count_table_rows(&store, "evidence_fts") > 0);
+    let graph_store =
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root)).expect("open");
+    assert!(
+        graph_store
+            .graph_snapshot_counts(DEFAULT_WORKSPACE_ID)
+            .expect("graph counts")
+            .node_count
+            > 0
+    );
 }
 
 #[test]

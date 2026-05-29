@@ -11,7 +11,7 @@ use hyprduck_engine_types::{
     BrainScope, EvidenceRef, KnowledgeProject, SourceArtifactManifest,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -825,7 +825,9 @@ fn persist_graph_snapshot_in_transaction(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<KnowledgeGraphPersistReport> {
     persist_snapshot_sources_in_transaction(graph, snapshot)?;
+    persist_source_pages_snapshot_in_transaction(graph, snapshot)?;
     persist_evidence_snapshot_in_transaction(graph, snapshot)?;
+    persist_wiki_pages_snapshot_in_transaction(graph, snapshot)?;
     persist_brain_events_snapshot_in_transaction(graph, snapshot)?;
     validate_snapshot_evidence_refs(snapshot)?;
     graph
@@ -1145,6 +1147,97 @@ fn persist_snapshot_sources_in_transaction(
     Ok(())
 }
 
+#[derive(Debug, Default)]
+struct SourcePageSnapshotRow {
+    page_label: String,
+    markdown_path_redacted: String,
+    image_path_redacted: String,
+    snippets: Vec<String>,
+}
+
+fn persist_source_pages_snapshot_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .chain(
+            snapshot
+                .evidence
+                .iter()
+                .filter_map(|evidence| evidence.source_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    for source_id in &source_ids {
+        sqlite
+            .execute("DELETE FROM source_pages WHERE source_id = ?1", [source_id])
+            .with_context(|| format!("failed clearing source pages for {source_id}"))?;
+    }
+
+    let mut pages = BTreeMap::<(String, usize), SourcePageSnapshotRow>::new();
+    for evidence in &snapshot.evidence {
+        let (Some(source_id), Some(page_index)) =
+            (evidence.source_id.as_ref(), evidence.page_index)
+        else {
+            continue;
+        };
+        let row = pages
+            .entry((source_id.clone(), page_index))
+            .or_insert_with(|| SourcePageSnapshotRow {
+                page_label: evidence.page_label.clone(),
+                markdown_path_redacted: evidence
+                    .markdown_path
+                    .as_deref()
+                    .map(redact_path_for_agent)
+                    .unwrap_or_default(),
+                image_path_redacted: evidence
+                    .image_path
+                    .as_deref()
+                    .map(redact_path_for_agent)
+                    .unwrap_or_default(),
+                snippets: Vec::new(),
+            });
+        if row.page_label.is_empty() {
+            row.page_label = evidence.page_label.clone();
+        }
+        if !evidence.snippet.trim().is_empty() {
+            row.snippets.push(evidence.snippet.clone());
+        }
+    }
+
+    for ((source_id, page_index), row) in pages {
+        let plain_text = row.snippets.join("\n\n");
+        sqlite
+            .execute(
+                "INSERT INTO source_pages (
+                    source_id,
+                    page_index,
+                    page_label,
+                    markdown_path_redacted,
+                    image_path_redacted,
+                    plain_text,
+                    parse_warnings_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]')",
+                (
+                    source_id.as_str(),
+                    page_index as i64,
+                    row.page_label.as_str(),
+                    row.markdown_path_redacted.as_str(),
+                    row.image_path_redacted.as_str(),
+                    plain_text.as_str(),
+                ),
+            )
+            .with_context(|| {
+                format!("failed inserting migrated source page {source_id}:{page_index}")
+            })?;
+    }
+
+    Ok(())
+}
+
 fn persist_evidence_snapshot_in_transaction(
     graph: &Graph,
     snapshot: &BrainRepoSnapshot,
@@ -1208,6 +1301,46 @@ fn persist_evidence_snapshot_in_transaction(
             .with_context(|| format!("failed indexing evidence row {}", evidence.id))?;
     }
 
+    Ok(())
+}
+
+fn persist_wiki_pages_snapshot_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "DELETE FROM wiki_pages WHERE workspace_id = ?1",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing wiki page rows")?;
+    for page in &snapshot.wiki_pages {
+        let evidence_refs_json = serde_json::to_string(&page.evidence_refs)
+            .context("failed encoding wiki evidence refs")?;
+        sqlite
+            .execute(
+                "INSERT INTO wiki_pages (
+                    wiki_page_id,
+                    workspace_id,
+                    title,
+                    body,
+                    approval_status,
+                    evidence_refs_json,
+                    revision,
+                    updated_at
+                ) VALUES (?1, ?2, ?3, ?4, 'materialized', ?5, 1, ?6)",
+                (
+                    page.page_id.as_str(),
+                    snapshot.workspace_id.as_str(),
+                    page.title.as_str(),
+                    page.body.as_str(),
+                    evidence_refs_json.as_str(),
+                    page.updated_at as i64,
+                ),
+            )
+            .with_context(|| format!("failed inserting wiki page row {}", page.page_id))?;
+    }
     Ok(())
 }
 

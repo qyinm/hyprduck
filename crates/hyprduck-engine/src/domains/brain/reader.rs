@@ -48,6 +48,8 @@ impl BrainReader {
         snapshot.memories = repo.read_optional_json_artifact("memory/records.json")?;
         let events = repo.read_brain_events()?;
         snapshot.events = events.clone();
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(repo.root()))?
+            .persist_graph_snapshot(&snapshot)?;
         Ok(Self {
             repo,
             snapshot,
