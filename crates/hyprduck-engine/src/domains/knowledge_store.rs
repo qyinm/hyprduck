@@ -2,7 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::{
-    BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, PolicyResult,
+    BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, ClaimRecord,
+    EntityRecord, PolicyResult, SourceFormat, SourceRecord, SourceStatus, WikiPage,
     BRAIN_EVENT_SCHEMA_VERSION,
 };
 use hyprduck_engine_types::{
@@ -750,7 +751,8 @@ fn persist_graph_snapshot_in_transaction(
         .run()
         .context("failed clearing GraphQLite workspace graph")?;
 
-    for node in &snapshot.nodes {
+    let graph_nodes = current_graph_nodes(snapshot);
+    for node in &graph_nodes {
         graph
             .upsert_node(
                 &node.node_id,
@@ -776,9 +778,82 @@ fn persist_graph_snapshot_in_transaction(
     }
 
     Ok(KnowledgeGraphPersistReport {
-        node_count: snapshot.nodes.len(),
+        node_count: graph_nodes.len(),
         relation_count: snapshot.relations.len(),
     })
+}
+
+fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
+    let mut nodes_by_id = snapshot
+        .nodes
+        .iter()
+        .cloned()
+        .map(|node| (node.node_id.clone(), node))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    for source in &snapshot.sources {
+        let node_id = format!("source:{}", source.source_id);
+        nodes_by_id
+            .entry(node_id.clone())
+            .or_insert(BrainNodeRecord {
+                node_id,
+                kind: BrainNodeKind::Source,
+                label: source.source_id.clone(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: Vec::new(),
+                source_ids: vec![source.source_id.clone()],
+                confidence: None,
+                updated_at: source.updated_at,
+            });
+    }
+    for wiki_page in &snapshot.wiki_pages {
+        nodes_by_id
+            .entry(wiki_page.page_id.clone())
+            .or_insert(BrainNodeRecord {
+                node_id: wiki_page.page_id.clone(),
+                kind: BrainNodeKind::WikiPage,
+                label: wiki_page.title.clone(),
+                scope: BrainScope::Project,
+                aliases: vec![wiki_page.path.clone()],
+                evidence_ids: wiki_page.evidence_refs.clone(),
+                source_ids: wiki_page.source_refs.clone(),
+                confidence: None,
+                updated_at: wiki_page.updated_at,
+            });
+    }
+    for entity in &snapshot.entities {
+        nodes_by_id
+            .entry(entity.entity_id.clone())
+            .or_insert(BrainNodeRecord {
+                node_id: entity.entity_id.clone(),
+                kind: entity.kind,
+                label: entity.name.clone(),
+                scope: BrainScope::Project,
+                aliases: entity.aliases.clone(),
+                evidence_ids: entity.evidence_refs.clone(),
+                source_ids: entity.source_refs.clone(),
+                confidence: None,
+                updated_at: entity.updated_at,
+            });
+    }
+    for claim in &snapshot.claims {
+        nodes_by_id
+            .entry(claim.claim_id.clone())
+            .or_insert(BrainNodeRecord {
+                node_id: claim.claim_id.clone(),
+                kind: BrainNodeKind::Claim,
+                label: claim.statement.clone(),
+                scope: BrainScope::Project,
+                aliases: claim.topic_refs.clone(),
+                evidence_ids: claim.evidence_refs.clone(),
+                source_ids: claim.source_refs.clone(),
+                confidence: None,
+                updated_at: claim.updated_at,
+            });
+    }
+
+    nodes_by_id.into_values().collect()
 }
 
 fn persist_snapshot_sources_in_transaction(
@@ -1315,7 +1390,20 @@ mod tests {
         let snapshot = BrainRepoSnapshot {
             workspace_id: "workspace-default".into(),
             generated_at: 10,
-            sources: Vec::new(),
+            sources: vec![SourceRecord {
+                source_id: "source-a".into(),
+                workspace_id: "workspace-default".into(),
+                original_path: "/tmp/source-a.pdf".into(),
+                source_path: "sources/source-a.pdf".into(),
+                markdown_path: "sources/source-a.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 10,
+            }],
             nodes: vec![
                 BrainNodeRecord {
                     node_id: "node-a".into(),
@@ -1362,9 +1450,37 @@ mod tests {
                 provenance: Some("test".into()),
             }],
             memories: Vec::new(),
-            wiki_pages: Vec::new(),
-            entities: Vec::new(),
-            claims: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-alpha".into(),
+                workspace_id: "workspace-default".into(),
+                path: "wiki/alpha".into(),
+                title: "Alpha Wiki".into(),
+                body: "Alpha wiki body.".into(),
+                node_refs: Vec::new(),
+                source_refs: vec!["source-a".into()],
+                evidence_refs: vec!["evidence-a".into()],
+                updated_at: 10,
+            }],
+            entities: vec![EntityRecord {
+                entity_id: "entity-alpha".into(),
+                workspace_id: "workspace-default".into(),
+                kind: BrainNodeKind::Company,
+                name: "Alpha Inc".into(),
+                aliases: vec!["Alpha".into()],
+                source_refs: vec!["source-a".into()],
+                evidence_refs: vec!["evidence-a".into()],
+                updated_at: 10,
+            }],
+            claims: vec![ClaimRecord {
+                claim_id: "claim-alpha".into(),
+                workspace_id: "workspace-default".into(),
+                statement: "Alpha relates to beta.".into(),
+                topic_refs: vec!["Alpha".into()],
+                source_refs: vec!["source-a".into()],
+                evidence_refs: vec!["evidence-a".into()],
+                status: "active".into(),
+                updated_at: 10,
+            }],
             extractions: Vec::new(),
             events: vec![test_brain_event(
                 "event-a",
@@ -1380,7 +1496,7 @@ mod tests {
         assert_eq!(
             report,
             KnowledgeGraphPersistReport {
-                node_count: 2,
+                node_count: 6,
                 relation_count: 1,
             }
         );
