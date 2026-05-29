@@ -11,8 +11,13 @@ const {
 const {
   maybeImportLegacySwiftConfig: importLegacySwiftConfig,
 } = require("./main/legacy-config.cjs");
+const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
+const { DisabledAgentTerminalBackend } = require("./main/agent-terminal-backend.cjs");
+const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-ghostty.cjs");
+const { tryCreatePtyAgentTerminalBackend } = require("./main/agent-terminal-pty.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
+const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
 const MAX_PROGRESS_LOG = 80;
 
 const snapshot = {
@@ -30,6 +35,7 @@ let mainWindow = null;
 let engineRuntime = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
+let agentTerminalSessions = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -67,7 +73,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  registerIpcHandlers();
+  await registerIpcHandlers();
   try {
     await maybeImportLegacySwiftConfig();
   } catch (error) {
@@ -100,7 +106,26 @@ app.on("will-quit", () => {
   }
 });
 
-function registerIpcHandlers() {
+async function registerIpcHandlers() {
+  const ghosttyProbe = await createGhosttyNativeBackendFromEnv();
+  const ptyProbe = ghosttyProbe.backend
+    ? { backend: null, reason: null }
+    : tryCreatePtyAgentTerminalBackend();
+  const fallbackBackend =
+    (ghosttyProbe.enabled && ghosttyProbe.reason) || ptyProbe.reason
+      ? new DisabledAgentTerminalBackend({
+          reason: ghosttyProbe.enabled ? ghosttyProbe.reason : ptyProbe.reason,
+        })
+      : undefined;
+  agentTerminalSessions = new AgentTerminalSessionManager({
+    backend: ghosttyProbe.backend ?? ptyProbe.backend ?? fallbackBackend,
+    getWorkspaceState: () => ({
+      workspaceId: snapshot.lastWorkspaceId ?? "default",
+      projectId: snapshot.lastProjectId ?? null,
+      sourceId: snapshot.lastSourceId ?? null,
+    }),
+    onEvent: publishAgentTerminalEvent,
+  });
   ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {
     switch (command) {
       case "app_snapshot":
@@ -164,6 +189,18 @@ function registerIpcHandlers() {
           command: "answer_project",
           payload: args.request,
         }).then((response) => response.data.answer);
+      case "agent_terminal_list_agents":
+        return agentTerminalSessions.listAgents(args);
+      case "agent_terminal_create_session":
+        return agentTerminalSessions.createSession(args);
+      case "agent_terminal_snapshot_session":
+        return agentTerminalSessions.snapshotSession(args);
+      case "agent_terminal_write_session":
+        return agentTerminalSessions.writeSession(args);
+      case "agent_terminal_resize_session":
+        return agentTerminalSessions.resizeSession(args);
+      case "agent_terminal_kill_session":
+        return agentTerminalSessions.killSession(args);
       case "start_parse":
         return startParse(args.request);
       case "retry_failed_pages":
@@ -178,6 +215,13 @@ function registerIpcHandlers() {
         throw new Error(`unknown HyprDuck command: ${command}`);
     }
   });
+}
+
+function publishAgentTerminalEvent(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send(AGENT_TERMINAL_EVENT, payload);
 }
 
 function brainReadScope(workspaceId) {

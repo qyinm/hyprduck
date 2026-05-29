@@ -21,6 +21,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  type AgentTerminalAgent,
+  type AgentTerminalEvent,
+  type AgentTerminalListResult,
+  type AgentTerminalSession,
   type BrainEvent,
   type BrainHealthResponseData,
   type DesktopCommand,
@@ -56,7 +60,6 @@ import {
 import type {
   MaterializedGraphSnapshot,
   WorkspaceApplyCorrectionRequest,
-  WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
   WorkspaceProject,
 } from "@/features/workspace/types";
@@ -180,6 +183,19 @@ async function invoke<K extends DesktopCommand>(
   ...args: DesktopCommandParameters<K>
 ): Promise<DesktopCommandResult<K>> {
   return getDesktopApi().invoke(command, ...args);
+}
+
+async function listAgentTerminalAgents(): Promise<AgentTerminalListResult> {
+  return invoke("agent_terminal_list_agents");
+}
+
+function listenAgentTerminalEvents(
+  handler: (event: AgentTerminalEvent) => void,
+): DesktopUnlisten {
+  return getDesktopApi().listen<AgentTerminalEvent>(
+    "hyprduck://agent-terminal",
+    (message) => handler(message.payload),
+  );
 }
 
 async function loadGraphWorkspaceEnvelope(
@@ -664,16 +680,38 @@ export function App() {
     setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
   };
 
-  const answerWorkspaceProject = async (
-    request: WorkspaceAnswerProjectRequest,
-  ) => {
-    return invoke("answer_workspace_project", {
-      request: {
-        projectId: request.projectId,
-        nodeId: request.nodeId ?? null,
-        question: request.question,
-      },
+  const createAgentTerminalSession = async (args: {
+    kind?: "agent" | "shell";
+    agentId?: AgentTerminalAgent["id"];
+    nodeId: string | null;
+  }): Promise<AgentTerminalSession> => {
+    return invoke("agent_terminal_create_session", {
+      kind: args.kind ?? "agent",
+      agentId: args.agentId,
+      workspaceId: loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
+      projectId: workspaceProject?.summary.projectId ?? null,
+      nodeId: args.nodeId,
+      contextScope: "workspace",
     });
+  };
+
+  const writeAgentTerminalSession = async (args: {
+    sessionId: string;
+    input: string;
+  }) => {
+    return invoke("agent_terminal_write_session", args);
+  };
+
+  const resizeAgentTerminalSession = async (args: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }) => {
+    return invoke("agent_terminal_resize_session", args);
+  };
+
+  const killAgentTerminalSession = async (args: { sessionId: string }) => {
+    return invoke("agent_terminal_kill_session", args);
   };
 
   const saveConfig = async (payload: EngineConfigPayload) => {
@@ -946,12 +984,18 @@ export function App() {
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
-                onAskProject={answerWorkspaceProject}
+                onCreateAgentTerminalSession={createAgentTerminalSession}
+                onKillAgentTerminalSession={killAgentTerminalSession}
+                onListenAgentTerminalEvents={listenAgentTerminalEvents}
+                onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
+                onResizeAgentTerminalSession={resizeAgentTerminalSession}
                 onRetryFailedPages={retryFailedPages}
+                onWriteAgentTerminalSession={writeAgentTerminalSession}
                 project={workspaceProject}
                 uiState={workspaceUiState}
+                workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}
               />
             </WorkspaceErrorBoundary>
           ) : null}

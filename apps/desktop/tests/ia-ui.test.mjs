@@ -10,10 +10,18 @@ const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const agentTerminalSource = readFileSync(
+  new URL("../src/features/agent-terminal/AgentTerminal.tsx", import.meta.url),
+  "utf8",
+);
+const appTypesSource = readFileSync(new URL("../src/appTypes.ts", import.meta.url), "utf8");
 const previewSource = readFileSync(
   new URL("../src/features/workspace/buildWorkspacePreview.ts", import.meta.url),
   "utf8",
 );
+const settingsSource = readFileSync(new URL("../src/SettingsPanel.tsx", import.meta.url), "utf8");
+const previewApiSource = readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8");
+const cliShimSource = readFileSync(new URL("../main/cli-shim.cjs", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
 const modelTaskMatrixSource = readFileSync(
@@ -83,7 +91,7 @@ test("Knowledge empty state focuses first users on importing source files", () =
 });
 
 test("launch copy stays agent-ready without unsupported provider claims", () => {
-  const buyerFacingCopy = [appSource, graphSource].join("\n");
+  const buyerFacingCopy = [appSource, graphSource, settingsSource].join("\n");
   const publicModelGuidance = modelTaskMatrixSource;
 
   expect(buyerFacingCopy).toMatch(/Local model caution/);
@@ -100,8 +108,8 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
 
 test("Knowledge workspace keeps the graph canvas and removes onboarding checklist chrome", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/aria-label="Ask with citations"/);
-  expect(graphSource).toMatch(/placeholder="Ask with citations\.\.\."/);
+  expect(graphSource).toMatch(/aria-label="Open Agent Terminal"/);
+  expect(graphSource).toMatch(/placeholder="Open Agent Terminal\.\.\."/);
   expect(graphSource).not.toMatch(/FirstRunActivationStrip/);
   expect(graphSource).not.toMatch(/aria-label="First-run activation"/);
   expect(graphSource).not.toMatch(/Register the local MCP server/);
@@ -122,11 +130,19 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/without leaving the graph/);
 });
 
-test("bottom prompt composer opens a floating answer window above the prompt", () => {
+test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
   expect(graphSource).toMatch(/GraphPromptComposer/);
+  expect(graphSource).toMatch(/AgentTerminal/);
   expect(graphSource).toMatch(/GraphAnswerWindow/);
   expect(graphSource).toMatch(/aria-label="Attach files"/);
-  expect(graphSource).toMatch(/dispatch\(\{ type: "open_answer_dock" \}\)/);
+  expect(graphSource).toMatch(/onFocus=\{openTerminal\}/);
+  expect(graphSource).toMatch(/onOpenAgentTerminal\(\);/);
+  expect(graphSource).toMatch(/onCreateSession=\{onCreateAgentTerminalSession\}/);
+  expect(agentTerminalSource).toMatch(/aria-label="Minimize Agent Terminal"/);
+  expect(graphSource).toMatch(/aria-label="Resize Agent Terminal"/);
+  expect(graphSource).toMatch(/aria-label="Restore Agent Terminal"/);
+  expect(graphSource).not.toMatch(/onAskProject/);
+  expect(graphSource).not.toMatch(/answer_workspace_project/);
   expect(graphSource).toMatch(/bottom-24/);
   expect(graphSource).toMatch(/Close answer/);
   expect(graphSource).toMatch(/Answering\.\.\./);
@@ -162,26 +178,27 @@ test("workspace graph reader loads the latest materialized snapshot first", () =
 test("desktop app prepares the short HyprDuck MCP shell command", () => {
   const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
 
-  expect(mainSource).toMatch(/ensureHyprduckShellCommand\(\)/);
-  expect(mainSource).toMatch(/function resolveCliPath\(\)/);
-  expect(mainSource).toMatch(/HYPRDUCK_CLI_BIN/);
-  expect(mainSource).toMatch(/HYPRDUCK_INSTALL_CLI_SHIM/);
-  expect(mainSource).toMatch(/isManagedHyprduckCliTarget/);
-  expect(mainSource).toMatch(/isDirectoryOnPath/);
-  expect(mainSource).toMatch(/existing-symlink/);
-  expect(mainSource).toMatch(/"\.local", "bin"/);
-  expect(mainSource).toMatch(/"hyprduck"/);
-  expect(mainSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
+  expect(mainSource).toMatch(/ensureHyprduckShellCommand\(app\)/);
+  expect(mainSource).toMatch(/require\("\.\/main\/cli-shim\.cjs"\)/);
+  expect(cliShimSource).toMatch(/function resolveCliPath\(\)/);
+  expect(cliShimSource).toMatch(/HYPRDUCK_CLI_BIN/);
+  expect(cliShimSource).toMatch(/HYPRDUCK_INSTALL_CLI_SHIM/);
+  expect(cliShimSource).toMatch(/isManagedHyprduckCliTarget/);
+  expect(cliShimSource).toMatch(/isDirectoryOnPath/);
+  expect(cliShimSource).toMatch(/existing-symlink/);
+  expect(cliShimSource).toMatch(/"\.local", "bin"/);
+  expect(cliShimSource).toMatch(/"hyprduck"/);
+  expect(cliShimSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
 });
 
 test("desktop provider validation preserves issue codes", () => {
-  expect(appSource).toMatch(/interface ValidationIssue \{\s*code: string;\s*message: string;\s*\}/);
-  expect(appSource).toMatch(/code: "provider_config"/);
-  expect(appSource).toMatch(/validation\.issues\.map\(\(issue\) => issue\.message\)/);
+  expect(appTypesSource).toMatch(/interface ValidationIssue \{\s*code: string;\s*message: string;\s*\}/);
+  expect(previewApiSource).toMatch(/code: "provider_config"/);
+  expect(previewApiSource).toMatch(/validation\.issues\.map\(\(issue\) => issue\.message\)/);
 });
 
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
-  expect(appSource).toMatch(/type WorkspaceLoadStatus = "idle" \| "loading" \| "ready" \| "fallback" \| "error"/);
+  expect(appTypesSource).toMatch(/type WorkspaceLoadStatus =\s*\|\s*"idle"\s*\|\s*"loading"\s*\|\s*"ready"\s*\|\s*"fallback"\s*\|\s*"error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
   expect(appSource).toMatch(/workspaceLoadStateFromResult\(result\)/);
@@ -203,7 +220,7 @@ test("partial import failures expose failed-page retry affordance", () => {
   expect(graphSource).toMatch(/Retry failed pages/);
   expect(graphSource).toMatch(/failedPageCount === 1 \? "page" : "pages"/);
   expect(graphSource).toMatch(/onRetryFailedPages/);
-  expect(appSource).toMatch(/invoke<void>\("retry_failed_pages"\)/);
+  expect(appSource).toMatch(/invoke\("retry_failed_pages"\)/);
   const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
   expect(mainSource).toMatch(/case "retry_failed_pages"/);
   expect(mainSource).toMatch(/function retryFailedPages/);

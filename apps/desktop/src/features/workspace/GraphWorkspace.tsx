@@ -1,14 +1,32 @@
-import { type Dispatch, useEffect, useMemo, useState } from "react";
+import {
+  type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
+import type {
+  AgentTerminalAgent,
+  AgentTerminalEvent,
+  AgentTerminalListResult,
+  AgentTerminalSession,
+  DesktopUnlisten,
+} from "@/appTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AgentTerminal } from "@/features/agent-terminal/AgentTerminal";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
   LoaderCircle,
+  Maximize2,
   Plus,
   Share2,
+  Terminal as TerminalIcon,
   Trash2,
   X,
 } from "lucide-react";
@@ -17,7 +35,6 @@ import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import { fileNameFromPath } from "./pathUtils";
 import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
-  WorkspaceAnswerProjectRequest,
   WorkspaceApplyCorrectionRequest,
   WorkspaceEvidenceRef,
   WorkspaceProject,
@@ -25,13 +42,34 @@ import type {
 
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
+  workspaceId: string;
   uiState: WorkspaceUiState;
   importStatus: GraphImportStatus | null;
   dispatch: Dispatch<WorkspaceUiAction>;
   onOpenImport: () => void;
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
-  onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
+  onCreateAgentTerminalSession: (args: {
+    kind?: "agent" | "shell";
+    agentId?: AgentTerminalAgent["id"];
+    nodeId: string | null;
+  }) => Promise<AgentTerminalSession>;
+  onListenAgentTerminalEvents: (
+    handler: (event: AgentTerminalEvent) => void,
+  ) => DesktopUnlisten;
+  onListAgentTerminalAgents: () => Promise<AgentTerminalListResult>;
+  onKillAgentTerminalSession: (args: {
+    sessionId: string;
+  }) => Promise<unknown>;
+  onResizeAgentTerminalSession: (args: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }) => Promise<unknown>;
+  onWriteAgentTerminalSession: (args: {
+    sessionId: string;
+    input: string;
+  }) => Promise<unknown>;
   onRetryFailedPages: () => Promise<void>;
 }
 
@@ -48,13 +86,19 @@ interface GraphImportStatus {
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
     project,
+    workspaceId,
     uiState,
     importStatus,
     dispatch,
     onOpenImport,
     onOpenArtifact,
     onApplyCorrection,
-    onAskProject,
+    onCreateAgentTerminalSession,
+    onListenAgentTerminalEvents,
+    onListAgentTerminalAgents,
+    onKillAgentTerminalSession,
+    onResizeAgentTerminalSession,
+    onWriteAgentTerminalSession,
     onRetryFailedPages,
   } = props;
   const projectNodes = project?.nodes ?? [];
@@ -104,6 +148,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
+  const [agentTerminalOpen, setAgentTerminalOpen] = useState(false);
   const answer = liveAnswer ?? baseAnswer;
   const hiddenConceptCount = project?.summary.hiddenConceptCount ?? 0;
   const hiddenRelationCount = project?.summary.hiddenRelationCount ?? 0;
@@ -204,33 +249,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     }
   }
 
-  async function handleAskProject() {
-    if (!project) {
-      return;
-    }
-
-    const prompt = uiState.answerInput.trim();
-    if (!prompt) {
-      return;
-    }
-
-    setAnswerPending(true);
-    setAnswerError(null);
-    dispatch({ type: "open_answer_dock" });
-    try {
-      const nextAnswer = await onAskProject({
-        projectId: project.summary.projectId,
-        nodeId: selectedNode?.node.id ?? null,
-        question: prompt,
-      });
-      setLiveAnswer(nextAnswer);
-    } catch (error) {
-      setAnswerError(String(error));
-    } finally {
-      setAnswerPending(false);
-    }
-  }
-
   async function handleOpenArtifact(path: string | null | undefined, reveal: boolean) {
     if (!path) {
       return;
@@ -285,11 +303,26 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             />
           )}
           <GraphPromptComposer
+            agentTerminal={({ onMinimize }) => (
+              <AgentTerminal
+                nodeId={selectedNode?.node.id ?? null}
+                onClose={() => setAgentTerminalOpen(false)}
+                onCreateSession={onCreateAgentTerminalSession}
+                onKillSession={onKillAgentTerminalSession}
+                onListenAgentTerminalEvents={onListenAgentTerminalEvents}
+                onListAgents={onListAgentTerminalAgents}
+                onMinimize={onMinimize}
+                onResizeSession={onResizeAgentTerminalSession}
+                onWriteSession={onWriteAgentTerminalSession}
+                open={agentTerminalOpen}
+              />
+            )}
+            agentTerminalOpen={agentTerminalOpen}
             answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
             inputValue={uiState.answerInput}
-            onAsk={() => void handleAskProject()}
             onAttachFiles={onOpenImport}
+            onOpenAgentTerminal={() => setAgentTerminalOpen(true)}
             onInputChange={(value) =>
               dispatch({
                 type: "set_answer_input",
@@ -979,38 +1012,157 @@ function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
 }
 
 interface GraphPromptComposerProps {
+  agentTerminal: (props: { onMinimize: () => void }) => ReactNode;
+  agentTerminalOpen: boolean;
   answerError: string | null;
   answerPending: boolean;
   inputValue: string;
-  onAsk: () => void;
   onAttachFiles: () => void;
+  onOpenAgentTerminal: () => void;
   onInputChange: (value: string) => void;
+}
+
+const TERMINAL_DEFAULT_SIZE = { width: 800, height: 544 };
+const TERMINAL_MIN_SIZE = { width: 480, height: 260 };
+
+function clampTerminalSize(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function GraphPromptComposer(props: GraphPromptComposerProps) {
   const {
+    agentTerminal,
+    agentTerminalOpen,
     answerError,
     answerPending,
     inputValue,
-    onAsk,
     onAttachFiles,
+    onOpenAgentTerminal,
     onInputChange,
   } = props;
-  const canAsk = inputValue.trim().length > 0 && !answerPending;
+  const [terminalContentVisible, setTerminalContentVisible] = useState(false);
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
+  const [terminalResizing, setTerminalResizing] = useState(false);
+  const [terminalSize, setTerminalSize] = useState(TERMINAL_DEFAULT_SIZE);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!agentTerminalOpen) {
+      setTerminalContentVisible(false);
+      setTerminalMinimized(false);
+      return undefined;
+    }
+    if (terminalMinimized) {
+      setTerminalContentVisible(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setTerminalContentVisible(true);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [agentTerminalOpen, terminalMinimized]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    [],
+  );
+
+  const openTerminal = () => {
+    setTerminalMinimized(false);
+    onOpenAgentTerminal();
+  };
+
+  const minimizeTerminal = () => {
+    setTerminalContentVisible(false);
+    setTerminalMinimized(true);
+  };
+
+  const beginTerminalResize = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (!agentTerminalOpen || terminalMinimized) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startSize = terminalSize;
+    setTerminalResizing(true);
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const viewportMaxWidth = Math.max(
+        TERMINAL_MIN_SIZE.width,
+        window.innerWidth - 48,
+      );
+      const viewportMaxHeight = Math.max(
+        TERMINAL_MIN_SIZE.height,
+        window.innerHeight - 80,
+      );
+      setTerminalSize({
+        width: clampTerminalSize(
+          startSize.width + (moveEvent.clientX - startX) * 2,
+          TERMINAL_MIN_SIZE.width,
+          viewportMaxWidth,
+        ),
+        height: clampTerminalSize(
+          startSize.height - (moveEvent.clientY - startY),
+          TERMINAL_MIN_SIZE.height,
+          viewportMaxHeight,
+        ),
+      });
+    };
+    const stopResize = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      resizeCleanupRef.current = null;
+      setTerminalResizing(false);
+    };
+    resizeCleanupRef.current = stopResize;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+  };
+
+  const showTerminalContent =
+    agentTerminalOpen && !terminalMinimized && terminalContentVisible;
+  const composerStyle =
+    agentTerminalOpen && !terminalMinimized
+      ? {
+          width: `min(${terminalSize.width}px, calc(100vw - 3rem))`,
+          height: `min(${terminalSize.height}px, calc(100vh - 5rem))`,
+        }
+      : undefined;
+  const terminalStyle =
+    agentTerminalOpen && !terminalMinimized
+      ? {
+          height: `min(${terminalSize.height}px, calc(100vh - 5rem))`,
+        }
+      : undefined;
 
   return (
     <form
-      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-14 w-[min(50rem,calc(100%-3rem))] items-center gap-3"
+      className={cn(
+        "agent-terminal-composer-frame pointer-events-auto absolute inset-x-6 bottom-6 mx-auto flex w-[min(50rem,calc(100%-3rem))] items-end gap-3",
+        agentTerminalOpen && !terminalMinimized
+          ? "z-30 h-[min(34rem,calc(100vh-5rem))]"
+          : "z-20 h-14",
+        terminalResizing && "transition-none",
+      )}
+      style={composerStyle}
       onSubmit={(event) => {
         event.preventDefault();
-        if (canAsk) {
-          onAsk();
-        }
+        openTerminal();
       }}
     >
       <Button
         aria-label="Attach files"
-        className="h-14 w-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+        className={cn(
+          "h-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur transition-[width,opacity] duration-200",
+          agentTerminalOpen && !terminalMinimized
+            ? "pointer-events-none w-0 border-0 opacity-0"
+            : "w-14 opacity-100",
+        )}
         onClick={onAttachFiles}
         size="icon"
         type="button"
@@ -1018,28 +1170,91 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       >
         <Plus size={19} />
       </Button>
-      <div className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur">
-        <input
-          aria-label="Ask with citations"
-          className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
-          onChange={(event) => onInputChange(event.target.value)}
-          placeholder="Ask with citations..."
-          value={inputValue}
-        />
-        {answerPending ? (
-          <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-            Answering...
-          </span>
+      <div
+        className={cn(
+          "agent-terminal-composer-pill relative min-w-0 flex-1 overflow-hidden border shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
+          agentTerminalOpen && !terminalMinimized
+            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl border-zinc-700/80 bg-zinc-900/95 text-zinc-100 shadow-[0_24px_80px_rgba(0,0,0,0.28)]"
+            : "flex h-14 items-center gap-2 rounded-full border-border/80 bg-background/95 px-3",
+          showTerminalContent ? "p-0" : "flex items-end gap-2 px-3 pb-2",
+          terminalResizing && "transition-none",
+        )}
+        style={terminalStyle}
+      >
+        {agentTerminalOpen ? (
+          <div
+            className={cn(
+              "h-full w-full",
+              showTerminalContent
+                ? "animate-in fade-in duration-200"
+                : "pointer-events-none absolute inset-0 opacity-0",
+            )}
+          >
+            {agentTerminal({ onMinimize: minimizeTerminal })}
+          </div>
         ) : null}
-        <Button
-          aria-label="Ask"
-          className="size-9 rounded-full"
-          disabled={!canAsk}
-          size="icon"
-          type="submit"
-        >
-          <ArrowUp size={18} />
-        </Button>
+        {terminalMinimized ? (
+          <>
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
+              <TerminalIcon size={17} className="shrink-0 text-muted-foreground" />
+              <span className="truncate text-sm font-medium text-muted-foreground">
+                Agent Terminal
+              </span>
+            </div>
+            <Button
+              aria-label="Restore Agent Terminal"
+              className="mb-0.5 size-9 rounded-full"
+              onClick={openTerminal}
+              size="icon"
+              type="button"
+            >
+              <Maximize2 size={16} />
+            </Button>
+          </>
+        ) : showTerminalContent ? (
+          <button
+            aria-label="Resize Agent Terminal"
+            className="absolute right-1 top-1 z-40 size-5 cursor-nesw-resize rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            onPointerDown={beginTerminalResize}
+            type="button"
+          >
+            <span className="pointer-events-none block size-full rounded border-r border-t border-current" />
+          </button>
+        ) : (
+          <>
+            <input
+              aria-label="Open Agent Terminal"
+              className={cn(
+                "h-10 min-w-0 flex-1 bg-transparent px-2 text-base outline-none",
+                agentTerminalOpen
+                  ? "text-zinc-100 placeholder:text-zinc-500"
+                  : "text-foreground placeholder:text-muted-foreground",
+              )}
+              onChange={(event) => onInputChange(event.target.value)}
+              onFocus={openTerminal}
+              placeholder="Open Agent Terminal..."
+              value={inputValue}
+            />
+            {answerPending ? (
+              <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+                Answering...
+              </span>
+            ) : null}
+            <Button
+              aria-label="Open Agent Terminal"
+              className={cn(
+                "mb-0.5 size-9 rounded-full",
+                agentTerminalOpen
+                  ? "bg-zinc-700 text-zinc-200 hover:bg-zinc-600 hover:text-zinc-50"
+                  : "",
+              )}
+              size="icon"
+              type="submit"
+            >
+              <ArrowUp size={18} />
+            </Button>
+          </>
+        )}
       </div>
       {answerError ? (
         <p className="absolute left-16 top-full mt-2 text-xs leading-5 text-destructive">

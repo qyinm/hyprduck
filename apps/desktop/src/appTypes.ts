@@ -150,6 +150,103 @@ export interface WorkspaceAnswerPayload {
   question: string;
 }
 
+export interface AgentTerminalAgent {
+  id: "codex" | "claude_code" | "pi_agent" | "hermes";
+  label: string;
+  detected: boolean;
+  support: "supported" | "experimental";
+  commands: string[];
+  command: string | null;
+  path: string | null;
+  launchArgs: string[];
+  confidence: "high" | "medium" | "missing";
+  disabledReason: string | null;
+}
+
+export interface AgentTerminalShell {
+  id: "terminal_shell";
+  label: string;
+  detected: boolean;
+  support: "supported";
+  commands: string[];
+  command: string | null;
+  path: string | null;
+  launchArgs: string[];
+  confidence: "high" | "missing";
+  disabledReason: string | null;
+}
+
+export type AgentTerminalSessionTarget =
+  | AgentTerminalAgent
+  | AgentTerminalShell;
+
+export interface AgentTerminalListResult {
+  agents: AgentTerminalAgent[];
+  shell: {
+    available: boolean;
+    label: string | null;
+    command: string | null;
+    path: string | null;
+    reason: string | null;
+  };
+}
+
+export interface AgentTerminalContextHandoff {
+  mcp: {
+    status: string;
+    toolHint: string;
+  };
+  workspace: {
+    workspaceId: string;
+    projectId: string | null;
+    nodeId: string | null;
+    sourceId: string | null;
+  };
+  context: {
+    scope: string;
+    requiredBeforeFirstPrompt: boolean;
+    attachInstructions: string[];
+  };
+  disclosure: {
+    localPathsRedactedByDefault: boolean;
+    externalAgentOwnsWorkflow: boolean;
+  };
+}
+
+export interface AgentTerminalSession {
+  id: string;
+  backendSessionId?: string;
+  agent: AgentTerminalSessionTarget;
+  handoff: AgentTerminalContextHandoff;
+  handoffState?: "writable" | "blocked" | "external_confirmation_required";
+  backend: {
+    backend: string;
+    status: string;
+    reason?: string;
+    fallback?: string;
+    exitCode?: number | null;
+    signal?: string | number | null;
+  };
+  fallback: {
+    type: "external_ghostty";
+    label: string;
+    available: boolean;
+    agentId: AgentTerminalSessionTarget["id"];
+    agentCommand: string | null;
+    attachInstructions: string[];
+  };
+  status: "running" | "fallback_required" | "handoff_required" | "closed";
+  output?: string;
+  outputSequence?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTerminalEvent {
+  type: "data" | "exit" | "session_closed";
+  session: AgentTerminalSession;
+}
+
 export interface DesktopCommandMap {
   app_snapshot: {
     args: undefined;
@@ -218,6 +315,39 @@ export interface DesktopCommandMap {
   answer_workspace_project: {
     args: { request: WorkspaceAnswerPayload };
     result: WorkspaceProject["answerByNodeId"][string];
+  };
+  agent_terminal_list_agents: {
+    args: undefined;
+    result: AgentTerminalListResult;
+  };
+  agent_terminal_create_session: {
+    args: {
+      kind?: "agent" | "shell";
+      agentId?: AgentTerminalAgent["id"];
+      workspaceId?: string | null;
+      projectId?: string | null;
+      nodeId?: string | null;
+      contextScope?: string;
+      cols?: number;
+      rows?: number;
+    };
+    result: AgentTerminalSession;
+  };
+  agent_terminal_snapshot_session: {
+    args: { sessionId: string };
+    result: AgentTerminalSession;
+  };
+  agent_terminal_write_session: {
+    args: { sessionId: string; input: string };
+    result: { status: string; reason?: string };
+  };
+  agent_terminal_resize_session: {
+    args: { sessionId: string; cols: number; rows: number };
+    result: { status: string; reason?: string };
+  };
+  agent_terminal_kill_session: {
+    args: { sessionId: string };
+    result: { status: string; reason?: string };
   };
 }
 
