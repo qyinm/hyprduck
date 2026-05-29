@@ -1030,7 +1030,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     }
     const timer = window.setTimeout(() => {
       setTerminalContentVisible(true);
-    }, 260);
+    }, 180);
     return () => window.clearTimeout(timer);
   }, [agentTerminalOpen]);
 
@@ -1049,7 +1049,12 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     >
       <Button
         aria-label="Attach files"
-        className="h-14 w-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur"
+        className={cn(
+          "h-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur transition-[width,opacity] duration-200",
+          agentTerminalOpen
+            ? "pointer-events-none w-0 border-0 opacity-0"
+            : "w-14 opacity-100",
+        )}
         onClick={onAttachFiles}
         size="icon"
         type="button"
@@ -1059,10 +1064,10 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       </Button>
       <div
         className={cn(
-          "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
+          "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
           agentTerminalOpen
-            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl"
-            : "flex h-14 items-center gap-2 rounded-full px-3",
+            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl border-zinc-700/80 bg-zinc-900/95 text-zinc-100 shadow-[0_24px_80px_rgba(0,0,0,0.28)]"
+            : "flex h-14 items-center gap-2 rounded-full border-border/80 bg-background/95 px-3",
           showTerminalContent ? "p-0" : "flex items-end gap-2 px-3 pb-2",
         )}
       >
@@ -1074,7 +1079,12 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
           <>
             <input
               aria-label="Open Agent Terminal"
-              className="h-10 min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+              className={cn(
+                "h-10 min-w-0 flex-1 bg-transparent px-2 text-base outline-none",
+                agentTerminalOpen
+                  ? "text-zinc-100 placeholder:text-zinc-500"
+                  : "text-foreground placeholder:text-muted-foreground",
+              )}
               onChange={(event) => onInputChange(event.target.value)}
               onFocus={onOpenAgentTerminal}
               placeholder="Open Agent Terminal..."
@@ -1087,7 +1097,12 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
             ) : null}
             <Button
               aria-label="Open Agent Terminal"
-              className="mb-0.5 size-9 rounded-full"
+              className={cn(
+                "mb-0.5 size-9 rounded-full",
+                agentTerminalOpen
+                  ? "bg-zinc-700 text-zinc-200 hover:bg-zinc-600 hover:text-zinc-50"
+                  : "",
+              )}
               disabled={false}
               size="icon"
               type="submit"

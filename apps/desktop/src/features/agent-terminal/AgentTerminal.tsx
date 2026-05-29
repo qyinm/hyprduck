@@ -325,14 +325,15 @@ export function AgentTerminal(props: AgentTerminalProps) {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800 px-4 text-zinc-100">
         <div className="flex min-w-0 items-center gap-2">
-          <TerminalIcon size={16} className="shrink-0 text-muted-foreground" />
-          <h2 className="truncate text-sm font-semibold">Agent Terminal</h2>
+          <TerminalIcon size={16} className="shrink-0 text-zinc-500" />
+          <h2 className="truncate text-sm font-semibold">New Terminal</h2>
         </div>
         <div className="flex items-center gap-1">
           <Button
             aria-label="Refresh agents"
+            className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             onClick={() => void refreshAgents()}
             size="icon"
             type="button"
@@ -342,6 +343,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
           </Button>
           <Button
             aria-label="New agent tab"
+            className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             onClick={() => setPickerOpen((value) => !value)}
             size="icon"
             type="button"
@@ -351,6 +353,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
           </Button>
           <Button
             aria-label="Close Agent Terminal"
+            className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             onClick={onClose}
             size="icon"
             type="button"
@@ -362,14 +365,14 @@ export function AgentTerminal(props: AgentTerminalProps) {
       </header>
 
       {sessions.length > 0 ? (
-        <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-secondary/20 px-3">
+        <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-zinc-800 bg-zinc-900 px-3">
           {sessions.map((session) => (
             <div
               className={cn(
                 "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
                 session.id === activeSessionId
-                  ? "border-foreground bg-background text-foreground"
-                  : "border-transparent text-muted-foreground hover:bg-background",
+                  ? "border-zinc-600 bg-zinc-800 text-zinc-100"
+                  : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
               )}
               key={session.id}
             >
@@ -382,7 +385,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
               </button>
               <button
                 aria-label={`Close ${session.agent.label} tab`}
-                className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                className="grid size-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
                 onClick={() => void closeSession(session.id)}
                 type="button"
               >
@@ -393,7 +396,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
         </div>
       ) : null}
 
-      <div className="relative min-h-0 flex-1 bg-zinc-950 p-4 font-mono text-xs text-zinc-100">
+      <div className="relative min-h-0 flex-1 bg-zinc-950/95 p-4 font-mono text-xs text-zinc-100">
         {activeSession ? (
           activeSession.status === "fallback_required" ? (
             <pre className="h-full whitespace-pre-wrap leading-5 text-zinc-300">
@@ -431,11 +434,13 @@ export function AgentTerminal(props: AgentTerminalProps) {
         )}
 
         {pickerOpen ? (
-          <div className="absolute left-3 top-3 w-72 rounded-lg border border-border bg-background p-2 shadow-lg">
+          <div className="absolute left-3 top-3 w-72 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold">Detected agents</span>
+              <span className="text-xs font-semibold text-zinc-100">
+                Detected agents
+              </span>
               {loadingAgents ? (
-                <span className="text-[10px] text-muted-foreground">Loading</span>
+                <span className="text-[10px] text-zinc-500">Loading</span>
               ) : null}
             </div>
             <div className="grid gap-1">
@@ -449,10 +454,10 @@ export function AgentTerminal(props: AgentTerminalProps) {
                   variant="ghost"
                 >
                   <span className="min-w-0">
-                    <span className="block truncate text-xs font-medium">
+                    <span className="block truncate text-xs font-medium text-zinc-100">
                       {agent.label}
                     </span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
+                    <span className="block truncate text-[10px] text-zinc-500">
                       {agent.path ?? agent.disabledReason}
                     </span>
                   </span>
@@ -462,7 +467,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
                 </Button>
               ))}
             </div>
-            <p className="mt-2 border-t border-border pt-2 text-[10px] leading-4 text-muted-foreground">
+            <p className="mt-2 border-t border-zinc-800 pt-2 text-[10px] leading-4 text-zinc-500">
               {agentList?.shell.reason ??
                 "Generic shell/custom commands are disabled in v1."}
             </p>
@@ -471,7 +476,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
       </div>
 
       {error ? (
-        <p className="border-t border-border px-3 py-2 text-xs text-destructive">
+        <p className="border-t border-zinc-800 px-3 py-2 text-xs text-red-300">
           {error}
         </p>
       ) : null}
