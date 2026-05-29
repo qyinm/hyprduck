@@ -413,7 +413,7 @@ export function createWebMockApi(): HyprDuckDesktopApi {
         jobId: `preview-${Date.now()}`,
         filePath,
         format,
-        status: "running",
+        status: "parsing",
         progressPercent: 0,
         lastMessage: "Preview parse started.",
       };

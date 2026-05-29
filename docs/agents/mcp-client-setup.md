@@ -46,11 +46,21 @@ The first successful proof must record:
   `search_documents`, `read_source`, and `read_page_evidence`;
 - if MCP import is part of the proof, `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` is set
   and `import_source` returns a `jobId` without leaking local paths; polling
-  `import_status` reaches `citationReady: true`, returns a `sourceId`, and
-  reports nonzero evidence count without leaking local paths;
+  `import_status` reaches `citation_ready` with `citationReady: true`, returns
+  a `sourceId`, and reports nonzero evidence count without leaking local paths;
 - first answer includes at least one `sourceId`, page, and `evidenceRef`;
 - second query reuses the same source set or performs a follow-up evidence read;
 - failure class, if any.
+
+Polling `import_status` should move through:
+
+```text
+imported -> parsing -> packaging -> citation_ready -> context_ready -> failed
+```
+
+`citation_ready` is the key HyprDuck import milestone: the source has evidence
+refs an agent can use with citations. `context_ready` is later context/graph
+readiness and should not block citation-backed source inspection.
 
 ## Failure Classes
 
@@ -62,7 +72,7 @@ Use one of these labels in setup verification logs:
 | `path` | The `hyprduck` shell command or registered binary path is missing. | Use `~/.local/bin/hyprduck` or reopen HyprDuck to refresh the shim. |
 | `provider_config` | Hosted provider settings block import or extraction. | Open Settings and fix the provider validation issue, or use Ollama for local-only setup. |
 | `import_allowlist` | MCP `import_source` was called with a path outside `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` or with no import roots configured. | Configure an approved import root or import through the desktop picker. |
-| `parsing` | No usable source artifacts exist for the workspace. | Add a PDF, DOCX, DOC, Markdown, or image file and poll `import_status` until `citationReady`. |
+| `parsing` | No usable source artifacts exist for the workspace. | Add a PDF, DOCX, DOC, Markdown, or image file and poll `import_status` until `citation_ready` with `citationReady: true`. |
 | `citation` | `get_context_pack` succeeds but returns no source/page/evidence refs. | Re-import the source or inspect `read_health` before using the answer. |
 | `unknown` | The error does not match the classes above. | Capture the command, workspace ID, and raw error for review. |
 

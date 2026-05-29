@@ -22,6 +22,7 @@ import { AgentTerminal } from "@/features/agent-terminal/AgentTerminal";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
+  Check,
   LoaderCircle,
   Maximize2,
   Plus,
@@ -918,6 +919,29 @@ function CompactEvidenceRow(props: CompactEvidenceRowProps) {
   );
 }
 
+function formatImportLifecycleTitle(status: string): string {
+  switch (status) {
+    case "imported":
+      return "Import accepted";
+    case "parsing":
+      return "Parsing source";
+    case "packaging":
+      return "Packaging citations";
+    case "citation_ready":
+      return "Citation-ready";
+    case "context_ready":
+      return "Context-ready";
+    case "partial":
+      return "Partial import";
+    case "failed":
+      return "Import failed";
+    case "cancelled":
+      return "Import cancelled";
+    default:
+      return "Import in progress";
+  }
+}
+
 function GraphImportStatusBanner(props: {
   status: GraphImportStatus;
   onRetryFailedPages: () => Promise<void>;
@@ -942,19 +966,17 @@ function GraphImportStatusBanner(props: {
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-sm font-semibold">
-            {failed
-              ? "Import failed"
-              : partial
-                ? "Partial import"
-                : "Importing source file"}
-          </p>
+          <p className="text-sm font-semibold">{formatImportLifecycleTitle(status.status)}</p>
           <p className="mt-1 truncate text-sm text-muted-foreground">
             {fileNameFromPath(status.filePath)} · {status.format.toUpperCase()}
             {status.message ? ` · ${status.message}` : ""}
           </p>
         </div>
-        <ImportStatusIndicator failed={failed} progress={progress} />
+        <ImportStatusIndicator
+          failed={failed}
+          ready={status.status === "citation_ready" || status.status === "context_ready"}
+          progress={progress}
+        />
       </div>
       {!failed && !partial && (
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary">
@@ -987,13 +1009,21 @@ function GraphImportStatusBanner(props: {
   );
 }
 
-function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
-  const { failed, progress } = props;
+function ImportStatusIndicator(props: { failed: boolean; ready: boolean; progress: number }) {
+  const { failed, ready, progress } = props;
 
   if (failed) {
     return (
       <div className="flex size-9 shrink-0 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10 text-destructive">
         <X size={18} strokeWidth={2.4} aria-hidden="true" />
+      </div>
+    );
+  }
+
+  if (ready) {
+    return (
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-50 text-emerald-700">
+        <Check size={18} strokeWidth={2.4} aria-hidden="true" />
       </div>
     );
   }

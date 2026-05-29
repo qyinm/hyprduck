@@ -735,7 +735,8 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
     assert!(!text.contains(import_root_arg.as_str()));
     let import_payload: Value = serde_json::from_str(text).expect("import payload");
     assert_eq!(import_payload["workspaceId"], "default");
-    assert_eq!(import_payload["status"], "queued");
+    assert_eq!(import_payload["status"], "imported");
+    assert_eq!(import_payload["phase"], "imported");
     assert_eq!(import_payload["citationReady"], false);
     let job_id = import_payload["jobId"]
         .as_str()
@@ -753,6 +754,8 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .to_string()
         .contains(import_root_arg.as_str()));
     assert_eq!(status_payload["workspaceId"], "default");
+    assert_eq!(status_payload["status"], "context_ready");
+    assert_eq!(status_payload["phase"], "context_ready");
     assert_eq!(status_payload["citationReady"], true);
     assert_eq!(status_payload["graphReady"], false);
     assert_eq!(status_payload["graphStatus"], "skipped");

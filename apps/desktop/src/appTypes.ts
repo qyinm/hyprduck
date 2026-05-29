@@ -15,11 +15,21 @@ export interface UiSnapshot {
   workspaceRevision?: number;
 }
 
+export type ImportJobLifecycleStatus =
+  | "imported"
+  | "parsing"
+  | "packaging"
+  | "citation_ready"
+  | "context_ready"
+  | "failed"
+  | "cancelled"
+  | "partial";
+
 export interface ActiveJobSnapshot {
   jobId: string;
   filePath: string;
   format: string;
-  status: string;
+  status: ImportJobLifecycleStatus;
   progressPercent: number;
   lastMessage: string | null;
 }
