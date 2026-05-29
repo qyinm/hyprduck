@@ -23,6 +23,7 @@
     "frontend:build": "tsc --noEmit && vite build",
     "check:agent-terminal-backend": "node scripts/check-agent-terminal-backend.cjs",
     "smoke:agent-terminal-pty:electron": "electron scripts/smoke-electron-agent-terminal-pty.cjs",
+    "smoke:agent-terminal-agents": "node scripts/smoke-agent-terminal-agents.cjs",
     "test:agent-detection": "node --test tests/agent-detection.test.cjs",
     "test:agent-terminal-fallbacks": "node --test tests/agent-terminal-fallbacks.test.cjs",
     "test:agent-terminal-ghostty": "node --test tests/agent-terminal-ghostty.test.cjs",

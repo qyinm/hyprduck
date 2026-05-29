@@ -75,6 +75,7 @@ node --test tests/agent-terminal-pty.test.cjs
 bun run test:agent-terminal-ghostty
 bun run test:agent-terminal-fallbacks
 bun run smoke:agent-terminal-pty:electron
+bun run smoke:agent-terminal-agents
 bun run frontend:typecheck
 ```
 

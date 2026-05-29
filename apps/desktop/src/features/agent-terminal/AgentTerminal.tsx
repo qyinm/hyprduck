@@ -165,6 +165,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
       fontFamily:
         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       fontSize: 13,
+      macOptionIsMeta: true,
       scrollback: 10_000,
       theme: {
         background: "#09090b",
@@ -184,6 +185,44 @@ export function AgentTerminal(props: AgentTerminalProps) {
     renderedSessionIdRef.current = activeSession.id;
     terminal.write(activeSession.output ?? "");
     renderedOutputLengthRef.current = activeSession.output?.length ?? 0;
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") {
+        return true;
+      }
+      const modifierPressed = isApplePlatform()
+        ? event.metaKey
+        : event.ctrlKey && !event.altKey;
+      if (!modifierPressed) {
+        return true;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "c" && terminal.hasSelection()) {
+        void navigator.clipboard
+          ?.writeText(terminal.getSelection())
+          .catch(() => undefined);
+        return false;
+      }
+      if (key === "v") {
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            if (text) {
+              return onWriteSessionRef.current({
+                sessionId: activeSession.id,
+                input: text,
+              });
+            }
+            return undefined;
+          })
+          .catch((pasteError) => setError(String(pasteError)));
+        return false;
+      }
+      if (key === "a") {
+        terminal.selectAll();
+        return false;
+      }
+      return true;
+    });
 
     const dataSubscription = terminal.onData((input) => {
       void onWriteSessionRef.current({ sessionId: activeSession.id, input }).catch(
@@ -479,4 +518,8 @@ export function AgentTerminal(props: AgentTerminalProps) {
       ) : null}
     </section>
   );
+}
+
+function isApplePlatform() {
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
 }
