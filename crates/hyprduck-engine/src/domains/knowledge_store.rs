@@ -942,9 +942,9 @@ fn persist_graph_snapshot_in_transaction(
     persist_snapshot_sources_in_transaction(graph, snapshot)?;
     persist_source_pages_snapshot_in_transaction(graph, snapshot)?;
     persist_evidence_snapshot_in_transaction(graph, snapshot)?;
+    validate_snapshot_evidence_refs(snapshot)?;
     persist_wiki_pages_snapshot_in_transaction(graph, snapshot)?;
     persist_brain_events_snapshot_in_transaction(graph, snapshot)?;
-    validate_snapshot_evidence_refs(snapshot)?;
     graph
         .connection()
         .cypher_builder("MATCH (n {workspace_id: $workspace_id}) DETACH DELETE n")
@@ -2586,6 +2586,54 @@ mod tests {
     }
 
     #[test]
+    fn wiki_content_rejects_missing_evidence_before_durable_rows_commit() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: "workspace-default".into(),
+            generated_at: 10,
+            sources: Vec::new(),
+            nodes: Vec::new(),
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-missing-evidence".into(),
+                workspace_id: "workspace-default".into(),
+                path: "wiki/missing-evidence".into(),
+                title: "Missing Evidence Wiki".into(),
+                body: "This durable wiki content cites evidence that is not relationally present."
+                    .into(),
+                node_refs: Vec::new(),
+                source_refs: Vec::new(),
+                evidence_refs: vec!["missing-evidence".into()],
+                updated_at: 10,
+            }],
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        let error = store
+            .persist_graph_snapshot(&snapshot)
+            .expect_err("wiki evidence ref validation should fail before commit");
+
+        assert!(error
+            .to_string()
+            .contains("wiki page wiki-missing-evidence references missing relational evidence row missing-evidence"));
+        assert_eq!(
+            wiki_page_count(&store, "workspace-default").expect("wiki page count"),
+            0
+        );
+        assert_eq!(
+            wiki_revision_count(&store, "workspace-default").expect("wiki revision count"),
+            0
+        );
+    }
+
+    #[test]
     fn graph_snapshot_appends_brain_events_in_graph_transaction() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
@@ -2735,6 +2783,34 @@ mod tests {
                 |row| row.get(0),
             )
             .context("query evidence item count")?;
+        Ok(count)
+    }
+
+    fn wiki_page_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+        let graph = Graph::open(&store.path).context("open graph")?;
+        let count = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM wiki_pages WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .context("query wiki page count")?;
+        Ok(count)
+    }
+
+    fn wiki_revision_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+        let graph = Graph::open(&store.path).context("open graph")?;
+        let count = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM wiki_revisions WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .context("query wiki revision count")?;
         Ok(count)
     }
 
