@@ -21,6 +21,14 @@ const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
 const ROOT_DIR_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_ROOTS";
 const IMPORT_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS";
+const PROPOSAL_ID_PATTERN: &str = "^prop-[0-9A-Fa-f]{32}$";
+const WRITE_CONTENT_TYPES: [&str; 5] = [
+    "memory",
+    "wiki_page",
+    "graph_change",
+    "evidence_refresh",
+    "link_repair",
+];
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
@@ -922,6 +930,7 @@ fn call_tool(
         }
         "write_propose" => {
             let content_type = required_string(arguments, "contentType")?;
+            validate_mcp_write_content_type(&content_type)?;
             let title = required_string(arguments, "title")?;
             let body = required_string(arguments, "body")?;
             let evidence_refs = required_string_array(arguments, "evidenceRefs")?;
@@ -935,6 +944,7 @@ fn call_tool(
         }
         "write_commit" => {
             let proposal_id = required_string(arguments, "proposalId")?;
+            validate_mcp_proposal_id(&proposal_id)?;
             let user_approved = arguments
                 .get("userApproved")
                 .and_then(|value| value.as_bool())
@@ -947,6 +957,9 @@ fn call_tool(
         }
         "write_commit_all" => {
             let proposal_ids = required_string_array(arguments, "proposalIds")?;
+            for proposal_id in &proposal_ids {
+                validate_mcp_proposal_id(proposal_id)?;
+            }
             serde_json::to_value(client.write_commit_all(WriteCommitAllRequest {
                 scope,
                 proposal_ids,
@@ -955,6 +968,7 @@ fn call_tool(
         "write_list" => serde_json::to_value(client.write_list(WriteListRequest { scope })?)?,
         "write_reject" => {
             let proposal_id = required_string(arguments, "proposalId")?;
+            validate_mcp_proposal_id(&proposal_id)?;
             serde_json::to_value(client.write_reject(WriteRejectRequest { scope, proposal_id })?)?
         }
         _ => return Err(anyhow!("Unknown HyprDuck MCP tool: {name}")),
@@ -1192,7 +1206,7 @@ fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bo
 }
 
 fn required_string_array(arguments: &Map<String, Value>, name: &str) -> Result<Vec<String>> {
-    match arguments.get(name) {
+    let values: Vec<String> = match arguments.get(name) {
         Some(Value::Array(values)) => values
             .iter()
             .map(|value| match value {
@@ -1200,9 +1214,35 @@ fn required_string_array(arguments: &Map<String, Value>, name: &str) -> Result<V
                 Value::String(_) => Err(anyhow!("element in {name} cannot be empty")),
                 _ => Err(anyhow!("each element in {name} must be a string")),
             })
-            .collect(),
-        Some(_) => Err(anyhow!("argument {name} must be an array of strings")),
-        None => Err(anyhow!("missing required argument: {name}")),
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(anyhow!("argument {name} must be an array of strings")),
+        None => return Err(anyhow!("missing required argument: {name}")),
+    };
+    if values.is_empty() {
+        return Err(anyhow!("argument {name} must contain at least one item"));
+    }
+    Ok(values)
+}
+
+fn validate_mcp_proposal_id(proposal_id: &str) -> Result<()> {
+    let suffix = proposal_id
+        .strip_prefix("prop-")
+        .ok_or_else(|| anyhow!("invalid proposalId: expected prop-<32 hex chars>"))?;
+    if suffix.len() != 32 || !suffix.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(anyhow!("invalid proposalId: expected prop-<32 hex chars>"));
+    }
+    Ok(())
+}
+
+fn validate_mcp_write_content_type(content_type: &str) -> Result<()> {
+    let content_type = content_type.trim();
+    if WRITE_CONTENT_TYPES.contains(&content_type) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "unsupported contentType {content_type}; supported contentTypes: {}",
+            WRITE_CONTENT_TYPES.join(", ")
+        ))
     }
 }
 
@@ -1482,19 +1522,20 @@ fn tool_definitions() -> Vec<Value> {
             "write_propose",
             "Propose an evidence-backed knowledge item for approval. Evidence refs must exist in the current workspace snapshot.",
             json!({
-                "contentType": { "type": "string", "description": "Content type (e.g., 'memory')." },
+                "contentType": { "type": "string", "enum": WRITE_CONTENT_TYPES, "description": "Supported evidence-backed write type." },
                 "title": { "type": "string", "description": "Human-readable title for the knowledge item." },
                 "body": { "type": "string", "description": "The knowledge content body." },
-                "evidenceRefs": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs from the current workspace snapshot that back this knowledge item." },
+                "evidenceRefs": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true, "description": "Evidence IDs from the current workspace snapshot that back this knowledge item." },
             }),
             vec!["contentType", "title", "body", "evidenceRefs"],
             false,
         ),
         tool_definition(
             "write_commit",
-            "Approve a pending proposal and persist it as a MemoryAccepted brain event.",
+            "Approve a pending proposal and persist it as an audited brain event. Pass userApproved=true only after explicit user approval for proposals that require it.",
             json!({
-                "proposalId": { "type": "string", "description": "Proposal ID returned by write_propose." },
+                "proposalId": { "type": "string", "pattern": PROPOSAL_ID_PATTERN, "description": "Proposal ID returned by write_propose." },
+                "userApproved": { "type": "boolean", "description": "Set true only when the user explicitly approved a proposal marked as requiring approval." },
             }),
             vec!["proposalId"],
             false,
@@ -1503,7 +1544,7 @@ fn tool_definitions() -> Vec<Value> {
             "write_commit_all",
             "Approve multiple pending proposals in a single batch call.",
             json!({
-                "proposalIds": { "type": "array", "items": { "type": "string" }, "description": "Array of proposal IDs to commit." },
+                "proposalIds": { "type": "array", "items": { "type": "string", "pattern": PROPOSAL_ID_PATTERN }, "minItems": 1, "uniqueItems": true, "description": "Array of proposal IDs to commit." },
             }),
             vec!["proposalIds"],
             false,
@@ -1519,7 +1560,7 @@ fn tool_definitions() -> Vec<Value> {
             "write_reject",
             "Reject a pending proposal and remove it from the proposals directory.",
             json!({
-                "proposalId": { "type": "string", "description": "Proposal ID to reject." },
+                "proposalId": { "type": "string", "pattern": PROPOSAL_ID_PATTERN, "description": "Proposal ID to reject." },
             }),
             vec!["proposalId"],
             false,
@@ -1653,6 +1694,19 @@ mod tests {
             json!(["contentType", "title", "body", "evidenceRefs"])
         );
         assert_eq!(
+            tool_by_name("write_propose")["inputSchema"]["properties"]["contentType"]["enum"],
+            json!(WRITE_CONTENT_TYPES)
+        );
+        assert_eq!(
+            tool_by_name("write_propose")["inputSchema"]["properties"]["evidenceRefs"]["minItems"],
+            json!(1)
+        );
+        assert_eq!(
+            tool_by_name("write_propose")["inputSchema"]["properties"]["evidenceRefs"]
+                ["uniqueItems"],
+            json!(true)
+        );
+        assert_eq!(
             tool_by_name("import_source")["inputSchema"]["required"],
             json!(["sourcePath"])
         );
@@ -1685,6 +1739,32 @@ mod tests {
             json!(["proposalIds"])
         );
         assert_eq!(
+            tool_by_name("write_commit")["inputSchema"]["properties"]["proposalId"]["pattern"],
+            json!(PROPOSAL_ID_PATTERN)
+        );
+        assert_eq!(
+            tool_by_name("write_commit")["inputSchema"]["properties"]
+                .get("userApproved")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str),
+            Some("boolean")
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["inputSchema"]["properties"]["proposalIds"]
+                ["minItems"],
+            json!(1)
+        );
+        assert_eq!(
+            tool_by_name("write_commit_all")["inputSchema"]["properties"]["proposalIds"]["items"]
+                ["pattern"],
+            json!(PROPOSAL_ID_PATTERN)
+        );
+        assert_eq!(
+            tool_by_name("write_reject")["inputSchema"]["properties"]["proposalId"]["pattern"],
+            json!(PROPOSAL_ID_PATTERN)
+        );
+        assert_eq!(
             tool_by_name("write_propose")["annotations"]["readOnlyHint"],
             false
         );
@@ -1700,6 +1780,26 @@ mod tests {
             tool_by_name("write_reject")["annotations"]["readOnlyHint"],
             false
         );
+    }
+
+    #[test]
+    fn mcp_write_arguments_reject_broad_or_unauditable_inputs() {
+        assert!(validate_mcp_write_content_type("memory").is_ok());
+        assert!(validate_mcp_write_content_type("wiki_page").is_ok());
+        assert!(validate_mcp_write_content_type("shell_command").is_err());
+        assert!(validate_mcp_write_content_type("../memory").is_err());
+
+        assert!(validate_mcp_proposal_id("prop-0123456789abcdef0123456789ABCDEF").is_ok());
+        assert!(validate_mcp_proposal_id("prop-1234").is_err());
+        assert!(validate_mcp_proposal_id("../prop-0123456789abcdef0123456789abcdef").is_err());
+
+        let mut arguments = Map::new();
+        arguments.insert("evidenceRefs".into(), json!([]));
+        let error = required_string_array(&arguments, "evidenceRefs")
+            .expect_err("empty evidence refs rejected");
+        assert!(error
+            .to_string()
+            .contains("evidenceRefs must contain at least one item"));
     }
 
     #[test]

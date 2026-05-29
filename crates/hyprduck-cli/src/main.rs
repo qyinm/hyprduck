@@ -694,10 +694,6 @@ fn print_graph_history(
             printable_refs(&state.source_markdown_refs),
             printable_refs(&state.storage_locations)
         );
-        println!(
-            "  rollback-target: {}",
-            state.rollback_target.replay_selector
-        );
     }
     Ok(())
 }
@@ -726,7 +722,6 @@ fn print_graph_state_inspection(
         "source-markdown: {}",
         printable_refs(&state.source_markdown_refs)
     );
-    println!("rollback-target: {}", state.rollback_target.replay_selector);
     println!("storage: {}", printable_refs(&state.storage_locations));
     println!("related-events: {}", events.events.len());
     print_event_history(events)?;
