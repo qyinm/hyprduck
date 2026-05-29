@@ -11,6 +11,7 @@ use hyprduck_engine_types::{
     BrainScope, EvidenceRef, KnowledgeProject, SourceArtifactManifest,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -862,10 +863,46 @@ fn persist_graph_snapshot_in_transaction(
             })?;
     }
 
+    mark_import_jobs_graph_ready_in_transaction(graph, snapshot)?;
+
     Ok(KnowledgeGraphPersistReport {
         node_count: graph_nodes.len(),
         relation_count: snapshot.relations.len(),
     })
+}
+
+fn mark_import_jobs_graph_ready_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let mut source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    source_ids.extend(
+        snapshot
+            .evidence
+            .iter()
+            .filter_map(|evidence| evidence.source_id.clone()),
+    );
+
+    let sqlite = graph.connection().sqlite_connection();
+    for source_id in source_ids {
+        sqlite.execute_batch(&format!(
+            "UPDATE import_jobs
+             SET graph_ready = 1,
+                 updated_at = {updated_at}
+             WHERE workspace_id = {workspace_id}
+               AND source_id = {source_id}
+               AND citation_ready = 1;",
+            updated_at = snapshot.generated_at,
+            workspace_id = sql_literal(&snapshot.workspace_id),
+            source_id = sql_literal(&source_id),
+        ))?;
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1870,10 +1907,26 @@ mod tests {
     }
 
     #[test]
+    fn graph_snapshot_marks_citation_ready_import_job_graph_ready_after_commit() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        insert_citation_ready_import_job(&store, "source-a");
+
+        let snapshot = single_event_snapshot("event-a", "source-a", "evidence-a", "Alpha");
+        store
+            .persist_graph_snapshot(&snapshot)
+            .expect("persist graph snapshot");
+
+        assert_eq!(import_job_readiness(&store, "source-a"), (1, 1));
+    }
+
+    #[test]
     fn graphqlite_mutation_failure_rolls_back_relational_graph_audit_writes() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
             .expect("open knowledge store");
+        insert_citation_ready_import_job(&store, "source-a");
         let graph = Graph::open(&store.path).expect("open graph");
         graph
             .connection()
@@ -1912,6 +1965,35 @@ mod tests {
                 relation_count: 0,
             }
         );
+        assert_eq!(import_job_readiness(&store, "source-a"), (1, 0));
+    }
+
+    fn insert_citation_ready_import_job(store: &KnowledgeStore, source_id: &str) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .execute_batch(&format!(
+                "INSERT INTO import_jobs
+                   (job_id, workspace_id, source_id, status, citation_ready, graph_ready, created_at, updated_at, error_message)
+                 VALUES ({job_id}, 'workspace-default', {source_id}, 'completed', 1, 0, 1, 1, NULL);",
+                job_id = sql_literal(&format!("import:{source_id}")),
+                source_id = sql_literal(source_id),
+            ))
+            .expect("insert citation-ready import job");
+    }
+
+    fn import_job_readiness(store: &KnowledgeStore, source_id: &str) -> (i64, i64) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT citation_ready, graph_ready FROM import_jobs WHERE source_id = ?1",
+                [source_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read import job readiness")
     }
 
     fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {

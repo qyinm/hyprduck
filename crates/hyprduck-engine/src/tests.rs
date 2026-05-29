@@ -20,6 +20,17 @@ fn count_table_rows(store: &KnowledgeProjectStore, table: &str) -> usize {
         .expect("parse row count")
 }
 
+fn import_job_readiness(store: &KnowledgeProjectStore, source_id: &str) -> String {
+    let source_id = source_id.replace('\'', "''");
+    store
+        .run_sql(&format!(
+            "SELECT citation_ready || ':' || graph_ready FROM import_jobs WHERE source_id = '{source_id}';"
+        ))
+        .expect("read import job readiness")
+        .trim()
+        .to_string()
+}
+
 #[test]
 fn default_project_store_migrates_legacy_db_to_canonical_name() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -125,6 +136,7 @@ fn source_import_persists_canonical_db_rows_and_fts() {
         .expect("save project and canonical source rows");
 
     assert_eq!(count_table_rows(&store, "import_jobs"), 1);
+    assert_eq!(import_job_readiness(&store, "source-db"), "1:0");
     assert_eq!(count_table_rows(&store, "sources"), 1);
     assert_eq!(count_table_rows(&store, "source_pages"), 1);
     assert!(count_table_rows(&store, "evidence_items") > 0);
