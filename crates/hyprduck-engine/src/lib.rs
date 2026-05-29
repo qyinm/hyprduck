@@ -3147,6 +3147,9 @@ impl KnowledgeProjectStore {
         source_manifest: Option<&SourceArtifactManifest>,
     ) -> Result<()> {
         self.ensure_schema()?;
+        if let Some(source_manifest) = source_manifest {
+            self.save_source(project, source_manifest)?;
+        }
         let snapshot_json =
             serde_json::to_string(project).context("failed to encode knowledge project")?;
         let snapshot_base64 = base64::engine::general_purpose::STANDARD.encode(snapshot_json);
@@ -3180,7 +3183,6 @@ impl KnowledgeProjectStore {
         );
         self.run_sql(&sql)?;
         if let Some(source_manifest) = source_manifest {
-            self.save_source(project, source_manifest)?;
             self.materialize_workspace_brain_repo(&source_manifest.workspace_id)?;
         }
         Ok(())

@@ -243,6 +243,47 @@ fn source_import_persists_canonical_db_rows_and_fts() {
 }
 
 #[test]
+fn source_import_writes_canonical_db_before_project_compatibility_row() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeProjectStore::new(temp.path().join("hyprduck.sqlite"));
+    store.ensure_schema().expect("create compatibility schema");
+    store
+        .run_sql(
+            "CREATE TRIGGER fail_project_insert BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT, 'project compatibility failure'); END;",
+        )
+        .expect("create project compatibility failure trigger");
+    let markdown =
+        "# Source import\n\n## Page 1\n\nCanonical source persists before compatibility rows.\n";
+    let (project, manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        markdown,
+        "source-db-first",
+        "alpha",
+        10,
+    );
+    let request = CompileProjectRequest {
+        source_markdown_path: temp.path().join("sample.md").display().to_string(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: None,
+    };
+
+    let error = store
+        .save_project(&project, &request, Some(&manifest))
+        .expect_err("project compatibility row should fail after canonical source write");
+
+    assert!(error.to_string().contains("project compatibility failure"));
+    assert_eq!(count_table_rows(&store, "import_jobs"), 1);
+    assert_eq!(import_job_readiness(&store, "source-db-first"), "1:0");
+    assert_eq!(count_table_rows(&store, "sources"), 1);
+    assert_eq!(count_table_rows(&store, "source_pages"), 1);
+    assert!(count_table_rows(&store, "evidence_items") > 0);
+    assert!(count_table_rows(&store, "evidence_fts") > 0);
+}
+
+#[test]
 fn latest_readable_marker_classifies_json_artifacts_as_migration_input() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
