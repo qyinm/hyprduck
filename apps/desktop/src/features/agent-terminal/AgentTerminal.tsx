@@ -366,56 +366,60 @@ export function AgentTerminal(props: AgentTerminalProps) {
       </header>
 
       {sessions.length > 0 ? (
-        <div className="relative h-10 shrink-0 border-b border-zinc-800 bg-zinc-900">
-          <div className="flex h-full items-center gap-1 overflow-x-auto px-3">
-            {sessions.map((session) => (
-              <div
-                className={cn(
-                  "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
-                  session.id === activeSessionId
-                    ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-                    : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
-                )}
-                key={session.id}
+        <div className="relative z-20 h-10 shrink-0 overflow-visible border-b border-zinc-800 bg-zinc-900">
+          <div className="flex h-full items-center px-3">
+            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+              {sessions.map((session) => (
+                <div
+                  className={cn(
+                    "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
+                    session.id === activeSessionId
+                      ? "border-zinc-600 bg-zinc-800 text-zinc-100"
+                      : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
+                  )}
+                  key={session.id}
+                >
+                  <button
+                    className="min-w-0 flex-1 truncate text-left"
+                    onClick={() => setActiveSessionId(session.id)}
+                    type="button"
+                  >
+                    {session.agent.label}
+                  </button>
+                  <button
+                    aria-label={`Close ${session.agent.label} tab`}
+                    className="grid size-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
+                    onClick={() => void closeSession(session.id)}
+                    type="button"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="relative ml-1 shrink-0">
+              <Button
+                aria-label="New agent tab"
+                className="size-7 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                onClick={() => setPickerOpen((value) => !value)}
+                size="icon"
+                type="button"
+                variant="ghost"
               >
-                <button
-                  className="min-w-0 flex-1 truncate text-left"
-                  onClick={() => setActiveSessionId(session.id)}
-                  type="button"
-                >
-                  {session.agent.label}
-                </button>
-                <button
-                  aria-label={`Close ${session.agent.label} tab`}
-                  className="grid size-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
-                  onClick={() => void closeSession(session.id)}
-                  type="button"
-                >
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
-            <Button
-              aria-label="New agent tab"
-              className="size-7 shrink-0 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-              onClick={() => setPickerOpen((value) => !value)}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <Plus size={14} />
-            </Button>
+                <Plus size={14} />
+              </Button>
+              {pickerOpen ? (
+                <AgentTerminalPickerMenu
+                  agents={agentList?.agents ?? []}
+                  onLaunchAgent={launchAgent}
+                />
+              ) : null}
+            </div>
           </div>
-          {pickerOpen ? (
-            <AgentTerminalPickerMenu
-              agents={agentList?.agents ?? []}
-              onLaunchAgent={launchAgent}
-            />
-          ) : null}
         </div>
       ) : null}
 
-      <div className="relative min-h-0 flex-1 bg-zinc-950/95 p-4 font-mono text-xs text-zinc-100">
+      <div className="relative z-0 min-h-0 flex-1 bg-zinc-950/95 p-4 font-mono text-xs text-zinc-100">
         {activeSession ? (
           activeSession.status === "fallback_required" ? (
             <pre className="h-full whitespace-pre-wrap leading-5 text-zinc-300">
@@ -496,7 +500,7 @@ function AgentTerminalPickerMenu(props: {
 }) {
   const { agents, onLaunchAgent } = props;
   return (
-    <div className="absolute right-3 top-9 z-20 w-48 rounded-lg border border-zinc-700/90 bg-zinc-950/95 p-1 font-sans shadow-[0_14px_36px_rgba(0,0,0,0.42)]">
+    <div className="absolute right-0 top-8 z-50 w-48 rounded-lg border border-zinc-700/90 bg-zinc-950/95 p-1 font-sans shadow-[0_14px_36px_rgba(0,0,0,0.42)]">
       <div className="grid gap-0.5">
         <TerminalMenuAction
           icon={<SquareTerminal size={14} />}
