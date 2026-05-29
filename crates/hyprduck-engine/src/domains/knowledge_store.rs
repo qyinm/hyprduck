@@ -2603,6 +2603,7 @@ mod tests {
             graph_checkpoint_count(&store, "workspace-default").expect("checkpoint count"),
             1
         );
+        assert_graph_checkpoint_metadata(&store, "workspace-default");
     }
 
     fn assert_wiki_relational_content(store: &KnowledgeStore, wiki_page_id: &str) {
@@ -2930,6 +2931,58 @@ mod tests {
             )
             .context("query graph checkpoint count")?;
         Ok(count)
+    }
+
+    fn assert_graph_checkpoint_metadata(store: &KnowledgeStore, workspace_id: &str) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        let row = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT checkpoint_id,
+                        reason,
+                        actor_json,
+                        related_event_id,
+                        graph_schema_version,
+                        graphqlite_extension_version,
+                        node_count,
+                        edge_count,
+                        evidence_ref_count,
+                        checksum,
+                        storage_ref
+                 FROM graph_checkpoints
+                 WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                    ))
+                },
+            )
+            .expect("graph checkpoint metadata row");
+        assert!(row
+            .0
+            .starts_with("graph-checkpoint-workspace-default-10-6-3"));
+        assert_eq!(row.1, "graph_snapshot_commit");
+        assert!(row.2.contains("hyprduck-knowledge-store"));
+        assert_eq!(row.3, "event-a");
+        assert_eq!(row.4, GRAPHQLITE_SCHEMA_VERSION);
+        assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
+        assert_eq!(row.6, 6);
+        assert_eq!(row.7, 3);
+        assert_eq!(row.8, 1);
+        assert_eq!(row.9.len(), 16);
+        assert_eq!(row.10, "hyprduck.sqlite:graphqlite");
     }
 
     fn wiki_page_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
