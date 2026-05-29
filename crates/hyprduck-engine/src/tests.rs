@@ -155,6 +155,114 @@ fn source_import_persists_canonical_db_rows_and_fts() {
 }
 
 #[test]
+fn latest_readable_marker_classifies_json_artifacts_as_migration_input() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let mut snapshot = synthetic_context_pack_snapshot(1);
+    snapshot.generated_at = 42;
+    snapshot.events = vec![BrainEvent {
+        event_id: "event-materialized-json-role".into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_materialized".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "test-agent".into(),
+        },
+        source_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect(),
+        source_markdown_refs: snapshot
+            .sources
+            .iter()
+            .map(|source| source.markdown_path.clone())
+            .collect(),
+        node_refs: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        relation_refs: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        claim_refs: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        memory_refs: Vec::new(),
+        target_node_ids: snapshot
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .collect(),
+        target_edge_ids: snapshot
+            .relations
+            .iter()
+            .map(|relation| relation.relation_id.clone())
+            .collect(),
+        target_claim_ids: snapshot
+            .claims
+            .iter()
+            .map(|claim| claim.claim_id.clone())
+            .collect(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: snapshot
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id.clone())
+            .collect(),
+        payload_json: materialized_graph_event_payload_json(
+            snapshot.generated_at,
+            &snapshot.sources,
+            &snapshot.nodes,
+            &snapshot.relations,
+            &snapshot.evidence,
+            &snapshot.memories,
+            &snapshot.wiki_pages,
+            &snapshot.entities,
+            &snapshot.claims,
+            &snapshot.extractions,
+        )
+        .expect("materialized graph payload"),
+        causality: BrainEventCausality {
+            caused_by_source_ids: snapshot
+                .sources
+                .iter()
+                .map(|source| source.source_id.clone())
+                .collect(),
+            snapshot_id: Some("snapshot-json-artifact-role".into()),
+            materialized_version: Some(snapshot.generated_at),
+            ..Default::default()
+        },
+        confidence: Some("test".into()),
+        policy_result: "materialized".into(),
+        created_at: snapshot.generated_at,
+    }];
+
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized state");
+
+    let marker: Value = serde_json::from_str(
+        &fs::read_to_string(workspace_root.join(LATEST_READABLE_SNAPSHOT_PATH))
+            .expect("read latest readable marker"),
+    )
+    .expect("decode latest readable marker");
+    assert_eq!(marker["artifactRole"], "migration_input");
+    assert_eq!(marker["canonicalStateStore"], "hyprduck.sqlite+graphqlite");
+    assert!(marker["materializedFiles"]
+        .as_array()
+        .expect("materialized files array")
+        .iter()
+        .any(|path| path == "brain-manifest.json"));
+}
+
+#[test]
 fn resolving_workspace_root_loads_graphqlite_store() {
     let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");

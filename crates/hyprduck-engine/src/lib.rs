@@ -152,6 +152,8 @@ const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
 #[cfg(test)]
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
+const MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT: &str = "migration_input";
+const CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE: &str = "hyprduck.sqlite+graphqlite";
 const PROVIDER_GRAPH_AGENT_ID: &str = "hyprduck-provider-graph-agent";
 const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
 const PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS: u64 = 300;
@@ -2660,12 +2662,24 @@ struct LatestReadableGraphSnapshotMarker {
     snapshot_id: String,
     event_id: String,
     source_ingest_id: String,
+    #[serde(default = "default_materialized_artifact_role")]
+    artifact_role: String,
+    #[serde(default = "default_canonical_state_store")]
+    canonical_state_store: String,
     materialized_at: u64,
     published_at: u64,
     #[serde(default)]
     source_markdown_refs: Vec<String>,
     #[serde(default)]
     materialized_files: Vec<String>,
+}
+
+fn default_materialized_artifact_role() -> String {
+    MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT.into()
+}
+
+fn default_canonical_state_store() -> String {
+    CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE.into()
 }
 
 fn capture_materialized_file_snapshot(root: &Path) -> Result<MaterializedFileSnapshot> {
