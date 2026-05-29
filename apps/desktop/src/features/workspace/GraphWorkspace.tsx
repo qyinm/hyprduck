@@ -1030,7 +1030,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     }
     const timer = window.setTimeout(() => {
       setTerminalContentVisible(true);
-    }, 190);
+    }, 520);
     return () => window.clearTimeout(timer);
   }, [agentTerminalOpen]);
 
@@ -1039,7 +1039,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
   return (
     <form
       className={cn(
-        "pointer-events-auto absolute inset-x-6 bottom-6 mx-auto flex w-[min(50rem,calc(100%-3rem))] items-end gap-3",
+        "agent-terminal-composer-frame pointer-events-auto absolute inset-x-6 bottom-6 mx-auto flex w-[min(50rem,calc(100%-3rem))] items-end gap-3",
         agentTerminalOpen ? "z-30 h-[min(34rem,calc(100vh-5rem))]" : "z-20 h-14",
       )}
       onSubmit={(event) => {
@@ -1067,7 +1067,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         )}
       >
         {showTerminalContent ? (
-          <div className="h-full w-full opacity-100 transition-opacity duration-150">
+          <div className="h-full w-full animate-in fade-in duration-200">
             {agentTerminal}
           </div>
         ) : (
