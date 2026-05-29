@@ -204,6 +204,14 @@ export interface AgentTerminalSession {
     reason?: string;
     fallback?: string;
   };
+  fallback: {
+    type: "external_ghostty";
+    label: string;
+    available: boolean;
+    agentId: AgentTerminalAgent["id"];
+    agentCommand: string | null;
+    attachInstructions: string[];
+  };
   status: "running" | "fallback_required" | "closed";
   createdAt: string;
   updatedAt: string;

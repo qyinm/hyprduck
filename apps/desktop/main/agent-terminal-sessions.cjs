@@ -8,6 +8,10 @@ const {
   assertContextHandoffReady,
   createAgentContextHandoff,
 } = require("./agent-terminal-context.cjs");
+const {
+  assertExternalFallbackReady,
+  createExternalGhosttyFallback,
+} = require("./agent-terminal-fallbacks.cjs");
 
 const FORBIDDEN_COMMAND_FIELDS = new Set([
   "command",
@@ -62,11 +66,15 @@ class AgentTerminalSessionManager {
       cols: normalizeDimension(args.cols, 120),
       rows: normalizeDimension(args.rows, 36),
     });
+    const fallback = assertExternalFallbackReady(
+      createExternalGhosttyFallback(agent, handoff),
+    );
     const session = {
       id: sessionId,
       agent,
       handoff,
       backend: backendSession,
+      fallback,
       status: backendSession.status === "unavailable" ? "fallback_required" : "running",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
