@@ -541,10 +541,7 @@ impl ImportJobStatus {
     }
 
     fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::ContextReady | Self::Failed | Self::Cancelled
-        )
+        matches!(self, Self::ContextReady | Self::Failed | Self::Cancelled)
     }
 }
 
@@ -861,7 +858,8 @@ fn call_tool(
                 persist: false,
             })?;
             serde_json::json!({
-                "contextPack": response.context_pack_v0.clone(),
+                "contextPack": response.context_pack_v1.clone(),
+                "contextPackV1": response.context_pack_v1,
                 "contextPackV0": response.context_pack_v0,
                 "persistedContextPackPath": response.persisted_context_pack_path,
             })

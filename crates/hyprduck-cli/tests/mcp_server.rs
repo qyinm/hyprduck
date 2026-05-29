@@ -321,22 +321,26 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .expect("context pack tool text");
     let context_pack_payload: Value = serde_json::from_str(text).expect("context pack payload");
     assert_eq!(
+        context_pack_payload["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        context_pack_payload["contextPackV1"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
         context_pack_payload["contextPackV0"]["schemaVersion"],
         "hyprduck.context_pack.v0"
     );
-    assert_eq!(
-        context_pack_payload["contextPack"]["schemaVersion"],
-        "hyprduck.context_pack.v0"
-    );
     assert!(context_pack_payload.get("contextPack").is_some());
+    assert!(context_pack_payload.get("contextPackV1").is_some());
     assert!(context_pack_payload.get("contextPackV0").is_some());
-    assert!(context_pack_payload["contextPack"].get("nodes").is_none());
-    assert!(context_pack_payload["contextPack"]
-        .get("relations")
-        .is_none());
-    assert!(context_pack_payload["contextPack"]
-        .get("evidence")
-        .is_none());
+    assert!(context_pack_payload["contextPack"]["selectedEvidence"][0]
+        .get("evidenceType")
+        .is_some());
+    assert!(context_pack_payload["contextPack"]["retrievalTrace"]
+        .get("evidenceTypeTrace")
+        .is_some());
     assert!(!text.contains("originalPath"));
     assert!(!text.contains("sourcePath"));
     assert!(!text.contains("markdownPath"));
@@ -1038,12 +1042,12 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(
         workspace.join("artifacts/source-mcp/evidence_index.json"),
         format!(
-            r#"{{"schemaVersion":"hyprduck.evidence_index.v0","workspaceId":"default","sourceId":"source-mcp","contentHash":"fnv64:mcp-source","providerRoute":"local_demo","localOnly":true,"evidence":[{{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","contentHash":"fnv64:mcp-source","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png"}}],"warnings":[],"generatedAt":42}}"#,
+            r#"{{"schemaVersion":"hyprduck.evidence_index.v1","workspaceId":"default","sourceId":"source-mcp","contentHash":"fnv64:mcp-source","providerRoute":"local_demo","localOnly":true,"evidence":[{{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","contentHash":"fnv64:mcp-source","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","evidenceType":"text"}}],"warnings":[],"generatedAt":42}}"#,
             root = workspace.display()
         ),
     )
     .expect("evidence index");
-    let context_pack = r#"{"schemaVersion":"hyprduck.context_pack.v0","packId":"ctx_mcp","workspaceId":"default","query":"MCP evidence","generatedAt":"2026-05-18T09:00:00Z","sourceSet":[{"sourceId":"source-mcp","originalFilename":"source.pdf","contentHash":"fnv64:mcp-source","pageCount":1,"ingestionStatus":"ingested","staleness":"current","providerRoute":"local_demo","localOnly":true}],"selectedEvidence":[{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","selectionReason":"MCP fixture evidence.","contentHash":"fnv64:mcp-source"}],"findings":[],"warnings":[],"retrievalTrace":{"strategy":"fixture","chunksConsidered":1,"chunksSelected":1,"budgetRequested":4000,"budgetUsed":100},"suggestedNextReads":[]}"#;
+    let context_pack = r#"{"schemaVersion":"hyprduck.context_pack.v1","packId":"ctx_mcp","workspaceId":"default","query":"MCP evidence","generatedAt":"2026-05-18T09:00:00Z","sourceSet":[{"sourceId":"source-mcp","originalFilename":"source.pdf","contentHash":"fnv64:mcp-source","pageCount":1,"ingestionStatus":"ingested","staleness":"current","providerRoute":"local_demo","localOnly":true}],"selectedEvidence":[{"evidenceRef":"evidence-mcp","sourceId":"source-mcp","page":1,"region":"page:Page 1","span":"page","quotedText":"Indexed MCP page evidence","parseConfidence":"high","selectionReason":"MCP fixture evidence.","contentHash":"fnv64:mcp-source","evidenceType":"text"}],"findings":[],"warnings":[],"retrievalTrace":{"strategy":"fixture","chunksConsidered":1,"chunksSelected":1,"budgetRequested":4000,"budgetUsed":100,"evidenceTypeTrace":{"considered":{"text":1},"selected":{"text":1}}},"suggestedNextReads":[]}"#;
     fs::write(workspace.join("context_pack.json"), context_pack).expect("latest context pack");
     fs::write(workspace.join("context_packs/ctx_mcp.json"), context_pack)
         .expect("history context pack");

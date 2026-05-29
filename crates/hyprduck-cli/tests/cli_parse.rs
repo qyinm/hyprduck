@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::{fs, time};
 
-use hyprduck_engine_types::{ContextPackV0, EvidenceIndexV1, EvidenceType, SourcePackV0};
+use hyprduck_engine_types::{ContextPackV1, EvidenceIndexV1, EvidenceType, SourcePackV0};
 
 #[test]
 fn doctor_reports_engine_resolution() {
@@ -15,7 +15,7 @@ fn doctor_reports_engine_resolution() {
 }
 
 #[test]
-fn context_alias_writes_context_pack_v0() {
+fn context_alias_writes_context_pack_v1() {
     let root = unique_temp_dir("hyprduck-cli-context-alias");
     fs::create_dir_all(root.join("default")).unwrap();
 
@@ -36,9 +36,14 @@ fn context_alias_writes_context_pack_v0() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("context-pack-v1: hyprduck.context_pack.v1"));
     assert!(stdout.contains("context-pack-v0: hyprduck.context_pack.v0"));
-    assert!(stdout.contains("context-pack-v0-path:"));
+    assert!(stdout.contains("context-pack-path:"));
     assert!(root.join("default/context_pack.json").exists());
+    let context_pack: ContextPackV1 =
+        serde_json::from_str(&fs::read_to_string(root.join("default/context_pack.json")).unwrap())
+            .expect("schema-valid context pack");
+    assert_eq!(context_pack.schema_version, "hyprduck.context_pack.v1");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -97,6 +102,7 @@ fn demo_writes_local_context_pack_artifacts() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("context-pack-v1: hyprduck.context_pack.v1"));
     assert!(stdout.contains("context-pack-v0: hyprduck.context_pack.v0"));
     assert!(stdout.contains("source-pack:"));
     assert!(stdout.contains("evidence-index:"));
@@ -113,10 +119,10 @@ fn demo_writes_local_context_pack_artifacts() {
     assert!(source_pack_path.exists());
     assert!(evidence_index_path.exists());
 
-    let context_pack: ContextPackV0 =
+    let context_pack: ContextPackV1 =
         serde_json::from_str(&fs::read_to_string(&context_pack_path).unwrap())
             .expect("schema-valid context pack");
-    assert_eq!(context_pack.schema_version, "hyprduck.context_pack.v0");
+    assert_eq!(context_pack.schema_version, "hyprduck.context_pack.v1");
     assert_eq!(context_pack.workspace_id, "demo");
     assert_eq!(context_pack.source_set.len(), 1);
     assert_eq!(context_pack.source_set[0].source_id, "demo-source");
@@ -126,6 +132,10 @@ fn demo_writes_local_context_pack_artifacts() {
     assert_eq!(
         context_pack.selected_evidence[0].source_id,
         context_pack.source_set[0].source_id
+    );
+    assert_eq!(
+        context_pack.selected_evidence[0].evidence_type,
+        EvidenceType::Text
     );
     assert_eq!(context_pack.selected_evidence[0].page, 1);
     assert!(context_pack
@@ -141,6 +151,14 @@ fn demo_writes_local_context_pack_artifacts() {
             .iter()
             .any(|evidence| &evidence.evidence_ref == evidence_ref)));
     assert!(context_pack.retrieval_trace.chunks_selected >= 1);
+    assert_eq!(
+        context_pack
+            .retrieval_trace
+            .evidence_type_trace
+            .selected
+            .get(EvidenceType::Text.as_trace_key()),
+        Some(&1)
+    );
 
     let source_pack: SourcePackV0 =
         serde_json::from_str(&fs::read_to_string(&source_pack_path).unwrap())
