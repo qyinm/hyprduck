@@ -30,6 +30,72 @@ fn default_project_store_migrates_legacy_db_to_canonical_name() {
 }
 
 #[test]
+fn default_project_store_preserves_legacy_project_source_and_correction_rows() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let legacy_path = temp.path().join("HyprDuck").join("knowledge.sqlite3");
+    let legacy_store = KnowledgeProjectStore::new(legacy_path.clone());
+    let markdown = "# Source import\n\n## Page 1\n\nLegacy project rows stay linked.\n";
+    let (project, manifest) =
+        compile_manifest_fixture_project_with_source(&temp, markdown, "source-legacy", "alpha", 10);
+    let request = CompileProjectRequest {
+        source_markdown_path: temp.path().join("sample.md").display().to_string(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: None,
+    };
+    legacy_store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save legacy project rows");
+    legacy_store
+        .append_workspace_correction(&WorkspaceCorrection {
+            id: "correction-legacy".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            aggregate_node_id: "concept-legacy".into(),
+            kind: CorrectionKind::Delete,
+            target_node_id: None,
+            value: None,
+            evidence_ids: vec!["evidence-legacy".into()],
+            source_node_ids: vec!["source-legacy:concept-legacy".into()],
+            created_at: 11,
+        })
+        .expect("save legacy correction row");
+
+    let canonical_store =
+        KnowledgeProjectStore::from_data_root(temp.path()).expect("default store");
+
+    assert_eq!(
+        canonical_store.path,
+        temp.path().join("HyprDuck").join("hyprduck.sqlite")
+    );
+    assert!(legacy_path.exists());
+    assert_eq!(
+        canonical_store
+            .load_project(Some(&project.summary.project_id))
+            .expect("load migrated project")
+            .expect("migrated project")
+            .summary
+            .project_id,
+        project.summary.project_id
+    );
+    assert_eq!(
+        canonical_store
+            .load_sources(DEFAULT_WORKSPACE_ID)
+            .expect("load migrated sources")
+            .len(),
+        1
+    );
+    assert_eq!(
+        canonical_store
+            .load_workspace_corrections(DEFAULT_WORKSPACE_ID)
+            .expect("load migrated corrections")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
     let temp = tempfile::tempdir().expect("temp dir");
     let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";
