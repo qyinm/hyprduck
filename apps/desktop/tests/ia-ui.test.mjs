@@ -258,3 +258,11 @@ test("partial import failures expose failed-page retry affordance", () => {
   expect(mainSource).toMatch(/sourceManifestPath: manifestPath/);
   expect(mainSource).not.toMatch(/onRetryFailedPages=\{startParse\}/);
 });
+
+test("graph import banner names citation-ready and context-ready states", () => {
+  expect(graphSource).toMatch(/formatImportLifecycleTitle/);
+  expect(graphSource).toMatch(/Citation-ready/);
+  expect(graphSource).toMatch(/Context-ready/);
+  expect(graphSource).toMatch(/Packaging citations/);
+  expect(graphSource).not.toMatch(/Importing source file/);
+});
