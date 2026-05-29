@@ -73,4 +73,4 @@ bun run --cwd apps/desktop test:agent-terminal-fallbacks
 bun run --cwd apps/desktop frontend:typecheck
 ```
 
-Before Agent Terminal replaces direct ask by default, dogfood Codex and at least one second agent. Record evidence that the pre-prompt handoff shows MCP status, workspace ID, selected context/evidence scope, and attach instructions in both embedded and external Ghostty fallback paths.
+Before broad rollout, dogfood Codex and at least one second agent. Record evidence that the pre-prompt handoff shows MCP status, workspace ID, selected context/evidence scope, and attach instructions in both embedded and external Ghostty fallback paths.
