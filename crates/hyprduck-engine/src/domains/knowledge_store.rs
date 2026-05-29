@@ -1869,6 +1869,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn graphqlite_mutation_failure_rolls_back_relational_graph_audit_writes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_graph_node_insert
+                 BEFORE INSERT ON nodes
+                 BEGIN
+                   SELECT RAISE(FAIL, 'forced GraphQLite node failure');
+                 END;",
+            )
+            .expect("install GraphQLite failure trigger");
+
+        let snapshot = single_event_snapshot("event-a", "source-a", "evidence-a", "Alpha");
+        let error = store
+            .persist_graph_snapshot(&snapshot)
+            .expect_err("GraphQLite node mutation should fail");
+
+        assert!(error
+            .to_string()
+            .contains("failed upserting GraphQLite node"));
+        assert_eq!(
+            evidence_item_count(&store, "workspace-default").expect("evidence count"),
+            0
+        );
+        assert_eq!(
+            brain_event_count(&store, "workspace-default").expect("brain event count"),
+            0
+        );
+        assert_eq!(
+            store
+                .graph_snapshot_counts("workspace-default")
+                .expect("graph counts"),
+            KnowledgeGraphPersistReport {
+                node_count: 0,
+                relation_count: 0,
+            }
+        );
+    }
+
     fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
         let graph = Graph::open(&store.path).context("open graph")?;
         let count = graph
@@ -1880,6 +1925,20 @@ mod tests {
                 |row| row.get(0),
             )
             .context("query brain event count")?;
+        Ok(count)
+    }
+
+    fn evidence_item_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+        let graph = Graph::open(&store.path).context("open graph")?;
+        let count = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM evidence_items WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .context("query evidence item count")?;
         Ok(count)
     }
 
