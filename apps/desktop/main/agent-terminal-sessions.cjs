@@ -26,7 +26,9 @@ class AgentTerminalSessionManager {
   constructor(options = {}) {
     this.backend = options.backend ?? createDefaultAgentTerminalBackend();
     this.getWorkspaceState = options.getWorkspaceState ?? (() => ({}));
+    this.onEvent = options.onEvent ?? (() => {});
     this.sessions = new Map();
+    this.outputLimit = options.outputLimit ?? 300_000;
   }
 
   listAgents() {
@@ -78,16 +80,24 @@ class AgentTerminalSessionManager {
       backend: backendSession,
       fallback,
       status: resolveSessionStatus(backendSession),
+      output: "",
+      outputSequence: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
-    return session;
+    if (session.status === "running") {
+      session.unsubscribe = this.backend.subscribe(
+        session.backendSessionId,
+        (event) => this.handleBackendEvent(sessionId, event),
+      );
+    }
+    return serializeSession(session);
   }
 
   snapshotSession(args = {}) {
     const session = this.requireSession(args.sessionId ?? args.session_id);
-    return session;
+    return serializeSession(session);
   }
 
   async writeSession(args = {}) {
@@ -117,8 +127,13 @@ class AgentTerminalSessionManager {
   async killSession(args = {}) {
     const session = this.requireSession(args.sessionId ?? args.session_id);
     const result = await this.backend.kill(session.backendSessionId);
+    if (typeof session.unsubscribe === "function") {
+      session.unsubscribe();
+      session.unsubscribe = null;
+    }
     session.status = "closed";
     session.updatedAt = new Date().toISOString();
+    this.publishSessionUpdate(session, "session_closed");
     return result;
   }
 
@@ -127,6 +142,39 @@ class AgentTerminalSessionManager {
       throw new Error(`unknown agent terminal session: ${sessionId ?? "(missing)"}`);
     }
     return this.sessions.get(sessionId);
+  }
+
+  handleBackendEvent(sessionId, event) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    if (event.type === "data") {
+      session.output += event.data;
+      if (session.output.length > this.outputLimit) {
+        session.output = session.output.slice(-this.outputLimit);
+      }
+      session.outputSequence += 1;
+    }
+    if (event.type === "exit") {
+      session.status = "closed";
+      session.backend.status = "exited";
+      session.backend.exitCode = event.exitCode ?? null;
+      session.backend.signal = event.signal ?? null;
+      if (typeof session.unsubscribe === "function") {
+        session.unsubscribe();
+        session.unsubscribe = null;
+      }
+    }
+    session.updatedAt = new Date().toISOString();
+    this.publishSessionUpdate(session, event.type);
+  }
+
+  publishSessionUpdate(session, eventType) {
+    this.onEvent({
+      type: eventType,
+      session: serializeSession(session),
+    });
   }
 }
 
@@ -164,8 +212,14 @@ function resolveSessionStatus(backendSession) {
     : "handoff_required";
 }
 
+function serializeSession(session) {
+  const { unsubscribe, ...serializable } = session;
+  return serializable;
+}
+
 module.exports = {
   AgentTerminalSessionManager,
   rejectCommandPayload,
   resolveHandoffState,
+  serializeSession,
 };

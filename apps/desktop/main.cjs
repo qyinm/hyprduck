@@ -14,8 +14,10 @@ const {
 const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
 const { DisabledAgentTerminalBackend } = require("./main/agent-terminal-backend.cjs");
 const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-ghostty.cjs");
+const { tryCreatePtyAgentTerminalBackend } = require("./main/agent-terminal-pty.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
+const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
 const MAX_PROGRESS_LOG = 80;
 
 const snapshot = {
@@ -106,17 +108,23 @@ app.on("will-quit", () => {
 
 async function registerIpcHandlers() {
   const ghosttyProbe = await createGhosttyNativeBackendFromEnv();
+  const ptyProbe = ghosttyProbe.backend
+    ? { backend: null, reason: null }
+    : tryCreatePtyAgentTerminalBackend();
   const fallbackBackend =
-    ghosttyProbe.enabled && ghosttyProbe.reason
-      ? new DisabledAgentTerminalBackend({ reason: ghosttyProbe.reason })
+    (ghosttyProbe.enabled && ghosttyProbe.reason) || ptyProbe.reason
+      ? new DisabledAgentTerminalBackend({
+          reason: ghosttyProbe.enabled ? ghosttyProbe.reason : ptyProbe.reason,
+        })
       : undefined;
   agentTerminalSessions = new AgentTerminalSessionManager({
-    backend: ghosttyProbe.backend ?? fallbackBackend,
+    backend: ghosttyProbe.backend ?? ptyProbe.backend ?? fallbackBackend,
     getWorkspaceState: () => ({
       workspaceId: snapshot.lastWorkspaceId ?? "default",
       projectId: snapshot.lastProjectId ?? null,
       sourceId: snapshot.lastSourceId ?? null,
     }),
+    onEvent: publishAgentTerminalEvent,
   });
   ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {
     switch (command) {
@@ -207,6 +215,13 @@ async function registerIpcHandlers() {
         throw new Error(`unknown HyprDuck command: ${command}`);
     }
   });
+}
+
+function publishAgentTerminalEvent(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send(AGENT_TERMINAL_EVENT, payload);
 }
 
 function brainReadScope(workspaceId) {

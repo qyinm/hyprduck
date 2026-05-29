@@ -56,9 +56,10 @@ test("backend lifecycle uses the backend session id", async () => {
     const writeResult = await manager.writeSession({ sessionId: session.id, input: "hello" });
     await manager.resizeSession({ sessionId: session.id, cols: 100, rows: 30 });
     await manager.killSession({ sessionId: session.id });
+    const closedSession = manager.snapshotSession({ sessionId: session.id });
 
     assert.equal(session.backendSessionId, "native-session-1");
-    assert.equal(session.status, "closed");
+    assert.equal(closedSession.status, "closed");
     assert.equal(writeResult.status, "written");
     assert.deepEqual(backend.calls.write, ["native-session-1"]);
     assert.deepEqual(backend.calls.resize, ["native-session-1"]);
@@ -77,6 +78,28 @@ test("writeSession blocks until context handoff is attached", async () => {
     assert.equal(session.status, "handoff_required");
     assert.equal(result.status, "blocked");
     assert.deepEqual(backend.calls.write, []);
+  });
+});
+
+test("backend data events are accumulated and published", async () => {
+  await withDetectedCodex(async () => {
+    const published = [];
+    const backend = createFakeBackend({ handoffStatus: "attached" });
+    const manager = new AgentTerminalSessionManager({
+      backend,
+      onEvent: (event) => published.push(event),
+    });
+
+    const session = await manager.createSession({ agentId: "codex" });
+    backend.emit("hello");
+    backend.emit("\r\nworld");
+    const snapshot = manager.snapshotSession({ sessionId: session.id });
+
+    assert.equal(snapshot.output, "hello\r\nworld");
+    assert.equal(snapshot.outputSequence, 2);
+    assert.equal(published.length, 2);
+    assert.equal(published[1].session.output, "hello\r\nworld");
+    assert.equal("unsubscribe" in published[1].session, false);
   });
 });
 
@@ -101,8 +124,14 @@ function createFakeBackend(options = {}) {
     resize: [],
     kill: [],
   };
+  const listeners = new Set();
   return {
     calls,
+    emit(data) {
+      for (const listener of listeners) {
+        listener({ type: "data", data });
+      }
+    },
     async createSession(args) {
       calls.create.push(args);
       return {
@@ -124,8 +153,9 @@ function createFakeBackend(options = {}) {
       calls.kill.push(sessionId);
       return { status: "closed" };
     },
-    subscribe() {
-      return () => {};
+    subscribe(_sessionId, listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     snapshotStatus() {
       return { backend: "fake", available: true };

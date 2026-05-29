@@ -7,6 +7,9 @@ const {
 const {
   createGhosttyNativeBackendFromEnv,
 } = require("../main/agent-terminal-ghostty.cjs");
+const {
+  tryCreatePtyAgentTerminalBackend,
+} = require("../main/agent-terminal-pty.cjs");
 
 function checkDefaultBackend() {
   const backend = assertAgentTerminalBackend(createDefaultAgentTerminalBackend());
@@ -29,15 +32,28 @@ async function checkOptionalGhosttyModule() {
   };
 }
 
+function checkPtyBackend() {
+  const result = tryCreatePtyAgentTerminalBackend();
+  if (!result.backend) {
+    return { available: false, reason: result.reason };
+  }
+  return {
+    available: true,
+    status: assertAgentTerminalBackend(result.backend).snapshotStatus(),
+  };
+}
+
 async function main() {
   const defaultStatus = checkDefaultBackend();
   const ghosttyProbe = await checkOptionalGhosttyModule();
+  const ptyProbe = checkPtyBackend();
   console.log(
     JSON.stringify(
       {
         ok: true,
         defaultStatus,
         ghosttyProbe,
+        ptyProbe,
       },
       null,
       2,
