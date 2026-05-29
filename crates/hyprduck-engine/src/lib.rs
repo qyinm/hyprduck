@@ -1280,9 +1280,9 @@ fn validate_proposal_id(proposal_id: &str) -> Result<()> {
 
 fn validate_write_content_type(content_type: &str) -> Result<()> {
     match content_type.trim() {
-        "memory" | "wiki_page" | "graph_change" => Ok(()),
+        "memory" | "wiki_page" | "graph_change" | "evidence_refresh" | "link_repair" => Ok(()),
         other => bail!(
-            "unsupported contentType {other}; supported contentTypes: memory, wiki_page, graph_change"
+            "unsupported contentType {other}; supported contentTypes: memory, wiki_page, graph_change, evidence_refresh, link_repair"
         ),
     }
 }
@@ -1346,7 +1346,7 @@ fn validate_committable_proposal(
                 .unwrap_or("proposal requires explicit user approval before commit")
         );
     }
-    if proposal.content_type != "memory" {
+    if !is_committable_agent_write_content_type(&proposal.content_type) {
         bail!(
             "committing contentType {} is not implemented yet",
             proposal.content_type
@@ -1365,6 +1365,13 @@ fn validate_committable_proposal(
         &snapshot,
         &request.scope.workspace_id,
         &proposal.evidence_refs,
+    )
+}
+
+fn is_committable_agent_write_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type.trim(),
+        "memory" | "evidence_refresh" | "link_repair"
     )
 }
 

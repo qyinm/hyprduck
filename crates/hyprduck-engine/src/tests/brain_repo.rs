@@ -338,6 +338,73 @@ fn large_semantic_wiki_or_graph_proposals_require_user_approval() {
 }
 
 #[test]
+fn small_evidence_refresh_and_link_repair_proposals_can_commit_without_user_approval() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-maintenance-auto".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Small evidence refresh and link repair changes may auto-commit.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-maintenance-auto".into()),
+        markdown_path: Some("artifacts/source-maintenance-auto/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "link_repair".into(),
+        title: "Repair stale source link".into(),
+        body: "Refresh evidence link metadata for an existing cited source.".into(),
+        evidence_refs: vec!["ev-maintenance-auto".into()],
+    })
+    .expect("propose maintenance write");
+    assert_eq!(proposal.status, "pending");
+
+    let committed = handle_write_commit(WriteCommitRequest {
+        scope,
+        proposal_id: proposal.proposal_id,
+        user_approved: false,
+    })
+    .expect("small maintenance write commits without user approval");
+    assert!(committed.event_id.starts_with("evt-"));
+    assert!(committed.memory_id.starts_with("memory-"));
+}
+
+#[test]
 fn brain_health_reports_source_readiness_metadata() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
