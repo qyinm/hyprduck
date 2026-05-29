@@ -14,6 +14,7 @@ use hyprduck_engine_types::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
@@ -982,10 +983,137 @@ fn persist_graph_snapshot_in_transaction(
 
     mark_import_jobs_graph_ready_in_transaction(graph, snapshot)?;
 
-    Ok(KnowledgeGraphPersistReport {
+    let report = KnowledgeGraphPersistReport {
         node_count: graph_nodes.len(),
         relation_count: snapshot.relations.len(),
+    };
+    persist_graph_checkpoint_metadata_in_transaction(graph, snapshot, &report)?;
+
+    Ok(report)
+}
+
+fn persist_graph_checkpoint_metadata_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+    report: &KnowledgeGraphPersistReport,
+) -> Result<()> {
+    if report.node_count == 0 && report.relation_count == 0 {
+        return Ok(());
+    }
+    let sqlite = graph.connection().sqlite_connection();
+    let actor_json = serde_json::json!({
+        "actorType": "system",
+        "actorId": "hyprduck-knowledge-store"
     })
+    .to_string();
+    let checkpoint_id = graph_checkpoint_id(snapshot, report);
+    let checksum = graph_checkpoint_checksum(snapshot, report)?;
+    let evidence_ref_count = snapshot
+        .nodes
+        .iter()
+        .flat_map(|node| node.evidence_ids.iter())
+        .chain(
+            snapshot
+                .relations
+                .iter()
+                .flat_map(|relation| relation.evidence_ids.iter()),
+        )
+        .chain(
+            snapshot
+                .wiki_pages
+                .iter()
+                .flat_map(|wiki| wiki.evidence_refs.iter()),
+        )
+        .chain(
+            snapshot
+                .claims
+                .iter()
+                .flat_map(|claim| claim.evidence_refs.iter()),
+        )
+        .collect::<BTreeSet<_>>()
+        .len();
+    sqlite
+        .execute(
+            "INSERT INTO graph_checkpoints (
+                checkpoint_id,
+                workspace_id,
+                reason,
+                actor_json,
+                related_event_id,
+                graph_schema_version,
+                graphqlite_extension_version,
+                node_count,
+                edge_count,
+                evidence_ref_count,
+                checksum,
+                storage_ref,
+                created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(checkpoint_id) DO UPDATE SET
+                reason=excluded.reason,
+                actor_json=excluded.actor_json,
+                related_event_id=excluded.related_event_id,
+                graph_schema_version=excluded.graph_schema_version,
+                graphqlite_extension_version=excluded.graphqlite_extension_version,
+                node_count=excluded.node_count,
+                edge_count=excluded.edge_count,
+                evidence_ref_count=excluded.evidence_ref_count,
+                checksum=excluded.checksum,
+                storage_ref=excluded.storage_ref,
+                created_at=excluded.created_at",
+            (
+                checkpoint_id.as_str(),
+                snapshot.workspace_id.as_str(),
+                "graph_snapshot_commit",
+                actor_json.as_str(),
+                snapshot.events.last().map(|event| event.event_id.as_str()),
+                GRAPHQLITE_SCHEMA_VERSION,
+                graphqlite_extension_version(),
+                report.node_count as i64,
+                report.relation_count as i64,
+                evidence_ref_count as i64,
+                checksum.as_str(),
+                "hyprduck.sqlite:graphqlite",
+                snapshot.generated_at as i64,
+            ),
+        )
+        .context("failed storing graph checkpoint metadata")?;
+    Ok(())
+}
+
+fn graph_checkpoint_id(
+    snapshot: &BrainRepoSnapshot,
+    report: &KnowledgeGraphPersistReport,
+) -> String {
+    format!(
+        "graph-checkpoint-{}-{}-{}-{}",
+        snapshot.workspace_id, snapshot.generated_at, report.node_count, report.relation_count
+    )
+}
+
+fn graph_checkpoint_checksum(
+    snapshot: &BrainRepoSnapshot,
+    report: &KnowledgeGraphPersistReport,
+) -> Result<String> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    snapshot.workspace_id.hash(&mut hasher);
+    snapshot.generated_at.hash(&mut hasher);
+    report.node_count.hash(&mut hasher);
+    report.relation_count.hash(&mut hasher);
+    serde_json::to_string(&snapshot.nodes)
+        .context("failed encoding checkpoint nodes")?
+        .hash(&mut hasher);
+    serde_json::to_string(&snapshot.relations)
+        .context("failed encoding checkpoint relations")?
+        .hash(&mut hasher);
+    serde_json::to_string(&snapshot.wiki_pages)
+        .context("failed encoding checkpoint wiki pages")?
+        .hash(&mut hasher);
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+fn graphqlite_extension_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 fn mark_import_jobs_graph_ready_in_transaction(
@@ -2471,6 +2599,10 @@ mod tests {
             brain_event_count(&store, "workspace-default").expect("brain event count"),
             1
         );
+        assert_eq!(
+            graph_checkpoint_count(&store, "workspace-default").expect("checkpoint count"),
+            1
+        );
     }
 
     fn assert_wiki_relational_content(store: &KnowledgeStore, wiki_page_id: &str) {
@@ -2783,6 +2915,20 @@ mod tests {
                 |row| row.get(0),
             )
             .context("query evidence item count")?;
+        Ok(count)
+    }
+
+    fn graph_checkpoint_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+        let graph = Graph::open(&store.path).context("open graph")?;
+        let count = graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM graph_checkpoints WHERE workspace_id = ?1",
+                [workspace_id],
+                |row| row.get(0),
+            )
+            .context("query graph checkpoint count")?;
         Ok(count)
     }
 
