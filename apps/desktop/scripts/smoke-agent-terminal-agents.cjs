@@ -14,8 +14,19 @@ const AGENT_PATTERNS = {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const agentIds = args.agents ?? DEFAULT_AGENT_IDS;
-  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const result = await runAgentTerminalAgentSmoke({
+    agentIds: args.agents,
+    timeoutMs: args.timeoutMs,
+  });
+  console.log(JSON.stringify(result, null, 2));
+  if (result.results.some((entry) => !entry.ok && !entry.skipped)) {
+    process.exitCode = 1;
+  }
+}
+
+async function runAgentTerminalAgentSmoke(options = {}) {
+  const agentIds = options.agentIds ?? DEFAULT_AGENT_IDS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const manager = new AgentTerminalSessionManager({
     backend: createPtyAgentTerminalBackend({ cwd: process.cwd() }),
     getWorkspaceState: () => ({
@@ -43,10 +54,7 @@ async function main() {
     results.push(await smokeAgent(manager, agentId, timeoutMs));
   }
 
-  console.log(JSON.stringify({ ok: results.every((result) => result.ok), results }, null, 2));
-  if (results.some((result) => !result.ok && !result.skipped)) {
-    process.exitCode = 1;
-  }
+  return { ok: results.every((result) => result.ok), results };
 }
 
 async function smokeAgent(manager, agentId, timeoutMs) {
@@ -115,7 +123,15 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  parseArgs,
+  runAgentTerminalAgentSmoke,
+  stripAnsi,
+};

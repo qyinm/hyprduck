@@ -78,6 +78,7 @@ bun run test:agent-terminal-ghostty
 bun run test:agent-terminal-fallbacks
 bun run smoke:agent-terminal-pty:electron
 bun run smoke:agent-terminal-agents
+bun run smoke:agent-terminal-agents:electron
 bun run frontend:typecheck
 ```
 
