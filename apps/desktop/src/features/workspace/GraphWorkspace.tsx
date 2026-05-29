@@ -1030,7 +1030,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     }
     const timer = window.setTimeout(() => {
       setTerminalContentVisible(true);
-    }, 520);
+    }, 260);
     return () => window.clearTimeout(timer);
   }, [agentTerminalOpen]);
 
