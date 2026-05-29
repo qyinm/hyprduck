@@ -65,6 +65,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
   const terminalHostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<XTermTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const pickerContainerRef = useRef<HTMLDivElement | null>(null);
   const renderedSessionIdRef = useRef<string | null>(null);
   const renderedOutputLengthRef = useRef(0);
   const sessionsRef = useRef<AgentTerminalSession[]>([]);
@@ -127,6 +128,30 @@ export function AgentTerminal(props: AgentTerminalProps) {
   }, [onListenAgentTerminalEvents, open]);
 
   useEffect(() => {
+    if (!pickerOpen) {
+      return undefined;
+    }
+    function closePickerOnOutsidePointer(event: PointerEvent) {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        pickerContainerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setPickerOpen(false);
+    }
+    document.addEventListener("pointerdown", closePickerOnOutsidePointer, true);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closePickerOnOutsidePointer,
+        true,
+      );
+    };
+  }, [pickerOpen]);
+
+  useEffect(() => {
     if (open) {
       return undefined;
     }
@@ -143,6 +168,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
     }
     setSessions([]);
     setActiveSessionId(null);
+    setPickerOpen(false);
     return undefined;
   }, [open]);
 
@@ -397,7 +423,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
                 </div>
               ))}
             </div>
-            <div className="relative ml-1 shrink-0">
+            <div className="relative ml-1 shrink-0" ref={pickerContainerRef}>
               <Button
                 aria-label="New agent tab"
                 className="size-7 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
