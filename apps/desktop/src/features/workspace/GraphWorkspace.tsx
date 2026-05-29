@@ -2,8 +2,10 @@ import { type Dispatch, useEffect, useMemo, useState } from "react";
 
 import type {
   AgentTerminalAgent,
+  AgentTerminalEvent,
   AgentTerminalListResult,
   AgentTerminalSession,
+  DesktopUnlisten,
 } from "@/appTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,7 +43,19 @@ interface GraphWorkspaceProps {
     agentId: AgentTerminalAgent["id"];
     nodeId: string | null;
   }) => Promise<AgentTerminalSession>;
+  onListenAgentTerminalEvents: (
+    handler: (event: AgentTerminalEvent) => void,
+  ) => DesktopUnlisten;
   onListAgentTerminalAgents: () => Promise<AgentTerminalListResult>;
+  onResizeAgentTerminalSession: (args: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }) => Promise<unknown>;
+  onWriteAgentTerminalSession: (args: {
+    sessionId: string;
+    input: string;
+  }) => Promise<unknown>;
   onRetryFailedPages: () => Promise<void>;
 }
 
@@ -66,7 +80,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenArtifact,
     onApplyCorrection,
     onCreateAgentTerminalSession,
+    onListenAgentTerminalEvents,
     onListAgentTerminalAgents,
+    onResizeAgentTerminalSession,
+    onWriteAgentTerminalSession,
     onRetryFailedPages,
   } = props;
   const projectNodes = project?.nodes ?? [];
@@ -287,7 +304,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             nodeId={selectedNode?.node.id ?? null}
             onClose={() => setAgentTerminalOpen(false)}
             onCreateSession={onCreateAgentTerminalSession}
+            onListenAgentTerminalEvents={onListenAgentTerminalEvents}
             onListAgents={onListAgentTerminalAgents}
+            onResizeSession={onResizeAgentTerminalSession}
+            onWriteSession={onWriteAgentTerminalSession}
             open={agentTerminalOpen}
             projectId={project?.summary.projectId ?? null}
             workspaceId={workspaceId}

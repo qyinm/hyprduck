@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   type AgentTerminalAgent,
+  type AgentTerminalEvent,
   type AgentTerminalListResult,
   type AgentTerminalSession,
   type BrainEvent,
@@ -186,6 +187,15 @@ async function invoke<K extends DesktopCommand>(
 
 async function listAgentTerminalAgents(): Promise<AgentTerminalListResult> {
   return invoke("agent_terminal_list_agents");
+}
+
+function listenAgentTerminalEvents(
+  handler: (event: AgentTerminalEvent) => void,
+): DesktopUnlisten {
+  return getDesktopApi().listen<AgentTerminalEvent>(
+    "hyprduck://agent-terminal",
+    (message) => handler(message.payload),
+  );
 }
 
 async function loadGraphWorkspaceEnvelope(
@@ -683,6 +693,21 @@ export function App() {
     });
   };
 
+  const writeAgentTerminalSession = async (args: {
+    sessionId: string;
+    input: string;
+  }) => {
+    return invoke("agent_terminal_write_session", args);
+  };
+
+  const resizeAgentTerminalSession = async (args: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }) => {
+    return invoke("agent_terminal_resize_session", args);
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke("save_engine_config", {
       payload,
@@ -954,10 +979,13 @@ export function App() {
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onCreateAgentTerminalSession={createAgentTerminalSession}
+                onListenAgentTerminalEvents={listenAgentTerminalEvents}
                 onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
+                onResizeAgentTerminalSession={resizeAgentTerminalSession}
                 onRetryFailedPages={retryFailedPages}
+                onWriteAgentTerminalSession={writeAgentTerminalSession}
                 project={workspaceProject}
                 uiState={workspaceUiState}
                 workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}

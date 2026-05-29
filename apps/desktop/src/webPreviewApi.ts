@@ -606,6 +606,8 @@ export function createWebMockApi(): HyprDuckDesktopApi {
           ],
         },
         status: "fallback_required",
+        output: "",
+        outputSequence: 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -650,6 +652,9 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       eventName: string,
       handler: (message: DesktopMessage<T>) => void | Promise<void>,
     ): DesktopUnlisten {
+      if (eventName === "hyprduck://agent-terminal") {
+        return () => undefined;
+      }
       if (eventName !== "hyprduck://snapshot") {
         return () => undefined;
       }

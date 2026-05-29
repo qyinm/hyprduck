@@ -204,6 +204,8 @@ export interface AgentTerminalSession {
     status: string;
     reason?: string;
     fallback?: string;
+    exitCode?: number | null;
+    signal?: string | number | null;
   };
   fallback: {
     type: "external_ghostty";
@@ -214,8 +216,15 @@ export interface AgentTerminalSession {
     attachInstructions: string[];
   };
   status: "running" | "fallback_required" | "handoff_required" | "closed";
+  output?: string;
+  outputSequence?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AgentTerminalEvent {
+  type: "data" | "exit" | "session_closed";
+  session: AgentTerminalSession;
 }
 
 export interface DesktopCommandMap {
