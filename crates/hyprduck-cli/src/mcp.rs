@@ -1746,6 +1746,45 @@ mod tests {
     }
 
     #[test]
+    fn import_parse_progress_maps_to_lifecycle_states() {
+        use hyprduck_engine_types::ParseProgress;
+
+        assert_eq!(
+            import_phase_from_parse_progress(&ParseProgress::Queued),
+            (ImportJobPhase::Imported, 2)
+        );
+        assert_eq!(
+            import_phase_from_parse_progress(&ParseProgress::Packaging),
+            (ImportJobPhase::Packaging, 68)
+        );
+        assert_eq!(
+            import_phase_from_parse_progress(&ParseProgress::Completed),
+            (ImportJobPhase::Packaging, 70)
+        );
+    }
+
+    #[test]
+    fn citation_ready_snapshot_serializes_status_and_readiness() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let mut job = ImportJobSnapshot::queued("import-test".into(), &scope);
+        job.status = ImportJobStatus::CitationReady;
+        job.phase = ImportJobPhase::CitationReady;
+        job.progress_percent = 82;
+        job.source_id = Some("source-1".into());
+        job.evidence_count = Some(3);
+        job.citation_ready = true;
+
+        let value = job.to_value();
+        assert_eq!(value["status"], json!("citation_ready"));
+        assert_eq!(value["phase"], json!("citation_ready"));
+        assert_eq!(value["citationReady"], json!(true));
+        assert_eq!(value["evidenceCount"], json!(3));
+    }
+
+    #[test]
     fn import_job_cancel_prevents_later_active_updates() {
         let registry = ImportJobRegistry::default();
         let scope = BrainReadScope {
