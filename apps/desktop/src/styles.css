@@ -210,3 +210,26 @@ body {
 [data-electron-no-drag] * {
   -webkit-app-region: no-drag;
 }
+
+@keyframes agent-terminal-expand {
+  from {
+    clip-path: inset(calc(100% - 3.5rem) 0 0 0 round 9999px);
+    opacity: 0.92;
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 1.75rem);
+    opacity: 1;
+  }
+}
+
+.agent-terminal-shell {
+  animation: agent-terminal-expand 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transform-origin: bottom center;
+  will-change: clip-path, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-terminal-shell {
+    animation: none;
+  }
+}
