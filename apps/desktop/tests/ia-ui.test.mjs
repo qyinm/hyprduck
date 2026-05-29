@@ -10,6 +10,10 @@ const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const agentTerminalSource = readFileSync(
+  new URL("../src/features/agent-terminal/AgentTerminal.tsx", import.meta.url),
+  "utf8",
+);
 const appTypesSource = readFileSync(new URL("../src/appTypes.ts", import.meta.url), "utf8");
 const previewSource = readFileSync(
   new URL("../src/features/workspace/buildWorkspacePreview.ts", import.meta.url),
@@ -131,9 +135,12 @@ test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
   expect(graphSource).toMatch(/AgentTerminal/);
   expect(graphSource).toMatch(/GraphAnswerWindow/);
   expect(graphSource).toMatch(/aria-label="Attach files"/);
-  expect(graphSource).toMatch(/onFocus=\{onOpenAgentTerminal\}/);
+  expect(graphSource).toMatch(/onFocus=\{openTerminal\}/);
   expect(graphSource).toMatch(/onOpenAgentTerminal\(\);/);
   expect(graphSource).toMatch(/onCreateSession=\{onCreateAgentTerminalSession\}/);
+  expect(agentTerminalSource).toMatch(/aria-label="Minimize Agent Terminal"/);
+  expect(graphSource).toMatch(/aria-label="Resize Agent Terminal"/);
+  expect(graphSource).toMatch(/aria-label="Restore Agent Terminal"/);
   expect(graphSource).not.toMatch(/onAskProject/);
   expect(graphSource).not.toMatch(/answer_workspace_project/);
   expect(graphSource).toMatch(/bottom-24/);

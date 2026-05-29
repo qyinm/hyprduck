@@ -1,4 +1,12 @@
-import { type Dispatch, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type {
   AgentTerminalAgent,
@@ -15,8 +23,10 @@ import { cn } from "@/lib/utils";
 import {
   ArrowUp,
   LoaderCircle,
+  Maximize2,
   Plus,
   Share2,
+  Terminal as TerminalIcon,
   Trash2,
   X,
 } from "lucide-react";
@@ -293,7 +303,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             />
           )}
           <GraphPromptComposer
-            agentTerminal={
+            agentTerminal={({ onMinimize }) => (
               <AgentTerminal
                 nodeId={selectedNode?.node.id ?? null}
                 onClose={() => setAgentTerminalOpen(false)}
@@ -301,11 +311,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 onKillSession={onKillAgentTerminalSession}
                 onListenAgentTerminalEvents={onListenAgentTerminalEvents}
                 onListAgents={onListAgentTerminalAgents}
+                onMinimize={onMinimize}
                 onResizeSession={onResizeAgentTerminalSession}
                 onWriteSession={onWriteAgentTerminalSession}
                 open={agentTerminalOpen}
               />
-            }
+            )}
             agentTerminalOpen={agentTerminalOpen}
             answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
@@ -1001,7 +1012,7 @@ function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
 }
 
 interface GraphPromptComposerProps {
-  agentTerminal: ReactNode;
+  agentTerminal: (props: { onMinimize: () => void }) => ReactNode;
   agentTerminalOpen: boolean;
   answerError: string | null;
   answerPending: boolean;
@@ -1009,6 +1020,13 @@ interface GraphPromptComposerProps {
   onAttachFiles: () => void;
   onOpenAgentTerminal: () => void;
   onInputChange: (value: string) => void;
+}
+
+const TERMINAL_DEFAULT_SIZE = { width: 800, height: 544 };
+const TERMINAL_MIN_SIZE = { width: 480, height: 260 };
+
+function clampTerminalSize(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function GraphPromptComposer(props: GraphPromptComposerProps) {
@@ -1023,9 +1041,18 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     onInputChange,
   } = props;
   const [terminalContentVisible, setTerminalContentVisible] = useState(false);
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
+  const [terminalResizing, setTerminalResizing] = useState(false);
+  const [terminalSize, setTerminalSize] = useState(TERMINAL_DEFAULT_SIZE);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!agentTerminalOpen) {
+      setTerminalContentVisible(false);
+      setTerminalMinimized(false);
+      return undefined;
+    }
+    if (terminalMinimized) {
       setTerminalContentVisible(false);
       return undefined;
     }
@@ -1033,26 +1060,106 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       setTerminalContentVisible(true);
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [agentTerminalOpen]);
+  }, [agentTerminalOpen, terminalMinimized]);
 
-  const showTerminalContent = agentTerminalOpen && terminalContentVisible;
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    [],
+  );
+
+  const openTerminal = () => {
+    setTerminalMinimized(false);
+    onOpenAgentTerminal();
+  };
+
+  const minimizeTerminal = () => {
+    setTerminalContentVisible(false);
+    setTerminalMinimized(true);
+  };
+
+  const beginTerminalResize = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (!agentTerminalOpen || terminalMinimized) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startSize = terminalSize;
+    setTerminalResizing(true);
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const viewportMaxWidth = Math.max(
+        TERMINAL_MIN_SIZE.width,
+        window.innerWidth - 48,
+      );
+      const viewportMaxHeight = Math.max(
+        TERMINAL_MIN_SIZE.height,
+        window.innerHeight - 80,
+      );
+      setTerminalSize({
+        width: clampTerminalSize(
+          startSize.width + (moveEvent.clientX - startX) * 2,
+          TERMINAL_MIN_SIZE.width,
+          viewportMaxWidth,
+        ),
+        height: clampTerminalSize(
+          startSize.height - (moveEvent.clientY - startY),
+          TERMINAL_MIN_SIZE.height,
+          viewportMaxHeight,
+        ),
+      });
+    };
+    const stopResize = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      resizeCleanupRef.current = null;
+      setTerminalResizing(false);
+    };
+    resizeCleanupRef.current = stopResize;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+  };
+
+  const showTerminalContent =
+    agentTerminalOpen && !terminalMinimized && terminalContentVisible;
+  const composerStyle =
+    agentTerminalOpen && !terminalMinimized
+      ? {
+          width: `min(${terminalSize.width}px, calc(100vw - 3rem))`,
+          height: `min(${terminalSize.height}px, calc(100vh - 5rem))`,
+        }
+      : undefined;
+  const terminalStyle =
+    agentTerminalOpen && !terminalMinimized
+      ? {
+          height: `min(${terminalSize.height}px, calc(100vh - 5rem))`,
+        }
+      : undefined;
 
   return (
     <form
       className={cn(
         "agent-terminal-composer-frame pointer-events-auto absolute inset-x-6 bottom-6 mx-auto flex w-[min(50rem,calc(100%-3rem))] items-end gap-3",
-        agentTerminalOpen ? "z-30 h-[min(34rem,calc(100vh-5rem))]" : "z-20 h-14",
+        agentTerminalOpen && !terminalMinimized
+          ? "z-30 h-[min(34rem,calc(100vh-5rem))]"
+          : "z-20 h-14",
+        terminalResizing ? "transition-none" : "",
       )}
+      style={composerStyle}
       onSubmit={(event) => {
         event.preventDefault();
-        onOpenAgentTerminal();
+        openTerminal();
       }}
     >
       <Button
         aria-label="Attach files"
         className={cn(
           "h-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur transition-[width,opacity] duration-200",
-          agentTerminalOpen
+          agentTerminalOpen && !terminalMinimized
             ? "pointer-events-none w-0 border-0 opacity-0"
             : "w-14 opacity-100",
         )}
@@ -1065,17 +1172,54 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       </Button>
       <div
         className={cn(
-          "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
-          agentTerminalOpen
+          "agent-terminal-composer-pill relative min-w-0 flex-1 overflow-hidden border shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
+          agentTerminalOpen && !terminalMinimized
             ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl border-zinc-700/80 bg-zinc-900/95 text-zinc-100 shadow-[0_24px_80px_rgba(0,0,0,0.28)]"
             : "flex h-14 items-center gap-2 rounded-full border-border/80 bg-background/95 px-3",
           showTerminalContent ? "p-0" : "flex items-end gap-2 px-3 pb-2",
+          terminalResizing ? "transition-none" : "",
         )}
+        style={terminalStyle}
       >
-        {showTerminalContent ? (
-          <div className="h-full w-full animate-in fade-in duration-200">
-            {agentTerminal}
+        {agentTerminalOpen ? (
+          <div
+            className={cn(
+              "h-full w-full",
+              showTerminalContent
+                ? "animate-in fade-in duration-200"
+                : "pointer-events-none absolute inset-0 opacity-0",
+            )}
+          >
+            {agentTerminal({ onMinimize: minimizeTerminal })}
           </div>
+        ) : null}
+        {terminalMinimized ? (
+          <>
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
+              <TerminalIcon size={17} className="shrink-0 text-muted-foreground" />
+              <span className="truncate text-sm font-medium text-muted-foreground">
+                Agent Terminal
+              </span>
+            </div>
+            <Button
+              aria-label="Restore Agent Terminal"
+              className="mb-0.5 size-9 rounded-full"
+              onClick={openTerminal}
+              size="icon"
+              type="button"
+            >
+              <Maximize2 size={16} />
+            </Button>
+          </>
+        ) : showTerminalContent ? (
+          <button
+            aria-label="Resize Agent Terminal"
+            className="absolute right-1 top-1 z-40 size-5 cursor-nesw-resize rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            onPointerDown={beginTerminalResize}
+            type="button"
+          >
+            <span className="pointer-events-none block size-full rounded border-r border-t border-current" />
+          </button>
         ) : (
           <>
             <input
@@ -1087,7 +1231,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
                   : "text-foreground placeholder:text-muted-foreground",
               )}
               onChange={(event) => onInputChange(event.target.value)}
-              onFocus={onOpenAgentTerminal}
+              onFocus={openTerminal}
               placeholder="Open Agent Terminal..."
               value={inputValue}
             />

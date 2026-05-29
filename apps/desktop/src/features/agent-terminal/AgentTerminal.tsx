@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  Minimize2,
   Plus,
   RotateCcw,
   Settings,
@@ -29,6 +30,7 @@ import piAgentIconUrl from "../../../resources/icons/pi-agent.svg?url";
 interface AgentTerminalProps {
   nodeId: string | null;
   onClose: () => void;
+  onMinimize: () => void;
   onCreateSession: (args: {
     kind?: "agent" | "shell";
     agentId?: AgentTerminalAgent["id"];
@@ -55,6 +57,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
   const {
     nodeId,
     onClose,
+    onMinimize,
     onCreateSession,
     onListenAgentTerminalEvents,
     onListAgents,
@@ -385,6 +388,16 @@ export function AgentTerminal(props: AgentTerminalProps) {
           <h2 className="truncate text-sm font-semibold">New Terminal</h2>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            aria-label="Minimize Agent Terminal"
+            className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+            onClick={onMinimize}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <Minimize2 size={14} />
+          </Button>
           <Button
             aria-label="Refresh agents"
             className="text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
