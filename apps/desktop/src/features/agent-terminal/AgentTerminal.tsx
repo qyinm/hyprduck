@@ -113,6 +113,12 @@ export function AgentTerminal(props: AgentTerminalProps) {
   }, [agentList, loadingAgents, open]);
 
   useEffect(() => {
+    if (open && sessions.length === 0) {
+      setPickerOpen(true);
+    }
+  }, [open, sessions.length]);
+
+  useEffect(() => {
     if (!open) {
       return undefined;
     }
@@ -430,8 +436,29 @@ export function AgentTerminal(props: AgentTerminalProps) {
               )}
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-center text-zinc-400">
-              Select a detected agent to open a tab.
+            <div className="flex h-full items-center justify-center">
+              <div className="grid w-full max-w-sm gap-2">
+                {(agentList?.agents ?? [])
+                  .filter((agent) => agent.detected)
+                  .slice(0, 4)
+                  .map((agent) => (
+                    <Button
+                      className="justify-between border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
+                      key={agent.id}
+                      onClick={() => void launchAgent(agent)}
+                      type="button"
+                      variant="outline"
+                    >
+                      <span className="truncate">{agent.label}</span>
+                      <Badge variant="outline" className="border-zinc-700 text-zinc-300">
+                        {agent.command}
+                      </Badge>
+                    </Button>
+                  ))}
+                {loadingAgents ? (
+                  <span className="text-center text-xs text-zinc-500">Loading</span>
+                ) : null}
+              </div>
             </div>
           )}
         </div>

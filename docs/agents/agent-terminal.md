@@ -31,6 +31,8 @@ HyprDuck Desktop now uses a real PTY backend by default when `node-pty` is avail
 
 The Ghostty-native backend remains an optional spike path:
 
+As of May 29, 2026, official Ghostty documentation still describes `libghostty` as not yet a stable standalone API. HyprDuck keeps the native Ghostty backend behind an explicit module gate until a maintained embeddable package passes the same packaged-build and Codex/Claude dogfood checks as the PTY backend.
+
 To probe a native Ghostty backend:
 
 ```sh
