@@ -1,4 +1,4 @@
-import { type Dispatch, useEffect, useMemo, useState } from "react";
+import { type Dispatch, type ReactNode, useEffect, useMemo, useState } from "react";
 
 import type {
   AgentTerminalAgent,
@@ -292,6 +292,20 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             />
           )}
           <GraphPromptComposer
+            agentTerminal={
+              <AgentTerminal
+                nodeId={selectedNode?.node.id ?? null}
+                onClose={() => setAgentTerminalOpen(false)}
+                onCreateSession={onCreateAgentTerminalSession}
+                onKillSession={onKillAgentTerminalSession}
+                onListenAgentTerminalEvents={onListenAgentTerminalEvents}
+                onListAgents={onListAgentTerminalAgents}
+                onResizeSession={onResizeAgentTerminalSession}
+                onWriteSession={onWriteAgentTerminalSession}
+                open={agentTerminalOpen}
+              />
+            }
+            agentTerminalOpen={agentTerminalOpen}
             answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
             inputValue={uiState.answerInput}
@@ -303,17 +317,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 value,
               })
             }
-          />
-          <AgentTerminal
-            nodeId={selectedNode?.node.id ?? null}
-            onClose={() => setAgentTerminalOpen(false)}
-            onCreateSession={onCreateAgentTerminalSession}
-            onKillSession={onKillAgentTerminalSession}
-            onListenAgentTerminalEvents={onListenAgentTerminalEvents}
-            onListAgents={onListAgentTerminalAgents}
-            onResizeSession={onResizeAgentTerminalSession}
-            onWriteSession={onWriteAgentTerminalSession}
-            open={agentTerminalOpen}
           />
         </section>
 
@@ -997,6 +1000,8 @@ function ImportStatusIndicator(props: { failed: boolean; progress: number }) {
 }
 
 interface GraphPromptComposerProps {
+  agentTerminal: ReactNode;
+  agentTerminalOpen: boolean;
   answerError: string | null;
   answerPending: boolean;
   inputValue: string;
@@ -1007,6 +1012,8 @@ interface GraphPromptComposerProps {
 
 function GraphPromptComposer(props: GraphPromptComposerProps) {
   const {
+    agentTerminal,
+    agentTerminalOpen,
     answerError,
     answerPending,
     inputValue,
@@ -1017,7 +1024,10 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
 
   return (
     <form
-      className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-14 w-[min(50rem,calc(100%-3rem))] items-center gap-3"
+      className={cn(
+        "pointer-events-auto absolute inset-x-6 bottom-6 mx-auto flex w-[min(50rem,calc(100%-3rem))] items-end gap-3",
+        agentTerminalOpen ? "z-30 h-[min(34rem,calc(100vh-5rem))]" : "z-20 h-14",
+      )}
       onSubmit={(event) => {
         event.preventDefault();
         onOpenAgentTerminal();
@@ -1033,29 +1043,42 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       >
         <Plus size={19} />
       </Button>
-      <div className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur">
-        <input
-          aria-label="Open Agent Terminal"
-          className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
-          onChange={(event) => onInputChange(event.target.value)}
-          onFocus={onOpenAgentTerminal}
-          placeholder="Open Agent Terminal..."
-          value={inputValue}
-        />
-        {answerPending ? (
-          <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-            Answering...
-          </span>
-        ) : null}
-        <Button
-          aria-label="Open Agent Terminal"
-          className="size-9 rounded-full"
-          disabled={false}
-          size="icon"
-          type="submit"
-        >
-          <ArrowUp size={18} />
-        </Button>
+      <div
+        className={cn(
+          "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
+          agentTerminalOpen
+            ? "h-[min(34rem,calc(100vh-5rem))] rounded-[1.75rem] p-0"
+            : "flex h-14 items-center gap-2 rounded-full px-3",
+        )}
+      >
+        {agentTerminalOpen ? (
+          agentTerminal
+        ) : (
+          <>
+            <input
+              aria-label="Open Agent Terminal"
+              className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
+              onChange={(event) => onInputChange(event.target.value)}
+              onFocus={onOpenAgentTerminal}
+              placeholder="Open Agent Terminal..."
+              value={inputValue}
+            />
+            {answerPending ? (
+              <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+                Answering...
+              </span>
+            ) : null}
+            <Button
+              aria-label="Open Agent Terminal"
+              className="size-9 rounded-full"
+              disabled={false}
+              size="icon"
+              type="submit"
+            >
+              <ArrowUp size={18} />
+            </Button>
+          </>
+        )}
       </div>
       {answerError ? (
         <p className="absolute left-16 top-full mt-2 text-xs leading-5 text-destructive">

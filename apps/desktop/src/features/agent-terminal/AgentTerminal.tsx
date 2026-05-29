@@ -324,7 +324,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
   }
 
   return (
-    <section className="agent-terminal-shell pointer-events-auto absolute inset-x-6 bottom-6 z-30 mx-auto flex w-[min(45.75rem,calc(100%-7.25rem))] translate-x-[2.125rem] flex-col overflow-hidden rounded-[1.75rem] border border-border bg-background shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
       <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
         <div className="flex min-w-0 items-center gap-2">
           <TerminalIcon size={16} className="shrink-0 text-muted-foreground" />
@@ -475,7 +475,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
           {error}
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }
 

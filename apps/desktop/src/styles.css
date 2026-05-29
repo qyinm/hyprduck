@@ -211,28 +211,18 @@ body {
   -webkit-app-region: no-drag;
 }
 
-@keyframes agent-terminal-grow-up {
-  from {
-    height: 3.5rem;
-    border-radius: 9999px;
-    opacity: 0.96;
-  }
-  to {
-    height: min(34rem, calc(100% - 5rem));
-    border-radius: 1.75rem;
-    opacity: 1;
-  }
-}
-
-.agent-terminal-shell {
-  height: min(34rem, calc(100% - 5rem));
-  animation: agent-terminal-grow-up 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+.agent-terminal-composer-pill {
   transform-origin: bottom center;
-  will-change: height, border-radius, opacity;
+  transition:
+    height 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    padding 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms ease;
+  will-change: height, border-radius, padding;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-terminal-shell {
-    animation: none;
+  .agent-terminal-composer-pill {
+    transition: none;
   }
 }
