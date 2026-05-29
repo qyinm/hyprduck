@@ -1,8 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Plus, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
+import {
+  FilePlus2,
+  Globe2,
+  Plus,
+  RotateCcw,
+  Settings,
+  SquareTerminal,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
 
 import type {
   AgentTerminalAgent,
@@ -406,6 +415,8 @@ export function AgentTerminal(props: AgentTerminalProps) {
           ) : (
             <div className="h-full min-h-0 overflow-hidden" ref={terminalHostRef} />
           )
+        ) : pickerOpen ? (
+          <div className="h-full" />
         ) : (
           <div className="flex h-full items-center justify-center">
             <div className="grid w-full max-w-sm gap-2">
@@ -434,43 +445,55 @@ export function AgentTerminal(props: AgentTerminalProps) {
         )}
 
         {pickerOpen ? (
-          <div className="absolute left-3 top-3 w-72 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-zinc-100">
-                Detected agents
-              </span>
-              {loadingAgents ? (
-                <span className="text-[10px] text-zinc-500">Loading</span>
-              ) : null}
+          <div className="absolute right-3 top-3 w-72 rounded-xl border border-zinc-700/90 bg-zinc-950/95 p-2 font-sans shadow-[0_18px_48px_rgba(0,0,0,0.45)]">
+            <div className="grid gap-1">
+              <TerminalMenuAction
+                icon={<SquareTerminal size={18} />}
+                label="New Terminal"
+                shortcut="⌘T"
+              />
+              <TerminalMenuAction
+                icon={<Globe2 size={18} />}
+                label="New Browser Tab"
+                shortcut="⌘⇧B"
+              />
+              <TerminalMenuAction
+                icon={<FilePlus2 size={18} />}
+                label="New Markdown"
+                shortcut="⌘⇧M"
+              />
             </div>
+            <div className="my-2 h-px bg-zinc-800" />
             <div className="grid gap-1">
               {(agentList?.agents ?? []).map((agent) => (
-                <Button
-                  className="h-auto justify-between gap-3 px-2 py-2 text-left"
+                <button
+                  className={cn(
+                    "flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold transition",
+                    agent.detected
+                      ? "text-zinc-100 hover:bg-zinc-800"
+                      : "cursor-not-allowed text-zinc-600",
+                  )}
                   disabled={!agent.detected}
                   key={agent.id}
                   onClick={() => void launchAgent(agent)}
+                  title={agent.path ?? agent.disabledReason ?? undefined}
                   type="button"
-                  variant="ghost"
                 >
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-medium text-zinc-100">
-                      {agent.label}
-                    </span>
-                    <span className="block truncate text-[10px] text-zinc-500">
-                      {agent.path ?? agent.disabledReason}
-                    </span>
-                  </span>
-                  <Badge variant={agent.detected ? "default" : "outline"}>
-                    {agent.detected ? agent.support : "missing"}
-                  </Badge>
-                </Button>
+                  <AgentMenuIcon agentId={agent.id} />
+                  <span className="min-w-0 flex-1 truncate">{agent.label}</span>
+                </button>
               ))}
             </div>
-            <p className="mt-2 border-t border-zinc-800 pt-2 text-[10px] leading-4 text-zinc-500">
-              {agentList?.shell.reason ??
-                "Generic shell/custom commands are disabled in v1."}
-            </p>
+            <div className="mt-2 border-t border-zinc-800 pt-2">
+              <button
+                className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold text-zinc-500"
+                disabled
+                type="button"
+              >
+                <Settings size={18} />
+                <span>Agent settings...</span>
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -486,4 +509,41 @@ export function AgentTerminal(props: AgentTerminalProps) {
 
 function isApplePlatform() {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+}
+
+function TerminalMenuAction(props: {
+  icon: ReactNode;
+  label: string;
+  shortcut: string;
+}) {
+  const { icon, label, shortcut } = props;
+  return (
+    <button
+      className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold text-zinc-100 transition hover:bg-zinc-800"
+      type="button"
+    >
+      <span className="grid size-5 shrink-0 place-items-center text-zinc-300">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="shrink-0 text-xs font-medium text-zinc-500">{shortcut}</span>
+    </button>
+  );
+}
+
+function AgentMenuIcon(props: { agentId: AgentTerminalAgent["id"] }) {
+  const { agentId } = props;
+  const iconClass = "grid size-5 shrink-0 place-items-center text-[13px] font-bold";
+  switch (agentId) {
+    case "codex":
+      return <span className={cn(iconClass, "text-zinc-100")}>◌</span>;
+    case "claude_code":
+      return <span className={cn(iconClass, "text-orange-400")}>✺</span>;
+    case "pi_agent":
+      return <span className={cn(iconClass, "text-zinc-100")}>Pi</span>;
+    case "hermes":
+      return <span className={cn(iconClass, "text-zinc-100")}>H</span>;
+    default:
+      return <SquareTerminal size={18} className="shrink-0 text-zinc-400" />;
+  }
 }
