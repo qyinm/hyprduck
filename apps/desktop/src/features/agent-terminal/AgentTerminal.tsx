@@ -2,13 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import {
-  ExternalLink,
-  Plus,
-  RotateCcw,
-  Terminal as TerminalIcon,
-  X,
-} from "lucide-react";
+import { Plus, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
 
 import type {
   AgentTerminalAgent,
@@ -43,8 +37,6 @@ interface AgentTerminalProps {
     input: string;
   }) => Promise<unknown>;
   open: boolean;
-  projectId: string | null;
-  workspaceId: string;
 }
 
 export function AgentTerminal(props: AgentTerminalProps) {
@@ -58,8 +50,6 @@ export function AgentTerminal(props: AgentTerminalProps) {
     onResizeSession,
     onWriteSession,
     open,
-    projectId,
-    workspaceId,
   } = props;
   const terminalHostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<XTermTerminal | null>(null);
@@ -111,12 +101,6 @@ export function AgentTerminal(props: AgentTerminalProps) {
     }
     void refreshAgents();
   }, [agentList, loadingAgents, open]);
-
-  useEffect(() => {
-    if (open && sessions.length === 0) {
-      setPickerOpen(true);
-    }
-  }, [open, sessions.length]);
 
   useEffect(() => {
     if (!open) {
@@ -340,14 +324,11 @@ export function AgentTerminal(props: AgentTerminalProps) {
   }
 
   return (
-    <section className="pointer-events-auto absolute inset-x-6 bottom-24 z-30 mx-auto flex h-[min(34rem,calc(100%-8rem))] w-[min(64rem,calc(100%-3rem))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
+    <section className="pointer-events-auto absolute inset-x-6 bottom-6 z-30 mx-auto flex h-[min(34rem,calc(100%-5rem))] w-[min(50rem,calc(100%-3rem))] flex-col overflow-hidden rounded-[1.75rem] border border-border bg-background shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
         <div className="flex min-w-0 items-center gap-2">
           <TerminalIcon size={16} className="shrink-0 text-muted-foreground" />
           <h2 className="truncate text-sm font-semibold">Agent Terminal</h2>
-          <Badge variant="outline" className="text-[10px]">
-            {workspaceId}
-          </Badge>
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -380,123 +361,74 @@ export function AgentTerminal(props: AgentTerminalProps) {
         </div>
       </header>
 
-      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-secondary/20 px-2">
-        {sessions.map((session) => (
-          <div
-            className={cn(
-              "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
-              session.id === activeSessionId
-                ? "border-foreground bg-background text-foreground"
-                : "border-transparent text-muted-foreground hover:bg-background",
-            )}
-            key={session.id}
-          >
-            <button
-              className="min-w-0 flex-1 truncate text-left"
-              onClick={() => setActiveSessionId(session.id)}
-              type="button"
-            >
-              {session.agent.label}
-            </button>
-            <button
-              aria-label={`Close ${session.agent.label} tab`}
-              className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
-              onClick={() => void closeSession(session.id)}
-              type="button"
-            >
-              <X size={11} />
-            </button>
-          </div>
-        ))}
-        {sessions.length === 0 ? (
-          <span className="px-2 text-xs text-muted-foreground">No agent tabs</span>
-        ) : null}
-      </div>
-
-      <div className="relative grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_18rem]">
-        <div className="min-h-0 bg-zinc-950 p-4 font-mono text-xs text-zinc-100">
-          {activeSession ? (
-            <div className="flex h-full flex-col gap-3">
-              <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-3">
-                <span className="truncate">{activeSession.agent.command}</span>
-                <span className="rounded border border-amber-400/30 px-2 py-1 text-[10px] text-amber-200">
-                  {activeSession.status}
-                </span>
-              </div>
-              {activeSession.status === "fallback_required" ? (
-                <pre className="whitespace-pre-wrap leading-5 text-zinc-300">
-                  {activeSession.backend.reason ??
-                    "Native backend is not available for this session."}
-                </pre>
-              ) : (
-                <div
-                  className="min-h-0 flex-1 overflow-hidden"
-                  ref={terminalHostRef}
-                />
+      {sessions.length > 0 ? (
+        <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-secondary/20 px-3">
+          {sessions.map((session) => (
+            <div
+              className={cn(
+                "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
+                session.id === activeSessionId
+                  ? "border-foreground bg-background text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-background",
               )}
+              key={session.id}
+            >
+              <button
+                className="min-w-0 flex-1 truncate text-left"
+                onClick={() => setActiveSessionId(session.id)}
+                type="button"
+              >
+                {session.agent.label}
+              </button>
+              <button
+                aria-label={`Close ${session.agent.label} tab`}
+                className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+                onClick={() => void closeSession(session.id)}
+                type="button"
+              >
+                <X size={11} />
+              </button>
             </div>
-          ) : (
-            <div className="flex h-full items-center justify-center">
-              <div className="grid w-full max-w-sm gap-2">
-                {(agentList?.agents ?? [])
-                  .filter((agent) => agent.detected)
-                  .slice(0, 4)
-                  .map((agent) => (
-                    <Button
-                      className="justify-between border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
-                      key={agent.id}
-                      onClick={() => void launchAgent(agent)}
-                      type="button"
-                      variant="outline"
-                    >
-                      <span className="truncate">{agent.label}</span>
-                      <Badge variant="outline" className="border-zinc-700 text-zinc-300">
-                        {agent.command}
-                      </Badge>
-                    </Button>
-                  ))}
-                {loadingAgents ? (
-                  <span className="text-center text-xs text-zinc-500">Loading</span>
-                ) : null}
-              </div>
-            </div>
-          )}
+          ))}
         </div>
+      ) : null}
 
-        <aside className="min-h-0 overflow-y-auto border-l border-border bg-background p-3">
-          <h3 className="text-xs font-semibold text-foreground">Context Handoff</h3>
-          <dl className="mt-3 grid gap-2 text-xs">
-            <div>
-              <dt className="text-muted-foreground">Workspace</dt>
-              <dd className="mt-0.5 truncate font-medium">{workspaceId}</dd>
+      <div className="relative min-h-0 flex-1 bg-zinc-950 p-4 font-mono text-xs text-zinc-100">
+        {activeSession ? (
+          activeSession.status === "fallback_required" ? (
+            <pre className="h-full whitespace-pre-wrap leading-5 text-zinc-300">
+              {activeSession.backend.reason ??
+                "Native backend is not available for this session."}
+            </pre>
+          ) : (
+            <div className="h-full min-h-0 overflow-hidden" ref={terminalHostRef} />
+          )
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <div className="grid w-full max-w-sm gap-2">
+              {(agentList?.agents ?? [])
+                .filter((agent) => agent.detected)
+                .slice(0, 4)
+                .map((agent) => (
+                  <Button
+                    className="justify-between border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-50"
+                    key={agent.id}
+                    onClick={() => void launchAgent(agent)}
+                    type="button"
+                    variant="outline"
+                  >
+                    <span className="truncate">{agent.label}</span>
+                    <Badge variant="outline" className="border-zinc-700 text-zinc-300">
+                      {agent.command}
+                    </Badge>
+                  </Button>
+                ))}
+              {loadingAgents ? (
+                <span className="text-center text-xs text-zinc-500">Loading</span>
+              ) : null}
             </div>
-            <div>
-              <dt className="text-muted-foreground">Project</dt>
-              <dd className="mt-0.5 truncate font-medium">{projectId ?? "none"}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">MCP</dt>
-              <dd className="mt-0.5 font-medium">
-                {activeSession?.handoff.mcp.status ?? "available"}
-              </dd>
-            </div>
-          </dl>
-          <ol className="mt-3 grid gap-1.5 text-xs leading-5 text-muted-foreground">
-            {(activeSession?.handoff.context.attachInstructions ?? [
-              `Workspace: ${workspaceId}`,
-              "Call HyprDuck MCP get_context_pack before answering.",
-              "Use cited evidence refs from the returned context pack.",
-            ]).map((instruction) => (
-              <li key={instruction}>{instruction}</li>
-            ))}
-          </ol>
-          <div className="mt-4 flex items-center gap-2 rounded-md border border-border bg-secondary/20 p-2 text-xs text-muted-foreground">
-            <ExternalLink size={14} className="shrink-0" />
-            {activeSession?.status === "running"
-              ? "PTY session is running inside HyprDuck."
-              : "External Ghostty fallback remains available."}
           </div>
-        </aside>
+        )}
 
         {pickerOpen ? (
           <div className="absolute left-3 top-3 w-72 rounded-lg border border-border bg-background p-2 shadow-lg">

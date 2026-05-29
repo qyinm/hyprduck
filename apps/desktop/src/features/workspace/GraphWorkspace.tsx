@@ -314,8 +314,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             onResizeSession={onResizeAgentTerminalSession}
             onWriteSession={onWriteAgentTerminalSession}
             open={agentTerminalOpen}
-            projectId={project?.summary.projectId ?? null}
-            workspaceId={workspaceId}
           />
         </section>
 
