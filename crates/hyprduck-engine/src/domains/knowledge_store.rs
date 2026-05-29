@@ -1179,13 +1179,6 @@ fn persist_brain_events_snapshot_in_transaction(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
-    sqlite
-        .execute(
-            "DELETE FROM brain_events WHERE workspace_id = ?1",
-            [snapshot.workspace_id.as_str()],
-        )
-        .context("failed clearing relational brain event rows")?;
-
     for event in &snapshot.events {
         let actor_json =
             serde_json::to_string(&event.actor).context("failed encoding brain event actor")?;
@@ -1841,6 +1834,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn graph_snapshot_appends_brain_events_in_graph_transaction() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+
+        let first_snapshot = single_event_snapshot("event-a", "source-a", "evidence-a", "Alpha");
+        store
+            .persist_graph_snapshot(&first_snapshot)
+            .expect("persist first graph snapshot");
+        assert_eq!(
+            brain_event_count(&store, "workspace-default").expect("first event count"),
+            1
+        );
+
+        let second_snapshot = single_event_snapshot("event-b", "source-b", "evidence-b", "Beta");
+        store
+            .persist_graph_snapshot(&second_snapshot)
+            .expect("persist second graph snapshot");
+
+        assert_eq!(
+            brain_event_count(&store, "workspace-default").expect("second event count"),
+            2
+        );
+        assert_eq!(
+            store
+                .graph_snapshot_counts("workspace-default")
+                .expect("graph counts"),
+            KnowledgeGraphPersistReport {
+                node_count: 2,
+                relation_count: 0,
+            }
+        );
+    }
+
     fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
         let graph = Graph::open(&store.path).context("open graph")?;
         let count = graph
@@ -1968,6 +1996,65 @@ mod tests {
             other => panic!("unexpected value for {column}: {other:?}"),
         };
         assert_eq!(values, expected);
+    }
+
+    fn single_event_snapshot(
+        event_id: &str,
+        source_id: &str,
+        evidence_id: &str,
+        label: &str,
+    ) -> BrainRepoSnapshot {
+        BrainRepoSnapshot {
+            workspace_id: "workspace-default".into(),
+            generated_at: 10,
+            sources: vec![SourceRecord {
+                source_id: source_id.into(),
+                workspace_id: "workspace-default".into(),
+                original_path: format!("/tmp/{source_id}.pdf"),
+                source_path: format!("sources/{source_id}.pdf"),
+                markdown_path: format!("sources/{source_id}.md"),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 1,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 10,
+            }],
+            nodes: vec![BrainNodeRecord {
+                node_id: format!("node-{source_id}"),
+                kind: BrainNodeKind::Concept,
+                label: label.into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![evidence_id.into()],
+                source_ids: vec![source_id.into()],
+                confidence: Some(0.9),
+                updated_at: 10,
+            }],
+            relations: Vec::new(),
+            evidence: vec![EvidenceRef {
+                id: evidence_id.into(),
+                page_label: "p1".into(),
+                page_index: Some(0),
+                snippet: format!("{label} evidence."),
+                source_path: Some(format!("sources/{source_id}.pdf")),
+                source_id: Some(source_id.into()),
+                markdown_path: Some(format!("sources/{source_id}.md")),
+                image_path: None,
+                provenance: Some("test".into()),
+            }],
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: vec![test_brain_event(
+                event_id,
+                "workspace-default",
+                &[evidence_id],
+            )],
+        }
     }
 
     fn test_brain_event(event_id: &str, workspace_id: &str, evidence_refs: &[&str]) -> BrainEvent {
