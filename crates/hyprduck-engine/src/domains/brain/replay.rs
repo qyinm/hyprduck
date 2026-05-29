@@ -3,6 +3,12 @@ use crate::*;
 pub(crate) fn handle_reconstruct_brain(
     request: ReconstructBrainRequest,
 ) -> Result<ReconstructBrainResponseData> {
+    if request.write_materialized {
+        bail!(
+            "checkpoint rollback is not exposed in v1; reconstruct_brain can only write replay output"
+        );
+    }
+
     let root = resolve_brain_workspace_root(&request.scope)?;
     let events_path = root.join("events/brain_events.jsonl");
     let events = read_brain_events_jsonl(&events_path)
@@ -28,56 +34,10 @@ pub(crate) fn handle_reconstruct_brain(
         .unwrap_or_else(|| root.join("snapshots").join(&snapshot_id).join("files"));
     let before = capture_materialized_file_snapshot(&output_root).unwrap_or_default();
     persist_reconstructed_brain_snapshot(&output_root, &replay.snapshot)?;
-    let mut changed_files = changed_materialized_files(
+    let changed_files = changed_materialized_files(
         &before,
         &capture_materialized_file_snapshot(&output_root).unwrap_or_default(),
     );
-
-    if request.write_materialized {
-        let writer = BrainWorkspaceWriter::open(root.clone())?;
-        let before_current = capture_materialized_file_snapshot(writer.root())?;
-        let rollback_at = unix_timestamp_seconds();
-        let backup_snapshot_id = format!(
-            "snapshot-pre-rollback-{}-{}",
-            request.scope.workspace_id, rollback_at
-        );
-        let previous_snapshot =
-            read_materialized_brain_snapshot(writer.root(), &request.scope.workspace_id).ok();
-        persist_materialized_snapshot(writer.root(), &backup_snapshot_id, &before_current)?;
-        let rollback_result = (|| -> Result<Vec<String>> {
-            let mut restored_snapshot = replay.snapshot.clone();
-            restored_snapshot.generated_at = rollback_at;
-            let rollback_event = brain_graph_rollback_event(
-                &restored_snapshot,
-                &snapshot_id,
-                &backup_snapshot_id,
-                previous_snapshot.as_ref(),
-                replay.selected_event_id.as_deref(),
-                rollback_at,
-            )?;
-            restored_snapshot.events = events
-                .iter()
-                .cloned()
-                .chain(std::iter::once(rollback_event))
-                .collect();
-            restore_selected_materialized_brain_snapshot(
-                writer.root(),
-                &restored_snapshot,
-                previous_snapshot.as_ref(),
-            )?;
-            Ok(changed_materialized_files(
-                &before_current,
-                &capture_materialized_file_snapshot(writer.root())?,
-            ))
-        })();
-        match rollback_result {
-            Ok(current_changed_files) => changed_files = current_changed_files,
-            Err(error) => {
-                restore_materialized_file_snapshot(writer.root(), &before_current)?;
-                return Err(error);
-            }
-        }
-    }
 
     Ok(ReconstructBrainResponseData {
         snapshot: replay.snapshot,
@@ -333,284 +293,30 @@ pub(crate) fn persist_reconstructed_brain_snapshot(
     Ok(())
 }
 
-fn restore_selected_materialized_brain_snapshot(
-    root: &Path,
-    snapshot: &BrainRepoSnapshot,
-    previous_snapshot: Option<&BrainRepoSnapshot>,
-) -> Result<()> {
-    ensure_materialized_brain_repo_dirs(root)?;
-    if let Some(previous_snapshot) = previous_snapshot {
-        let next_wiki_paths = snapshot
-            .wiki_pages
-            .iter()
-            .map(|page| page.path.as_str())
-            .collect::<BTreeSet<_>>();
-        for page in &previous_snapshot.wiki_pages {
-            if !next_wiki_paths.contains(page.path.as_str()) && is_wiki_markdown_ref(&page.path) {
-                let path = root.join(&page.path);
-                if path.exists() {
-                    fs::remove_file(&path).with_context(|| {
-                        format!("failed removing stale wiki page {}", path.display())
-                    })?;
-                }
-            }
-        }
-    }
-    persist_materialized_graph_and_wiki_state(root, snapshot)?;
-    write_json_pretty(&root.join("memory/records.json"), &snapshot.memories)?;
-    write_structured_extraction_artifacts(root, &snapshot.extractions)?;
-    write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
-    publish_latest_readable_graph_snapshot_marker(root, snapshot)?;
-    Ok(())
-}
-
-fn brain_graph_rollback_event(
-    snapshot: &BrainRepoSnapshot,
-    snapshot_id: &str,
-    pre_rollback_snapshot_id: &str,
-    previous_snapshot: Option<&BrainRepoSnapshot>,
-    selected_event_id: Option<&str>,
-    rollback_at: u64,
-) -> Result<BrainEvent> {
-    Ok(BrainEvent {
-        event_id: format!("evt-{}", Uuid::now_v7()),
-        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-        workspace_id: snapshot.workspace_id.clone(),
-        scope: BrainScope::Project,
-        event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some("graph_rollback".into()),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: "hyprduck-agent-rollback".into(),
-        },
-        source_refs: snapshot
-            .sources
-            .iter()
-            .map(|source| source.source_id.clone())
-            .collect(),
-        source_markdown_refs: snapshot
-            .sources
-            .iter()
-            .map(|source| source.markdown_path.clone())
-            .collect(),
-        node_refs: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        relation_refs: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        claim_refs: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        memory_refs: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        target_node_ids: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        target_edge_ids: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        target_claim_ids: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        target_memory_ids: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        evidence_refs: snapshot
-            .evidence
-            .iter()
-            .map(|evidence| evidence.id.clone())
-            .collect(),
-        payload_json: rollback_materialized_graph_event_payload_json(
-            snapshot,
-            snapshot_id,
-            pre_rollback_snapshot_id,
-            previous_snapshot,
-            selected_event_id,
-        )?,
-        causality: BrainEventCausality {
-            caused_by_event_ids: selected_event_id
-                .map(|event_id| vec![event_id.to_string()])
-                .unwrap_or_default(),
-            caused_by_source_ids: snapshot
-                .sources
-                .iter()
-                .map(|source| source.source_id.clone())
-                .collect(),
-            snapshot_id: Some(snapshot_id.to_string()),
-            previous_snapshot_id: Some(pre_rollback_snapshot_id.to_string()),
-            materialized_version: Some(rollback_at),
-            ..Default::default()
-        },
-        confidence: None,
-        policy_result: "rollback_applied".into(),
-        created_at: rollback_at,
-    })
-}
-
-fn rollback_materialized_graph_event_payload_json(
-    snapshot: &BrainRepoSnapshot,
-    restored_snapshot_id: &str,
-    pre_rollback_snapshot_id: &str,
-    previous_snapshot: Option<&BrainRepoSnapshot>,
-    selected_event_id: Option<&str>,
-) -> Result<String> {
-    serde_json::to_string(&json!({
-        "nodeCount": snapshot.nodes.len(),
-        "relationCount": snapshot.relations.len(),
-        "sourceCount": snapshot.sources.len(),
-        "rollback": {
-            "restoredSnapshotId": restored_snapshot_id,
-            "preRollbackSnapshotId": pre_rollback_snapshot_id,
-            "selectedEventId": selected_event_id,
-            "replaySelector": selected_event_id
-                .map(|event_id| format!("--event {event_id}"))
-                .unwrap_or_else(|| "--latest".into()),
-            "sourceEventCount": snapshot.events.len(),
-            "sourceOfTruth": "events/brain_events.jsonl",
-        },
-        "diff": rollback_snapshot_diff(previous_snapshot, snapshot),
-        "materializedGraph": {
-            "generatedAt": snapshot.generated_at,
-            "sources": snapshot.sources,
-            "nodes": snapshot.nodes,
-            "edges": snapshot.relations,
-            "evidence": snapshot.evidence,
-            "memories": snapshot.memories,
-            "wikiPages": snapshot.wiki_pages,
-            "entities": snapshot.entities,
-            "claims": snapshot.claims,
-            "extractions": snapshot.extractions,
-        }
-    }))
-    .context("failed to encode rollback materialized graph event payload")
-}
-
-fn rollback_snapshot_diff(
-    previous_snapshot: Option<&BrainRepoSnapshot>,
-    snapshot: &BrainRepoSnapshot,
-) -> Value {
-    let previous_node_ids = previous_snapshot
-        .map(|snapshot| {
-            snapshot
-                .nodes
-                .iter()
-                .map(|node| node.node_id.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let next_node_ids = snapshot
-        .nodes
-        .iter()
-        .map(|node| node.node_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let previous_edge_ids = previous_snapshot
-        .map(|snapshot| {
-            snapshot
-                .relations
-                .iter()
-                .map(|relation| relation.relation_id.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let next_edge_ids = snapshot
-        .relations
-        .iter()
-        .map(|relation| relation.relation_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let previous_claim_ids = previous_snapshot
-        .map(|snapshot| {
-            snapshot
-                .claims
-                .iter()
-                .map(|claim| claim.claim_id.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let next_claim_ids = snapshot
-        .claims
-        .iter()
-        .map(|claim| claim.claim_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let previous_memory_ids = previous_snapshot
-        .map(|snapshot| {
-            snapshot
-                .memories
-                .iter()
-                .map(|memory| memory.memory_id.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let next_memory_ids = snapshot
-        .memories
-        .iter()
-        .map(|memory| memory.memory_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let previous_wiki_paths = previous_snapshot
-        .map(|snapshot| {
-            snapshot
-                .wiki_pages
-                .iter()
-                .map(|page| page.path.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let next_wiki_paths = snapshot
-        .wiki_pages
-        .iter()
-        .map(|page| page.path.as_str())
-        .collect::<BTreeSet<_>>();
-
-    json!({
-        "nodeCountBefore": previous_node_ids.len(),
-        "nodeCountAfter": next_node_ids.len(),
-        "edgeCountBefore": previous_edge_ids.len(),
-        "edgeCountAfter": next_edge_ids.len(),
-        "claimCountBefore": previous_claim_ids.len(),
-        "claimCountAfter": next_claim_ids.len(),
-        "memoryCountBefore": previous_memory_ids.len(),
-        "memoryCountAfter": next_memory_ids.len(),
-        "wikiPageCountBefore": previous_wiki_paths.len(),
-        "wikiPageCountAfter": next_wiki_paths.len(),
-        "addedNodeIds": sorted_set_difference(&next_node_ids, &previous_node_ids),
-        "removedNodeIds": sorted_set_difference(&previous_node_ids, &next_node_ids),
-        "addedEdgeIds": sorted_set_difference(&next_edge_ids, &previous_edge_ids),
-        "removedEdgeIds": sorted_set_difference(&previous_edge_ids, &next_edge_ids),
-        "addedClaimIds": sorted_set_difference(&next_claim_ids, &previous_claim_ids),
-        "removedClaimIds": sorted_set_difference(&previous_claim_ids, &next_claim_ids),
-        "addedMemoryIds": sorted_set_difference(&next_memory_ids, &previous_memory_ids),
-        "removedMemoryIds": sorted_set_difference(&previous_memory_ids, &next_memory_ids),
-        "addedWikiPaths": sorted_set_difference(&next_wiki_paths, &previous_wiki_paths),
-        "removedWikiPaths": sorted_set_difference(&previous_wiki_paths, &next_wiki_paths),
-    })
-}
-
-fn sorted_set_difference(left: &BTreeSet<&str>, right: &BTreeSet<&str>) -> Vec<String> {
-    left.difference(right)
-        .map(|value| (*value).to_string())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconstruct_brain_rejects_materialized_rollback_writes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let error = handle_reconstruct_brain(ReconstructBrainRequest {
+            scope: BrainReadScope {
+                workspace_id: "default".into(),
+                root_dir: Some(temp.path().display().to_string()),
+            },
+            up_to_timestamp: None,
+            up_to_materialized_version: None,
+            up_to_event_id: None,
+            output_root: None,
+            write_materialized: true,
+        })
+        .expect_err("materialized rollback writes are not exposed");
+
+        assert!(error
+            .to_string()
+            .contains("checkpoint rollback is not exposed in v1"));
+    }
 
     #[test]
     fn reconstruct_replays_provider_graph_events_as_latest_overlays() {

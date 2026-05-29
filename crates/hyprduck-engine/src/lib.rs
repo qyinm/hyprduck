@@ -2718,48 +2718,6 @@ fn should_skip_materialized_snapshot_path(path: &Path) -> bool {
         || normalized.starts_with('.')
 }
 
-fn persist_materialized_snapshot(
-    root: &Path,
-    snapshot_id: &str,
-    snapshot: &MaterializedFileSnapshot,
-) -> Result<()> {
-    let snapshot_root = root.join("snapshots").join(snapshot_id).join("files");
-    for (relative_path, bytes) in &snapshot.files {
-        write_file_atomic(&snapshot_root.join(relative_path), bytes)?;
-    }
-    write_json_pretty(
-        &root
-            .join("snapshots")
-            .join(snapshot_id)
-            .join("manifest.json"),
-        &json!({
-            "snapshotId": snapshot_id,
-            "fileCount": snapshot.files.len(),
-            "createdAt": unix_timestamp_seconds(),
-        }),
-    )
-}
-
-fn restore_materialized_file_snapshot(
-    root: &Path,
-    snapshot: &MaterializedFileSnapshot,
-) -> Result<()> {
-    let after = capture_materialized_file_snapshot(root)?;
-    for relative_path in after.files.keys() {
-        if !snapshot.files.contains_key(relative_path) {
-            let path = root.join(relative_path);
-            if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("failed removing {}", path.display()))?;
-            }
-        }
-    }
-    for (relative_path, bytes) in &snapshot.files {
-        write_file_atomic(&root.join(relative_path), bytes)?;
-    }
-    Ok(())
-}
-
 fn changed_materialized_files(
     before: &MaterializedFileSnapshot,
     after: &MaterializedFileSnapshot,
