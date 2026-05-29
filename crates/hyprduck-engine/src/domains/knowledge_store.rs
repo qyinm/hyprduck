@@ -269,6 +269,7 @@ impl KnowledgeStore {
                    manifest_json=excluded.manifest_json,
                    updated_at=excluded.updated_at;
                  DELETE FROM source_pages WHERE source_id = {source_id};
+                 DELETE FROM source_page_fts WHERE source_id = {source_id};
                  DELETE FROM evidence_fts WHERE source_id = {source_id};
                  DELETE FROM evidence_items WHERE source_id = {source_id};",
                 job_id = sql_literal(&format!("import:{}", manifest.source_id)),
@@ -427,6 +428,26 @@ impl KnowledgeStore {
                 graph_neighbor_count,
                 score: -lexical_rank + typed_evidence_boost + graph_boost,
             });
+        }
+        if hits.len() < limit {
+            append_source_page_fts_hits(
+                &graph,
+                workspace_id,
+                fts_query.as_str(),
+                limit,
+                &graph_neighbor_counts,
+                &mut hits,
+            )?;
+        }
+        if hits.len() < limit {
+            append_wiki_fts_hits(
+                &graph,
+                workspace_id,
+                fts_query.as_str(),
+                limit,
+                &graph_neighbor_counts,
+                &mut hits,
+            )?;
         }
         if hits.is_empty() {
             let mut fallback_statement = graph
@@ -670,6 +691,13 @@ impl KnowledgeStore {
                 evidence_id UNINDEXED,
                 source_id UNINDEXED,
                 evidence_type UNINDEXED,
+                text
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS source_page_fts USING fts5(
+                source_id UNINDEXED,
+                page_index UNINDEXED,
+                page_label UNINDEXED,
                 text
             );
 
@@ -925,6 +953,128 @@ fn evidence_graph_neighbor_counts(
         }
     }
     Ok(counts)
+}
+
+#[allow(dead_code)]
+fn append_source_page_fts_hits(
+    graph: &Graph,
+    workspace_id: &str,
+    fts_query: &str,
+    limit: usize,
+    graph_neighbor_counts: &BTreeMap<String, i64>,
+    hits: &mut Vec<HybridRetrievalHit>,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT
+                e.evidence_id,
+                p.source_id,
+                e.evidence_type,
+                p.text,
+                bm25(source_page_fts) AS lexical_rank
+             FROM source_page_fts p
+             JOIN sources s ON s.source_id = p.source_id
+             JOIN evidence_items e ON e.source_id = p.source_id AND e.page_index = p.page_index
+             WHERE s.workspace_id = ?1 AND source_page_fts MATCH ?2
+             ORDER BY lexical_rank ASC
+             LIMIT ?3",
+        )
+        .context("failed preparing source page FTS retrieval query")?;
+    let mut rows = statement
+        .query((workspace_id, fts_query, limit as i64))
+        .context("failed running source page FTS retrieval query")?;
+    while let Some(row) = rows
+        .next()
+        .context("failed reading source page FTS retrieval row")?
+    {
+        if hits.len() >= limit {
+            break;
+        }
+        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+        if hits.iter().any(|hit| hit.evidence_id == evidence_id) {
+            continue;
+        }
+        let source_id: String = row.get(1).context("failed reading source id")?;
+        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+        let snippet: String = row.get(3).context("failed reading source page text")?;
+        let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
+        let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+        hits.push(HybridRetrievalHit {
+            evidence_id,
+            source_id,
+            evidence_type,
+            snippet,
+            lexical_rank,
+            graph_neighbor_count,
+            score: -lexical_rank + 0.03 + graph_boost,
+        });
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn append_wiki_fts_hits(
+    graph: &Graph,
+    workspace_id: &str,
+    fts_query: &str,
+    limit: usize,
+    graph_neighbor_counts: &BTreeMap<String, i64>,
+    hits: &mut Vec<HybridRetrievalHit>,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT
+                w.wiki_page_id,
+                w.title,
+                w.text,
+                wp.evidence_refs_json,
+                bm25(wiki_fts) AS lexical_rank
+             FROM wiki_fts w
+             JOIN wiki_pages wp ON wp.wiki_page_id = w.wiki_page_id
+             WHERE w.workspace_id = ?1 AND wiki_fts MATCH ?2
+             ORDER BY lexical_rank ASC
+             LIMIT ?3",
+        )
+        .context("failed preparing wiki FTS retrieval query")?;
+    let mut rows = statement
+        .query((workspace_id, fts_query, limit as i64))
+        .context("failed running wiki FTS retrieval query")?;
+    while let Some(row) = rows
+        .next()
+        .context("failed reading wiki FTS retrieval row")?
+    {
+        if hits.len() >= limit {
+            break;
+        }
+        let wiki_page_id: String = row.get(0).context("failed reading wiki page id")?;
+        let title: String = row.get(1).context("failed reading wiki title")?;
+        let text: String = row.get(2).context("failed reading wiki text")?;
+        let evidence_refs_json: String = row.get(3).context("failed reading wiki evidence refs")?;
+        let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
+        let evidence_refs =
+            serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+        let Some(evidence_id) = evidence_refs.first().cloned() else {
+            continue;
+        };
+        if hits.iter().any(|hit| hit.evidence_id == evidence_id) {
+            continue;
+        }
+        let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+        hits.push(HybridRetrievalHit {
+            evidence_id,
+            source_id: wiki_page_id,
+            evidence_type: "wiki_evidence".into(),
+            snippet: format!("{title}\n{text}"),
+            lexical_rank,
+            graph_neighbor_count,
+            score: -lexical_rank + 0.02 + graph_boost,
+        });
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -1673,6 +1823,12 @@ fn persist_source_pages_snapshot_in_transaction(
         sqlite
             .execute("DELETE FROM source_pages WHERE source_id = ?1", [source_id])
             .with_context(|| format!("failed clearing source pages for {source_id}"))?;
+        sqlite
+            .execute(
+                "DELETE FROM source_page_fts WHERE source_id = ?1",
+                [source_id],
+            )
+            .with_context(|| format!("failed clearing source page FTS for {source_id}"))?;
     }
 
     let mut pages = BTreeMap::<(String, usize), SourcePageSnapshotRow>::new();
@@ -1731,6 +1887,18 @@ fn persist_source_pages_snapshot_in_transaction(
             .with_context(|| {
                 format!("failed inserting migrated source page {source_id}:{page_index}")
             })?;
+        sqlite
+            .execute(
+                "INSERT INTO source_page_fts (source_id, page_index, page_label, text)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (
+                    source_id.as_str(),
+                    page_index as i64,
+                    row.page_label.as_str(),
+                    plain_text.as_str(),
+                ),
+            )
+            .with_context(|| format!("failed indexing source page {source_id}:{page_index}"))?;
     }
 
     Ok(())
@@ -2587,6 +2755,7 @@ mod tests {
         assert_graph_node_metadata(&store, "node-a");
         assert_graph_wiki_page_node(&store, "wiki-alpha");
         assert_wiki_relational_content(&store, "wiki-alpha");
+        assert_source_page_fts_content(&store);
         assert_graph_edge_metadata(&store, "claim-alpha", "source:source-a", "CITES");
         assert_relational_proof_ignores_graph_metadata_tamper(&store);
         let hits = store
@@ -2595,6 +2764,13 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].evidence_id, "evidence-a");
         assert_eq!(hits[0].graph_neighbor_count, 1);
+        let wiki_hits = store
+            .hybrid_retrieve("workspace-default", "source evidence", 5)
+            .expect("wiki hybrid retrieve");
+        assert_eq!(wiki_hits.len(), 1);
+        assert_eq!(wiki_hits[0].evidence_id, "evidence-a");
+        assert_eq!(wiki_hits[0].source_id, "wiki-alpha");
+        assert_eq!(wiki_hits[0].evidence_type, "wiki_evidence");
         assert_eq!(
             brain_event_count(&store, "workspace-default").expect("brain event count"),
             1
@@ -2668,6 +2844,19 @@ mod tests {
                 |row| row.get::<_, i64>(0),
             )
             .expect("wiki fts count");
+        assert_eq!(fts_hits, 1);
+    }
+
+    fn assert_source_page_fts_content(store: &KnowledgeStore) {
+        let graph = Graph::open(store.path()).expect("open graph");
+        let sqlite = graph.connection().sqlite_connection();
+        let fts_hits = sqlite
+            .query_row(
+                "SELECT count(*) FROM source_page_fts WHERE source_page_fts MATCH 'relates'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("source page fts count");
         assert_eq!(fts_hits, 1);
     }
 
