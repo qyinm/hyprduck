@@ -3,13 +3,14 @@ use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::{
     BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, ClaimRecord,
-    EntityRecord, PolicyResult, SourceFormat, SourceRecord, SourceStatus,
-    StructuredExtractionArtifact, BRAIN_EVENT_SCHEMA_VERSION,
+    EntityRecord, PolicyResult, StructuredExtractionArtifact, BRAIN_EVENT_SCHEMA_VERSION,
 };
 use hyprduck_engine_types::{
-    BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
-    BrainScope, ContextPackArtifactMetadataV0, ContextPackParseConfidence, EvidenceRef,
-    EvidenceType, KnowledgeProject, SourceArtifactManifest, WikiPage,
+    BrainContextPack, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
+    BrainRepoSnapshot, BrainScope, ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0,
+    ContextPackParseConfidence, ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef,
+    EvidenceType, KnowledgeProject, SourceArtifactManifest, SourceFormat, SourceRecord,
+    SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +60,37 @@ pub(crate) struct HybridRetrievalHit {
     pub(crate) lexical_rank: f64,
     pub(crate) graph_neighbor_count: i64,
     pub(crate) score: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ContextPackEvidenceRow {
+    evidence_id: String,
+    source_id: String,
+    page_index: Option<i64>,
+    page_label: String,
+    evidence_type: String,
+    snippet: String,
+    source_path_redacted: String,
+    markdown_path_redacted: String,
+    image_path_redacted: String,
+    provenance: String,
+    confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct ContextPackSourceRow {
+    source_id: String,
+    workspace_id: String,
+    original_path_redacted: String,
+    source_path_redacted: String,
+    markdown_path_redacted: String,
+    format: String,
+    status: String,
+    page_count: i64,
+    provider_route: String,
+    provider_locality: String,
+    content_hash: String,
+    updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -510,6 +542,148 @@ impl KnowledgeStore {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn assemble_context_pack_v1_from_db(
+        &self,
+        workspace_id: &str,
+        query: &str,
+        budget: usize,
+        pack_id: String,
+        generated_at: String,
+    ) -> Result<ContextPackV1> {
+        let limit = budget.clamp(1, 24);
+        let hits = self
+            .hybrid_retrieve(workspace_id, query, limit)
+            .context("failed retrieving DB-backed context pack evidence")?;
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+
+        let mut evidence_rows = Vec::new();
+        for hit in &hits {
+            if let Some(row) =
+                load_context_pack_evidence_row(&graph, workspace_id, &hit.evidence_id)?
+            {
+                evidence_rows.push(row);
+            }
+        }
+
+        let source_ids = evidence_rows
+            .iter()
+            .map(|row| row.source_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut sources = Vec::new();
+        let mut source_metadata = BTreeMap::new();
+        for source_id in source_ids {
+            let Some(source) = load_context_pack_source_row(&graph, workspace_id, &source_id)?
+            else {
+                continue;
+            };
+            source_metadata.insert(
+                source.source_id.clone(),
+                ContextPackSourceMetadataV0 {
+                    content_hash: source.content_hash.clone(),
+                    provider_route: source.provider_route.clone(),
+                    local_only: source.provider_locality != "hosted",
+                },
+            );
+            sources.push(SourceRecord {
+                source_id: source.source_id,
+                workspace_id: source.workspace_id,
+                original_path: source.original_path_redacted,
+                source_path: source.source_path_redacted,
+                markdown_path: source.markdown_path_redacted,
+                format: SourceFormat::from(source.format),
+                status: SourceStatus::from(source.status),
+                page_count: source.page_count.max(0) as usize,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: source.updated_at.max(0) as u64,
+            });
+        }
+
+        let mut evidence_metadata: BTreeMap<
+            String,
+            BTreeMap<String, ContextPackEvidenceMetadataV0>,
+        > = BTreeMap::new();
+        let evidence = evidence_rows
+            .into_iter()
+            .filter_map(|row| {
+                if !source_metadata.contains_key(&row.source_id) {
+                    return None;
+                }
+                let page = row.page_index.unwrap_or(0).max(0) as usize + 1;
+                let metadata = ContextPackEvidenceMetadataV0 {
+                    source_id: row.source_id.clone(),
+                    page,
+                    region: None,
+                    span: None,
+                    quoted_text: row.snippet.clone(),
+                    parse_confidence: db_parse_confidence(row.confidence),
+                    content_hash: source_metadata
+                        .get(&row.source_id)
+                        .map(|metadata| metadata.content_hash.clone())
+                        .unwrap_or_default(),
+                    markdown_path: non_empty_string(row.markdown_path_redacted.clone()),
+                    image_path: non_empty_string(row.image_path_redacted.clone()),
+                    evidence_type: db_context_evidence_type(&row.evidence_type),
+                };
+                evidence_metadata
+                    .entry(row.source_id.clone())
+                    .or_default()
+                    .insert(row.evidence_id.clone(), metadata);
+                Some(EvidenceRef {
+                    id: row.evidence_id,
+                    page_label: row.page_label,
+                    page_index: row.page_index.map(|page_index| page_index.max(0) as usize),
+                    snippet: row.snippet,
+                    source_path: non_empty_string(row.source_path_redacted),
+                    source_id: Some(row.source_id),
+                    markdown_path: non_empty_string(row.markdown_path_redacted),
+                    image_path: non_empty_string(row.image_path_redacted),
+                    provenance: non_empty_string(row.provenance),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut warnings = Vec::new();
+        if evidence.is_empty() {
+            warnings.push("No active DB evidence matched the Context Pack query.".into());
+        }
+
+        let pack = BrainContextPack {
+            workspace_id: workspace_id.into(),
+            query: query.into(),
+            token_budget: budget,
+            summary: format!(
+                "Context assembled from {} DB evidence item(s) using SQLite FTS5 retrieval and GraphQLite graph expansion.",
+                evidence.len()
+            ),
+            wiki_pages: Vec::new(),
+            nodes: Vec::new(),
+            sources,
+            memories: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            relations: Vec::new(),
+            evidence,
+            recent_events: Vec::new(),
+            warnings,
+        };
+        let artifact_metadata = ContextPackArtifactMetadataV0 {
+            sources: source_metadata,
+            evidence: evidence_metadata,
+            warnings: Vec::new(),
+        };
+        let mut context_pack = ContextPackV1::from_brain_context_pack(
+            &pack,
+            pack_id,
+            generated_at,
+            &artifact_metadata,
+        );
+        context_pack.retrieval_trace.strategy = "sqlite-graphqlite-fts5-hybrid".into();
+        Ok(context_pack)
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn resolve_evidence_proof(
         &self,
         workspace_id: &str,
@@ -875,6 +1049,141 @@ impl KnowledgeStore {
             .ok_or_else(|| anyhow!("knowledge schema version query returned no rows"))?
             .get::<i64>("schema_version")
             .context("failed reading knowledge schema version")
+    }
+}
+
+fn load_context_pack_evidence_row(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_id: &str,
+) -> Result<Option<ContextPackEvidenceRow>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT
+                evidence_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                source_path_redacted,
+                markdown_path_redacted,
+                image_path_redacted,
+                provenance,
+                confidence
+             FROM evidence_items
+             WHERE workspace_id = ?1
+               AND evidence_id = ?2
+               AND status = 'active'",
+        )
+        .context("failed preparing context pack evidence row query")?;
+    let mut rows = statement
+        .query((workspace_id, evidence_id))
+        .context("failed querying context pack evidence row")?;
+    let Some(row) = rows
+        .next()
+        .context("failed reading context pack evidence row")?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ContextPackEvidenceRow {
+        evidence_id: row.get(0).context("read context evidence id")?,
+        source_id: row.get(1).context("read context evidence source")?,
+        page_index: row.get(2).context("read context evidence page index")?,
+        page_label: row.get(3).context("read context evidence page label")?,
+        evidence_type: row.get(4).context("read context evidence type")?,
+        snippet: row.get(5).context("read context evidence snippet")?,
+        source_path_redacted: row.get(6).context("read context evidence source path")?,
+        markdown_path_redacted: row.get(7).context("read context evidence markdown path")?,
+        image_path_redacted: row.get(8).context("read context evidence image path")?,
+        provenance: row.get(9).context("read context evidence provenance")?,
+        confidence: row.get(10).context("read context evidence confidence")?,
+    }))
+}
+
+fn load_context_pack_source_row(
+    graph: &Graph,
+    workspace_id: &str,
+    source_id: &str,
+) -> Result<Option<ContextPackSourceRow>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT
+                source_id,
+                workspace_id,
+                original_path_redacted,
+                source_path_redacted,
+                markdown_path_redacted,
+                format,
+                status,
+                page_count,
+                provider_route,
+                provider_locality,
+                content_hash,
+                updated_at
+             FROM sources
+             WHERE workspace_id = ?1
+               AND source_id = ?2
+               AND status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
+        )
+        .context("failed preparing context pack source row query")?;
+    let mut rows = statement
+        .query((workspace_id, source_id))
+        .context("failed querying context pack source row")?;
+    let Some(row) = rows
+        .next()
+        .context("failed reading context pack source row")?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ContextPackSourceRow {
+        source_id: row.get(0).context("read context source id")?,
+        workspace_id: row.get(1).context("read context source workspace")?,
+        original_path_redacted: row.get(2).context("read context source original path")?,
+        source_path_redacted: row.get(3).context("read context source source path")?,
+        markdown_path_redacted: row.get(4).context("read context source markdown path")?,
+        format: row.get(5).context("read context source format")?,
+        status: row.get(6).context("read context source status")?,
+        page_count: row.get(7).context("read context source page count")?,
+        provider_route: row.get(8).context("read context source provider route")?,
+        provider_locality: row
+            .get(9)
+            .context("read context source provider locality")?,
+        content_hash: row.get(10).context("read context source content hash")?,
+        updated_at: row.get(11).context("read context source updated at")?,
+    }))
+}
+
+fn db_parse_confidence(confidence: Option<f64>) -> ContextPackParseConfidence {
+    match confidence {
+        Some(value) if value >= 0.8 => ContextPackParseConfidence::High,
+        Some(value) if value >= 0.5 => ContextPackParseConfidence::Medium,
+        Some(_) => ContextPackParseConfidence::Low,
+        None => ContextPackParseConfidence::Unknown,
+    }
+}
+
+fn db_context_evidence_type(evidence_type: &str) -> EvidenceType {
+    match evidence_type {
+        "text_evidence" => EvidenceType::Text,
+        "table_evidence" => EvidenceType::Table,
+        "image_region_evidence" => EvidenceType::ImageRegion,
+        "ocr_evidence" => EvidenceType::Ocr,
+        "caption_evidence" => EvidenceType::Caption,
+        "summary_evidence" | "wiki_evidence" => EvidenceType::Summary,
+        "claim_evidence" => EvidenceType::Claim,
+        "relationship_evidence" => EvidenceType::Relationship,
+        _ => EvidenceType::Unknown,
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -3122,6 +3431,34 @@ mod tests {
             .find(|hit| hit.evidence_id == "evidence-b")
             .expect("graph neighbor evidence hit");
         assert_eq!(beta_neighbor_hit.snippet, "Beta neighbor evidence.");
+        update_source_context_pack_metadata(&store, "source-a");
+        let context_pack = store
+            .assemble_context_pack_v1_from_db(
+                "workspace-default",
+                "Alpha",
+                5,
+                "ctx_db_alpha".into(),
+                "2026-05-29T09:53:26Z".into(),
+            )
+            .expect("assemble DB context pack v1");
+        assert_eq!(
+            context_pack.schema_version,
+            hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION
+        );
+        assert_eq!(
+            context_pack.retrieval_trace.strategy,
+            "sqlite-graphqlite-fts5-hybrid"
+        );
+        assert!(context_pack
+            .selected_evidence
+            .iter()
+            .any(|evidence| evidence.evidence_ref == "evidence-a"));
+        assert!(context_pack
+            .retrieval_trace
+            .evidence_type_trace
+            .selected
+            .get("text")
+            .is_some_and(|count| *count >= 1));
         update_evidence_status(&store, "evidence-b", "failed");
         let filtered_hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)
@@ -3222,6 +3559,22 @@ mod tests {
                 (evidence_id, status),
             )
             .expect("update evidence status");
+    }
+
+    fn update_source_context_pack_metadata(store: &KnowledgeStore, source_id: &str) {
+        let graph = Graph::open(store.path()).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .execute(
+                "UPDATE sources
+                 SET provider_route = 'test-local',
+                     provider_locality = 'local',
+                     content_hash = 'sha256:test-context-pack'
+                 WHERE source_id = ?1",
+                [source_id],
+            )
+            .expect("update source context metadata");
     }
 
     fn assert_source_page_fts_content(store: &KnowledgeStore) {
