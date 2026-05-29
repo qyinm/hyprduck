@@ -150,6 +150,65 @@ export interface WorkspaceAnswerPayload {
   question: string;
 }
 
+export interface AgentTerminalAgent {
+  id: "codex" | "claude_code" | "pi_agent" | "hermes";
+  label: string;
+  detected: boolean;
+  support: "supported" | "experimental";
+  commands: string[];
+  command: string | null;
+  path: string | null;
+  launchArgs: string[];
+  confidence: "high" | "medium" | "missing";
+  disabledReason: string | null;
+}
+
+export interface AgentTerminalListResult {
+  agents: AgentTerminalAgent[];
+  shell: {
+    available: false;
+    reason: string;
+  };
+}
+
+export interface AgentTerminalContextHandoff {
+  mcp: {
+    status: string;
+    toolHint: string;
+  };
+  workspace: {
+    workspaceId: string;
+    projectId: string | null;
+    nodeId: string | null;
+    sourceId: string | null;
+    sourceManifestPath: string | null;
+  };
+  context: {
+    scope: string;
+    requiredBeforeFirstPrompt: boolean;
+    attachInstructions: string[];
+  };
+  disclosure: {
+    localPathsRedactedByDefault: boolean;
+    externalAgentOwnsWorkflow: boolean;
+  };
+}
+
+export interface AgentTerminalSession {
+  id: string;
+  agent: AgentTerminalAgent;
+  handoff: AgentTerminalContextHandoff;
+  backend: {
+    backend: string;
+    status: string;
+    reason?: string;
+    fallback?: string;
+  };
+  status: "running" | "fallback_required" | "closed";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DesktopCommandMap {
   app_snapshot: {
     args: undefined;
@@ -218,6 +277,38 @@ export interface DesktopCommandMap {
   answer_workspace_project: {
     args: { request: WorkspaceAnswerPayload };
     result: WorkspaceProject["answerByNodeId"][string];
+  };
+  agent_terminal_list_agents: {
+    args: undefined;
+    result: AgentTerminalListResult;
+  };
+  agent_terminal_create_session: {
+    args: {
+      agentId: AgentTerminalAgent["id"];
+      workspaceId?: string | null;
+      projectId?: string | null;
+      nodeId?: string | null;
+      contextScope?: string;
+      cols?: number;
+      rows?: number;
+    };
+    result: AgentTerminalSession;
+  };
+  agent_terminal_snapshot_session: {
+    args: { sessionId: string };
+    result: AgentTerminalSession;
+  };
+  agent_terminal_write_session: {
+    args: { sessionId: string; input: string };
+    result: { status: string; reason?: string };
+  };
+  agent_terminal_resize_session: {
+    args: { sessionId: string; cols: number; rows: number };
+    result: { status: string; reason?: string };
+  };
+  agent_terminal_kill_session: {
+    args: { sessionId: string };
+    result: { status: string; reason?: string };
   };
 }
 

@@ -1,8 +1,14 @@
 import { type Dispatch, useEffect, useMemo, useState } from "react";
 
+import type {
+  AgentTerminalAgent,
+  AgentTerminalListResult,
+  AgentTerminalSession,
+} from "@/appTypes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AgentTerminal } from "@/features/agent-terminal/AgentTerminal";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
@@ -32,6 +38,11 @@ interface GraphWorkspaceProps {
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
   onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
+  onCreateAgentTerminalSession: (args: {
+    agentId: AgentTerminalAgent["id"];
+    nodeId: string | null;
+  }) => Promise<AgentTerminalSession>;
+  onListAgentTerminalAgents: () => Promise<AgentTerminalListResult>;
   onRetryFailedPages: () => Promise<void>;
 }
 
@@ -55,6 +66,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenArtifact,
     onApplyCorrection,
     onAskProject,
+    onCreateAgentTerminalSession,
+    onListAgentTerminalAgents,
     onRetryFailedPages,
   } = props;
   const projectNodes = project?.nodes ?? [];
@@ -104,6 +117,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
+  const [agentTerminalOpen, setAgentTerminalOpen] = useState(false);
   const answer = liveAnswer ?? baseAnswer;
   const hiddenConceptCount = project?.summary.hiddenConceptCount ?? 0;
   const hiddenRelationCount = project?.summary.hiddenRelationCount ?? 0;
@@ -290,12 +304,22 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             inputValue={uiState.answerInput}
             onAsk={() => void handleAskProject()}
             onAttachFiles={onOpenImport}
+            onOpenAgentTerminal={() => setAgentTerminalOpen(true)}
             onInputChange={(value) =>
               dispatch({
                 type: "set_answer_input",
                 value,
               })
             }
+          />
+          <AgentTerminal
+            nodeId={selectedNode?.node.id ?? null}
+            onClose={() => setAgentTerminalOpen(false)}
+            onCreateSession={onCreateAgentTerminalSession}
+            onListAgents={onListAgentTerminalAgents}
+            open={agentTerminalOpen}
+            projectId={project?.summary.projectId ?? null}
+            workspaceId="default"
           />
         </section>
 
@@ -984,6 +1008,7 @@ interface GraphPromptComposerProps {
   inputValue: string;
   onAsk: () => void;
   onAttachFiles: () => void;
+  onOpenAgentTerminal: () => void;
   onInputChange: (value: string) => void;
 }
 
@@ -994,6 +1019,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     inputValue,
     onAsk,
     onAttachFiles,
+    onOpenAgentTerminal,
     onInputChange,
   } = props;
   const canAsk = inputValue.trim().length > 0 && !answerPending;
@@ -1023,6 +1049,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
           aria-label="Ask with citations"
           className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
           onChange={(event) => onInputChange(event.target.value)}
+          onFocus={onOpenAgentTerminal}
           placeholder="Ask with citations..."
           value={inputValue}
         />

@@ -21,6 +21,9 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  type AgentTerminalAgent,
+  type AgentTerminalListResult,
+  type AgentTerminalSession,
   type BrainEvent,
   type BrainHealthResponseData,
   type DesktopCommand,
@@ -180,6 +183,10 @@ async function invoke<K extends DesktopCommand>(
   ...args: DesktopCommandParameters<K>
 ): Promise<DesktopCommandResult<K>> {
   return getDesktopApi().invoke(command, ...args);
+}
+
+async function listAgentTerminalAgents(): Promise<AgentTerminalListResult> {
+  return invoke("agent_terminal_list_agents");
 }
 
 async function loadGraphWorkspaceEnvelope(
@@ -676,6 +683,19 @@ export function App() {
     });
   };
 
+  const createAgentTerminalSession = async (args: {
+    agentId: AgentTerminalAgent["id"];
+    nodeId: string | null;
+  }): Promise<AgentTerminalSession> => {
+    return invoke("agent_terminal_create_session", {
+      agentId: args.agentId,
+      workspaceId: loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
+      projectId: workspaceProject?.summary.projectId ?? null,
+      nodeId: args.nodeId,
+      contextScope: "workspace",
+    });
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke("save_engine_config", {
       payload,
@@ -947,6 +967,8 @@ export function App() {
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onAskProject={answerWorkspaceProject}
+                onCreateAgentTerminalSession={createAgentTerminalSession}
+                onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}
                 onOpenImport={chooseFile}
                 onRetryFailedPages={retryFailedPages}

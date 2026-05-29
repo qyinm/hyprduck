@@ -6,6 +6,8 @@ import type {
 } from "@/features/workspace/types";
 import type {
   ActiveJobSnapshot,
+  AgentTerminalListResult,
+  AgentTerminalSession,
   BrainEvent,
   BrainHealthResponseData,
   DesktopCommand,
@@ -102,6 +104,62 @@ const WEB_MOCK_PROVIDER_MODELS: Record<string, string[]> = {
 };
 
 const WEB_MOCK_NOW_SECONDS = Math.floor(Date.now() / 1000);
+const WEB_MOCK_AGENT_LIST: AgentTerminalListResult = {
+  agents: [
+    {
+      id: "codex",
+      label: "Codex",
+      detected: true,
+      support: "supported",
+      commands: ["codex"],
+      command: "codex",
+      path: "/usr/local/bin/codex",
+      launchArgs: [],
+      confidence: "high",
+      disabledReason: null,
+    },
+    {
+      id: "claude_code",
+      label: "Claude Code",
+      detected: false,
+      support: "supported",
+      commands: ["claude"],
+      command: null,
+      path: null,
+      launchArgs: [],
+      confidence: "missing",
+      disabledReason: "Claude Code command was not found on PATH.",
+    },
+    {
+      id: "pi_agent",
+      label: "Pi Agent",
+      detected: false,
+      support: "experimental",
+      commands: ["pi-agent", "pi"],
+      command: null,
+      path: null,
+      launchArgs: [],
+      confidence: "missing",
+      disabledReason: "Pi Agent command was not found on PATH.",
+    },
+    {
+      id: "hermes",
+      label: "Hermes",
+      detected: false,
+      support: "experimental",
+      commands: ["hermes"],
+      command: null,
+      path: null,
+      launchArgs: [],
+      confidence: "missing",
+      disabledReason: "Hermes command was not found on PATH.",
+    },
+  ],
+  shell: {
+    available: false,
+    reason: "Generic shell/custom commands are disabled in Agent Terminal v1.",
+  },
+};
 let webMockRecentEvents: BrainEvent[] = [
   {
     eventId: "evt-web-source-imported",
@@ -491,6 +549,70 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       }
       return { ...answer };
     },
+    agent_terminal_list_agents: () => WEB_MOCK_AGENT_LIST,
+    agent_terminal_create_session: (args) => {
+      const agent = WEB_MOCK_AGENT_LIST.agents.find(
+        (candidate) => candidate.id === args.agentId,
+      );
+      if (!agent?.detected) {
+        throw new Error(`${agent?.label ?? args.agentId} is not detected.`);
+      }
+      const session: AgentTerminalSession = {
+        id: `preview-agent-${Date.now()}`,
+        agent,
+        handoff: {
+          mcp: {
+            status: "available",
+            toolHint: "Use HyprDuck MCP get_context_pack/read_context_pack for cited evidence.",
+          },
+          workspace: {
+            workspaceId: args.workspaceId ?? "web-preview",
+            projectId: args.projectId ?? "preview:sample",
+            nodeId: args.nodeId ?? null,
+            sourceId: "preview",
+            sourceManifestPath: null,
+          },
+          context: {
+            scope: args.contextScope ?? "workspace",
+            requiredBeforeFirstPrompt: true,
+            attachInstructions: [
+              `Workspace: ${args.workspaceId ?? "web-preview"}`,
+              "Ask the agent to call HyprDuck MCP get_context_pack before answering.",
+              "Use cited evidence refs and page/source refs from the returned context pack.",
+            ],
+          },
+          disclosure: {
+            localPathsRedactedByDefault: true,
+            externalAgentOwnsWorkflow: true,
+          },
+        },
+        backend: {
+          backend: "web-preview",
+          status: "unavailable",
+          reason: "Web preview cannot host native terminal sessions.",
+          fallback: "external_ghostty",
+        },
+        status: "fallback_required",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return session;
+    },
+    agent_terminal_snapshot_session: () => {
+      throw new Error("Web preview does not persist agent terminal sessions.");
+    },
+    agent_terminal_write_session: () => ({
+      status: "ignored",
+      reason: "Web preview does not host native terminal sessions.",
+    }),
+    agent_terminal_resize_session: () => ({
+      status: "ignored",
+      reason: "Web preview does not host native terminal sessions.",
+    }),
+    agent_terminal_kill_session: () => ({
+      status: "ignored",
+      reason: "Web preview does not host native terminal sessions.",
+    }),
     save_engine_config: (args) => {
       webMockConfig = {
         ...webMockConfig,
