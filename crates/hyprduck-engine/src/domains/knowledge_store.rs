@@ -430,6 +430,15 @@ impl KnowledgeStore {
             });
         }
         if hits.len() < limit {
+            append_graph_neighbor_hits(
+                &graph,
+                workspace_id,
+                limit,
+                &graph_neighbor_counts,
+                &mut hits,
+            )?;
+        }
+        if hits.len() < limit {
             append_source_page_fts_hits(
                 &graph,
                 workspace_id,
@@ -953,6 +962,222 @@ fn evidence_graph_neighbor_counts(
         }
     }
     Ok(counts)
+}
+
+#[allow(dead_code)]
+fn append_graph_neighbor_hits(
+    graph: &Graph,
+    workspace_id: &str,
+    limit: usize,
+    graph_neighbor_counts: &BTreeMap<String, i64>,
+    hits: &mut Vec<HybridRetrievalHit>,
+) -> Result<()> {
+    let seed_evidence_ids = hits
+        .iter()
+        .map(|hit| hit.evidence_id.clone())
+        .collect::<BTreeSet<_>>();
+    if seed_evidence_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut seed_node_ids = BTreeSet::new();
+    let seed_rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {workspace_id: $workspace_id})
+             RETURN n.id AS node_id, n.evidence_ids_json AS evidence_ids_json",
+        )
+        .param("workspace_id", workspace_id)
+        .run()
+        .context("failed finding GraphQLite retrieval seed nodes")?;
+    for row in &seed_rows {
+        let node_id = row.get::<String>("node_id").context("read seed node id")?;
+        let evidence_ids =
+            row_string_array(row, "evidence_ids_json").context("read seed node evidence refs")?;
+        if evidence_ids
+            .iter()
+            .any(|evidence_id| seed_evidence_ids.contains(evidence_id))
+        {
+            seed_node_ids.insert(node_id);
+        }
+    }
+
+    let mut candidate_evidence_ids = BTreeSet::new();
+    for seed_node_id in &seed_node_ids {
+        append_cypher_neighbor_evidence_ids(
+            graph,
+            workspace_id,
+            seed_node_id.as_str(),
+            "MATCH (seed {id: $seed_node_id})-[r]->(neighbor)
+             RETURN neighbor.workspace_id AS neighbor_workspace_id,
+                    neighbor.evidence_ids_json AS neighbor_evidence_ids_json,
+                    r.evidence_ids_json AS relationship_evidence_ids_json",
+            &mut candidate_evidence_ids,
+        )?;
+        append_cypher_neighbor_evidence_ids(
+            graph,
+            workspace_id,
+            seed_node_id.as_str(),
+            "MATCH (neighbor)-[r]->(seed {id: $seed_node_id})
+             RETURN neighbor.workspace_id AS neighbor_workspace_id,
+                    neighbor.evidence_ids_json AS neighbor_evidence_ids_json,
+                    r.evidence_ids_json AS relationship_evidence_ids_json",
+            &mut candidate_evidence_ids,
+        )?;
+    }
+    append_cypher_seed_relationship_endpoint_evidence_ids(
+        graph,
+        workspace_id,
+        &seed_evidence_ids,
+        &mut candidate_evidence_ids,
+    )?;
+
+    let sqlite = graph.connection().sqlite_connection();
+    for evidence_id in candidate_evidence_ids {
+        if hits.len() >= limit {
+            break;
+        }
+        if seed_evidence_ids.contains(&evidence_id)
+            || hits.iter().any(|hit| hit.evidence_id == evidence_id)
+        {
+            continue;
+        }
+        let mut statement = sqlite
+            .prepare(
+                "SELECT evidence_id, source_id, evidence_type, snippet
+                 FROM evidence_items
+                 WHERE workspace_id = ?1 AND evidence_id = ?2",
+            )
+            .context("failed preparing graph neighbor evidence query")?;
+        let mut rows = statement
+            .query((workspace_id, evidence_id.as_str()))
+            .context("failed running graph neighbor evidence query")?;
+        let Some(row) = rows
+            .next()
+            .context("failed reading graph neighbor evidence row")?
+        else {
+            continue;
+        };
+        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+        let source_id: String = row.get(1).context("failed reading source id")?;
+        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+        let snippet: String = row.get(3).context("failed reading evidence snippet")?;
+        let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+        hits.push(HybridRetrievalHit {
+            evidence_id,
+            source_id,
+            evidence_type,
+            snippet,
+            lexical_rank: 0.0,
+            graph_neighbor_count,
+            score: 0.04 + graph_boost,
+        });
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn append_cypher_seed_relationship_endpoint_evidence_ids(
+    graph: &Graph,
+    workspace_id: &str,
+    seed_evidence_ids: &BTreeSet<String>,
+    candidate_evidence_ids: &mut BTreeSet<String>,
+) -> Result<()> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (source)-[r]->(target)
+             RETURN source.workspace_id AS source_workspace_id,
+                    target.workspace_id AS target_workspace_id,
+                    source.evidence_ids_json AS source_evidence_ids_json,
+                    target.evidence_ids_json AS target_evidence_ids_json,
+                    r.evidence_ids_json AS relationship_evidence_ids_json",
+        )
+        .run()
+        .context("failed querying GraphQLite seed relationships")?;
+    for row in &rows {
+        let source_workspace_id = row
+            .get::<String>("source_workspace_id")
+            .context("read source workspace id")?;
+        let target_workspace_id = row
+            .get::<String>("target_workspace_id")
+            .context("read target workspace id")?;
+        if source_workspace_id != workspace_id || target_workspace_id != workspace_id {
+            continue;
+        }
+        let relationship_evidence_ids = row_string_array(row, "relationship_evidence_ids_json")
+            .context("read relationship evidence refs")?;
+        if !relationship_evidence_ids
+            .iter()
+            .any(|evidence_id| seed_evidence_ids.contains(evidence_id))
+        {
+            continue;
+        }
+        candidate_evidence_ids.extend(
+            row_string_array(row, "source_evidence_ids_json")
+                .context("read source evidence refs")?,
+        );
+        candidate_evidence_ids.extend(
+            row_string_array(row, "target_evidence_ids_json")
+                .context("read target evidence refs")?,
+        );
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn append_cypher_neighbor_evidence_ids(
+    graph: &Graph,
+    workspace_id: &str,
+    seed_node_id: &str,
+    cypher: &str,
+    candidate_evidence_ids: &mut BTreeSet<String>,
+) -> Result<()> {
+    let rows = graph
+        .connection()
+        .cypher_builder(cypher)
+        .param("seed_node_id", seed_node_id)
+        .run()
+        .with_context(|| format!("failed querying GraphQLite neighbors for {seed_node_id}"))?;
+    for row in &rows {
+        let neighbor_workspace_id = row
+            .get::<String>("neighbor_workspace_id")
+            .context("read neighbor workspace id")?;
+        if neighbor_workspace_id != workspace_id {
+            continue;
+        }
+        for column in [
+            "neighbor_evidence_ids_json",
+            "relationship_evidence_ids_json",
+        ] {
+            let evidence_ids =
+                row_string_array(row, column).with_context(|| format!("read {column}"))?;
+            candidate_evidence_ids.extend(evidence_ids);
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn row_string_array(row: &graphqlite::Row, column: &str) -> Result<Vec<String>> {
+    match row.get_value(column) {
+        Some(graphqlite::Value::Array(values)) => Ok(values
+            .iter()
+            .filter_map(|value| match value {
+                graphqlite::Value::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect()),
+        Some(graphqlite::Value::String(value)) => {
+            Ok(serde_json::from_str::<Vec<String>>(value).unwrap_or_default())
+        }
+        Some(graphqlite::Value::Null) | None => Ok(Vec::new()),
+        Some(other) => Err(anyhow!(
+            "expected string array column {column}, got {other:?}"
+        )),
+    }
 }
 
 #[allow(dead_code)]
@@ -2594,7 +2819,7 @@ mod tests {
                 markdown_path: "sources/source-a.md".into(),
                 format: SourceFormat::pdf(),
                 status: SourceStatus::ingested(),
-                page_count: 1,
+                page_count: 2,
                 description: String::new(),
                 user_context: String::new(),
                 ingest_instruction: String::new(),
@@ -2618,8 +2843,8 @@ mod tests {
                     label: "Beta".into(),
                     scope: BrainScope::Project,
                     aliases: Vec::new(),
-                    evidence_ids: Vec::new(),
-                    source_ids: Vec::new(),
+                    evidence_ids: vec!["evidence-b".into()],
+                    source_ids: vec!["source-a".into()],
                     confidence: None,
                     updated_at: 10,
                 },
@@ -2656,17 +2881,30 @@ mod tests {
                     updated_at: 10,
                 },
             ],
-            evidence: vec![EvidenceRef {
-                id: "evidence-a".into(),
-                page_label: "p1".into(),
-                page_index: Some(0),
-                snippet: "Alpha relates to beta.".into(),
-                source_path: Some("sources/source-a.pdf".into()),
-                source_id: Some("source-a".into()),
-                markdown_path: Some("sources/source-a.md".into()),
-                image_path: None,
-                provenance: Some("test".into()),
-            }],
+            evidence: vec![
+                EvidenceRef {
+                    id: "evidence-a".into(),
+                    page_label: "p1".into(),
+                    page_index: Some(0),
+                    snippet: "Alpha relates to beta.".into(),
+                    source_path: Some("sources/source-a.pdf".into()),
+                    source_id: Some("source-a".into()),
+                    markdown_path: Some("sources/source-a.md".into()),
+                    image_path: None,
+                    provenance: Some("test".into()),
+                },
+                EvidenceRef {
+                    id: "evidence-b".into(),
+                    page_label: "p2".into(),
+                    page_index: Some(1),
+                    snippet: "Beta neighbor evidence.".into(),
+                    source_path: Some("sources/source-a.pdf".into()),
+                    source_id: Some("source-a".into()),
+                    markdown_path: Some("sources/source-a.md".into()),
+                    image_path: None,
+                    provenance: Some("test".into()),
+                },
+            ],
             memories: Vec::new(),
             wiki_pages: vec![WikiPage {
                 page_id: "wiki-alpha".into(),
@@ -2761,9 +2999,11 @@ mod tests {
         let hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)
             .expect("hybrid retrieve");
-        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].evidence_id, "evidence-a");
         assert_eq!(hits[0].graph_neighbor_count, 1);
+        assert_eq!(hits[1].evidence_id, "evidence-b");
+        assert_eq!(hits[1].snippet, "Beta neighbor evidence.");
         let wiki_hits = store
             .hybrid_retrieve("workspace-default", "source evidence", 5)
             .expect("wiki hybrid retrieve");
@@ -3169,7 +3409,7 @@ mod tests {
         assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
         assert_eq!(row.6, 6);
         assert_eq!(row.7, 3);
-        assert_eq!(row.8, 1);
+        assert_eq!(row.8, 2);
         assert_eq!(row.9.len(), 16);
         assert_eq!(row.10, "hyprduck.sqlite:graphqlite");
     }
