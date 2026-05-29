@@ -1235,10 +1235,10 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
     });
     writer.repo().write_memory_records(&memories)?;
 
-    store.update_agent_write_proposal_status(
+    store.record_agent_write_commit(
         &request.scope.workspace_id,
         &request.proposal_id,
-        "committed",
+        &event,
         now as i64,
     )?;
     fs::remove_file(&proposal_path).ok();

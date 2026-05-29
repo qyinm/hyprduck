@@ -115,6 +115,11 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
         .expect("reload persisted proposal")
         .expect("persisted proposal remains");
     assert_eq!(persisted.approval_status, "committed");
+    let operation = store
+        .load_brain_event_operation(DEFAULT_WORKSPACE_ID, &committed.event_id)
+        .expect("load persisted commit event")
+        .expect("commit event was persisted");
+    assert_eq!(operation, "agent_session_write");
 
     let events = fs::read_to_string(workspace_root.join("events/brain_events.jsonl"))
         .expect("read event log");

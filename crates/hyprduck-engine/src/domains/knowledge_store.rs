@@ -2,12 +2,12 @@ use anyhow::{anyhow, Context, Result};
 use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::{
-    BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, ClaimRecord,
-    EntityRecord, PolicyResult, StructuredExtractionArtifact, BRAIN_EVENT_SCHEMA_VERSION,
+    BrainActor, BrainActorType, BrainEventCausality, BrainEventKind, ClaimRecord, EntityRecord,
+    PolicyResult, StructuredExtractionArtifact, BRAIN_EVENT_SCHEMA_VERSION,
 };
 use hyprduck_engine_types::{
-    BrainContextPack, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
+    BrainContextPack, BrainEvent, BrainNodeKind, BrainNodeRecord, BrainRelationKind,
+    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
     ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackParseConfidence,
     ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, EvidenceType, KnowledgeProject,
     PageEvidenceV0, ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
@@ -684,6 +684,111 @@ impl KnowledgeStore {
             )
             .with_context(|| format!("failed updating proposal status {proposal_id}"))?;
         Ok(())
+    }
+
+    pub(crate) fn record_agent_write_commit(
+        &self,
+        workspace_id: &str,
+        proposal_id: &str,
+        event: &BrainEvent,
+        updated_at: i64,
+    ) -> Result<()> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sqlite = graph.connection().sqlite_connection();
+        sqlite
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("failed starting agent write commit audit transaction")?;
+
+        let result = (|| -> Result<()> {
+            let actor_json = serde_json::to_string(&event.actor)
+                .context("failed encoding agent write event actor")?;
+            let evidence_refs_json = serde_json::to_string(&event.evidence_refs)
+                .context("failed encoding agent write event evidence refs")?;
+            let operation_type = event
+                .operation_type
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", event.event_type).to_ascii_lowercase());
+            let payload_json = if event.payload_json.trim().is_empty() {
+                "{}"
+            } else {
+                event.payload_json.as_str()
+            };
+            sqlite
+                .execute(
+                    "INSERT INTO brain_events (
+                        event_id,
+                        workspace_id,
+                        actor_json,
+                        operation_type,
+                        evidence_refs_json,
+                        payload_json,
+                        created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    ON CONFLICT(event_id) DO UPDATE SET
+                        workspace_id=excluded.workspace_id,
+                        actor_json=excluded.actor_json,
+                        operation_type=excluded.operation_type,
+                        evidence_refs_json=excluded.evidence_refs_json,
+                        payload_json=excluded.payload_json,
+                        created_at=excluded.created_at",
+                    (
+                        event.event_id.as_str(),
+                        event.workspace_id.as_str(),
+                        actor_json.as_str(),
+                        operation_type.as_str(),
+                        evidence_refs_json.as_str(),
+                        payload_json,
+                        event.created_at as i64,
+                    ),
+                )
+                .with_context(|| format!("failed inserting brain event row {}", event.event_id))?;
+            sqlite
+                .execute(
+                    "UPDATE agent_write_proposals
+                     SET approval_status = 'committed', updated_at = ?3
+                     WHERE workspace_id = ?1 AND proposal_id = ?2",
+                    (workspace_id, proposal_id, updated_at),
+                )
+                .with_context(|| format!("failed marking proposal {proposal_id} committed"))?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                sqlite
+                    .execute_batch("COMMIT")
+                    .context("failed committing agent write audit transaction")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = sqlite.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_brain_event_operation(
+        &self,
+        workspace_id: &str,
+        event_id: &str,
+    ) -> Result<Option<String>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let mut statement = graph
+            .connection()
+            .sqlite_connection()
+            .prepare(
+                "SELECT operation_type
+                 FROM brain_events
+                 WHERE workspace_id = ?1 AND event_id = ?2",
+            )
+            .context("failed preparing brain event lookup")?;
+        let mut rows = statement
+            .query((workspace_id, event_id))
+            .context("failed querying brain event")?;
+        if let Some(row) = rows.next().context("failed reading brain event row")? {
+            return Ok(Some(row.get(0).context("read operation type")?));
+        }
+        Ok(None)
     }
 
     #[allow(dead_code)]
