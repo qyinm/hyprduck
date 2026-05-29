@@ -1369,6 +1369,46 @@ impl ContextPackV0 {
     }
 }
 
+impl ContextPackV1 {
+    pub fn from_brain_context_pack(
+        pack: &BrainContextPack,
+        pack_id: impl Into<String>,
+        generated_at: impl Into<String>,
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let v0 =
+            ContextPackV0::from_brain_context_pack(pack, pack_id, generated_at, artifact_metadata);
+        let selected_evidence = v0
+            .selected_evidence
+            .iter()
+            .map(|evidence| ContextPackEvidenceV1::from_v0(evidence, artifact_metadata))
+            .collect::<Vec<_>>();
+        let evidence_type_trace =
+            ContextPackEvidenceTypeTraceV1::from_pack(pack, &selected_evidence, artifact_metadata);
+
+        Self {
+            schema_version: CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
+            pack_id: v0.pack_id,
+            workspace_id: v0.workspace_id,
+            query: v0.query,
+            generated_at: v0.generated_at,
+            source_set: v0.source_set,
+            selected_evidence,
+            findings: v0.findings,
+            warnings: v0.warnings,
+            retrieval_trace: ContextPackRetrievalTraceV1 {
+                strategy: v0.retrieval_trace.strategy,
+                chunks_considered: v0.retrieval_trace.chunks_considered,
+                chunks_selected: v0.retrieval_trace.chunks_selected,
+                budget_requested: v0.retrieval_trace.budget_requested,
+                budget_used: v0.retrieval_trace.budget_used,
+                evidence_type_trace,
+            },
+            suggested_next_reads: v0.suggested_next_reads,
+        }
+    }
+}
+
 fn context_pack_internal_warning_type(warning: &str) -> &'static str {
     let normalized = warning.to_ascii_lowercase();
     if normalized.contains("budget") && normalized.contains("truncat") {
@@ -1440,6 +1480,78 @@ impl ContextPackEvidenceV0 {
     }
 }
 
+impl ContextPackEvidenceV1 {
+    fn from_v0(
+        evidence: &ContextPackEvidenceV0,
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let evidence_type = artifact_metadata
+            .evidence
+            .get(&evidence.source_id)
+            .and_then(|source_evidence| source_evidence.get(&evidence.evidence_ref))
+            .map(|metadata| metadata.evidence_type)
+            .unwrap_or_else(EvidenceType::legacy_default);
+
+        Self {
+            evidence_ref: evidence.evidence_ref.clone(),
+            source_id: evidence.source_id.clone(),
+            page: evidence.page,
+            region: evidence.region.clone(),
+            span: evidence.span.clone(),
+            quoted_text: evidence.quoted_text.clone(),
+            parse_confidence: evidence.parse_confidence.clone(),
+            selection_reason: evidence.selection_reason.clone(),
+            content_hash: evidence.content_hash.clone(),
+            evidence_type,
+        }
+    }
+}
+
+impl ContextPackEvidenceTypeTraceV1 {
+    fn from_pack(
+        pack: &BrainContextPack,
+        selected_evidence: &[ContextPackEvidenceV1],
+        artifact_metadata: &ContextPackArtifactMetadataV0,
+    ) -> Self {
+        let mut considered = BTreeMap::new();
+        for evidence in &pack.evidence {
+            let evidence_type = evidence
+                .source_id
+                .as_ref()
+                .and_then(|source_id| artifact_metadata.evidence.get(source_id))
+                .and_then(|source_evidence| {
+                    source_evidence.get(&evidence.id).or_else(|| {
+                        let page = context_pack_evidence_page(evidence)?;
+                        source_evidence.values().find(|metadata| {
+                            metadata.page == page
+                                && evidence
+                                    .source_id
+                                    .as_ref()
+                                    .is_some_and(|source_id| metadata.source_id == *source_id)
+                        })
+                    })
+                })
+                .map(|metadata| metadata.evidence_type)
+                .unwrap_or_else(EvidenceType::legacy_default);
+            *considered
+                .entry(evidence_type.as_trace_key().to_string())
+                .or_insert(0) += 1;
+        }
+
+        let mut selected = BTreeMap::new();
+        for evidence in selected_evidence {
+            *selected
+                .entry(evidence.evidence_type.as_trace_key().to_string())
+                .or_insert(0) += 1;
+        }
+
+        Self {
+            considered,
+            selected,
+        }
+    }
+}
+
 fn resolve_context_pack_evidence_metadata<'a>(
     evidence: &EvidenceRef,
     evidence_metadata: &'a BTreeMap<SourceId, BTreeMap<String, ContextPackEvidenceMetadataV0>>,
@@ -1487,6 +1599,7 @@ fn parse_page_number_from_label(label: &str) -> Option<usize> {
 #[serde(rename_all = "camelCase")]
 pub struct GetContextPackResponseData {
     pub context_pack: BrainContextPack,
+    pub context_pack_v1: ContextPackV1,
     pub context_pack_v0: ContextPackV0,
     #[serde(default)]
     pub persisted_context_pack_path: Option<String>,
@@ -2733,6 +2846,117 @@ mod tests {
             vec!["ev_src_agent_context_p1_b1"]
         );
         assert_eq!(external.warnings[0].warning_type, "budget_truncated");
+    }
+
+    #[test]
+    fn context_pack_v1_projects_selected_evidence_types_and_trace() {
+        let internal = BrainContextPack {
+            workspace_id: "default".into(),
+            query: "agent reuse".into(),
+            token_budget: 4000,
+            summary: "Agent context reuse summary.".into(),
+            wiki_pages: vec![],
+            nodes: vec![],
+            sources: vec![SourceRecord {
+                source_id: "src_agent_context".into(),
+                workspace_id: "default".into(),
+                original_path: "/tmp/agent-context.pdf".into(),
+                source_path: "/tmp/HyprDuck/default/sources/src_agent_context.pdf".into(),
+                markdown_path: "/tmp/HyprDuck/default/sources/src_agent_context.md".into(),
+                format: SourceFormat::pdf(),
+                status: SourceStatus::ingested(),
+                page_count: 2,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: 1,
+            }],
+            memories: vec![],
+            entities: vec![],
+            claims: vec![ClaimRecord {
+                claim_id: "claim_agent_reuse".into(),
+                workspace_id: "default".into(),
+                statement: "Context packs can be reused by agents.".into(),
+                topic_refs: vec![],
+                source_refs: vec!["src_agent_context".into()],
+                evidence_refs: vec!["ev_src_agent_context_p1_b1".into()],
+                status: "active".into(),
+                updated_at: 2,
+            }],
+            relations: vec![],
+            evidence: vec![EvidenceRef {
+                id: "ev_src_agent_context_p1_b1".into(),
+                page_label: "Page 1".into(),
+                page_index: Some(0),
+                snippet: "Context packs are reusable by coding agents.".into(),
+                source_path: None,
+                source_id: Some("src_agent_context".into()),
+                markdown_path: Some("/tmp/HyprDuck/default/sources/src_agent_context.md".into()),
+                image_path: Some("/tmp/HyprDuck/default/artifacts/page_1.png".into()),
+                provenance: Some("markdown_extract".into()),
+            }],
+            recent_events: vec![],
+            warnings: vec![],
+        };
+
+        let source_metadata = BTreeMap::from([(
+            "src_agent_context".into(),
+            ContextPackSourceMetadataV0 {
+                content_hash: "sha256:abc123".into(),
+                provider_route: "ollama".into(),
+                local_only: true,
+            },
+        )]);
+        let mut artifact_metadata = ContextPackArtifactMetadataV0::from_sources(source_metadata);
+        artifact_metadata
+            .evidence
+            .entry("src_agent_context".into())
+            .or_default()
+            .insert(
+                "ev_src_agent_context_p1_b1".into(),
+                ContextPackEvidenceMetadataV0 {
+                    source_id: "src_agent_context".into(),
+                    page: 1,
+                    region: Some("page:Page 1".into()),
+                    span: Some("page".into()),
+                    quoted_text: "Indexed source evidence quote.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    content_hash: "sha256:abc123".into(),
+                    markdown_path: None,
+                    image_path: None,
+                    evidence_type: EvidenceType::Table,
+                },
+            );
+
+        let external = ContextPackV1::from_brain_context_pack(
+            &internal,
+            "ctx_test",
+            "2026-05-29T00:00:00Z",
+            &artifact_metadata,
+        );
+
+        assert_eq!(external.schema_version, CONTEXT_PACK_V1_SCHEMA_VERSION);
+        assert_eq!(
+            external.selected_evidence[0].evidence_type,
+            EvidenceType::Table
+        );
+        assert_eq!(
+            external
+                .retrieval_trace
+                .evidence_type_trace
+                .selected
+                .get("table"),
+            Some(&1)
+        );
+        assert!(
+            external
+                .retrieval_trace
+                .evidence_type_trace
+                .considered
+                .values()
+                .sum::<usize>()
+                >= 1
+        );
     }
 
     #[test]

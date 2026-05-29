@@ -913,14 +913,14 @@ fn context_pack_source_metadata_skips_symlink_escape() {
 }
 
 #[test]
-fn context_pack_v0_persistence_writes_latest_and_history_files() {
+fn context_pack_v1_persistence_writes_latest_and_history_files() {
     let temp = tempfile::tempdir().expect("temp dir");
     let scope = BrainReadScope {
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().to_string_lossy().into_owned()),
     };
-    let context_pack = hyprduck_engine_types::ContextPackV0 {
-        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+    let context_pack = hyprduck_engine_types::ContextPackV1 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
         pack_id: "ctx_test_pack".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         query: "agent reuse".into(),
@@ -929,25 +929,30 @@ fn context_pack_v0_persistence_writes_latest_and_history_files() {
         selected_evidence: vec![],
         findings: vec![],
         warnings: vec![],
-        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV1 {
             strategy: "test".into(),
             chunks_considered: 0,
             chunks_selected: 0,
             budget_requested: 4000,
             budget_used: 0,
+            evidence_type_trace: hyprduck_engine_types::ContextPackEvidenceTypeTraceV1::default(),
         },
         suggested_next_reads: vec![],
     };
 
-    let path = persist_context_pack_v0(&scope, &context_pack).expect("persist context pack");
+    let path = persist_context_pack_v1(&scope, &context_pack).expect("persist context pack");
     assert!(path.ends_with("default/context_pack.json"));
     let latest = temp.path().join("default/context_pack.json");
     let history = temp.path().join("default/context_packs/ctx_test_pack.json");
     assert!(latest.exists());
     assert!(history.exists());
-    let decoded: hyprduck_engine_types::ContextPackV0 =
+    let decoded: hyprduck_engine_types::ContextPackV1 =
         serde_json::from_str(&fs::read_to_string(latest).expect("latest context pack"))
             .expect("context pack json");
+    assert_eq!(
+        decoded.schema_version,
+        hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION
+    );
     assert_eq!(decoded.pack_id, "ctx_test_pack");
 }
 
@@ -958,8 +963,8 @@ fn read_context_pack_reads_latest_and_history_without_path_escape() {
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().to_string_lossy().into_owned()),
     };
-    let context_pack = hyprduck_engine_types::ContextPackV0 {
-        schema_version: hyprduck_engine_types::CONTEXT_PACK_V0_SCHEMA_VERSION.into(),
+    let context_pack = hyprduck_engine_types::ContextPackV1 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
         pack_id: "ctx_test_pack".into(),
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         query: "agent reuse".into(),
@@ -968,16 +973,17 @@ fn read_context_pack_reads_latest_and_history_without_path_escape() {
         selected_evidence: vec![],
         findings: vec![],
         warnings: vec![],
-        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV0 {
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV1 {
             strategy: "test".into(),
             chunks_considered: 0,
             chunks_selected: 0,
             budget_requested: 4000,
             budget_used: 0,
+            evidence_type_trace: hyprduck_engine_types::ContextPackEvidenceTypeTraceV1::default(),
         },
         suggested_next_reads: vec![],
     };
-    persist_context_pack_v0(&scope, &context_pack).expect("persist context pack");
+    persist_context_pack_v1(&scope, &context_pack).expect("persist context pack");
 
     let latest = handle_read_context_pack(ReadContextPackRequest {
         scope: scope.clone(),
