@@ -593,10 +593,7 @@ fn evidence_index_item(
     })
 }
 
-fn infer_evidence_type(
-    page: &PageArtifact,
-    raw_text: &str,
-) -> hyprduck_engine_types::EvidenceType {
+fn infer_evidence_type(page: &PageArtifact, raw_text: &str) -> hyprduck_engine_types::EvidenceType {
     if page
         .markdown_path
         .as_ref()
