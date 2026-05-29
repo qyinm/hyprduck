@@ -2574,19 +2574,28 @@ fn join_or_none(values: &[String]) -> String {
 
 fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
     validate_workspace_id(&scope.workspace_id)?;
-    if let Some(root_dir) = &scope.root_dir {
-        return resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id);
-    }
-    if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
-        return resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id);
-    }
-    if let Some(application_support_root) = dirs::data_local_dir() {
-        return resolve_workspace_root_from_base(
+    let root = if let Some(root_dir) = &scope.root_dir {
+        resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id)?
+    } else if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
+        resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id)?
+    } else if let Some(application_support_root) = dirs::data_local_dir() {
+        resolve_workspace_root_from_base(
             &application_support_root.join("HyprDuck"),
             &scope.workspace_id,
-        );
-    }
-    resolve_workspace_root_from_base(&std::env::temp_dir().join("HyprDuck"), &scope.workspace_id)
+        )?
+    } else {
+        resolve_workspace_root_from_base(
+            &std::env::temp_dir().join("HyprDuck"),
+            &scope.workspace_id,
+        )?
+    };
+    ensure_workspace_knowledge_store(&root)?;
+    Ok(root)
+}
+
+fn ensure_workspace_knowledge_store(root: &Path) -> Result<()> {
+    KnowledgeStore::open(KnowledgeStore::default_path_for_root(root))?.health()?;
+    Ok(())
 }
 
 fn validate_workspace_id(workspace_id: &str) -> Result<()> {

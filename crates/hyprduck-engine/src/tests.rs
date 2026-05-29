@@ -143,6 +143,32 @@ fn source_import_persists_canonical_db_rows_and_fts() {
 }
 
 #[test]
+fn resolving_workspace_root_loads_graphqlite_store() {
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let previous_output_root = std::env::var_os("HYPRDUCK_OUTPUT_DIR");
+    std::env::set_var("HYPRDUCK_OUTPUT_DIR", temp.path());
+
+    let workspace_root = resolve_brain_workspace_root(&BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: None,
+    })
+    .expect("resolve workspace root");
+
+    match previous_output_root {
+        Some(value) => std::env::set_var("HYPRDUCK_OUTPUT_DIR", value),
+        None => std::env::remove_var("HYPRDUCK_OUTPUT_DIR"),
+    }
+
+    let store =
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root)).expect("open");
+    let health = store.health().expect("knowledge store health");
+    assert!(health.graphqlite_loaded);
+    assert!(health.graphqlite_transactional);
+    assert!(workspace_root.join("hyprduck.sqlite").exists());
+}
+
+#[test]
 fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
     let temp = tempfile::tempdir().expect("temp dir");
     let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";
