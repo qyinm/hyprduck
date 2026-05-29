@@ -330,6 +330,11 @@ impl KnowledgeStore {
             ))?;
 
             for page in &manifest.pages {
+                let plain_text = page
+                    .plain_text_path
+                    .as_deref()
+                    .and_then(|path| fs::read_to_string(path).ok())
+                    .unwrap_or_default();
                 let parse_warnings_json = serde_json::to_string(
                     &page
                         .error_message
@@ -339,14 +344,25 @@ impl KnowledgeStore {
                 )?;
                 sqlite.execute_batch(&format!(
                     "INSERT INTO source_pages (source_id, page_index, page_label, markdown_path_redacted, image_path_redacted, plain_text, parse_warnings_json)
-                     VALUES ({source_id}, {page_index}, {page_label}, {markdown_path}, {image_path}, '', {parse_warnings_json});",
+                     VALUES ({source_id}, {page_index}, {page_label}, {markdown_path}, {image_path}, {plain_text}, {parse_warnings_json});",
                     source_id = sql_literal(&manifest.source_id),
                     page_index = page.index,
                     page_label = sql_literal(&page.label),
                     markdown_path = sql_optional_literal(page.markdown_path.as_deref()),
                     image_path = sql_optional_literal(page.image_path.as_deref()),
+                    plain_text = sql_literal(&plain_text),
                     parse_warnings_json = sql_literal(&parse_warnings_json),
                 ))?;
+                if !plain_text.trim().is_empty() {
+                    sqlite.execute_batch(&format!(
+                        "INSERT INTO source_page_fts (source_id, page_index, page_label, text)
+                         VALUES ({source_id}, {page_index}, {page_label}, {plain_text});",
+                        source_id = sql_literal(&manifest.source_id),
+                        page_index = page.index,
+                        page_label = sql_literal(&page.label),
+                        plain_text = sql_literal(&plain_text),
+                    ))?;
+                }
             }
 
             for evidence in unique_project_evidence(project) {

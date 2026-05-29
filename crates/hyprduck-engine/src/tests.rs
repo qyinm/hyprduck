@@ -208,8 +208,23 @@ fn source_import_persists_canonical_db_rows_and_fts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let store = KnowledgeProjectStore::new(temp.path().join("hyprduck.sqlite"));
     let markdown = "# Source import\n\n## Page 1\n\nCanonical source evidence persists.\n";
-    let (project, manifest) =
+    let (project, mut manifest) =
         compile_manifest_fixture_project_with_source(&temp, markdown, "source-db", "alpha", 10);
+    let page_text_path = temp.path().join("source-db-page-1.txt");
+    fs::write(
+        &page_text_path,
+        "Canonical source page body persists before compatibility output.",
+    )
+    .expect("write source page text");
+    manifest.pages[0].plain_text_path = Some(page_text_path.display().to_string());
+    manifest.pages.push(PageArtifact {
+        index: 1,
+        label: "Page 2".into(),
+        image_path: None,
+        markdown_path: None,
+        plain_text_path: None,
+        error_message: Some("provider timeout".into()),
+    });
     let request = CompileProjectRequest {
         source_markdown_path: temp.path().join("sample.md").display().to_string(),
         source_document_path: Some(manifest.source_path.clone()),
@@ -226,13 +241,37 @@ fn source_import_persists_canonical_db_rows_and_fts() {
     assert_eq!(count_table_rows(&store, "import_jobs"), 1);
     assert_eq!(import_job_readiness(&store, "source-db"), "1:0");
     assert_eq!(count_table_rows(&store, "sources"), 1);
-    assert_eq!(count_table_rows(&store, "source_pages"), 1);
+    assert_eq!(count_table_rows(&store, "source_pages"), 2);
+    assert_eq!(count_table_rows(&store, "source_page_fts"), 1);
     assert!(count_table_rows(&store, "evidence_items") > 0);
     assert!(count_table_rows(&store, "evidence_fts") > 0);
     assert!(store
         .run_sql("SELECT manifest_json FROM sources WHERE source_id = 'source-db';")
         .expect("read manifest json")
         .contains("\"source_id\":\"source-db\""));
+    assert!(store
+        .run_sql("SELECT parse_warnings_json FROM sources WHERE source_id = 'source-db';")
+        .expect("read source warnings")
+        .contains("provider timeout"));
+    assert!(store
+        .run_sql(
+            "SELECT plain_text FROM source_pages WHERE source_id = 'source-db' AND page_index = 0;"
+        )
+        .expect("read source page text")
+        .contains("Canonical source page body"));
+    assert_eq!(
+        store
+            .run_sql("SELECT count(*) FROM source_page_fts WHERE source_page_fts MATCH 'body';")
+            .expect("query source page fts")
+            .trim(),
+        "1"
+    );
+    assert!(store
+        .run_sql(
+            "SELECT parse_warnings_json FROM source_pages WHERE source_id = 'source-db' AND page_index = 1;"
+        )
+        .expect("read source page warnings")
+        .contains("provider timeout"));
     assert_eq!(
         store
             .run_sql("SELECT source_path_redacted FROM sources WHERE source_id = 'source-db';")
