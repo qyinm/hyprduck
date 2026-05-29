@@ -80,6 +80,23 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
     .expect("list proposals");
     assert_eq!(pending.proposals.len(), 1);
     assert_eq!(pending.proposals[0].proposal_id, proposal.proposal_id);
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store");
+    let persisted = store
+        .load_agent_write_proposal(DEFAULT_WORKSPACE_ID, &proposal.proposal_id)
+        .expect("load persisted proposal")
+        .expect("persisted proposal exists");
+    assert_eq!(persisted.actor_id, MCP_WRITE_AGENT_ID);
+    assert_eq!(persisted.validation_status, "validated");
+    assert_eq!(persisted.approval_status, "pending");
+    assert_eq!(persisted.evidence_refs, vec!["ev-agent-write-1"]);
+    assert!(!persisted.requires_user_approval);
+    fs::remove_file(
+        workspace_root
+            .join("proposals")
+            .join(format!("{}.json", proposal.proposal_id)),
+    )
+    .expect("remove compatibility proposal file");
 
     let committed = handle_write_commit(WriteCommitRequest {
         scope: scope.clone(),
@@ -93,6 +110,11 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
         .join("proposals")
         .join(format!("{}.json", proposal.proposal_id))
         .exists());
+    let persisted = store
+        .load_agent_write_proposal(DEFAULT_WORKSPACE_ID, &proposal.proposal_id)
+        .expect("reload persisted proposal")
+        .expect("persisted proposal remains");
+    assert_eq!(persisted.approval_status, "committed");
 
     let events = fs::read_to_string(workspace_root.join("events/brain_events.jsonl"))
         .expect("read event log");

@@ -124,7 +124,7 @@ use domains::ingest::output_package::{
 };
 #[cfg(test)]
 use domains::ingest::output_package::{build_source_id, write_source_manifest};
-use domains::knowledge_store::KnowledgeStore;
+use domains::knowledge_store::{AgentWriteProposalRecord, KnowledgeStore};
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,
@@ -155,6 +155,7 @@ const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json
 const MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT: &str = "migration_input";
 const CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE: &str = "hyprduck.sqlite+graphqlite";
 const PROVIDER_GRAPH_AGENT_ID: &str = "hyprduck-provider-graph-agent";
+const MCP_WRITE_AGENT_ID: &str = "hyprduck-mcp-write-agent";
 const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
 const PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS: u64 = 300;
 
@@ -1123,6 +1124,26 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
         requires_user_approval: approval.requires_user_approval,
         approval_reason: approval.reason,
     };
+    let status = write_proposal_status(&proposal);
+    let proposal_json =
+        serde_json::to_string(&proposal).context("failed encoding agent write proposal")?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    store.persist_agent_write_proposal(&AgentWriteProposalRecord {
+        proposal_id: proposal.proposal_id.clone(),
+        workspace_id: proposal.workspace_id.clone(),
+        content_type: proposal.content_type.clone(),
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        actor_id: MCP_WRITE_AGENT_ID.into(),
+        validation_status: "validated".into(),
+        requires_user_approval: proposal.requires_user_approval,
+        approval_reason: proposal.approval_reason.clone(),
+        approval_status: status.clone(),
+        proposal_json,
+        created_at: now as i64,
+        updated_at: now as i64,
+    })?;
     write_json_pretty(
         &writer
             .root()
@@ -1133,11 +1154,7 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
 
     Ok(WriteProposeResponseData {
         proposal_id,
-        status: if proposal.requires_user_approval {
-            "pending_user_approval".into()
-        } else {
-            "pending".into()
-        },
+        status,
         created_at: now,
     })
 }
@@ -1146,17 +1163,16 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
     validate_proposal_id(&request.proposal_id)?;
     let root = resolve_brain_workspace_root(&request.scope)?;
     let writer = BrainWorkspaceWriter::open(root.clone())?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposal_path = root
         .join("proposals")
         .join(format!("{}.json", request.proposal_id));
-    if !proposal_path.exists() {
-        bail!(
-            "proposal {} was not found (already committed or rejected)",
-            request.proposal_id
-        );
-    }
-
-    let proposal: AgentWriteProposal = read_json_artifact(&proposal_path)?;
+    let proposal = read_agent_write_proposal(
+        &store,
+        &root,
+        &request.scope.workspace_id,
+        &request.proposal_id,
+    )?;
     validate_committable_proposal(&proposal, &request)?;
 
     let now = unix_timestamp_seconds();
@@ -1184,7 +1200,7 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
         operation_type: Some("agent_session_write".into()),
         actor: BrainActor {
             actor_type: BrainActorType::Agent,
-            actor_id: "hyprduck-mcp-write-agent".into(),
+            actor_id: MCP_WRITE_AGENT_ID.into(),
         },
         source_refs: Vec::new(),
         source_markdown_refs: Vec::new(),
@@ -1219,6 +1235,12 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
     });
     writer.repo().write_memory_records(&memories)?;
 
+    store.update_agent_write_proposal_status(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        "committed",
+        now as i64,
+    )?;
     fs::remove_file(&proposal_path).ok();
 
     Ok(WriteCommitResponseData {
@@ -1257,20 +1279,32 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
 
 fn handle_write_list(request: WriteListRequest) -> Result<WriteListResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposals_dir = root.join("proposals");
+    let mut proposals = store
+        .list_pending_agent_write_proposals(&request.scope.workspace_id)?
+        .into_iter()
+        .map(write_proposal_summary_from_record)
+        .collect::<Vec<_>>();
+    let mut seen = proposals
+        .iter()
+        .map(|proposal| proposal.proposal_id.clone())
+        .collect::<BTreeSet<_>>();
     if !proposals_dir.exists() {
-        return Ok(WriteListResponseData {
-            proposals: Vec::new(),
-        });
+        return Ok(WriteListResponseData { proposals });
     }
-    let mut proposals = Vec::new();
     for entry in fs::read_dir(&proposals_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "json") {
             if let Ok(proposal) = read_json_artifact::<Value>(&path) {
+                let proposal_id = proposal["proposalId"].as_str().unwrap_or("").to_string();
+                if proposal_id.is_empty() || seen.contains(&proposal_id) {
+                    continue;
+                }
+                seen.insert(proposal_id.clone());
                 proposals.push(WriteProposalSummary {
-                    proposal_id: proposal["proposalId"].as_str().unwrap_or("").to_string(),
+                    proposal_id,
                     content_type: proposal["contentType"]
                         .as_str()
                         .unwrap_or("memory")
@@ -1297,9 +1331,16 @@ fn handle_write_reject(request: WriteRejectRequest) -> Result<WriteRejectRespons
     validate_proposal_id(&request.proposal_id)?;
     let root = resolve_brain_workspace_root(&request.scope)?;
     let _writer = BrainWorkspaceWriter::open(root.clone())?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposal_path = root
         .join("proposals")
         .join(format!("{}.json", request.proposal_id));
+    store.update_agent_write_proposal_status(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        "rejected",
+        unix_timestamp_seconds() as i64,
+    )?;
     if proposal_path.exists() {
         fs::remove_file(&proposal_path)?;
     }
@@ -1307,6 +1348,65 @@ fn handle_write_reject(request: WriteRejectRequest) -> Result<WriteRejectRespons
         proposal_id: request.proposal_id,
         status: "rejected".into(),
     })
+}
+
+fn read_agent_write_proposal(
+    store: &KnowledgeStore,
+    root: &Path,
+    workspace_id: &str,
+    proposal_id: &str,
+) -> Result<AgentWriteProposal> {
+    if let Some(record) = store.load_agent_write_proposal(workspace_id, proposal_id)? {
+        if record.approval_status != "pending" && record.approval_status != "pending_user_approval"
+        {
+            bail!(
+                "proposal {} was not found (already committed or rejected)",
+                proposal_id
+            );
+        }
+        if record.validation_status != "validated" {
+            bail!(
+                "proposal {} is not committable because validation status is {}",
+                proposal_id,
+                record.validation_status
+            );
+        }
+        return Ok(agent_write_proposal_from_record(record));
+    }
+
+    let proposal_path = root.join("proposals").join(format!("{proposal_id}.json"));
+    if !proposal_path.exists() {
+        bail!(
+            "proposal {} was not found (already committed or rejected)",
+            proposal_id
+        );
+    }
+    read_json_artifact(&proposal_path)
+}
+
+fn agent_write_proposal_from_record(record: AgentWriteProposalRecord) -> AgentWriteProposal {
+    AgentWriteProposal {
+        proposal_id: record.proposal_id,
+        content_type: record.content_type,
+        title: record.title,
+        body: record.body,
+        evidence_refs: record.evidence_refs,
+        created_at: record.created_at.max(0) as u64,
+        workspace_id: record.workspace_id,
+        requires_user_approval: record.requires_user_approval,
+        approval_reason: record.approval_reason,
+    }
+}
+
+fn write_proposal_summary_from_record(record: AgentWriteProposalRecord) -> WriteProposalSummary {
+    WriteProposalSummary {
+        proposal_id: record.proposal_id,
+        content_type: record.content_type,
+        title: record.title,
+        body: record.body,
+        evidence_refs: record.evidence_refs,
+        created_at: record.created_at.max(0) as u64,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1347,6 +1447,14 @@ fn validate_write_content_type(content_type: &str) -> Result<()> {
 struct WriteApprovalPolicy {
     requires_user_approval: bool,
     reason: Option<String>,
+}
+
+fn write_proposal_status(proposal: &AgentWriteProposal) -> String {
+    if proposal.requires_user_approval {
+        "pending_user_approval".into()
+    } else {
+        "pending".into()
+    }
 }
 
 fn write_proposal_approval_policy(content_type: &str, body: &str) -> WriteApprovalPolicy {
