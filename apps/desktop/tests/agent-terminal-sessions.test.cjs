@@ -103,6 +103,25 @@ test("backend data events are accumulated and published", async () => {
   });
 });
 
+test("writeSession blocks after a backend exit event closes the session", async () => {
+  await withDetectedCodex(async () => {
+    const backend = createFakeBackend({ handoffStatus: "attached" });
+    const manager = new AgentTerminalSessionManager({ backend });
+
+    const session = await manager.createSession({ agentId: "codex" });
+    backend.exit({ exitCode: 0, signal: null });
+    const result = await manager.writeSession({
+      sessionId: session.id,
+      input: "late",
+    });
+
+    assert.equal(manager.snapshotSession({ sessionId: session.id }).status, "closed");
+    assert.equal(result.status, "blocked");
+    assert.deepEqual(backend.calls.write, []);
+  });
+});
+
+
 async function withDetectedCodex(callback) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprduck-codex-"));
   const codexPath = path.join(tempDir, "codex");
@@ -130,6 +149,11 @@ function createFakeBackend(options = {}) {
     emit(data) {
       for (const listener of listeners) {
         listener({ type: "data", data });
+      }
+    },
+    exit(event) {
+      for (const listener of listeners) {
+        listener({ type: "exit", ...event });
       }
     },
     async createSession(args) {

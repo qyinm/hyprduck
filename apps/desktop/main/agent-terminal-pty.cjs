@@ -77,12 +77,18 @@ class PtyAgentTerminalBackend extends AgentTerminalBackend {
 
   async write(sessionId, input) {
     const record = this.requireSession(sessionId);
+    if (record.closed) {
+      return { status: "blocked", reason: "terminal session is closed" };
+    }
     record.ptyProcess.write(input);
     return { status: "written" };
   }
 
   async resize(sessionId, dimensions) {
     const record = this.requireSession(sessionId);
+    if (record.closed) {
+      return { status: "ignored", reason: "terminal session is closed" };
+    }
     record.ptyProcess.resize(dimensions.cols, dimensions.rows);
     return { status: "resized" };
   }

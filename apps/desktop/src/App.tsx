@@ -708,6 +708,10 @@ export function App() {
     return invoke("agent_terminal_resize_session", args);
   };
 
+  const killAgentTerminalSession = async (args: { sessionId: string }) => {
+    return invoke("agent_terminal_kill_session", args);
+  };
+
   const saveConfig = async (payload: EngineConfigPayload) => {
     const saved = await invoke("save_engine_config", {
       payload,
@@ -979,6 +983,7 @@ export function App() {
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
                 onCreateAgentTerminalSession={createAgentTerminalSession}
+                onKillAgentTerminalSession={killAgentTerminalSession}
                 onListenAgentTerminalEvents={listenAgentTerminalEvents}
                 onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}

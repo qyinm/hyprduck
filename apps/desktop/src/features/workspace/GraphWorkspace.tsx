@@ -47,6 +47,9 @@ interface GraphWorkspaceProps {
     handler: (event: AgentTerminalEvent) => void,
   ) => DesktopUnlisten;
   onListAgentTerminalAgents: () => Promise<AgentTerminalListResult>;
+  onKillAgentTerminalSession: (args: {
+    sessionId: string;
+  }) => Promise<unknown>;
   onResizeAgentTerminalSession: (args: {
     sessionId: string;
     cols: number;
@@ -82,6 +85,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onCreateAgentTerminalSession,
     onListenAgentTerminalEvents,
     onListAgentTerminalAgents,
+    onKillAgentTerminalSession,
     onResizeAgentTerminalSession,
     onWriteAgentTerminalSession,
     onRetryFailedPages,
@@ -304,6 +308,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             nodeId={selectedNode?.node.id ?? null}
             onClose={() => setAgentTerminalOpen(false)}
             onCreateSession={onCreateAgentTerminalSession}
+            onKillSession={onKillAgentTerminalSession}
             onListenAgentTerminalEvents={onListenAgentTerminalEvents}
             onListAgents={onListAgentTerminalAgents}
             onResizeSession={onResizeAgentTerminalSession}

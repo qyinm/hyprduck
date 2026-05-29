@@ -106,6 +106,9 @@ class AgentTerminalSessionManager {
     if (!input) {
       return { status: "ignored", reason: "empty input" };
     }
+    if (session.status === "closed") {
+      return { status: "blocked", reason: "terminal session is closed" };
+    }
     if (session.handoffState !== "writable") {
       return {
         status: "blocked",
@@ -118,6 +121,9 @@ class AgentTerminalSessionManager {
 
   async resizeSession(args = {}) {
     const session = this.requireSession(args.sessionId ?? args.session_id);
+    if (session.status === "closed") {
+      return { status: "ignored", reason: "terminal session is closed" };
+    }
     return this.backend.resize(session.backendSessionId, {
       cols: normalizeDimension(args.cols, 120),
       rows: normalizeDimension(args.rows, 36),

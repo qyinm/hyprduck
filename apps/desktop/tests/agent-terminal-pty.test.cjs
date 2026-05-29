@@ -48,6 +48,10 @@ test("pty backend spawns the detected agent command and forwards lifecycle event
   assert.equal(events[0].data, "ready");
   assert.equal(events[1].type, "exit");
   assert.equal(events[1].exitCode, 0);
+  assert.deepEqual(await backend.write("session-1", "late"), {
+    status: "blocked",
+    reason: "terminal session is closed",
+  });
 });
 
 test("pty backend replays fast startup output to late subscribers", async () => {

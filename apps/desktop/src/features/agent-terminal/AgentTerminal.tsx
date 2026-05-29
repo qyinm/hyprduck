@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ExternalLink, Plus, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
+import {
+  ExternalLink,
+  Plus,
+  RotateCcw,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
 
 import type {
   AgentTerminalAgent,
@@ -26,6 +32,7 @@ interface AgentTerminalProps {
     handler: (event: AgentTerminalEvent) => void,
   ) => DesktopUnlisten;
   onListAgents: () => Promise<AgentTerminalListResult>;
+  onKillSession: (args: { sessionId: string }) => Promise<unknown>;
   onResizeSession: (args: {
     sessionId: string;
     cols: number;
@@ -47,6 +54,7 @@ export function AgentTerminal(props: AgentTerminalProps) {
     onCreateSession,
     onListenAgentTerminalEvents,
     onListAgents,
+    onKillSession,
     onResizeSession,
     onWriteSession,
     open,
@@ -58,6 +66,8 @@ export function AgentTerminal(props: AgentTerminalProps) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const renderedSessionIdRef = useRef<string | null>(null);
   const renderedOutputLengthRef = useRef(0);
+  const sessionsRef = useRef<AgentTerminalSession[]>([]);
+  const onKillSessionRef = useRef(onKillSession);
   const onResizeSessionRef = useRef(onResizeSession);
   const onWriteSessionRef = useRef(onWriteSession);
   const [agentList, setAgentList] = useState<AgentTerminalListResult | null>(null);
@@ -73,9 +83,27 @@ export function AgentTerminal(props: AgentTerminalProps) {
   );
 
   useEffect(() => {
+    onKillSessionRef.current = onKillSession;
     onResizeSessionRef.current = onResizeSession;
     onWriteSessionRef.current = onWriteSession;
-  }, [onResizeSession, onWriteSession]);
+  }, [onKillSession, onResizeSession, onWriteSession]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(
+    () => () => {
+      for (const session of sessionsRef.current.filter(
+        (candidate) => candidate.status !== "closed",
+      )) {
+        void onKillSessionRef.current({ sessionId: session.id }).catch(
+          () => undefined,
+        );
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!open || agentList || loadingAgents) {
@@ -96,6 +124,26 @@ export function AgentTerminal(props: AgentTerminalProps) {
       );
     });
   }, [onListenAgentTerminalEvents, open]);
+
+  useEffect(() => {
+    if (open) {
+      return undefined;
+    }
+    terminalRef.current?.dispose();
+    terminalRef.current = null;
+    fitAddonRef.current = null;
+    renderedSessionIdRef.current = null;
+    renderedOutputLengthRef.current = 0;
+    const liveSessions = sessionsRef.current.filter(
+      (session) => session.status !== "closed",
+    );
+    for (const session of liveSessions) {
+      void onKillSessionRef.current({ sessionId: session.id }).catch(() => undefined);
+    }
+    setSessions([]);
+    setActiveSessionId(null);
+    return undefined;
+  }, [open]);
 
   useEffect(() => {
     terminalRef.current?.dispose();
@@ -228,6 +276,24 @@ export function AgentTerminal(props: AgentTerminalProps) {
     }
   }
 
+  async function closeSession(sessionId: string) {
+    setSessions((current) => current.filter((session) => session.id !== sessionId));
+    setActiveSessionId((current) => {
+      if (current !== sessionId) {
+        return current;
+      }
+      const remaining = sessionsRef.current.filter(
+        (session) => session.id !== sessionId,
+      );
+      return remaining[remaining.length - 1]?.id ?? null;
+    });
+    try {
+      await onKillSession({ sessionId });
+    } catch (killError) {
+      setError(String(killError));
+    }
+  }
+
   return (
     <section className="pointer-events-auto absolute inset-x-6 bottom-24 z-30 mx-auto flex h-[min(34rem,calc(100%-8rem))] w-[min(64rem,calc(100%-3rem))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
       <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
@@ -271,19 +337,31 @@ export function AgentTerminal(props: AgentTerminalProps) {
 
       <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-secondary/20 px-2">
         {sessions.map((session) => (
-          <button
+          <div
             className={cn(
-              "h-7 max-w-48 shrink-0 rounded-md border px-2 text-xs font-medium",
+              "flex h-7 max-w-48 shrink-0 items-center gap-1 rounded-md border pl-2 pr-1 text-xs font-medium",
               session.id === activeSessionId
                 ? "border-foreground bg-background text-foreground"
                 : "border-transparent text-muted-foreground hover:bg-background",
             )}
             key={session.id}
-            onClick={() => setActiveSessionId(session.id)}
-            type="button"
           >
-            <span className="truncate">{session.agent.label}</span>
-          </button>
+            <button
+              className="min-w-0 flex-1 truncate text-left"
+              onClick={() => setActiveSessionId(session.id)}
+              type="button"
+            >
+              {session.agent.label}
+            </button>
+            <button
+              aria-label={`Close ${session.agent.label} tab`}
+              className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={() => void closeSession(session.id)}
+              type="button"
+            >
+              <X size={11} />
+            </button>
+          </div>
         ))}
         {sessions.length === 0 ? (
           <span className="px-2 text-xs text-muted-foreground">No agent tabs</span>

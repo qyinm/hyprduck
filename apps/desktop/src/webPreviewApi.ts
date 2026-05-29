@@ -625,7 +625,7 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       reason: "Web preview does not host native terminal sessions.",
     }),
     agent_terminal_kill_session: () => ({
-      status: "ignored",
+      status: "closed",
       reason: "Web preview does not host native terminal sessions.",
     }),
     save_engine_config: (args) => {
