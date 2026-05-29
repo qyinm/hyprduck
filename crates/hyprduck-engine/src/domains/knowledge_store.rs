@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use graphqlite::{Graph, PropertyValue};
+#[cfg(test)]
+use hyprduck_engine_types::EvidenceRef;
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
     BrainScope,
@@ -208,10 +210,16 @@ impl KnowledgeStore {
 
             CREATE TABLE IF NOT EXISTS evidence_items (
                 evidence_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL DEFAULT '',
                 source_id TEXT NOT NULL,
                 page_index INTEGER,
+                page_label TEXT NOT NULL DEFAULT '',
                 evidence_type TEXT NOT NULL,
                 snippet TEXT NOT NULL,
+                source_path_redacted TEXT NOT NULL DEFAULT '',
+                markdown_path_redacted TEXT NOT NULL DEFAULT '',
+                image_path_redacted TEXT NOT NULL DEFAULT '',
+                provenance TEXT NOT NULL DEFAULT '',
                 span_json TEXT NOT NULL DEFAULT '{}',
                 region_json TEXT NOT NULL DEFAULT '{}',
                 producer_run_id TEXT NOT NULL DEFAULT '',
@@ -298,6 +306,25 @@ impl KnowledgeStore {
                 }
             }
         }
+        for column in [
+            "workspace_id TEXT NOT NULL DEFAULT ''",
+            "page_label TEXT NOT NULL DEFAULT ''",
+            "source_path_redacted TEXT NOT NULL DEFAULT ''",
+            "markdown_path_redacted TEXT NOT NULL DEFAULT ''",
+            "image_path_redacted TEXT NOT NULL DEFAULT ''",
+            "provenance TEXT NOT NULL DEFAULT ''",
+        ] {
+            let result = sqlite.execute(
+                &format!("ALTER TABLE evidence_items ADD COLUMN {column}"),
+                [],
+            );
+            if let Err(error) = result {
+                let message = error.to_string();
+                if !message.contains("duplicate column name") {
+                    return Err(error).context("failed migrating evidence_items table");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -319,6 +346,9 @@ fn persist_graph_snapshot_in_transaction(
     graph: &Graph,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<KnowledgeGraphPersistReport> {
+    persist_snapshot_sources_in_transaction(graph, snapshot)?;
+    persist_evidence_snapshot_in_transaction(graph, snapshot)?;
+    validate_snapshot_evidence_refs(snapshot)?;
     graph
         .connection()
         .cypher_builder("MATCH (n {workspace_id: $workspace_id}) DETACH DELETE n")
@@ -355,6 +385,213 @@ fn persist_graph_snapshot_in_transaction(
         node_count: snapshot.nodes.len(),
         relation_count: snapshot.relations.len(),
     })
+}
+
+fn persist_snapshot_sources_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    for source in &snapshot.sources {
+        sqlite
+            .execute(
+                "INSERT INTO sources (
+                    source_id,
+                    workspace_id,
+                    project_id,
+                    title,
+                    original_path,
+                    source_path,
+                    markdown_path,
+                    format,
+                    status,
+                    page_count,
+                    success_count,
+                    failed_count,
+                    updated_at
+                ) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 0, ?10)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    workspace_id=excluded.workspace_id,
+                    title=excluded.title,
+                    original_path=excluded.original_path,
+                    source_path=excluded.source_path,
+                    markdown_path=excluded.markdown_path,
+                    format=excluded.format,
+                    status=excluded.status,
+                    page_count=excluded.page_count,
+                    updated_at=excluded.updated_at",
+                (
+                    source.source_id.as_str(),
+                    snapshot.workspace_id.as_str(),
+                    source.source_id.as_str(),
+                    source.original_path.as_str(),
+                    source.source_path.as_str(),
+                    source.markdown_path.as_str(),
+                    format!("{:?}", source.format).to_ascii_lowercase(),
+                    format!("{:?}", source.status).to_ascii_lowercase(),
+                    source.page_count as i64,
+                    source.updated_at as i64,
+                ),
+            )
+            .with_context(|| format!("failed upserting source row {}", source.source_id))?;
+    }
+    for evidence in &snapshot.evidence {
+        let Some(source_id) = evidence.source_id.as_deref() else {
+            continue;
+        };
+        sqlite
+            .execute(
+                "INSERT OR IGNORE INTO sources (
+                    source_id,
+                    workspace_id,
+                    project_id,
+                    title,
+                    original_path,
+                    source_path,
+                    markdown_path,
+                    format,
+                    status,
+                    page_count,
+                    success_count,
+                    failed_count,
+                    updated_at
+                ) VALUES (?1, ?2, '', ?1, '', '', '', 'unknown', 'unknown', 0, 0, 0, ?3)",
+                (
+                    source_id,
+                    snapshot.workspace_id.as_str(),
+                    snapshot.generated_at as i64,
+                ),
+            )
+            .with_context(|| format!("failed upserting evidence source row {source_id}"))?;
+    }
+    Ok(())
+}
+
+fn persist_evidence_snapshot_in_transaction(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "DELETE FROM evidence_fts WHERE evidence_id IN (SELECT evidence_id FROM evidence_items WHERE workspace_id = ?1)",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing evidence FTS rows")?;
+    sqlite
+        .execute(
+            "DELETE FROM evidence_items WHERE workspace_id = ?1",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing relational evidence rows")?;
+
+    for evidence in &snapshot.evidence {
+        let source_id = evidence.source_id.as_deref().unwrap_or_default();
+        let page_index = evidence
+            .page_index
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        sqlite
+            .execute(
+                "INSERT INTO evidence_items (
+                    evidence_id,
+                    workspace_id,
+                    source_id,
+                    page_index,
+                    page_label,
+                    evidence_type,
+                    snippet,
+                    source_path_redacted,
+                    markdown_path_redacted,
+                    image_path_redacted,
+                    provenance,
+                    status
+                ) VALUES (?1, ?2, ?3, NULLIF(?4, ''), ?5, 'text_evidence', ?6, ?7, ?8, ?9, ?10, 'active')",
+                (
+                    evidence.id.as_str(),
+                    snapshot.workspace_id.as_str(),
+                    source_id,
+                    page_index.as_str(),
+                    evidence.page_label.as_str(),
+                    evidence.snippet.as_str(),
+                    evidence.source_path.as_deref().unwrap_or_default(),
+                    evidence.markdown_path.as_deref().unwrap_or_default(),
+                    evidence.image_path.as_deref().unwrap_or_default(),
+                    evidence.provenance.as_deref().unwrap_or_default(),
+                ),
+            )
+            .with_context(|| format!("failed inserting evidence row {}", evidence.id))?;
+        sqlite
+            .execute(
+                "INSERT INTO evidence_fts (evidence_id, source_id, evidence_type, text)
+                 VALUES (?1, ?2, 'text_evidence', ?3)",
+                (evidence.id.as_str(), source_id, evidence.snippet.as_str()),
+            )
+            .with_context(|| format!("failed indexing evidence row {}", evidence.id))?;
+    }
+
+    Ok(())
+}
+
+fn validate_snapshot_evidence_refs(snapshot: &BrainRepoSnapshot) -> Result<()> {
+    let evidence_ids = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for node in &snapshot.nodes {
+        validate_record_evidence_refs(
+            &format!("node {}", node.node_id),
+            &node.evidence_ids,
+            &evidence_ids,
+        )?;
+    }
+    for relation in &snapshot.relations {
+        validate_record_evidence_refs(
+            &format!("relation {}", relation.relation_id),
+            &relation.evidence_ids,
+            &evidence_ids,
+        )?;
+    }
+    for wiki_page in &snapshot.wiki_pages {
+        validate_record_evidence_refs(
+            &format!("wiki page {}", wiki_page.page_id),
+            &wiki_page.evidence_refs,
+            &evidence_ids,
+        )?;
+    }
+    for claim in &snapshot.claims {
+        validate_record_evidence_refs(
+            &format!("claim {}", claim.claim_id),
+            &claim.evidence_refs,
+            &evidence_ids,
+        )?;
+    }
+    for memory in &snapshot.memories {
+        validate_record_evidence_refs(
+            &format!("memory {}", memory.memory_id),
+            &memory.evidence_refs,
+            &evidence_ids,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_record_evidence_refs(
+    record_label: &str,
+    refs: &[String],
+    evidence_ids: &std::collections::BTreeSet<&str>,
+) -> Result<()> {
+    for evidence_ref in refs {
+        if !evidence_ids.contains(evidence_ref.as_str()) {
+            return Err(anyhow!(
+                "{} references missing relational evidence row {}",
+                record_label,
+                evidence_ref
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn node_graph_properties(
@@ -659,7 +896,17 @@ mod tests {
                 confidence: Some(0.8),
                 updated_at: 10,
             }],
-            evidence: Vec::new(),
+            evidence: vec![EvidenceRef {
+                id: "evidence-a".into(),
+                page_label: "p1".into(),
+                page_index: Some(0),
+                snippet: "Alpha relates to beta.".into(),
+                source_path: Some("sources/source-a.pdf".into()),
+                source_id: Some("source-a".into()),
+                markdown_path: Some("sources/source-a.md".into()),
+                image_path: None,
+                provenance: Some("test".into()),
+            }],
             memories: Vec::new(),
             wiki_pages: Vec::new(),
             entities: Vec::new(),
@@ -685,5 +932,44 @@ mod tests {
                 .expect("graph counts"),
             report
         );
+    }
+
+    #[test]
+    fn graph_snapshot_rejects_missing_relational_evidence_refs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        let snapshot = BrainRepoSnapshot {
+            workspace_id: "workspace-default".into(),
+            generated_at: 10,
+            sources: Vec::new(),
+            nodes: vec![BrainNodeRecord {
+                node_id: "node-a".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Alpha".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["missing-evidence".into()],
+                source_ids: Vec::new(),
+                confidence: None,
+                updated_at: 10,
+            }],
+            relations: Vec::new(),
+            evidence: Vec::new(),
+            memories: Vec::new(),
+            wiki_pages: Vec::new(),
+            entities: Vec::new(),
+            claims: Vec::new(),
+            extractions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        let error = store
+            .persist_graph_snapshot(&snapshot)
+            .expect_err("missing evidence ref should fail graph publish");
+
+        assert!(error
+            .to_string()
+            .contains("references missing relational evidence row missing-evidence"));
     }
 }
