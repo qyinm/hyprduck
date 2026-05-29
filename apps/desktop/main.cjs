@@ -290,7 +290,7 @@ async function startParse(request) {
     jobId: nextJobId(),
     filePath: request.path,
     format: request.format,
-    status: "queued",
+    status: "imported",
     progressPercent: 4,
     lastMessage: "Queued parse request",
   };
@@ -328,9 +328,10 @@ async function startParse(request) {
     if (data.saved_output_path) {
       try {
         if (snapshot.activeJob) {
+          snapshot.activeJob.status = "packaging";
           snapshot.activeJob.progressPercent = 100;
-          snapshot.activeJob.lastMessage = "Compiling knowledge workspace";
-          pushProgressEntry("compile", "Compiling knowledge workspace");
+          snapshot.activeJob.lastMessage = "Packaging citation evidence";
+          pushProgressEntry("packaging", "Packaging citation evidence");
           publishSnapshot();
         }
         const sourceManifest = data.source_manifest ?? null;
@@ -345,15 +346,21 @@ async function startParse(request) {
         snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
         snapshot.workspaceRevision += 1;
         pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
+        if (snapshot.activeJob) {
+          snapshot.activeJob.status = "citation_ready";
+          snapshot.activeJob.progressPercent = 94;
+          snapshot.activeJob.lastMessage = "Citation-ready evidence is available";
+          pushProgressEntry("citation_ready", "Citation-ready evidence is available");
+        }
         let graphRebuildQueued = false;
         if (sourceManifest) {
           graphRebuildQueued = true;
           if (snapshot.activeJob) {
-            snapshot.activeJob.status = "running";
+            snapshot.activeJob.status = "citation_ready";
             snapshot.activeJob.progressPercent = 96;
-            snapshot.activeJob.lastMessage = "Rebuilding workspace graph";
+            snapshot.activeJob.lastMessage = "Preparing context graph";
           }
-          pushProgressEntry("graph", "Queued workspace graph rebuild");
+          pushProgressEntry("context", "Preparing context graph");
           enqueueWorkspaceGraphRebuild(
             data.saved_output_path,
             request.path,
@@ -406,7 +413,7 @@ async function retryFailedPages() {
     jobId: nextJobId(),
     filePath: sourcePath,
     format: sourceManifest.format,
-    status: "queued",
+    status: "imported",
     progressPercent: 4,
     lastMessage: `Queued retry for ${failedPages.length} failed page${
       failedPages.length === 1 ? "" : "s"
@@ -497,9 +504,10 @@ async function retryFailedPages() {
     );
 
     if (snapshot.activeJob) {
+      snapshot.activeJob.status = "packaging";
       snapshot.activeJob.progressPercent = 100;
-      snapshot.activeJob.lastMessage = "Compiling knowledge workspace after retry";
-      pushProgressEntry("compile", "Compiling knowledge workspace after retry");
+      snapshot.activeJob.lastMessage = "Packaging citation evidence after retry";
+      pushProgressEntry("packaging", "Packaging citation evidence after retry");
       publishSnapshot();
     }
     const project = await compileWorkspaceProject(
@@ -513,13 +521,19 @@ async function retryFailedPages() {
     snapshot.lastSourceId = project.sourceId ?? snapshot.lastSourceId;
     snapshot.workspaceRevision += 1;
     pushProgressEntry("compile", `Compiled knowledge workspace ${project.projectId}`);
+    if (snapshot.activeJob) {
+      snapshot.activeJob.status = "citation_ready";
+      snapshot.activeJob.progressPercent = 94;
+      snapshot.activeJob.lastMessage = "Citation-ready evidence is available";
+      pushProgressEntry("citation_ready", "Citation-ready evidence is available after retry");
+    }
 
     if (snapshot.activeJob) {
-      snapshot.activeJob.status = "running";
+      snapshot.activeJob.status = "citation_ready";
       snapshot.activeJob.progressPercent = 96;
-      snapshot.activeJob.lastMessage = "Rebuilding workspace graph";
+      snapshot.activeJob.lastMessage = "Preparing context graph";
     }
-    pushProgressEntry("graph", "Queued workspace graph rebuild");
+    pushProgressEntry("context", "Preparing context graph");
     enqueueWorkspaceGraphRebuild(
       updatedManifest.markdown_path,
       updatedManifest.source_path,
@@ -690,9 +704,9 @@ async function runWorkspaceGraphRebuild(
   activeJobId,
 ) {
   updateActiveGraphRebuildJob(activeJobId, {
-    status: "running",
+    status: "citation_ready",
     progressPercent: 96,
-    lastMessage: "Rebuilding workspace graph",
+    lastMessage: "Preparing context graph",
   });
   pushProgressEntry("graph", `Rebuilding workspace graph for ${sourceManifest.output_name}`);
   publishSnapshot();
@@ -724,7 +738,7 @@ async function runWorkspaceGraphRebuild(
       graphGenerationNonBlockingMessage(project) ?? "Workspace graph rebuild completed",
     );
     updateActiveGraphRebuildJob(activeJobId, {
-      status: "completed",
+      status: "context_ready",
       progressPercent: 100,
       lastMessage: "Workspace graph rebuild completed",
     });
@@ -819,7 +833,7 @@ function applyProgressEvent(event) {
   if (!snapshot.activeJob) {
     return;
   }
-  snapshot.activeJob.status = "running";
+  snapshot.activeJob.status = "parsing";
   switch (event.type) {
     case "queued":
       snapshot.activeJob.progressPercent = 6;
@@ -842,11 +856,13 @@ function applyProgressEvent(event) {
       pushProgressEntry("parsing", snapshot.activeJob.lastMessage);
       break;
     case "packaging":
+      snapshot.activeJob.status = "packaging";
       snapshot.activeJob.progressPercent = 94;
       snapshot.activeJob.lastMessage = "Saving markdown package";
       pushProgressEntry("packaging", "Saving markdown package");
       break;
     case "completed":
+      snapshot.activeJob.status = "packaging";
       snapshot.activeJob.progressPercent = 100;
       snapshot.activeJob.lastMessage = "Parse completed";
       pushProgressEntry("completed", "Parse completed");

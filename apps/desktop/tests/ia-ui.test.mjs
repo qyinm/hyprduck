@@ -191,6 +191,36 @@ test("desktop app prepares the short HyprDuck MCP shell command", () => {
   expect(cliShimSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
 });
 
+test("desktop import jobs use HyprDuck citation lifecycle states", () => {
+  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+  const activeJobStatusAssignments = [
+    ...mainSource.matchAll(/snapshot\.activeJob\.status\s*=\s*"([^"]+)"/g),
+  ].map((match) => match[1]);
+  const activeJobInitializers = [
+    ...mainSource.matchAll(/snapshot\.activeJob\s*=\s*\{[\s\S]*?status:\s*"([^"]+)"/g),
+  ].map((match) => match[1]);
+  const graphRebuildStatusPatches = [
+    ...mainSource.matchAll(/updateActiveGraphRebuildJob\([^)]*\{\s*status:\s*"([^"]+)"/g),
+  ].map((match) => match[1]);
+  const importJobStatuses = [
+    ...activeJobStatusAssignments,
+    ...activeJobInitializers,
+    ...graphRebuildStatusPatches,
+  ];
+
+  expect(appTypesSource).toMatch(
+    /type ImportJobLifecycleStatus =\s*\|\s*"imported"\s*\|\s*"parsing"\s*\|\s*"packaging"\s*\|\s*"citation_ready"\s*\|\s*"context_ready"\s*\|\s*"failed"\s*\|\s*"cancelled"\s*\|\s*"partial"/,
+  );
+  expect(importJobStatuses).toContain("imported");
+  expect(importJobStatuses).toContain("parsing");
+  expect(importJobStatuses).toContain("packaging");
+  expect(importJobStatuses).toContain("citation_ready");
+  expect(importJobStatuses).toContain("context_ready");
+  expect(importJobStatuses).not.toContain("queued");
+  expect(importJobStatuses).not.toContain("running");
+  expect(importJobStatuses).not.toContain("completed");
+});
+
 test("desktop provider validation preserves issue codes", () => {
   expect(appTypesSource).toMatch(/interface ValidationIssue \{\s*code: string;\s*message: string;\s*\}/);
   expect(previewApiSource).toMatch(/code: "provider_config"/);
