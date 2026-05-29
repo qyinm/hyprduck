@@ -1121,6 +1121,9 @@ fn brain_knowledge_store_report(
     let summary = knowledge_store.state_summary(workspace_id)?;
     Ok(BrainKnowledgeStoreReport {
         canonical_storage: "sqlite+graphqlite".into(),
+        primary_graph_store: "graphqlite".into(),
+        pure_sqlite_relational_graph_rejected: true,
+        graph_native_query_surface: "graphqlite_cypher".into(),
         db_schema_version: health.db_schema_version,
         graph_schema_version: health.graph_schema_version,
         graphqlite_loaded: health.graphqlite_loaded,

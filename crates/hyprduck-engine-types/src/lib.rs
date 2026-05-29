@@ -1643,6 +1643,9 @@ pub struct BrainGovernanceReport {
 #[serde(rename_all = "camelCase")]
 pub struct BrainKnowledgeStoreReport {
     pub canonical_storage: String,
+    pub primary_graph_store: String,
+    pub pure_sqlite_relational_graph_rejected: bool,
+    pub graph_native_query_surface: String,
     pub db_schema_version: i64,
     pub graph_schema_version: i64,
     pub graphqlite_loaded: bool,

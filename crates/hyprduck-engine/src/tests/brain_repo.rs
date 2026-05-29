@@ -25,6 +25,9 @@ fn brain_health_is_clean_for_empty_workspace() {
         .as_ref()
         .expect("knowledge store report");
     assert_eq!(store.canonical_storage, "sqlite+graphqlite");
+    assert_eq!(store.primary_graph_store, "graphqlite");
+    assert!(store.pure_sqlite_relational_graph_rejected);
+    assert_eq!(store.graph_native_query_surface, "graphqlite_cypher");
     assert!(store.graphqlite_loaded);
     assert!(store.graphqlite_transactional);
     assert_eq!(store.evidence_item_count, 0);

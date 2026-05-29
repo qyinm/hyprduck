@@ -219,6 +219,15 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     let payload: Value = serde_json::from_str(text).expect("health payload");
     assert_eq!(payload["status"], "clean");
     assert_eq!(payload["attentionCount"], 0);
+    assert_eq!(payload["knowledgeStore"]["primaryGraphStore"], "graphqlite");
+    assert_eq!(
+        payload["knowledgeStore"]["pureSqliteRelationalGraphRejected"],
+        true
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["graphNativeQuerySurface"],
+        "graphqlite_cypher"
+    );
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);
