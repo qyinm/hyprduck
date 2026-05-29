@@ -814,6 +814,27 @@ impl KnowledgeStore {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn read_graph_canvas_projection_from_db(
+        &self,
+        workspace_id: &str,
+    ) -> Result<
+        Option<(
+            Vec<BrainNodeRecord>,
+            Vec<BrainRelationRecord>,
+            Vec<WikiPage>,
+        )>,
+    > {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let nodes = load_graph_canvas_nodes(&graph, workspace_id)?;
+        let relations = load_graph_canvas_relations(&graph, workspace_id)?;
+        let wiki_pages = load_graph_canvas_wiki_pages(&graph, workspace_id)?;
+        if nodes.is_empty() && relations.is_empty() && wiki_pages.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some((nodes, relations, wiki_pages)))
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn resolve_evidence_proof(
         &self,
         workspace_id: &str,
@@ -1182,6 +1203,151 @@ impl KnowledgeStore {
     }
 }
 
+fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<BrainNodeRecord>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {workspace_id: $workspace_id})
+             RETURN n.id AS node_id,
+                    n.kind AS kind,
+                    n.label AS label,
+                    n.scope AS scope,
+                    n.aliases_json AS aliases_json,
+                    n.evidence_ids_json AS evidence_ids_json,
+                    n.source_ids_json AS source_ids_json,
+                    n.confidence AS confidence,
+                    n.updated_at AS updated_at",
+        )
+        .param("workspace_id", workspace_id)
+        .run()
+        .context("failed querying GraphQLite graph canvas nodes")?;
+    let mut nodes = rows
+        .iter()
+        .map(|row| {
+            Ok(BrainNodeRecord {
+                node_id: row_string(row, "node_id").context("read graph canvas node id")?,
+                kind: parse_brain_node_kind(
+                    &row_string(row, "kind").context("read graph canvas node kind")?,
+                ),
+                label: row_string(row, "label").context("read graph canvas node label")?,
+                scope: parse_brain_scope(
+                    &row_string(row, "scope").context("read graph canvas node scope")?,
+                ),
+                aliases: row_string_array(row, "aliases_json")
+                    .context("read graph canvas node aliases")?,
+                evidence_ids: row_string_array(row, "evidence_ids_json")
+                    .context("read graph canvas node evidence refs")?,
+                source_ids: row_string_array(row, "source_ids_json")
+                    .context("read graph canvas node source refs")?,
+                confidence: parse_optional_f32(
+                    &row_string(row, "confidence").context("read graph canvas node confidence")?,
+                ),
+                updated_at: row_i64(row, "updated_at")
+                    .context("read graph canvas node updated at")?
+                    .max(0) as u64,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    Ok(nodes)
+}
+
+fn load_graph_canvas_relations(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<Vec<BrainRelationRecord>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+             RETURN r.relation_id AS relation_id,
+                    r.kind AS kind,
+                    source.id AS source_node_id,
+                    target.id AS target_node_id,
+                    r.label AS label,
+                    r.evidence_ids_json AS evidence_ids_json,
+                    r.confidence AS confidence,
+                    r.updated_at AS updated_at",
+        )
+        .param("workspace_id", workspace_id)
+        .run()
+        .context("failed querying GraphQLite graph canvas relations")?;
+    let mut relations = rows
+        .iter()
+        .map(|row| {
+            Ok(BrainRelationRecord {
+                relation_id: row_string(row, "relation_id")
+                    .context("read graph canvas relation id")?,
+                kind: parse_brain_relation_kind(
+                    &row_string(row, "kind").context("read graph canvas relation kind")?,
+                ),
+                source_node_id: row_string(row, "source_node_id")
+                    .context("read graph canvas relation source node")?,
+                target_node_id: row_string(row, "target_node_id")
+                    .context("read graph canvas relation target node")?,
+                label: row_string(row, "label").context("read graph canvas relation label")?,
+                evidence_ids: row_string_array(row, "evidence_ids_json")
+                    .context("read graph canvas relation evidence refs")?,
+                confidence: parse_optional_f32(
+                    &row_string(row, "confidence")
+                        .context("read graph canvas relation confidence")?,
+                ),
+                updated_at: row_i64(row, "updated_at")
+                    .context("read graph canvas relation updated at")?
+                    .max(0) as u64,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    Ok(relations)
+}
+
+fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT wiki_page_id,
+                    path,
+                    title,
+                    body,
+                    evidence_refs_json,
+                    updated_at
+             FROM wiki_pages
+             WHERE workspace_id = ?1
+               AND approval_status IN ('materialized', 'approved')
+             ORDER BY path ASC, wiki_page_id ASC",
+        )
+        .context("failed preparing graph canvas wiki page query")?;
+    let mut rows = statement
+        .query([workspace_id])
+        .context("failed querying graph canvas wiki pages")?;
+    let mut wiki_pages = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading graph canvas wiki row")?
+    {
+        wiki_pages.push(WikiPage {
+            page_id: row.get(0).context("read graph canvas wiki id")?,
+            workspace_id: workspace_id.into(),
+            path: row.get(1).context("read graph canvas wiki path")?,
+            title: row.get(2).context("read graph canvas wiki title")?,
+            body: row.get(3).context("read graph canvas wiki body")?,
+            node_refs: Vec::new(),
+            source_refs: Vec::new(),
+            evidence_refs: serde_json::from_str::<Vec<String>>(
+                &row.get::<_, String>(4)
+                    .context("read graph canvas wiki evidence refs")?,
+            )
+            .unwrap_or_default(),
+            updated_at: row
+                .get::<_, i64>(5)
+                .context("read graph canvas wiki updated at")?
+                .max(0) as u64,
+        });
+    }
+    Ok(wiki_pages)
+}
+
 fn load_context_pack_evidence_row(
     graph: &Graph,
     workspace_id: &str,
@@ -1536,6 +1702,31 @@ fn parse_brain_node_kind(kind: &str) -> BrainNodeKind {
         "claim" => BrainNodeKind::Claim,
         "topic" => BrainNodeKind::Topic,
         _ => BrainNodeKind::Concept,
+    }
+}
+
+fn parse_brain_relation_kind(kind: &str) -> BrainRelationKind {
+    match kind {
+        "mentions" => BrainRelationKind::Mentions,
+        "supports" => BrainRelationKind::Supports,
+        "contradicts" => BrainRelationKind::Contradicts,
+        "supersedes" => BrainRelationKind::Supersedes,
+        "same_as" => BrainRelationKind::SameAs,
+        "works_at" => BrainRelationKind::WorksAt,
+        "founded" => BrainRelationKind::Founded,
+        "invested_in" => BrainRelationKind::InvestedIn,
+        "advises" => BrainRelationKind::Advises,
+        "attended" => BrainRelationKind::Attended,
+        "owns" => BrainRelationKind::Owns,
+        "responsible_for" => BrainRelationKind::ResponsibleFor,
+        "decided" => BrainRelationKind::Decided,
+        "blocks" => BrainRelationKind::Blocks,
+        "depends_on" => BrainRelationKind::DependsOn,
+        "source_of" => BrainRelationKind::SourceOf,
+        "derived_from" => BrainRelationKind::DerivedFrom,
+        "cites" => BrainRelationKind::Cites,
+        "links_to" => BrainRelationKind::LinksTo,
+        _ => BrainRelationKind::RelatedTo,
     }
 }
 
@@ -1894,6 +2085,32 @@ fn append_cypher_neighbor_evidence_ids(
         }
     }
     Ok(())
+}
+
+#[allow(dead_code)]
+fn row_string(row: &graphqlite::Row, column: &str) -> Result<String> {
+    match row.get_value(column) {
+        Some(graphqlite::Value::String(value)) => Ok(value.clone()),
+        Some(graphqlite::Value::Integer(value)) => Ok(value.to_string()),
+        Some(graphqlite::Value::Float(value)) => Ok(value.to_string()),
+        Some(graphqlite::Value::Bool(value)) => Ok(value.to_string()),
+        Some(graphqlite::Value::Null) | None => Ok(String::new()),
+        Some(other) => Err(anyhow!("expected scalar column {column}, got {other:?}")),
+    }
+}
+
+#[allow(dead_code)]
+fn row_i64(row: &graphqlite::Row, column: &str) -> Result<i64> {
+    match row.get_value(column) {
+        Some(graphqlite::Value::Integer(value)) => Ok(*value),
+        Some(graphqlite::Value::Float(value)) => Ok(*value as i64),
+        Some(graphqlite::Value::String(value)) if value.trim().is_empty() => Ok(0),
+        Some(graphqlite::Value::String(value)) => value
+            .parse::<i64>()
+            .with_context(|| format!("failed parsing integer column {column}")),
+        Some(graphqlite::Value::Null) | None => Ok(0),
+        Some(other) => Err(anyhow!("expected integer column {column}, got {other:?}")),
+    }
 }
 
 #[allow(dead_code)]
@@ -3907,6 +4124,19 @@ mod tests {
         let _ = store
             .read_node_from_db("workspace-default", "node-a")
             .expect("read node from DB");
+        let (graph_nodes, graph_relations, graph_wiki_pages) = store
+            .read_graph_canvas_projection_from_db("workspace-default")
+            .expect("read graph canvas projection")
+            .expect("graph canvas projection");
+        assert!(graph_nodes.iter().any(|node| node.node_id == "node-a"));
+        assert!(graph_nodes
+            .iter()
+            .any(|node| node.node_id == "source:source-a"));
+        assert!(graph_relations
+            .iter()
+            .any(|relation| relation.relation_id == "rel-a"));
+        assert_eq!(graph_wiki_pages.len(), 1);
+        assert_eq!(graph_wiki_pages[0].page_id, "wiki-alpha");
         update_evidence_status(&store, "evidence-b", "failed");
         let filtered_hits = store
             .hybrid_retrieve("workspace-default", "Alpha", 5)

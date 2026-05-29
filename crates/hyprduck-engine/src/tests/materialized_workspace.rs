@@ -20,6 +20,33 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         updated_at: 10,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized graph");
+    let mut db_snapshot = snapshot.clone();
+    db_snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-beta".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Beta".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: Vec::new(),
+        source_ids: Vec::new(),
+        confidence: Some(0.8),
+        updated_at: 11,
+    });
+    db_snapshot.relations.push(BrainRelationRecord {
+        relation_id: "rel-alpha-beta".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: "concept-alpha".into(),
+        target_node_id: "concept-beta".into(),
+        label: "relates".into(),
+        evidence_ids: Vec::new(),
+        confidence: Some(0.7),
+        updated_at: 11,
+    });
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store");
+    store
+        .persist_graph_snapshot(&db_snapshot)
+        .expect("persist DB graph projection");
     let artifact_root = workspace_root.join("artifacts/source-alpha");
     fs::create_dir_all(&artifact_root).expect("artifact root");
     write_json_pretty(
@@ -61,6 +88,14 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
     assert_eq!(report.raw_source_graph_node_count, 151);
     assert_eq!(report.canonical_source_graph_node_count, 32);
     assert_eq!(report.canonical_source_graph_relation_count, 48);
+    assert!(response
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-beta"));
+    assert!(response
+        .edges
+        .iter()
+        .any(|edge| edge.relation_id == "rel-alpha-beta"));
 }
 
 #[test]

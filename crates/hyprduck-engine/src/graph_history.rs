@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{
     latest_readable_materialized_file_refs, read_latest_readable_graph_snapshot_marker,
-    BrainReader, MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
+    BrainReader, KnowledgeStore, MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
 };
 
 pub(crate) fn handle_read_graph_history(
@@ -79,6 +79,15 @@ pub(crate) fn handle_read_graph_snapshot(
         .filter(|_| marker_event.is_some())
         .map(|marker| marker.materialized_files.clone())
         .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
+    let db_projection =
+        match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
+            Some(projection) => projection,
+            None => (
+                reader.snapshot.nodes.clone(),
+                reader.snapshot.relations.clone(),
+                reader.read_all_wiki_pages()?,
+            ),
+        };
 
     Ok(ReadGraphSnapshotResponseData {
         snapshot_id,
@@ -91,8 +100,8 @@ pub(crate) fn handle_read_graph_snapshot(
         materialized_paths,
         source_paths: graph_snapshot_source_paths(&reader.snapshot),
         graph_materialization_reports: read_graph_materialization_reports(reader.root()),
-        nodes: reader.snapshot.nodes.clone(),
-        edges: reader.snapshot.relations.clone(),
+        nodes: db_projection.0,
+        edges: db_projection.1,
         claims: reader.snapshot.claims.clone(),
         memory_refs: reader
             .snapshot
@@ -100,8 +109,25 @@ pub(crate) fn handle_read_graph_snapshot(
             .iter()
             .map(|memory| memory.memory_id.clone())
             .collect(),
-        wiki_pages: reader.read_all_wiki_pages()?,
+        wiki_pages: db_projection.2,
     })
+}
+
+fn read_graph_canvas_projection(
+    root: &Path,
+    workspace_id: &str,
+) -> Result<
+    Option<(
+        Vec<hyprduck_engine_types::BrainNodeRecord>,
+        Vec<hyprduck_engine_types::BrainRelationRecord>,
+        Vec<hyprduck_engine_types::WikiPage>,
+    )>,
+> {
+    let db_path = KnowledgeStore::default_path_for_root(root);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    KnowledgeStore::open(db_path)?.read_graph_canvas_projection_from_db(workspace_id)
 }
 
 fn read_graph_materialization_reports(root: &Path) -> Vec<GraphMaterializationReportSummary> {
