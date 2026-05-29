@@ -7,11 +7,11 @@ use hyprduck_engine_types::{
 };
 use hyprduck_engine_types::{
     BrainContextPack, BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord,
-    BrainRepoSnapshot, BrainScope, ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0,
-    ContextPackParseConfidence, ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef,
-    EvidenceType, KnowledgeProject, PageEvidenceV0, ReadNodeResponseData,
-    ReadPageEvidenceResponseData, ReadSourceResponseData, SourceArtifactManifest, SourceFormat,
-    SourceRecord, SourceStatus, WikiPage,
+    BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
+    ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackParseConfidence,
+    ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, EvidenceType, KnowledgeProject,
+    PageEvidenceV0, ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
+    SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -834,6 +834,114 @@ impl KnowledgeStore {
         Ok(Some((nodes, relations, wiki_pages)))
     }
 
+    pub(crate) fn search_brain_from_db(
+        &self,
+        workspace_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<BrainSearchResult>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let terms = db_search_terms(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let mut results = Vec::new();
+        for hit in self.hybrid_retrieve(workspace_id, query, limit)? {
+            let row = load_context_pack_evidence_row(&graph, workspace_id, &hit.evidence_id)?;
+            let path = row
+                .as_ref()
+                .and_then(|row| non_empty_string(row.markdown_path_redacted.clone()));
+            results.push(BrainSearchResult {
+                kind: if hit.evidence_type == "wiki_evidence" {
+                    BrainSearchResultKind::WikiPage
+                } else {
+                    BrainSearchResultKind::Evidence
+                },
+                id: hit.evidence_id,
+                title: hit.source_id,
+                path,
+                score: db_float_score(hit.score),
+                snippet: hit.snippet,
+            });
+        }
+
+        for node in load_graph_canvas_nodes(&graph, workspace_id)? {
+            let haystack = format!(
+                "{} {} {} {}",
+                node.node_id,
+                node.label,
+                node.aliases.join(" "),
+                node.source_ids.join(" ")
+            );
+            if let Some(score) = db_match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Node,
+                    id: node.node_id,
+                    title: node.label,
+                    path: None,
+                    score,
+                    snippet: evidence_snippet_from_ids(&node.evidence_ids),
+                });
+            }
+        }
+
+        for relation in load_graph_canvas_relations(&graph, workspace_id)? {
+            let haystack = format!(
+                "{} {:?} {} {} {} {}",
+                relation.relation_id,
+                relation.kind,
+                relation.source_node_id,
+                relation.target_node_id,
+                relation.label,
+                relation.evidence_ids.join(" ")
+            );
+            if let Some(score) = db_match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::Relation,
+                    id: relation.relation_id,
+                    title: relation.label,
+                    path: None,
+                    score,
+                    snippet: format!(
+                        "{:?}: {} -> {}; {}",
+                        relation.kind,
+                        relation.source_node_id,
+                        relation.target_node_id,
+                        evidence_snippet_from_ids(&relation.evidence_ids)
+                    ),
+                });
+            }
+        }
+
+        for page in load_graph_canvas_wiki_pages(&graph, workspace_id)? {
+            let haystack = format!("{} {} {}", page.path, page.title, page.body);
+            if let Some(score) = db_match_score(&terms, &haystack) {
+                results.push(BrainSearchResult {
+                    kind: BrainSearchResultKind::WikiPage,
+                    id: page.page_id,
+                    title: page.title,
+                    path: Some(page.path),
+                    score,
+                    snippet: db_best_snippet(&page.body, &terms),
+                });
+            }
+        }
+
+        results.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| left.title.cmp(&right.title))
+        });
+        results.dedup_by(|left, right| left.kind == right.kind && left.id == right.id);
+        results.truncate(limit);
+        Ok(results)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn resolve_evidence_proof(
         &self,
@@ -1346,6 +1454,47 @@ fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec
         });
     }
     Ok(wiki_pages)
+}
+
+fn db_search_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(|term| term.trim().to_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect()
+}
+
+fn db_match_score(terms: &[String], haystack: &str) -> Option<usize> {
+    let lower = haystack.to_lowercase();
+    let matched = terms.iter().filter(|term| lower.contains(*term)).count();
+    (matched > 0).then(|| matched * 100)
+}
+
+fn db_best_snippet(text: &str, terms: &[String]) -> String {
+    let lower = text.to_lowercase();
+    for term in terms {
+        if let Some(index) = lower.find(term) {
+            let start = text[..index].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+            let end = text[index..]
+                .find('\n')
+                .map(|pos| index + pos)
+                .unwrap_or_else(|| text.len());
+            return text[start..end].trim().chars().take(240).collect();
+        }
+    }
+    text.trim().chars().take(240).collect()
+}
+
+fn db_float_score(score: f64) -> usize {
+    (score.max(0.0) * 1000.0).round() as usize
+}
+
+fn evidence_snippet_from_ids(evidence_ids: &[String]) -> String {
+    if evidence_ids.is_empty() {
+        String::new()
+    } else {
+        format!("Evidence refs: {}", evidence_ids.join(", "))
+    }
 }
 
 fn load_context_pack_evidence_row(

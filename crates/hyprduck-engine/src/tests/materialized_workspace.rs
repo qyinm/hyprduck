@@ -96,6 +96,20 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         .edges
         .iter()
         .any(|edge| edge.relation_id == "rel-alpha-beta"));
+
+    let search_response = handle_search_brain(hyprduck_engine_types::SearchBrainRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(output_root.display().to_string()),
+        },
+        query: "Beta".into(),
+        limit: Some(10),
+    })
+    .expect("search DB graph projection");
+    assert!(search_response
+        .results
+        .iter()
+        .any(|result| result.id == "concept-beta"));
 }
 
 #[test]

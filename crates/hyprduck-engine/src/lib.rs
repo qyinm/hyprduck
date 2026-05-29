@@ -660,6 +660,19 @@ fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectR
 }
 
 fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let db_results = store.search_brain_from_db(
+        &request.scope.workspace_id,
+        &request.query,
+        request.limit.unwrap_or(10),
+    )?;
+    if !db_results.is_empty() {
+        return Ok(SearchBrainResponseData {
+            results: db_results,
+        });
+    }
+
     let reader = BrainReader::open(&request.scope)?;
     Ok(SearchBrainResponseData {
         results: reader.search(&request.query, request.limit.unwrap_or(10)),
