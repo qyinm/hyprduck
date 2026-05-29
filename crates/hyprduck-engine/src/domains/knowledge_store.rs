@@ -398,7 +398,10 @@ impl KnowledgeStore {
                     bm25(evidence_fts) AS lexical_rank
                  FROM evidence_fts f
                  JOIN evidence_items e ON e.evidence_id = f.evidence_id
+                 JOIN sources s ON s.source_id = e.source_id
                  WHERE e.workspace_id = ?1 AND evidence_fts MATCH ?2
+                   AND e.status = 'active'
+                   AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
                  ORDER BY lexical_rank ASC
                  LIMIT ?3",
             )
@@ -463,9 +466,12 @@ impl KnowledgeStore {
                 .connection()
                 .sqlite_connection()
                 .prepare(
-                    "SELECT evidence_id, source_id, evidence_type, snippet
-                     FROM evidence_items
-                     WHERE snippet LIKE '%' || ?1 || '%'
+                    "SELECT e.evidence_id, e.source_id, e.evidence_type, e.snippet
+                     FROM evidence_items e
+                     JOIN sources s ON s.source_id = e.source_id
+                     WHERE e.snippet LIKE '%' || ?1 || '%'
+                       AND e.status = 'active'
+                       AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
                      LIMIT ?2",
                 )
                 .context("failed preparing hybrid retrieval fallback query")?;
@@ -1041,9 +1047,12 @@ fn append_graph_neighbor_hits(
         }
         let mut statement = sqlite
             .prepare(
-                "SELECT evidence_id, source_id, evidence_type, snippet
-                 FROM evidence_items
-                 WHERE workspace_id = ?1 AND evidence_id = ?2",
+                "SELECT e.evidence_id, e.source_id, e.evidence_type, e.snippet
+                 FROM evidence_items e
+                 JOIN sources s ON s.source_id = e.source_id
+                 WHERE e.workspace_id = ?1 AND e.evidence_id = ?2
+                   AND e.status = 'active'
+                   AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
             )
             .context("failed preparing graph neighbor evidence query")?;
         let mut rows = statement
@@ -1282,6 +1291,8 @@ fn append_source_page_fts_hits(
              JOIN sources s ON s.source_id = p.source_id
              JOIN evidence_items e ON e.source_id = p.source_id AND e.page_index = p.page_index
              WHERE s.workspace_id = ?1 AND source_page_fts MATCH ?2
+               AND e.status = 'active'
+               AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
              ORDER BY lexical_rank ASC
              LIMIT ?3",
         )
@@ -1342,6 +1353,7 @@ fn append_wiki_fts_hits(
              FROM wiki_fts w
              JOIN wiki_pages wp ON wp.wiki_page_id = w.wiki_page_id
              WHERE w.workspace_id = ?1 AND wiki_fts MATCH ?2
+               AND wp.approval_status IN ('materialized', 'approved')
              ORDER BY lexical_rank ASC
              LIMIT ?3",
         )
@@ -3110,6 +3122,13 @@ mod tests {
             .find(|hit| hit.evidence_id == "evidence-b")
             .expect("graph neighbor evidence hit");
         assert_eq!(beta_neighbor_hit.snippet, "Beta neighbor evidence.");
+        update_evidence_status(&store, "evidence-b", "failed");
+        let filtered_hits = store
+            .hybrid_retrieve("workspace-default", "Alpha", 5)
+            .expect("filtered hybrid retrieve");
+        assert!(filtered_hits
+            .iter()
+            .all(|hit| hit.evidence_id != "evidence-b"));
         let wiki_hits = store
             .hybrid_retrieve("workspace-default", "source evidence", 5)
             .expect("wiki hybrid retrieve");
@@ -3191,6 +3210,18 @@ mod tests {
             )
             .expect("wiki fts count");
         assert_eq!(fts_hits, 1);
+    }
+
+    fn update_evidence_status(store: &KnowledgeStore, evidence_id: &str, status: &str) {
+        let graph = Graph::open(store.path()).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .execute(
+                "UPDATE evidence_items SET status = ?2 WHERE evidence_id = ?1",
+                (evidence_id, status),
+            )
+            .expect("update evidence status");
     }
 
     fn assert_source_page_fts_content(store: &KnowledgeStore) {
