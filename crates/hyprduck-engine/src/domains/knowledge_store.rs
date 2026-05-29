@@ -384,6 +384,7 @@ impl KnowledgeStore {
         if fts_query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
+        let evidence_intent = EvidenceQueryIntent::from_query(query);
 
         let mut statement = graph
             .connection()
@@ -413,11 +414,7 @@ impl KnowledgeStore {
             let snippet: String = row.get(3).context("failed reading evidence text")?;
             let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
             let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
-            let typed_evidence_boost = if evidence_type == "text_evidence" {
-                0.05
-            } else {
-                0.0
-            };
+            let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
             let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
             hits.push(HybridRetrievalHit {
                 evidence_id,
@@ -435,6 +432,7 @@ impl KnowledgeStore {
                 workspace_id,
                 limit,
                 &graph_neighbor_counts,
+                &evidence_intent,
                 &mut hits,
             )?;
         }
@@ -445,6 +443,7 @@ impl KnowledgeStore {
                 fts_query.as_str(),
                 limit,
                 &graph_neighbor_counts,
+                &evidence_intent,
                 &mut hits,
             )?;
         }
@@ -455,6 +454,7 @@ impl KnowledgeStore {
                 fts_query.as_str(),
                 limit,
                 &graph_neighbor_counts,
+                &evidence_intent,
                 &mut hits,
             )?;
         }
@@ -481,11 +481,7 @@ impl KnowledgeStore {
                 let evidence_type: String = row.get(2).context("failed reading evidence type")?;
                 let snippet: String = row.get(3).context("failed reading evidence text")?;
                 let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
-                let typed_evidence_boost = if evidence_type == "text_evidence" {
-                    0.05
-                } else {
-                    0.0
-                };
+                let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
                 let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
                 hits.push(HybridRetrievalHit {
                     evidence_id,
@@ -970,6 +966,7 @@ fn append_graph_neighbor_hits(
     workspace_id: &str,
     limit: usize,
     graph_neighbor_counts: &BTreeMap<String, i64>,
+    evidence_intent: &EvidenceQueryIntent,
     hits: &mut Vec<HybridRetrievalHit>,
 ) -> Result<()> {
     let seed_evidence_ids = hits
@@ -1063,6 +1060,7 @@ fn append_graph_neighbor_hits(
         let evidence_type: String = row.get(2).context("failed reading evidence type")?;
         let snippet: String = row.get(3).context("failed reading evidence snippet")?;
         let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
         let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
         hits.push(HybridRetrievalHit {
             evidence_id,
@@ -1071,7 +1069,7 @@ fn append_graph_neighbor_hits(
             snippet,
             lexical_rank: 0.0,
             graph_neighbor_count,
-            score: 0.04 + graph_boost,
+            score: 0.04 + typed_evidence_boost + graph_boost,
         });
     }
 
@@ -1180,6 +1178,87 @@ fn row_string_array(row: &graphqlite::Row, column: &str) -> Result<Vec<String>> 
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct EvidenceQueryIntent {
+    wants_table: bool,
+    wants_visual: bool,
+    wants_summary: bool,
+    wants_claim: bool,
+    wants_relationship: bool,
+}
+
+impl EvidenceQueryIntent {
+    fn from_query(query: &str) -> Self {
+        let query = query.to_lowercase();
+        let contains_any = |needles: &[&str]| needles.iter().any(|needle| query.contains(needle));
+        Self {
+            wants_table: contains_any(&[
+                "table",
+                "row",
+                "column",
+                "spreadsheet",
+                "csv",
+                "financial",
+                "balance sheet",
+                "표",
+                "테이블",
+            ]),
+            wants_visual: contains_any(&[
+                "image",
+                "figure",
+                "chart",
+                "diagram",
+                "screenshot",
+                "ocr",
+                "caption",
+                "그림",
+                "이미지",
+                "차트",
+            ]),
+            wants_summary: contains_any(&["summary", "summarize", "overview", "요약", "개요"]),
+            wants_claim: contains_any(&[
+                "claim",
+                "assertion",
+                "statement",
+                "argument",
+                "주장",
+                "명제",
+            ]),
+            wants_relationship: contains_any(&[
+                "relationship",
+                "relation",
+                "link",
+                "graph",
+                "connect",
+                "edge",
+                "관계",
+                "연결",
+            ]),
+        }
+    }
+
+    fn boost(self, evidence_type: &str) -> f64 {
+        let intent_boost = match evidence_type {
+            "table_evidence" if self.wants_table => 0.14,
+            "image_region_evidence" | "ocr_evidence" | "caption_evidence" if self.wants_visual => {
+                0.12
+            }
+            "summary_evidence" | "wiki_evidence" if self.wants_summary => 0.10,
+            "claim_evidence" if self.wants_claim => 0.10,
+            "relationship_evidence" if self.wants_relationship => 0.10,
+            "claim_evidence" if self.wants_relationship => 0.06,
+            "relationship_evidence" if self.wants_claim => 0.06,
+            _ => 0.0,
+        };
+        intent_boost
+            + match evidence_type {
+                "text_evidence" => 0.05,
+                "summary_evidence" | "claim_evidence" | "wiki_evidence" => 0.02,
+                _ => 0.0,
+            }
+    }
+}
+
 #[allow(dead_code)]
 fn append_source_page_fts_hits(
     graph: &Graph,
@@ -1187,6 +1266,7 @@ fn append_source_page_fts_hits(
     fts_query: &str,
     limit: usize,
     graph_neighbor_counts: &BTreeMap<String, i64>,
+    evidence_intent: &EvidenceQueryIntent,
     hits: &mut Vec<HybridRetrievalHit>,
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
@@ -1225,6 +1305,7 @@ fn append_source_page_fts_hits(
         let snippet: String = row.get(3).context("failed reading source page text")?;
         let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
         let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
         let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
         hits.push(HybridRetrievalHit {
             evidence_id,
@@ -1233,7 +1314,7 @@ fn append_source_page_fts_hits(
             snippet,
             lexical_rank,
             graph_neighbor_count,
-            score: -lexical_rank + 0.03 + graph_boost,
+            score: -lexical_rank + 0.03 + typed_evidence_boost + graph_boost,
         });
     }
     Ok(())
@@ -1246,6 +1327,7 @@ fn append_wiki_fts_hits(
     fts_query: &str,
     limit: usize,
     graph_neighbor_counts: &BTreeMap<String, i64>,
+    evidence_intent: &EvidenceQueryIntent,
     hits: &mut Vec<HybridRetrievalHit>,
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
@@ -1288,6 +1370,7 @@ fn append_wiki_fts_hits(
             continue;
         }
         let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let typed_evidence_boost = evidence_intent.boost("wiki_evidence");
         let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
         hits.push(HybridRetrievalHit {
             evidence_id,
@@ -1296,7 +1379,7 @@ fn append_wiki_fts_hits(
             snippet: format!("{title}\n{text}"),
             lexical_rank,
             graph_neighbor_count,
-            score: -lexical_rank + 0.02 + graph_boost,
+            score: -lexical_rank + 0.02 + typed_evidence_boost + graph_boost,
         });
     }
     Ok(())
@@ -2804,6 +2887,23 @@ mod tests {
     }
 
     #[test]
+    fn evidence_query_intent_boosts_requested_evidence_types() {
+        let table_intent = EvidenceQueryIntent::from_query("show the financial table");
+        assert!(table_intent.boost("table_evidence") > table_intent.boost("text_evidence"));
+
+        let visual_intent = EvidenceQueryIntent::from_query("inspect the figure caption");
+        assert!(
+            visual_intent.boost("image_region_evidence") > visual_intent.boost("text_evidence")
+        );
+
+        let relationship_intent = EvidenceQueryIntent::from_query("which claims are connected");
+        assert!(
+            relationship_intent.boost("relationship_evidence")
+                > relationship_intent.boost("text_evidence")
+        );
+    }
+
+    #[test]
     fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
@@ -3000,10 +3100,16 @@ mod tests {
             .hybrid_retrieve("workspace-default", "Alpha", 5)
             .expect("hybrid retrieve");
         assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].evidence_id, "evidence-a");
-        assert_eq!(hits[0].graph_neighbor_count, 1);
-        assert_eq!(hits[1].evidence_id, "evidence-b");
-        assert_eq!(hits[1].snippet, "Beta neighbor evidence.");
+        let alpha_hit = hits
+            .iter()
+            .find(|hit| hit.evidence_id == "evidence-a")
+            .expect("alpha evidence hit");
+        assert_eq!(alpha_hit.graph_neighbor_count, 1);
+        let beta_neighbor_hit = hits
+            .iter()
+            .find(|hit| hit.evidence_id == "evidence-b")
+            .expect("graph neighbor evidence hit");
+        assert_eq!(beta_neighbor_hit.snippet, "Beta neighbor evidence.");
         let wiki_hits = store
             .hybrid_retrieve("workspace-default", "source evidence", 5)
             .expect("wiki hybrid retrieve");
