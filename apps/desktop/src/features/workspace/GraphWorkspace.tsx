@@ -1047,7 +1047,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         className={cn(
           "agent-terminal-composer-pill min-w-0 flex-1 overflow-hidden border border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur",
           agentTerminalOpen
-            ? "h-[min(34rem,calc(100vh-5rem))] rounded-[1.75rem] p-0"
+            ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl p-0"
             : "flex h-14 items-center gap-2 rounded-full px-3",
         )}
       >
