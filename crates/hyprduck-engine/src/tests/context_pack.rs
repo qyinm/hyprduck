@@ -248,11 +248,9 @@ fn context_pack_artifact_metadata_reports_unsupported_evidence_index_schema() {
         }],
     );
 
-    assert!(metadata
-        .warnings
-        .iter()
-        .any(|warning| warning.warning_type == "evidence_index_schema_mismatch"
-            && warning.message.contains("hyprduck.evidence_index.v99")));
+    assert!(metadata.warnings.iter().any(|warning| warning.warning_type
+        == "evidence_index_schema_mismatch"
+        && warning.message.contains("hyprduck.evidence_index.v99")));
     assert!(!metadata
         .warnings
         .iter()

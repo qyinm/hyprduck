@@ -1403,8 +1403,10 @@ fn brain_health_source_report(
     });
     match evidence_index.as_ref() {
         Some(index)
-            if index.schema_version() != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
-                && index.schema_version() != hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION =>
+            if index.schema_version()
+                != hyprduck_engine_types::EVIDENCE_INDEX_V0_SCHEMA_VERSION
+                && index.schema_version()
+                    != hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION =>
         {
             push_health_warning(&mut warnings, "evidence_index_schema_mismatch");
         }
