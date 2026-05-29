@@ -1620,9 +1620,25 @@ pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
     #[serde(default)]
+    pub knowledge_store: Option<BrainKnowledgeStoreReport>,
+    #[serde(default)]
     pub source_reports: Vec<BrainHealthSourceReport>,
     #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainKnowledgeStoreReport {
+    pub canonical_storage: String,
+    pub db_schema_version: i64,
+    pub graph_schema_version: i64,
+    pub graphqlite_loaded: bool,
+    pub graphqlite_transactional: bool,
+    pub evidence_item_count: usize,
+    pub wiki_page_count: usize,
+    pub graph_node_count: usize,
+    pub graph_relation_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

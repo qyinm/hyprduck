@@ -38,6 +38,14 @@ pub(crate) struct KnowledgeStoreHealth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct KnowledgeStoreStateSummary {
+    pub(crate) evidence_item_count: usize,
+    pub(crate) wiki_page_count: usize,
+    pub(crate) graph_node_count: usize,
+    pub(crate) graph_relation_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct GraphqliteGateReport {
     pub(crate) loaded: bool,
     pub(crate) cypher_ready: bool,
@@ -161,6 +169,16 @@ impl KnowledgeStore {
             graph_schema_version: gate.graph_schema_version,
             graphqlite_loaded: gate.loaded,
             graphqlite_transactional: gate.rollback_ready,
+        })
+    }
+
+    pub(crate) fn state_summary(&self, workspace_id: &str) -> Result<KnowledgeStoreStateSummary> {
+        let graph_counts = self.graph_snapshot_counts(workspace_id)?;
+        Ok(KnowledgeStoreStateSummary {
+            evidence_item_count: self.count_rows_for_workspace("evidence_items", workspace_id)?,
+            wiki_page_count: self.count_rows_for_workspace("wiki_pages", workspace_id)?,
+            graph_node_count: graph_counts.node_count,
+            graph_relation_count: graph_counts.relation_count,
         })
     }
 
@@ -1392,7 +1410,6 @@ impl KnowledgeStore {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn graph_snapshot_counts(
         &self,
         workspace_id: &str,
@@ -1422,6 +1439,18 @@ impl KnowledgeStore {
             node_count,
             relation_count,
         })
+    }
+
+    fn count_rows_for_workspace(&self, table: &str, workspace_id: &str) -> Result<usize> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE workspace_id = ?1");
+        graph
+            .connection()
+            .sqlite_connection()
+            .query_row(&sql, [workspace_id], |row| row.get::<_, i64>(0))
+            .with_context(|| format!("failed counting {table} rows"))?
+            .try_into()
+            .map_err(|_| anyhow!("negative {table} row count"))
     }
 
     fn ensure_schema(&self) -> Result<()> {
@@ -4615,6 +4644,17 @@ mod tests {
                 .graph_snapshot_counts("workspace-default")
                 .expect("graph counts"),
             report
+        );
+        assert_eq!(
+            store
+                .state_summary("workspace-default")
+                .expect("state summary"),
+            KnowledgeStoreStateSummary {
+                evidence_item_count: 2,
+                wiki_page_count: 1,
+                graph_node_count: 6,
+                graph_relation_count: 3,
+            }
         );
         assert_graph_node_metadata(&store, "node-a");
         assert_graph_wiki_page_node(&store, "wiki-alpha");

@@ -11,11 +11,11 @@ use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
     BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
-    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind,
-    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
-    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
-    CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef,
-    GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
+    BrainHealthStatus, BrainKnowledgeStoreReport, BrainNodeKind, BrainNodeRecord, BrainReadScope,
+    BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult,
+    BrainSearchResultKind, ClaimRecord, CompileProjectRequest, CompileProjectResponseData,
+    CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
+    EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
     GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
     MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
@@ -1056,13 +1056,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
-    let _knowledge_store_health =
-        KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?.health()?;
+    let knowledge_store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let knowledge_store_report =
+        brain_knowledge_store_report(&knowledge_store, &request.scope.workspace_id)?;
     let repo = BrainArtifactRepository::new(root.clone());
     if !repo.brain_manifest_path().exists() {
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
+            knowledge_store: Some(knowledge_store_report),
             source_reports: Vec::new(),
             recent_events: Vec::new(),
         });
@@ -1093,8 +1095,28 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             BrainHealthStatus::AttentionNeeded
         },
         attention_count,
+        knowledge_store: Some(knowledge_store_report),
         source_reports,
         recent_events,
+    })
+}
+
+fn brain_knowledge_store_report(
+    knowledge_store: &KnowledgeStore,
+    workspace_id: &str,
+) -> Result<BrainKnowledgeStoreReport> {
+    let health = knowledge_store.health()?;
+    let summary = knowledge_store.state_summary(workspace_id)?;
+    Ok(BrainKnowledgeStoreReport {
+        canonical_storage: "sqlite+graphqlite".into(),
+        db_schema_version: health.db_schema_version,
+        graph_schema_version: health.graph_schema_version,
+        graphqlite_loaded: health.graphqlite_loaded,
+        graphqlite_transactional: health.graphqlite_transactional,
+        evidence_item_count: summary.evidence_item_count,
+        wiki_page_count: summary.wiki_page_count,
+        graph_node_count: summary.graph_node_count,
+        graph_relation_count: summary.graph_relation_count,
     })
 }
 

@@ -14,6 +14,17 @@ fn brain_health_is_clean_for_empty_workspace() {
 
     assert_eq!(health.status, BrainHealthStatus::Clean);
     assert_eq!(health.attention_count, 0);
+    let store = health
+        .knowledge_store
+        .as_ref()
+        .expect("knowledge store report");
+    assert_eq!(store.canonical_storage, "sqlite+graphqlite");
+    assert!(store.graphqlite_loaded);
+    assert!(store.graphqlite_transactional);
+    assert_eq!(store.evidence_item_count, 0);
+    assert_eq!(store.wiki_page_count, 0);
+    assert_eq!(store.graph_node_count, 0);
+    assert_eq!(store.graph_relation_count, 0);
     assert!(health.source_reports.is_empty());
     assert!(health.recent_events.is_empty());
 }
