@@ -2856,14 +2856,16 @@ mod provider_failure_tests {
 
 fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 11 && columns.len() != 12 {
+    if !matches!(columns.len(), 11 | 12 | 13 | 14) {
         bail!(
-            "expected 11 or 12 source summary columns from sqlite, got {}",
+            "expected 11, 12, 13, or 14 source summary columns from sqlite, got {}",
             columns.len()
         );
     }
+    let readiness_offset = (columns.len() >= 13).then_some(11);
+    let manifest_index = if columns.len() >= 13 { 13 } else { 11 };
     let manifest = columns
-        .get(11)
+        .get(manifest_index)
         .map(|encoded| decode_source_manifest_snapshot(encoded))
         .transpose()?;
     Ok(SourceSummary {
@@ -2883,6 +2885,14 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
         failed_count: columns[9]
             .parse()
             .context("failed to parse source failed_count")?,
+        citation_ready: readiness_offset
+            .map(|offset| sqlite_bool(columns[offset]))
+            .transpose()?
+            .unwrap_or_else(|| columns[8].parse::<usize>().unwrap_or_default() > 0),
+        graph_ready: readiness_offset
+            .map(|offset| sqlite_bool(columns[offset + 1]))
+            .transpose()?
+            .unwrap_or(false),
         description: manifest
             .as_ref()
             .map(|manifest| manifest.description.clone())
@@ -2903,14 +2913,16 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
 
 fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 13 && columns.len() != 14 {
+    if !matches!(columns.len(), 13 | 14 | 15 | 16) {
         bail!(
-            "expected 13 or 14 stored source columns from sqlite, got {}",
+            "expected 13, 14, 15, or 16 stored source columns from sqlite, got {}",
             columns.len()
         );
     }
+    let readiness_offset = (columns.len() >= 15).then_some(13);
+    let manifest_index = if columns.len() >= 15 { 15 } else { 13 };
     let manifest = columns
-        .get(13)
+        .get(manifest_index)
         .map(|encoded| decode_source_manifest_snapshot(encoded))
         .transpose()?;
     Ok(StoredSourceRow {
@@ -2931,6 +2943,14 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
             failed_count: columns[9]
                 .parse()
                 .context("failed to parse source failed_count")?,
+            citation_ready: readiness_offset
+                .map(|offset| sqlite_bool(columns[offset]))
+                .transpose()?
+                .unwrap_or_else(|| columns[8].parse::<usize>().unwrap_or_default() > 0),
+            graph_ready: readiness_offset
+                .map(|offset| sqlite_bool(columns[offset + 1]))
+                .transpose()?
+                .unwrap_or(false),
             description: manifest
                 .as_ref()
                 .map(|manifest| manifest.description.clone())
@@ -3028,6 +3048,14 @@ fn decode_sqlite_hex_text(value: &str) -> Result<String> {
         })
         .collect::<Result<Vec<_>>>()?;
     String::from_utf8(bytes).context("sqlite hex text was not valid UTF-8")
+}
+
+fn sqlite_bool(value: &str) -> Result<bool> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => bail!("expected sqlite boolean 0 or 1, got {other}"),
+    }
 }
 
 fn ingest_status_slug(status: &IngestStatus) -> &'static str {
@@ -3291,8 +3319,8 @@ impl KnowledgeProjectStore {
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, manifest_base64 \
-             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            "SELECT hex(sources.workspace_id), hex(sources.source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(sources.status), page_count, success_count, failed_count, sources.updated_at, COALESCE(import_jobs.citation_ready, CASE WHEN success_count > 0 THEN 1 ELSE 0 END), COALESCE(import_jobs.graph_ready, 0), manifest_base64 \
+             FROM sources LEFT JOIN import_jobs ON import_jobs.workspace_id = sources.workspace_id AND import_jobs.source_id = sources.source_id WHERE sources.workspace_id = '{}' ORDER BY sources.updated_at DESC;",
             escape_sqlite(workspace_id)
         );
         let output = self.run_sql(&sql)?;
@@ -3306,8 +3334,8 @@ impl KnowledgeProjectStore {
     fn load_source_rows(&self, workspace_id: &str) -> Result<Vec<StoredSourceRow>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path), manifest_base64 \
-             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            "SELECT hex(sources.workspace_id), hex(sources.source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(sources.status), page_count, success_count, failed_count, sources.updated_at, hex(project_id), hex(manifest_path), COALESCE(import_jobs.citation_ready, CASE WHEN success_count > 0 THEN 1 ELSE 0 END), COALESCE(import_jobs.graph_ready, 0), manifest_base64 \
+             FROM sources LEFT JOIN import_jobs ON import_jobs.workspace_id = sources.workspace_id AND import_jobs.source_id = sources.source_id WHERE sources.workspace_id = '{}' ORDER BY sources.updated_at DESC;",
             escape_sqlite(workspace_id)
         );
         let output = self.run_sql(&sql)?;

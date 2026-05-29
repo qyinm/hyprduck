@@ -240,6 +240,20 @@ fn source_import_persists_canonical_db_rows_and_fts() {
             .trim(),
         "alpha.pdf"
     );
+    let loaded_sources = store
+        .load_sources(DEFAULT_WORKSPACE_ID)
+        .expect("load source readiness");
+    assert_eq!(loaded_sources.len(), 1);
+    assert!(loaded_sources[0].citation_ready);
+    assert!(!loaded_sources[0].graph_ready);
+    store
+        .run_sql("UPDATE import_jobs SET graph_ready = 1 WHERE source_id = 'source-db';")
+        .expect("mark graph ready");
+    let graph_ready_sources = store
+        .load_sources(DEFAULT_WORKSPACE_ID)
+        .expect("load graph-ready source");
+    assert!(graph_ready_sources[0].citation_ready);
+    assert!(graph_ready_sources[0].graph_ready);
 }
 
 #[test]

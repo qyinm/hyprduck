@@ -248,6 +248,10 @@ pub struct SourceSummary {
     pub success_count: usize,
     pub failed_count: usize,
     #[serde(default)]
+    pub citation_ready: bool,
+    #[serde(default)]
+    pub graph_ready: bool,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub user_context: String,
