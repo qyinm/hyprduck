@@ -4,12 +4,12 @@ use graphqlite::{Graph, PropertyValue};
 use hyprduck_engine_types::{
     BrainActor, BrainActorType, BrainEvent, BrainEventCausality, BrainEventKind, ClaimRecord,
     EntityRecord, PolicyResult, SourceFormat, SourceRecord, SourceStatus,
-    StructuredExtractionArtifact, WikiPage, BRAIN_EVENT_SCHEMA_VERSION,
+    StructuredExtractionArtifact, BRAIN_EVENT_SCHEMA_VERSION,
 };
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
     BrainScope, ContextPackArtifactMetadataV0, ContextPackParseConfidence, EvidenceRef,
-    EvidenceType, KnowledgeProject, SourceArtifactManifest,
+    EvidenceType, KnowledgeProject, SourceArtifactManifest, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -675,12 +675,50 @@ impl KnowledgeStore {
             CREATE TABLE IF NOT EXISTS wiki_pages (
                 wiki_page_id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL,
                 body TEXT NOT NULL,
                 approval_status TEXT NOT NULL,
                 evidence_refs_json TEXT NOT NULL DEFAULT '[]',
                 revision INTEGER NOT NULL DEFAULT 1,
                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_wiki_pages_workspace_updated_at
+                ON wiki_pages(workspace_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS wiki_revisions (
+                wiki_page_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                workspace_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                approval_status TEXT NOT NULL,
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                diff_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (wiki_page_id, revision),
+                FOREIGN KEY (wiki_page_id) REFERENCES wiki_pages(wiki_page_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_sections (
+                wiki_page_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                section_index INTEGER NOT NULL,
+                heading TEXT NOT NULL,
+                body TEXT NOT NULL,
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (wiki_page_id, revision, section_index),
+                FOREIGN KEY (wiki_page_id, revision) REFERENCES wiki_revisions(wiki_page_id, revision) ON DELETE CASCADE
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
+                workspace_id UNINDEXED,
+                wiki_page_id UNINDEXED,
+                revision UNINDEXED,
+                section_index UNINDEXED,
+                title,
+                text
             );
 
             CREATE TABLE IF NOT EXISTS brain_events (
@@ -771,6 +809,15 @@ impl KnowledgeStore {
                 let message = error.to_string();
                 if !message.contains("duplicate column name") {
                     return Err(error).context("failed migrating evidence_items table");
+                }
+            }
+        }
+        for column in ["path TEXT NOT NULL DEFAULT ''"] {
+            let result = sqlite.execute(&format!("ALTER TABLE wiki_pages ADD COLUMN {column}"), []);
+            if let Err(error) = result {
+                let message = error.to_string();
+                if !message.contains("duplicate column name") {
+                    return Err(error).context("failed migrating wiki_pages table");
                 }
             }
         }
@@ -1638,33 +1685,176 @@ fn persist_wiki_pages_snapshot_in_transaction(
             [snapshot.workspace_id.as_str()],
         )
         .context("failed clearing wiki page rows")?;
+    sqlite
+        .execute(
+            "DELETE FROM wiki_revisions WHERE workspace_id = ?1",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing wiki revision rows")?;
+    sqlite
+        .execute(
+            "DELETE FROM wiki_fts WHERE workspace_id = ?1",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing wiki FTS rows")?;
     for page in &snapshot.wiki_pages {
         let evidence_refs_json = serde_json::to_string(&page.evidence_refs)
             .context("failed encoding wiki evidence refs")?;
+        let revision = 1_i64;
+        let approval_status = "materialized";
+        let diff_json = "{}";
         sqlite
             .execute(
                 "INSERT INTO wiki_pages (
                     wiki_page_id,
                     workspace_id,
+                    path,
                     title,
                     body,
                     approval_status,
                     evidence_refs_json,
                     revision,
                     updated_at
-                ) VALUES (?1, ?2, ?3, ?4, 'materialized', ?5, 1, ?6)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 (
                     page.page_id.as_str(),
                     snapshot.workspace_id.as_str(),
+                    page.path.as_str(),
                     page.title.as_str(),
                     page.body.as_str(),
+                    approval_status,
                     evidence_refs_json.as_str(),
+                    revision,
                     page.updated_at as i64,
                 ),
             )
             .with_context(|| format!("failed inserting wiki page row {}", page.page_id))?;
+        sqlite
+            .execute(
+                "INSERT INTO wiki_revisions (
+                    wiki_page_id,
+                    revision,
+                    workspace_id,
+                    title,
+                    body,
+                    approval_status,
+                    evidence_refs_json,
+                    diff_json,
+                    updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                (
+                    page.page_id.as_str(),
+                    revision,
+                    snapshot.workspace_id.as_str(),
+                    page.title.as_str(),
+                    page.body.as_str(),
+                    approval_status,
+                    evidence_refs_json.as_str(),
+                    diff_json,
+                    page.updated_at as i64,
+                ),
+            )
+            .with_context(|| format!("failed inserting wiki revision row {}", page.page_id))?;
+        for section in wiki_sections_from_page(page) {
+            let section_evidence_refs_json = serde_json::to_string(&section.evidence_refs)
+                .context("failed encoding wiki section evidence refs")?;
+            sqlite
+                .execute(
+                    "INSERT INTO wiki_sections (
+                        wiki_page_id,
+                        revision,
+                        section_index,
+                        heading,
+                        body,
+                        evidence_refs_json,
+                        updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    (
+                        page.page_id.as_str(),
+                        revision,
+                        section.index,
+                        section.heading.as_str(),
+                        section.body.as_str(),
+                        section_evidence_refs_json.as_str(),
+                        page.updated_at as i64,
+                    ),
+                )
+                .with_context(|| format!("failed inserting wiki section row {}", page.page_id))?;
+            sqlite
+                .execute(
+                    "INSERT INTO wiki_fts (workspace_id, wiki_page_id, revision, section_index, title, text)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    (
+                        snapshot.workspace_id.as_str(),
+                        page.page_id.as_str(),
+                        revision,
+                        section.index,
+                        page.title.as_str(),
+                        section.body.as_str(),
+                    ),
+                )
+                .with_context(|| format!("failed indexing wiki section {}", page.page_id))?;
+        }
     }
     Ok(())
+}
+
+struct WikiSectionRow {
+    index: i64,
+    heading: String,
+    body: String,
+    evidence_refs: Vec<String>,
+}
+
+fn wiki_sections_from_page(page: &WikiPage) -> Vec<WikiSectionRow> {
+    let mut sections = Vec::new();
+    let mut current_heading = page.title.clone();
+    let mut current_body = String::new();
+
+    for line in page.body.lines() {
+        if let Some(heading) = markdown_heading_text(line) {
+            if !current_body.trim().is_empty() || !sections.is_empty() {
+                sections.push(WikiSectionRow {
+                    index: sections.len() as i64,
+                    heading: current_heading,
+                    body: current_body.trim().to_owned(),
+                    evidence_refs: page.evidence_refs.clone(),
+                });
+                current_body.clear();
+            }
+            current_heading = heading.to_owned();
+        } else {
+            if !current_body.is_empty() {
+                current_body.push('\n');
+            }
+            current_body.push_str(line);
+        }
+    }
+
+    if !current_body.trim().is_empty() || sections.is_empty() {
+        sections.push(WikiSectionRow {
+            index: sections.len() as i64,
+            heading: current_heading,
+            body: current_body.trim().to_owned(),
+            evidence_refs: page.evidence_refs.clone(),
+        });
+    }
+
+    sections
+}
+
+fn markdown_heading_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|value| *value == '#').count();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+    let rest = trimmed.get(hashes..)?.trim_start();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
 }
 
 fn persist_brain_events_snapshot_in_transaction(
@@ -2187,7 +2377,8 @@ mod tests {
                 workspace_id: "workspace-default".into(),
                 path: "wiki/alpha".into(),
                 title: "Alpha Wiki".into(),
-                body: "Alpha wiki body.".into(),
+                body: "# Overview\nAlpha wiki body.\n## Evidence\nAlpha cites source evidence."
+                    .into(),
                 node_refs: Vec::new(),
                 source_refs: vec!["source-a".into()],
                 evidence_refs: vec!["evidence-a".into()],
@@ -2267,6 +2458,7 @@ mod tests {
         );
         assert_graph_node_metadata(&store, "node-a");
         assert_graph_wiki_page_node(&store, "wiki-alpha");
+        assert_wiki_relational_content(&store, "wiki-alpha");
         assert_graph_edge_metadata(&store, "claim-alpha", "source:source-a", "CITES");
         assert_relational_proof_ignores_graph_metadata_tamper(&store);
         let hits = store
@@ -2279,6 +2471,71 @@ mod tests {
             brain_event_count(&store, "workspace-default").expect("brain event count"),
             1
         );
+    }
+
+    fn assert_wiki_relational_content(store: &KnowledgeStore, wiki_page_id: &str) {
+        let graph = Graph::open(store.path()).expect("open graph");
+        let sqlite = graph.connection().sqlite_connection();
+        let page = sqlite
+            .query_row(
+                "SELECT path, approval_status, revision, evidence_refs_json
+                 FROM wiki_pages
+                 WHERE wiki_page_id = ?1",
+                [wiki_page_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .expect("wiki page row");
+        assert_eq!(page.0, "wiki/alpha");
+        assert_eq!(page.1, "materialized");
+        assert_eq!(page.2, 1);
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&page.3).expect("wiki evidence refs"),
+            vec!["evidence-a"]
+        );
+
+        let revision = sqlite
+            .query_row(
+                "SELECT approval_status, diff_json, body
+                 FROM wiki_revisions
+                 WHERE wiki_page_id = ?1 AND revision = 1",
+                [wiki_page_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("wiki revision row");
+        assert_eq!(revision.0, "materialized");
+        assert_eq!(revision.1, "{}");
+        assert!(revision.2.contains("Alpha wiki body."));
+
+        let sections = sqlite
+            .query_row(
+                "SELECT count(*) FROM wiki_sections WHERE wiki_page_id = ?1 AND revision = 1",
+                [wiki_page_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("wiki section count");
+        assert_eq!(sections, 2);
+
+        let fts_hits = sqlite
+            .query_row(
+                "SELECT count(*) FROM wiki_fts WHERE wiki_fts MATCH 'source'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("wiki fts count");
+        assert_eq!(fts_hits, 1);
     }
 
     #[test]
