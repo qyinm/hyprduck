@@ -266,3 +266,17 @@ test("graph import banner names citation-ready and context-ready states", () => 
   expect(graphSource).toMatch(/Packaging citations/);
   expect(graphSource).not.toMatch(/Importing source file/);
 });
+
+test("MCP docs describe import lifecycle states", () => {
+  const mcpDocs = readFileSync(new URL("../../../docs/mcp-client-setup.md", import.meta.url), "utf8");
+  const agentMcpDocs = readFileSync(
+    new URL("../../../docs/agents/mcp-client-setup.md", import.meta.url),
+    "utf8",
+  );
+  const docs = `${mcpDocs}\n${agentMcpDocs}`;
+
+  expect(docs).toMatch(/imported -> parsing -> packaging -> citation_ready -> context_ready -> failed/);
+  expect(docs).toMatch(/citation_ready/);
+  expect(docs).toMatch(/context_ready/);
+  expect(docs).not.toMatch(/poll `import_status` until the job is completed/);
+});

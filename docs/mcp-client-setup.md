@@ -97,10 +97,18 @@ disabled unless the server process is started with both
 `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` when an agent should be allowed to import
 local files, and pass a `sourcePath` that canonicalizes under one of those roots.
 The tool starts an import job and returns `jobId` immediately. Poll
-`import_status` until `citationReady` is true, then use `get_context_pack`,
-`read_page_evidence`, or `read_source`. `graphReady` is separate and may become
-true later; graph failure after citation readiness does not remove source
-evidence. Local paths are redacted by default.
+`import_status` through the HyprDuck import lifecycle:
+
+```text
+imported -> parsing -> packaging -> citation_ready -> context_ready -> failed
+```
+
+Agents may start citation-backed work as soon as `status` is `citation_ready`
+and `citationReady` is true. `context_ready` means the follow-up context/graph
+refresh has finished or was intentionally skipped after citation packaging.
+`graphReady` is separate and may become true later; graph failure after
+citation readiness does not remove source evidence. Local paths are redacted by
+default.
 
 ## Verification Prompt
 
@@ -115,7 +123,7 @@ The expected agent behavior is:
 
 - Optionally import a user-approved local file with `import_source` when the
   source is not already in HyprDuck, then poll `import_status` until
-  `citationReady` is true.
+  `citation_ready` with `citationReady` true.
 - Build a Context Pack v0 with `get_context_pack`.
 - Quote or summarize only from selected evidence.
 - Cite `sourceId`, page, and `evidenceRef`.
