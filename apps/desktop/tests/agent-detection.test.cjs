@@ -35,6 +35,19 @@ test("detectSupportedAgents does not expose generic shell as a v1 agent", () => 
   );
 });
 
+test("detectSupportedAgents does not approve a generic pi executable", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprduck-agents-"));
+  const piPath = path.join(tempDir, "pi");
+  fs.writeFileSync(piPath, "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(piPath, 0o755);
+
+  const agents = detectSupportedAgents({ pathEnv: tempDir });
+  const piAgent = agents.find((agent) => agent.id === "pi_agent");
+
+  assert.equal(piAgent.detected, false);
+  assert.deepEqual(piAgent.commands, ["pi-agent"]);
+});
+
 test("assertKnownAgentId rejects arbitrary command identifiers", () => {
   assert.equal(assertKnownAgentId("codex"), "codex");
   assert.throws(() => assertKnownAgentId("zsh"), /unknown supported agent id/);

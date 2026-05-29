@@ -181,7 +181,6 @@ export interface AgentTerminalContextHandoff {
     projectId: string | null;
     nodeId: string | null;
     sourceId: string | null;
-    sourceManifestPath: string | null;
   };
   context: {
     scope: string;
@@ -196,8 +195,10 @@ export interface AgentTerminalContextHandoff {
 
 export interface AgentTerminalSession {
   id: string;
+  backendSessionId?: string;
   agent: AgentTerminalAgent;
   handoff: AgentTerminalContextHandoff;
+  handoffState?: "writable" | "blocked" | "external_confirmation_required";
   backend: {
     backend: string;
     status: string;
@@ -212,7 +213,7 @@ export interface AgentTerminalSession {
     agentCommand: string | null;
     attachInstructions: string[];
   };
-  status: "running" | "fallback_required" | "closed";
+  status: "running" | "fallback_required" | "handoff_required" | "closed";
   createdAt: string;
   updatedAt: string;
 }

@@ -3,7 +3,6 @@ function createAgentContextHandoff(options = {}) {
   const projectId = options.projectId ?? null;
   const nodeId = options.nodeId ?? null;
   const sourceId = options.sourceId ?? null;
-  const sourceManifestPath = options.sourceManifestPath ?? null;
   const contextScope = options.contextScope ?? "workspace";
 
   return {
@@ -16,7 +15,6 @@ function createAgentContextHandoff(options = {}) {
       projectId,
       nodeId,
       sourceId,
-      sourceManifestPath,
     },
     context: {
       scope: contextScope,

@@ -23,7 +23,6 @@ import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import { fileNameFromPath } from "./pathUtils";
 import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
 import type {
-  WorkspaceAnswerProjectRequest,
   WorkspaceApplyCorrectionRequest,
   WorkspaceEvidenceRef,
   WorkspaceProject,
@@ -38,7 +37,6 @@ interface GraphWorkspaceProps {
   onOpenImport: () => void;
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   onApplyCorrection: (request: WorkspaceApplyCorrectionRequest) => Promise<void>;
-  onAskProject: (request: WorkspaceAnswerProjectRequest) => Promise<WorkspaceProject["answerByNodeId"][string]>;
   onCreateAgentTerminalSession: (args: {
     agentId: AgentTerminalAgent["id"];
     nodeId: string | null;
@@ -67,7 +65,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onOpenImport,
     onOpenArtifact,
     onApplyCorrection,
-    onAskProject,
     onCreateAgentTerminalSession,
     onListAgentTerminalAgents,
     onRetryFailedPages,
@@ -220,33 +217,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     }
   }
 
-  async function handleAskProject() {
-    if (!project) {
-      return;
-    }
-
-    const prompt = uiState.answerInput.trim();
-    if (!prompt) {
-      return;
-    }
-
-    setAnswerPending(true);
-    setAnswerError(null);
-    dispatch({ type: "open_answer_dock" });
-    try {
-      const nextAnswer = await onAskProject({
-        projectId: project.summary.projectId,
-        nodeId: selectedNode?.node.id ?? null,
-        question: prompt,
-      });
-      setLiveAnswer(nextAnswer);
-    } catch (error) {
-      setAnswerError(String(error));
-    } finally {
-      setAnswerPending(false);
-    }
-  }
-
   async function handleOpenArtifact(path: string | null | undefined, reveal: boolean) {
     if (!path) {
       return;
@@ -304,7 +274,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
             inputValue={uiState.answerInput}
-            onAsk={() => void handleAskProject()}
             onAttachFiles={onOpenImport}
             onOpenAgentTerminal={() => setAgentTerminalOpen(true)}
             onInputChange={(value) =>
@@ -1008,7 +977,6 @@ interface GraphPromptComposerProps {
   answerError: string | null;
   answerPending: boolean;
   inputValue: string;
-  onAsk: () => void;
   onAttachFiles: () => void;
   onOpenAgentTerminal: () => void;
   onInputChange: (value: string) => void;
@@ -1019,21 +987,17 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     answerError,
     answerPending,
     inputValue,
-    onAsk,
     onAttachFiles,
     onOpenAgentTerminal,
     onInputChange,
   } = props;
-  const canAsk = inputValue.trim().length > 0 && !answerPending;
 
   return (
     <form
       className="pointer-events-auto absolute inset-x-6 bottom-6 z-20 mx-auto flex h-14 w-[min(50rem,calc(100%-3rem))] items-center gap-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (canAsk) {
-          onAsk();
-        }
+        onOpenAgentTerminal();
       }}
     >
       <Button
@@ -1048,11 +1012,11 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       </Button>
       <div className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur">
         <input
-          aria-label="Ask with citations"
+          aria-label="Open Agent Terminal"
           className="min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground"
           onChange={(event) => onInputChange(event.target.value)}
           onFocus={onOpenAgentTerminal}
-          placeholder="Ask with citations..."
+          placeholder="Open Agent Terminal..."
           value={inputValue}
         />
         {answerPending ? (
@@ -1061,9 +1025,9 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
           </span>
         ) : null}
         <Button
-          aria-label="Ask"
+          aria-label="Open Agent Terminal"
           className="size-9 rounded-full"
-          disabled={!canAsk}
+          disabled={false}
           size="icon"
           type="submit"
         >

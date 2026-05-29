@@ -135,7 +135,7 @@ const WEB_MOCK_AGENT_LIST: AgentTerminalListResult = {
       label: "Pi Agent",
       detected: false,
       support: "experimental",
-      commands: ["pi-agent", "pi"],
+      commands: ["pi-agent"],
       command: null,
       path: null,
       launchArgs: [],
@@ -570,7 +570,6 @@ export function createWebMockApi(): HyprDuckDesktopApi {
             projectId: args.projectId ?? "preview:sample",
             nodeId: args.nodeId ?? null,
             sourceId: "preview",
-            sourceManifestPath: null,
           },
           context: {
             scope: args.contextScope ?? "workspace",
@@ -586,6 +585,7 @@ export function createWebMockApi(): HyprDuckDesktopApi {
             externalAgentOwnsWorkflow: true,
           },
         },
+        handoffState: "external_confirmation_required",
         backend: {
           backend: "web-preview",
           status: "unavailable",

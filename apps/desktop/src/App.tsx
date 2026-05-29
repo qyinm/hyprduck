@@ -59,7 +59,6 @@ import {
 import type {
   MaterializedGraphSnapshot,
   WorkspaceApplyCorrectionRequest,
-  WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
   WorkspaceProject,
 } from "@/features/workspace/types";
@@ -671,18 +670,6 @@ export function App() {
     setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
   };
 
-  const answerWorkspaceProject = async (
-    request: WorkspaceAnswerProjectRequest,
-  ) => {
-    return invoke("answer_workspace_project", {
-      request: {
-        projectId: request.projectId,
-        nodeId: request.nodeId ?? null,
-        question: request.question,
-      },
-    });
-  };
-
   const createAgentTerminalSession = async (args: {
     agentId: AgentTerminalAgent["id"];
     nodeId: string | null;
@@ -966,7 +953,6 @@ export function App() {
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
-                onAskProject={answerWorkspaceProject}
                 onCreateAgentTerminalSession={createAgentTerminalSession}
                 onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}

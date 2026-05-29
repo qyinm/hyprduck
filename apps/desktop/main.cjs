@@ -12,6 +12,7 @@ const {
   maybeImportLegacySwiftConfig: importLegacySwiftConfig,
 } = require("./main/legacy-config.cjs");
 const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
+const { DisabledAgentTerminalBackend } = require("./main/agent-terminal-backend.cjs");
 const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-ghostty.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
@@ -105,13 +106,16 @@ app.on("will-quit", () => {
 
 async function registerIpcHandlers() {
   const ghosttyProbe = await createGhosttyNativeBackendFromEnv();
+  const fallbackBackend =
+    ghosttyProbe.enabled && ghosttyProbe.reason
+      ? new DisabledAgentTerminalBackend({ reason: ghosttyProbe.reason })
+      : undefined;
   agentTerminalSessions = new AgentTerminalSessionManager({
-    backend: ghosttyProbe.backend ?? undefined,
+    backend: ghosttyProbe.backend ?? fallbackBackend,
     getWorkspaceState: () => ({
       workspaceId: snapshot.lastWorkspaceId ?? "default",
       projectId: snapshot.lastProjectId ?? null,
       sourceId: snapshot.lastSourceId ?? null,
-      sourceManifestPath: snapshot.lastSourceManifestPath ?? null,
     }),
   });
   ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {

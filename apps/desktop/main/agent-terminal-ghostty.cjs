@@ -21,22 +21,30 @@ async function createGhosttyNativeBackendFromEnv(env = process.env) {
     };
   }
 
-  const loaded = require(moduleName);
-  const factory =
-    typeof loaded.createAgentTerminalBackend === "function"
-      ? loaded.createAgentTerminalBackend
-      : loaded.default;
-  if (typeof factory !== "function") {
-    throw new Error(
-      `${moduleName} must export createAgentTerminalBackend() or a default factory`,
-    );
-  }
+  try {
+    const loaded = require(moduleName);
+    const factory =
+      typeof loaded.createAgentTerminalBackend === "function"
+        ? loaded.createAgentTerminalBackend
+        : loaded.default;
+    if (typeof factory !== "function") {
+      throw new Error(
+        `${moduleName} must export createAgentTerminalBackend() or a default factory`,
+      );
+    }
 
-  return {
-    enabled: true,
-    backend: assertAgentTerminalBackend(await factory()),
-    reason: null,
-  };
+    return {
+      enabled: true,
+      backend: assertAgentTerminalBackend(await factory()),
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      enabled: true,
+      backend: null,
+      reason: `Ghostty native backend load failed: ${error.message}`,
+    };
+  }
 }
 
 module.exports = {

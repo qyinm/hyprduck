@@ -19,7 +19,7 @@ const SUPPORTED_AGENT_DEFINITIONS = [
   {
     id: "pi_agent",
     label: "Pi Agent",
-    commands: ["pi-agent", "pi"],
+    commands: ["pi-agent"],
     launchArgs: [],
     support: "experimental",
   },

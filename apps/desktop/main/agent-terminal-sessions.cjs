@@ -55,12 +55,12 @@ class AgentTerminalSessionManager {
         projectId: args.projectId ?? args.project_id ?? workspaceState.projectId ?? null,
         nodeId: args.nodeId ?? args.node_id ?? null,
         sourceId: workspaceState.sourceId ?? null,
-        sourceManifestPath: workspaceState.sourceManifestPath ?? null,
         contextScope: args.contextScope ?? args.context_scope ?? "workspace",
       }),
     );
     const sessionId = randomUUID();
     const backendSession = await this.backend.createSession({
+      sessionId,
       agent,
       handoff,
       cols: normalizeDimension(args.cols, 120),
@@ -71,11 +71,13 @@ class AgentTerminalSessionManager {
     );
     const session = {
       id: sessionId,
+      backendSessionId: backendSession.id ?? sessionId,
       agent,
       handoff,
+      handoffState: resolveHandoffState(backendSession),
       backend: backendSession,
       fallback,
-      status: backendSession.status === "unavailable" ? "fallback_required" : "running",
+      status: resolveSessionStatus(backendSession),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -94,12 +96,19 @@ class AgentTerminalSessionManager {
     if (!input) {
       return { status: "ignored", reason: "empty input" };
     }
-    return this.backend.write(session.id, input);
+    if (session.handoffState !== "writable") {
+      return {
+        status: "blocked",
+        reason: "Agent context handoff must be attached before terminal input is accepted.",
+        handoffState: session.handoffState,
+      };
+    }
+    return this.backend.write(session.backendSessionId, input);
   }
 
   async resizeSession(args = {}) {
     const session = this.requireSession(args.sessionId ?? args.session_id);
-    return this.backend.resize(session.id, {
+    return this.backend.resize(session.backendSessionId, {
       cols: normalizeDimension(args.cols, 120),
       rows: normalizeDimension(args.rows, 36),
     });
@@ -107,7 +116,7 @@ class AgentTerminalSessionManager {
 
   async killSession(args = {}) {
     const session = this.requireSession(args.sessionId ?? args.session_id);
-    const result = await this.backend.kill(session.id);
+    const result = await this.backend.kill(session.backendSessionId);
     session.status = "closed";
     session.updatedAt = new Date().toISOString();
     return result;
@@ -135,7 +144,28 @@ function normalizeDimension(value, fallback) {
   return Math.max(1, Math.min(500, Math.floor(parsed)));
 }
 
+function resolveHandoffState(backendSession) {
+  if (backendSession.status === "unavailable") {
+    return "external_confirmation_required";
+  }
+  const state = backendSession.handoffStatus ?? backendSession.handoff?.status;
+  if (state === "attached" || state === "acknowledged") {
+    return "writable";
+  }
+  return "blocked";
+}
+
+function resolveSessionStatus(backendSession) {
+  if (backendSession.status === "unavailable") {
+    return "fallback_required";
+  }
+  return resolveHandoffState(backendSession) === "writable"
+    ? "running"
+    : "handoff_required";
+}
+
 module.exports = {
   AgentTerminalSessionManager,
   rejectCommandPayload,
+  resolveHandoffState,
 };

@@ -8,7 +8,7 @@ HyprDuck v1 detects these agent commands from `PATH`:
 
 - Codex: `codex`
 - Claude Code: `claude`
-- Pi Agent: `pi-agent`, then `pi`
+- Pi Agent: `pi-agent`
 - Hermes: `hermes`
 
 Generic shell and custom command entries are not part of the default v1 picker. They must remain hidden or disabled unless a later Advanced mode is explicitly designed and reviewed.
@@ -21,6 +21,7 @@ Every Agent Terminal session must expose a context handoff before the first real
 - workspace ID
 - selected context or evidence scope
 - copyable or launchable attach instructions
+- explicit handoff state; terminal input is blocked until the backend reports the handoff attached or acknowledged
 
 The handoff tells the selected agent to call HyprDuck MCP `get_context_pack` before answering and to use cited evidence refs, page refs, and source refs from the returned pack.
 
