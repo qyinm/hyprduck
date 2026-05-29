@@ -349,6 +349,172 @@ fn brain_reader_open_migrates_existing_materialized_json_into_sqlite() {
 }
 
 #[test]
+fn brain_reader_migration_preserves_artifact_metadata() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    ensure_materialized_brain_repo_dirs(&workspace_root).expect("materialized dirs");
+
+    let mut snapshot = synthetic_context_pack_snapshot(1);
+    snapshot.generated_at = 44;
+    snapshot.events = vec![materialized_test_event(
+        &snapshot,
+        "event-preserve-artifact-metadata",
+    )];
+
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty(&workspace_root.join("graph/nodes.json"), &snapshot.nodes)
+        .expect("write nodes");
+    write_json_pretty(
+        &workspace_root.join("graph/edges.json"),
+        &snapshot.relations,
+    )
+    .expect("write edges");
+    write_json_pretty(
+        &workspace_root.join("graph/evidence.json"),
+        &snapshot.evidence,
+    )
+    .expect("write evidence");
+    write_json_pretty(
+        &workspace_root.join("graph/entities.json"),
+        &snapshot.entities,
+    )
+    .expect("write entities");
+    write_json_pretty(&workspace_root.join("graph/claims.json"), &snapshot.claims)
+        .expect("write claims");
+    write_json_pretty(
+        &workspace_root.join("memory/records.json"),
+        &snapshot.memories,
+    )
+    .expect("write memories");
+    write_brain_events_jsonl(
+        &workspace_root.join("events/brain_events.jsonl"),
+        &snapshot.events,
+    )
+    .expect("write events");
+
+    let artifact_root = workspace_root.join("artifacts/source-alpha");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::write(
+        artifact_root.join("source_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.source_pack.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "source-alpha",
+            "originalFilename": "alpha.pdf",
+            "originalPath": "alpha.pdf",
+            "sourcePath": snapshot.sources[0].source_path.as_str(),
+            "markdownPath": snapshot.sources[0].markdown_path.as_str(),
+            "artifactRoot": artifact_root.display().to_string(),
+            "contentHash": "fnv64:preserved-alpha",
+            "format": "pdf",
+            "pageCount": 1,
+            "ingestionStatus": "ingested",
+            "providerRoute": "ollama:llama3.2",
+            "localOnly": true,
+            "pages": [],
+            "warnings": [{
+                "type": "ocr_low_confidence",
+                "severity": "medium",
+                "message": "Low OCR confidence on page 1.",
+                "page": 1
+            }],
+            "createdAt": 1,
+            "updatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("source pack");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v1",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": "source-alpha",
+            "contentHash": "fnv64:preserved-alpha",
+            "providerRoute": "ollama:llama3.2",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-alpha-000",
+                "sourceId": "source-alpha",
+                "page": 1,
+                "region": "bbox:10,20,300,140",
+                "span": "text:15..92",
+                "quotedText": "Preserved table evidence text.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:preserved-alpha",
+                "markdownPath": "/private/tmp/source-alpha/page-1.md",
+                "imagePath": "/private/tmp/source-alpha/page-1.png",
+                "evidenceType": "table"
+            }],
+            "warnings": [],
+            "generatedAt": 44
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    fs::write(
+        workspace_root.join("context_pack.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.context_pack.v1",
+            "packId": "ctx_preserved",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "query": "preserve artifact metadata",
+            "generatedAt": "2026-05-29T09:53:26Z"
+        })
+        .to_string(),
+    )
+    .expect("latest context pack");
+    fs::create_dir_all(workspace_root.join("context_packs")).expect("context packs dir");
+    fs::write(
+        workspace_root.join("context_packs/ctx_preserved.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.context_pack.v1",
+            "packId": "ctx_preserved",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "query": "preserve artifact metadata",
+            "generatedAt": "2026-05-29T09:53:26Z"
+        })
+        .to_string(),
+    )
+    .expect("history context pack");
+
+    BrainReader::open_workspace_root(workspace_root.clone(), DEFAULT_WORKSPACE_ID)
+        .expect("open reader and preserve artifact metadata");
+
+    let store = KnowledgeProjectStore::new(workspace_root.join("hyprduck.sqlite"));
+    assert_eq!(
+        store
+            .run_sql("SELECT provider_route || '|' || provider_locality || '|' || content_hash FROM sources WHERE source_id = 'source-alpha';")
+            .expect("read source metadata")
+            .trim(),
+        "ollama:llama3.2|local|fnv64:preserved-alpha"
+    );
+    let evidence_row = store
+        .run_sql("SELECT evidence_type || '|' || snippet || '|' || span_json || '|' || region_json || '|' || markdown_path_redacted || '|' || image_path_redacted || '|' || confidence FROM evidence_items WHERE evidence_id = 'ev-alpha-000';")
+        .expect("read evidence metadata");
+    assert!(evidence_row.contains("table_evidence|Preserved table evidence text."));
+    assert!(evidence_row.contains(r#"{"span":"text:15..92"}"#));
+    assert!(evidence_row.contains(r#"{"region":"bbox:10,20,300,140"}"#));
+    assert!(evidence_row.contains("page-1.md|page-1.png|1.0"));
+    assert_eq!(
+        store
+            .run_sql("SELECT COUNT(*) FROM context_pack_exports WHERE pack_id = 'ctx_preserved';")
+            .expect("read context pack export count")
+            .trim(),
+        "2"
+    );
+    assert_eq!(
+        store
+            .run_sql("SELECT export_path FROM context_pack_exports WHERE is_latest = 1 AND pack_id = 'ctx_preserved';")
+            .expect("read latest context pack export")
+            .trim(),
+        "context_pack.json"
+    );
+}
+
+#[test]
 fn resolving_workspace_root_loads_graphqlite_store() {
     let _guard = TEST_ENV_LOCK.lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
