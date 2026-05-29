@@ -974,6 +974,7 @@ export function App() {
                 onRetryFailedPages={retryFailedPages}
                 project={workspaceProject}
                 uiState={workspaceUiState}
+                workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}
               />
             </WorkspaceErrorBoundary>
           ) : null}

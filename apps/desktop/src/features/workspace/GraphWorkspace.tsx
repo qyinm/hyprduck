@@ -31,6 +31,7 @@ import type {
 
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
+  workspaceId: string;
   uiState: WorkspaceUiState;
   importStatus: GraphImportStatus | null;
   dispatch: Dispatch<WorkspaceUiAction>;
@@ -59,6 +60,7 @@ interface GraphImportStatus {
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
     project,
+    workspaceId,
     uiState,
     importStatus,
     dispatch,
@@ -319,7 +321,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             onListAgents={onListAgentTerminalAgents}
             open={agentTerminalOpen}
             projectId={project?.summary.projectId ?? null}
-            workspaceId="default"
+            workspaceId={workspaceId}
           />
         </section>
 

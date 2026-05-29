@@ -70,7 +70,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  registerIpcHandlers();
+  await registerIpcHandlers();
   try {
     await maybeImportLegacySwiftConfig();
   } catch (error) {
