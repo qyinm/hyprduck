@@ -2266,6 +2266,7 @@ mod tests {
             report
         );
         assert_graph_node_metadata(&store, "node-a");
+        assert_graph_wiki_page_node(&store, "wiki-alpha");
         assert_graph_edge_metadata(&store, "claim-alpha", "source:source-a", "CITES");
         assert_relational_proof_ignores_graph_metadata_tamper(&store);
         let hits = store
@@ -2509,6 +2510,31 @@ mod tests {
         assert_eq!(row.get::<f64>("confidence").expect("confidence"), 0.9);
         assert_eq!(row.get::<String>("status").expect("status"), "active");
         assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
+    }
+
+    fn assert_graph_wiki_page_node(store: &KnowledgeStore, node_id: &str) {
+        let graph = Graph::open(&store.path).expect("open graph");
+        let rows = graph
+            .connection()
+            .cypher_builder(
+                "MATCH (n:WikiPage {id: $node_id})
+                 RETURN n.kind AS kind,
+                        n.label AS label,
+                        n.aliases_json AS aliases_json,
+                        n.evidence_ids_json AS evidence_ids_json,
+                        n.source_ids_json AS source_ids_json,
+                        n.status AS status",
+            )
+            .param("node_id", node_id)
+            .run()
+            .expect("query wiki page graph node");
+        let row = rows.get(0).expect("wiki page graph node row");
+        assert_eq!(row.get::<String>("kind").expect("kind"), "wiki_page");
+        assert_eq!(row.get::<String>("label").expect("label"), "Alpha Wiki");
+        assert_string_array(row, "aliases_json", &["wiki/alpha"]);
+        assert_string_array(row, "evidence_ids_json", &["evidence-a"]);
+        assert_string_array(row, "source_ids_json", &["source-a"]);
+        assert_eq!(row.get::<String>("status").expect("status"), "active");
     }
 
     fn assert_graph_edge_metadata(
