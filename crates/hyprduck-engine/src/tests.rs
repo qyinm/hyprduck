@@ -12,6 +12,24 @@ mod workspace_answer;
 use common::*;
 
 #[test]
+fn default_project_store_migrates_legacy_db_to_canonical_name() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_dir = temp.path().join("HyprDuck");
+    fs::create_dir_all(&store_dir).expect("create store dir");
+    let legacy_path = store_dir.join("knowledge.sqlite3");
+    fs::write(&legacy_path, b"legacy sqlite bytes").expect("write legacy store");
+
+    let store = KnowledgeProjectStore::from_data_root(temp.path()).expect("default store");
+
+    assert_eq!(store.path, store_dir.join("hyprduck.sqlite"));
+    assert!(legacy_path.exists());
+    assert_eq!(
+        fs::read(store.path).expect("read canonical store"),
+        b"legacy sqlite bytes"
+    );
+}
+
+#[test]
 fn structured_extraction_artifact_tracks_claims_relations_and_provenance() {
     let temp = tempfile::tempdir().expect("temp dir");
     let markdown = "# Source import\n\n## Page 1\n\nShared Context Layer keeps agents grounded.\nEvidence Map links page images to markdown snippets.\n\n## Page 2\n\nShared Context Layer turns imported documents into agent-ready knowledge.\n";

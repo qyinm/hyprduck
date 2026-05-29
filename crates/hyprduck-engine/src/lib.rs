@@ -3093,8 +3093,14 @@ impl KnowledgeProjectStore {
         let root = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .ok_or_else(|| anyhow!("failed to resolve local data directory"))?;
-        let new_path = root.join("HyprDuck/knowledge.sqlite3");
-        let legacy_path = root.join("HyprDuck/knowledge.sqlite3");
+        Self::from_data_root(&root)
+    }
+
+    fn from_data_root(root: &Path) -> Result<Self> {
+        let store_dir = root.join("HyprDuck");
+        let new_path = KnowledgeStore::default_path_for_root(&store_dir);
+        let legacy_path = store_dir.join("knowledge.sqlite3");
+        migrate_legacy_project_store(&legacy_path, &new_path)?;
         Ok(Self {
             path: if new_path.exists() {
                 new_path
@@ -3470,6 +3476,7 @@ impl KnowledgeProjectStore {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed creating {}", parent.display()))?;
         }
+        KnowledgeStore::open(self.path.clone())?;
         self.run_sql(
             "CREATE TABLE IF NOT EXISTS projects (
                 project_id TEXT PRIMARY KEY,
@@ -3530,6 +3537,24 @@ impl KnowledgeProjectStore {
 
         String::from_utf8(output.stdout).context("sqlite3 output was not valid UTF-8")
     }
+}
+
+fn migrate_legacy_project_store(legacy_path: &Path, new_path: &Path) -> Result<()> {
+    if new_path.exists() || !legacy_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating {}", parent.display()))?;
+    }
+    fs::copy(legacy_path, new_path).with_context(|| {
+        format!(
+            "failed migrating legacy project store from {} to {}",
+            legacy_path.display(),
+            new_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn escape_sqlite(value: &str) -> String {
