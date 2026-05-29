@@ -1,6 +1,6 @@
 # Agent Terminal
 
-Agent Terminal is the HyprDuck Desktop surface for opening detected local coding agents with HyprDuck context attached. HyprDuck remains the evidence provider. Codex, Claude Code, Pi Agent, Hermes, or another supported external agent owns the reasoning and work.
+Agent Terminal is the HyprDuck Desktop surface for opening the user's default shell or detected local coding agents with HyprDuck context attached. HyprDuck remains the evidence provider. Codex, Claude Code, Pi Agent, Hermes, or another supported external agent owns the reasoning and work.
 
 ## Supported agents
 
@@ -11,7 +11,7 @@ HyprDuck v1 detects these agent commands from `PATH`:
 - Pi Agent: `pi-agent`
 - Hermes: `hermes`
 
-Generic shell and custom command entries are not part of the default v1 picker. They must remain hidden or disabled unless a later Advanced mode is explicitly designed and reviewed.
+`New Terminal` opens only the user's default shell resolved inside Electron main. Renderer-provided custom commands, arbitrary shell paths, and custom executable fields stay rejected.
 
 ## Context handoff
 
@@ -27,7 +27,7 @@ The handoff tells the selected agent to call HyprDuck MCP `get_context_pack` bef
 
 ## Backend gates
 
-HyprDuck Desktop now uses a real PTY backend by default when `node-pty` is available. The backend launches only detected agent commands from the allowlisted registry, streams process output to the renderer terminal, accepts keyboard input, handles resize, and keeps external Ghostty available as a fallback.
+HyprDuck Desktop now uses a real PTY backend by default when `node-pty` is available. The backend launches only detected agent commands from the allowlisted registry or the main-resolved default shell for `New Terminal`, streams process output to the renderer terminal, accepts keyboard input, handles resize, and keeps external Ghostty available as a fallback.
 
 The Ghostty-native backend remains an optional spike path:
 
@@ -60,7 +60,7 @@ This fallback is an official v1 path, not an error state. It preserves terminal 
 
 ## Security boundary
 
-Renderer code cannot pass arbitrary shell commands to Electron main. Agent session creation accepts only known agent IDs from the detection registry. Command resolution happens in the main process.
+Renderer code cannot pass arbitrary shell commands to Electron main. Agent session creation accepts known agent IDs from the detection registry or `kind: "shell"` for the main-resolved default shell. Command resolution happens in the main process, and `command`, `customCommand`, `shell`, `shellCommand`, and `executable` payload fields remain rejected.
 
 The renderer remains sandboxed with `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`.
 

@@ -1147,7 +1147,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         agentTerminalOpen && !terminalMinimized
           ? "z-30 h-[min(34rem,calc(100vh-5rem))]"
           : "z-20 h-14",
-        terminalResizing ? "transition-none" : "",
+        terminalResizing && "transition-none",
       )}
       style={composerStyle}
       onSubmit={(event) => {
@@ -1177,7 +1177,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
             ? "h-[min(34rem,calc(100vh-5rem))] rounded-2xl border-zinc-700/80 bg-zinc-900/95 text-zinc-100 shadow-[0_24px_80px_rgba(0,0,0,0.28)]"
             : "flex h-14 items-center gap-2 rounded-full border-border/80 bg-background/95 px-3",
           showTerminalContent ? "p-0" : "flex items-end gap-2 px-3 pb-2",
-          terminalResizing ? "transition-none" : "",
+          terminalResizing && "transition-none",
         )}
         style={terminalStyle}
       >
@@ -1248,7 +1248,6 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
                   ? "bg-zinc-700 text-zinc-200 hover:bg-zinc-600 hover:text-zinc-50"
                   : "",
               )}
-              disabled={false}
               size="icon"
               type="submit"
             >

@@ -19,7 +19,6 @@ import type {
   AgentTerminalSession,
   DesktopUnlisten,
 } from "@/appTypes";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import claudeIconUrl from "../../../resources/icons/claude-color.svg?url";
