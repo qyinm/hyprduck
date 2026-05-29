@@ -1280,6 +1280,8 @@ fn brain_relation_type(kind: BrainRelationKind) -> &'static str {
         BrainRelationKind::DependsOn => "DEPENDS_ON",
         BrainRelationKind::SourceOf => "SOURCE_OF",
         BrainRelationKind::DerivedFrom => "DERIVED_FROM",
+        BrainRelationKind::Cites => "CITES",
+        BrainRelationKind::LinksTo => "LINKS_TO",
         BrainRelationKind::RelatedTo => "RELATED_TO",
     }
 }
@@ -1303,6 +1305,8 @@ fn brain_relation_kind_slug(kind: BrainRelationKind) -> &'static str {
         BrainRelationKind::DependsOn => "depends_on",
         BrainRelationKind::SourceOf => "source_of",
         BrainRelationKind::DerivedFrom => "derived_from",
+        BrainRelationKind::Cites => "cites",
+        BrainRelationKind::LinksTo => "links_to",
         BrainRelationKind::RelatedTo => "related_to",
     }
 }
@@ -1428,16 +1432,38 @@ mod tests {
                     updated_at: 10,
                 },
             ],
-            relations: vec![BrainRelationRecord {
-                relation_id: "rel-a".into(),
-                kind: BrainRelationKind::RelatedTo,
-                source_node_id: "node-a".into(),
-                target_node_id: "node-b".into(),
-                label: "relates".into(),
-                evidence_ids: vec!["evidence-a".into()],
-                confidence: Some(0.8),
-                updated_at: 10,
-            }],
+            relations: vec![
+                BrainRelationRecord {
+                    relation_id: "rel-a".into(),
+                    kind: BrainRelationKind::RelatedTo,
+                    source_node_id: "node-a".into(),
+                    target_node_id: "node-b".into(),
+                    label: "relates".into(),
+                    evidence_ids: vec!["evidence-a".into()],
+                    confidence: Some(0.8),
+                    updated_at: 10,
+                },
+                BrainRelationRecord {
+                    relation_id: "rel-cites".into(),
+                    kind: BrainRelationKind::Cites,
+                    source_node_id: "claim-alpha".into(),
+                    target_node_id: "source:source-a".into(),
+                    label: "cites".into(),
+                    evidence_ids: vec!["evidence-a".into()],
+                    confidence: Some(0.8),
+                    updated_at: 10,
+                },
+                BrainRelationRecord {
+                    relation_id: "rel-links".into(),
+                    kind: BrainRelationKind::LinksTo,
+                    source_node_id: "wiki-alpha".into(),
+                    target_node_id: "entity-alpha".into(),
+                    label: "links".into(),
+                    evidence_ids: vec!["evidence-a".into()],
+                    confidence: Some(0.8),
+                    updated_at: 10,
+                },
+            ],
             evidence: vec![EvidenceRef {
                 id: "evidence-a".into(),
                 page_label: "p1".into(),
@@ -1497,7 +1523,7 @@ mod tests {
             report,
             KnowledgeGraphPersistReport {
                 node_count: 6,
-                relation_count: 1,
+                relation_count: 3,
             }
         );
         assert_eq!(

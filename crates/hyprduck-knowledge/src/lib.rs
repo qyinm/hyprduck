@@ -375,6 +375,8 @@ pub enum BrainRelationKind {
     DependsOn,
     SourceOf,
     DerivedFrom,
+    Cites,
+    LinksTo,
     RelatedTo,
 }
 
