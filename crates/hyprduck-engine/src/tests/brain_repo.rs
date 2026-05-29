@@ -84,6 +84,7 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
     let committed = handle_write_commit(WriteCommitRequest {
         scope: scope.clone(),
         proposal_id: proposal.proposal_id.clone(),
+        user_approved: false,
     })
     .expect("commit proposal");
     assert!(committed.event_id.starts_with("evt-"));
@@ -256,11 +257,84 @@ fn agent_session_write_revalidates_evidence_on_commit() {
     let error = handle_write_commit(WriteCommitRequest {
         scope,
         proposal_id: proposal.proposal_id,
+        user_approved: false,
     })
     .expect_err("stale evidence rejected");
     assert!(error
         .to_string()
         .contains("ev-agent-write-stale was not found"));
+}
+
+#[test]
+fn large_semantic_wiki_or_graph_proposals_require_user_approval() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-semantic-approval".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Large semantic wiki and graph changes require user approval.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-semantic-approval".into()),
+        markdown_path: Some("artifacts/source-semantic-approval/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "wiki_page".into(),
+        title: "Large wiki rewrite".into(),
+        body: (0..45)
+            .map(|idx| format!("Semantic section {idx} updates graph-linked wiki content."))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        evidence_refs: vec!["ev-semantic-approval".into()],
+    })
+    .expect("propose semantic write");
+    assert_eq!(proposal.status, "pending_user_approval");
+
+    let error = handle_write_commit(WriteCommitRequest {
+        scope,
+        proposal_id: proposal.proposal_id,
+        user_approved: false,
+    })
+    .expect_err("large semantic proposal requires user approval");
+
+    assert!(error
+        .to_string()
+        .contains("large semantic wiki/graph changes require explicit user approval"));
 }
 
 #[test]

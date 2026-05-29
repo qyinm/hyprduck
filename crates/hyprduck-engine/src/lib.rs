@@ -1054,6 +1054,7 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
 
     let now = unix_timestamp_seconds();
     let proposal_id = format!("prop-{}", Uuid::now_v7().as_simple());
+    let approval = write_proposal_approval_policy(&request.content_type, &request.body);
     let proposal = AgentWriteProposal {
         proposal_id: proposal_id.clone(),
         content_type: request.content_type,
@@ -1062,6 +1063,8 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
         evidence_refs: request.evidence_refs,
         created_at: now,
         workspace_id: request.scope.workspace_id,
+        requires_user_approval: approval.requires_user_approval,
+        approval_reason: approval.reason,
     };
     write_json_pretty(
         &writer
@@ -1073,7 +1076,11 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
 
     Ok(WriteProposeResponseData {
         proposal_id,
-        status: "pending".into(),
+        status: if proposal.requires_user_approval {
+            "pending_user_approval".into()
+        } else {
+            "pending".into()
+        },
         created_at: now,
     })
 }
@@ -1170,6 +1177,7 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
         match handle_write_commit(WriteCommitRequest {
             scope: request.scope.clone(),
             proposal_id: proposal_id.clone(),
+            user_approved: false,
         }) {
             Ok(response) => results.push(WriteCommitResultItem {
                 proposal_id: proposal_id.clone(),
@@ -1254,6 +1262,10 @@ struct AgentWriteProposal {
     evidence_refs: Vec<String>,
     created_at: u64,
     workspace_id: String,
+    #[serde(default)]
+    requires_user_approval: bool,
+    #[serde(default)]
+    approval_reason: Option<String>,
 }
 
 fn validate_proposal_id(proposal_id: &str) -> Result<()> {
@@ -1268,8 +1280,27 @@ fn validate_proposal_id(proposal_id: &str) -> Result<()> {
 
 fn validate_write_content_type(content_type: &str) -> Result<()> {
     match content_type.trim() {
-        "memory" => Ok(()),
-        other => bail!("unsupported contentType {other}; supported contentType: memory"),
+        "memory" | "wiki_page" | "graph_change" => Ok(()),
+        other => bail!(
+            "unsupported contentType {other}; supported contentTypes: memory, wiki_page, graph_change"
+        ),
+    }
+}
+
+struct WriteApprovalPolicy {
+    requires_user_approval: bool,
+    reason: Option<String>,
+}
+
+fn write_proposal_approval_policy(content_type: &str, body: &str) -> WriteApprovalPolicy {
+    let semantic_content = matches!(content_type.trim(), "wiki_page" | "graph_change");
+    let large_body = body.chars().count() > 2_000 || body.lines().count() > 40;
+    let requires_user_approval = semantic_content && large_body;
+    WriteApprovalPolicy {
+        requires_user_approval,
+        reason: requires_user_approval.then(|| {
+            "large semantic wiki/graph changes require explicit user approval".to_string()
+        }),
     }
 }
 
@@ -1306,6 +1337,21 @@ fn validate_committable_proposal(
         bail!("proposal workspaceId does not match request workspaceId");
     }
     validate_write_content_type(&proposal.content_type)?;
+    if proposal.requires_user_approval && !request.user_approved {
+        bail!(
+            "{}",
+            proposal
+                .approval_reason
+                .as_deref()
+                .unwrap_or("proposal requires explicit user approval before commit")
+        );
+    }
+    if proposal.content_type != "memory" {
+        bail!(
+            "committing contentType {} is not implemented yet",
+            proposal.content_type
+        );
+    }
     if proposal.title.trim().is_empty() {
         bail!("proposal title must not be empty");
     }

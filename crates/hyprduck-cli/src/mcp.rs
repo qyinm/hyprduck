@@ -935,7 +935,15 @@ fn call_tool(
         }
         "write_commit" => {
             let proposal_id = required_string(arguments, "proposalId")?;
-            serde_json::to_value(client.write_commit(WriteCommitRequest { scope, proposal_id })?)?
+            let user_approved = arguments
+                .get("userApproved")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            serde_json::to_value(client.write_commit(WriteCommitRequest {
+                scope,
+                proposal_id,
+                user_approved,
+            })?)?
         }
         "write_commit_all" => {
             let proposal_ids = required_string_array(arguments, "proposalIds")?;

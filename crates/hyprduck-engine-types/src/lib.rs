@@ -391,6 +391,8 @@ pub struct WriteProposeResponseData {
 pub struct WriteCommitRequest {
     pub scope: BrainReadScope,
     pub proposal_id: String,
+    #[serde(default)]
+    pub user_approved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2363,6 +2365,7 @@ mod tests {
             EngineRequest::WriteCommit(WriteCommitRequest {
                 scope: scope.clone(),
                 proposal_id: "prop-1".into(),
+                user_approved: false,
             }),
             EngineRequest::WriteCommitAll(WriteCommitAllRequest {
                 scope: scope.clone(),
