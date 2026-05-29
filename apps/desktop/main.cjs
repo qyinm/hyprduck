@@ -12,6 +12,7 @@ const {
   maybeImportLegacySwiftConfig: importLegacySwiftConfig,
 } = require("./main/legacy-config.cjs");
 const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
+const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-ghostty.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const MAX_PROGRESS_LOG = 80;
@@ -102,8 +103,10 @@ app.on("will-quit", () => {
   }
 });
 
-function registerIpcHandlers() {
+async function registerIpcHandlers() {
+  const ghosttyProbe = await createGhosttyNativeBackendFromEnv();
   agentTerminalSessions = new AgentTerminalSessionManager({
+    backend: ghosttyProbe.backend ?? undefined,
     getWorkspaceState: () => ({
       workspaceId: snapshot.lastWorkspaceId ?? "default",
       projectId: snapshot.lastProjectId ?? null,

@@ -23,6 +23,7 @@
     "frontend:build": "tsc --noEmit && vite build",
     "check:agent-terminal-backend": "node scripts/check-agent-terminal-backend.cjs",
     "test:agent-detection": "node --test tests/agent-detection.test.cjs",
+    "test:agent-terminal-ghostty": "node --test tests/agent-terminal-ghostty.test.cjs",
     "test:agent-terminal-sessions": "node --test tests/agent-terminal-sessions.test.cjs",
     "check:desktop-contract": "node scripts/check-desktop-command-contract.cjs",
     "test:ia": "bun test tests/ia-ui.test.mjs",

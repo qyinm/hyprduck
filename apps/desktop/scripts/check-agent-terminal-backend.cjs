@@ -4,6 +4,9 @@ const {
   assertAgentTerminalBackend,
   createDefaultAgentTerminalBackend,
 } = require("../main/agent-terminal-backend.cjs");
+const {
+  createGhosttyNativeBackendFromEnv,
+} = require("../main/agent-terminal-ghostty.cjs");
 
 function checkDefaultBackend() {
   const backend = assertAgentTerminalBackend(createDefaultAgentTerminalBackend());
@@ -15,25 +18,11 @@ function checkDefaultBackend() {
 }
 
 async function checkOptionalGhosttyModule() {
-  const moduleName = process.env.HYPRDUCK_GHOSTTY_BACKEND_MODULE;
-  if (!moduleName) {
-    return {
-      checked: false,
-      reason: "Set HYPRDUCK_GHOSTTY_BACKEND_MODULE to test a native Ghostty backend module.",
-    };
+  const result = await createGhosttyNativeBackendFromEnv();
+  if (!result.backend) {
+    return { checked: result.enabled, reason: result.reason };
   }
-
-  const loaded = require(moduleName);
-  const factory =
-    typeof loaded.createAgentTerminalBackend === "function"
-      ? loaded.createAgentTerminalBackend
-      : loaded.default;
-  if (typeof factory !== "function") {
-    throw new Error(
-      `${moduleName} must export createAgentTerminalBackend() or a default factory`,
-    );
-  }
-  const backend = assertAgentTerminalBackend(await factory());
+  const backend = assertAgentTerminalBackend(result.backend);
   return {
     checked: true,
     status: backend.snapshotStatus(),
