@@ -12,10 +12,10 @@ use cli::{Cli, Commands, GraphStateSelector};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainReadScope, CompileProjectRequest, ContextPackParseConfidence, DocumentFormat,
-    EvidenceIndexItemV0, EvidenceIndexV0, GetContextPackRequest, GraphHistoryEntry, IngestStatus,
-    PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress, ParseRequest,
-    ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
-    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V0_SCHEMA_VERSION,
+    EvidenceIndexItemV1, EvidenceIndexV1, EvidenceType, GetContextPackRequest, GraphHistoryEntry,
+    IngestStatus, PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress,
+    ParseRequest, ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
+    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V1_SCHEMA_VERSION,
     SOURCE_PACK_V0_SCHEMA_VERSION,
 };
 use std::path::{Path, PathBuf};
@@ -426,14 +426,14 @@ fn write_demo_source_artifacts(root: &Path, fixture_path: &Path) -> Result<Sourc
         created_at: now,
         updated_at: now,
     };
-    let evidence_index = EvidenceIndexV0 {
-        schema_version: EVIDENCE_INDEX_V0_SCHEMA_VERSION.into(),
+    let evidence_index = EvidenceIndexV1 {
+        schema_version: EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
         workspace_id: DEMO_WORKSPACE_ID.into(),
         source_id: DEMO_SOURCE_ID.into(),
         content_hash: content_hash.clone(),
         provider_route: "local_demo".into(),
         local_only: true,
-        evidence: vec![EvidenceIndexItemV0 {
+        evidence: vec![EvidenceIndexItemV1 {
             evidence_ref: format!("ev-{DEMO_SOURCE_ID}-source-1"),
             source_id: DEMO_SOURCE_ID.into(),
             page: 1,
@@ -444,6 +444,7 @@ fn write_demo_source_artifacts(root: &Path, fixture_path: &Path) -> Result<Sourc
             content_hash,
             markdown_path: Some(page_markdown_path.display().to_string()),
             image_path: None,
+            evidence_type: EvidenceType::Text,
         }],
         warnings: Vec::new(),
         generated_at: now,

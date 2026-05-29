@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::{fs, time};
 
-use hyprduck_engine_types::{ContextPackV0, EvidenceIndexV0, SourcePackV0};
+use hyprduck_engine_types::{ContextPackV0, EvidenceIndexV1, EvidenceType, SourcePackV0};
 
 #[test]
 fn doctor_reports_engine_resolution() {
@@ -150,15 +150,16 @@ fn demo_writes_local_context_pack_artifacts() {
     assert_eq!(source_pack.provider_route, "local_demo");
     assert!(source_pack.local_only);
 
-    let evidence_index: EvidenceIndexV0 =
+    let evidence_index: EvidenceIndexV1 =
         serde_json::from_str(&fs::read_to_string(&evidence_index_path).unwrap())
             .expect("schema-valid evidence index");
-    assert_eq!(evidence_index.schema_version, "hyprduck.evidence_index.v0");
+    assert_eq!(evidence_index.schema_version, "hyprduck.evidence_index.v1");
     assert_eq!(evidence_index.source_id, "demo-source");
     assert_eq!(evidence_index.provider_route, "local_demo");
     assert!(evidence_index.local_only);
     assert_eq!(evidence_index.content_hash, source_pack.content_hash);
     assert_eq!(evidence_index.evidence.len(), 1);
+    assert_eq!(evidence_index.evidence[0].evidence_type, EvidenceType::Text);
     let _ = fs::remove_dir_all(root);
 }
 
