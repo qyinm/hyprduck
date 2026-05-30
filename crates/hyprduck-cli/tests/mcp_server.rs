@@ -256,6 +256,11 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         payload["knowledgeStore"]["jsonArtifactRole"],
         "migration_export_debug_compat"
     );
+    assert_eq!(payload["knowledgeStore"]["vectorSearchEnabled"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["vectorSearchPolicy"],
+        "defer_until_db_graphqlite_read_paths_stabilize"
+    );
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);

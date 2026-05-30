@@ -1660,6 +1660,8 @@ pub struct BrainKnowledgeStoreReport {
     pub broad_verification_required: bool,
     pub json_artifacts_canonical: bool,
     pub json_artifact_role: String,
+    pub vector_search_enabled: bool,
+    pub vector_search_policy: String,
     pub evidence_item_count: usize,
     pub wiki_page_count: usize,
     pub graph_node_count: usize,
