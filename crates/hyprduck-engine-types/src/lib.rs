@@ -1662,6 +1662,8 @@ pub struct BrainKnowledgeStoreReport {
     pub json_artifact_role: String,
     pub vector_search_enabled: bool,
     pub vector_search_policy: String,
+    pub checkpoint_rollback_api_enabled: bool,
+    pub checkpoint_rollback_policy: String,
     pub evidence_item_count: usize,
     pub wiki_page_count: usize,
     pub graph_node_count: usize,

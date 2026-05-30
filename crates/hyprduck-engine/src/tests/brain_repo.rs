@@ -45,6 +45,11 @@ fn brain_health_is_clean_for_empty_workspace() {
         store.vector_search_policy,
         "defer_until_db_graphqlite_read_paths_stabilize"
     );
+    assert!(!store.checkpoint_rollback_api_enabled);
+    assert_eq!(
+        store.checkpoint_rollback_policy,
+        "defer_until_checkpoints_reliably_stored"
+    );
     assert_eq!(store.evidence_item_count, 0);
     assert_eq!(store.wiki_page_count, 0);
     assert_eq!(store.graph_node_count, 0);
