@@ -107,3 +107,33 @@ Representative verification:
 1. `knowledge_store_creates_canonical_schema_and_graphqlite_gate`
 2. `graphqlite_gate_rejects_non_transactional_graph_mutations`
 3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
+
+## Test Engineering Gate
+
+Status: accepted.
+
+The acceptance matrix for this migration is intentionally broader than a normal
+storage refactor because it changes the durable truth for evidence, graph, wiki,
+MCP, and desktop graph reads.
+
+Required coverage:
+
+1. Migration: existing materialized JSON and legacy project rows import into the
+   canonical SQLite plus GraphQLite store without losing source, page, evidence,
+   wiki, event, or correction data.
+2. Transaction and rollback: GraphQLite gate tests prove rollback behavior, and
+   graph mutation failures roll back related relational graph and audit writes.
+3. Health: read-health responses expose canonical storage, schema versions,
+   GraphQLite load/transaction state, release gate state, deferred rollback,
+   deferred vector search, deferred graph algorithms, and governance posture.
+4. MCP: agent-facing read and write tools preserve cited evidence behavior,
+   default path redaction, and narrow mutation semantics.
+5. Desktop: graph canvas reads must come from DB or GraphQLite projections rather
+   than materialized JSON direct reads.
+
+Representative verification:
+
+1. `brain_repo`
+2. `graphqlite_gate`
+3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
+4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
