@@ -36,6 +36,8 @@ fn brain_health_is_clean_for_empty_workspace() {
     assert!(store.graphqlite_transactional);
     assert_eq!(store.graphqlite_release_gate, "passed");
     assert!(store.release_blocked_without_graphqlite);
+    assert_eq!(store.migration_blast_radius, "high");
+    assert!(store.broad_verification_required);
     assert_eq!(store.evidence_item_count, 0);
     assert_eq!(store.wiki_page_count, 0);
     assert_eq!(store.graph_node_count, 0);

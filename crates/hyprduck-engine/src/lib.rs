@@ -1138,6 +1138,8 @@ fn brain_knowledge_store_report(
             "blocked".into()
         },
         release_blocked_without_graphqlite: true,
+        migration_blast_radius: "high".into(),
+        broad_verification_required: true,
         evidence_item_count: summary.evidence_item_count,
         wiki_page_count: summary.wiki_page_count,
         graph_node_count: summary.graph_node_count,

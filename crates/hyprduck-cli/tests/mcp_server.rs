@@ -249,6 +249,8 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         payload["knowledgeStore"]["releaseBlockedWithoutGraphqlite"],
         true
     );
+    assert_eq!(payload["knowledgeStore"]["migrationBlastRadius"], "high");
+    assert_eq!(payload["knowledgeStore"]["broadVerificationRequired"], true);
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);
