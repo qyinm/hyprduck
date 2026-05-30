@@ -38,6 +38,8 @@ fn brain_health_is_clean_for_empty_workspace() {
     assert!(store.release_blocked_without_graphqlite);
     assert_eq!(store.migration_blast_radius, "high");
     assert!(store.broad_verification_required);
+    assert!(!store.json_artifacts_canonical);
+    assert_eq!(store.json_artifact_role, "migration_export_debug_compat");
     assert_eq!(store.evidence_item_count, 0);
     assert_eq!(store.wiki_page_count, 0);
     assert_eq!(store.graph_node_count, 0);

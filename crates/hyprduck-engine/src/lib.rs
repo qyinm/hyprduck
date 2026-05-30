@@ -1140,6 +1140,8 @@ fn brain_knowledge_store_report(
         release_blocked_without_graphqlite: true,
         migration_blast_radius: "high".into(),
         broad_verification_required: true,
+        json_artifacts_canonical: false,
+        json_artifact_role: "migration_export_debug_compat".into(),
         evidence_item_count: summary.evidence_item_count,
         wiki_page_count: summary.wiki_page_count,
         graph_node_count: summary.graph_node_count,

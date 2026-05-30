@@ -251,6 +251,11 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     );
     assert_eq!(payload["knowledgeStore"]["migrationBlastRadius"], "high");
     assert_eq!(payload["knowledgeStore"]["broadVerificationRequired"], true);
+    assert_eq!(payload["knowledgeStore"]["jsonArtifactsCanonical"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["jsonArtifactRole"],
+        "migration_export_debug_compat"
+    );
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);
