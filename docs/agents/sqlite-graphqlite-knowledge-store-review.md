@@ -80,3 +80,30 @@ Representative verification:
 2. `agent_session_write_rejects_unknown_evidence_ref`
 3. `agent_session_write_revalidates_evidence_on_commit`
 4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
+
+## Dependency And Packaging Review
+
+Status: accepted.
+
+GraphQLite is a required engine dependency, not an optional accelerator. The
+engine pins the GraphQLite crate version and treats extension load, basic Cypher
+mutation/read behavior, and rollback behavior as release gates.
+
+Release-blocking checks:
+
+1. The engine dependency remains pinned to the reviewed GraphQLite version.
+2. Workspace initialization opens the canonical `hyprduck.sqlite` file through
+   GraphQLite and records `hyprduck.sqlite:graphqlite` as the graph storage
+   location.
+3. The GraphQLite gate creates, reads, cleans up, and verifies rollback behavior
+   before normal workspace operation is considered healthy.
+4. Health output reports `graphqliteReleaseGate=passed` only when GraphQLite is
+   loaded and transactional.
+5. Packaged desktop builds must include whatever native or extension runtime the
+   pinned GraphQLite crate requires before this migration can ship.
+
+Representative verification:
+
+1. `knowledge_store_creates_canonical_schema_and_graphqlite_gate`
+2. `graphqlite_gate_rejects_non_transactional_graph_mutations`
+3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
