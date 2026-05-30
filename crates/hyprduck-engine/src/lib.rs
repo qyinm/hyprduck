@@ -1146,6 +1146,8 @@ fn brain_knowledge_store_report(
         vector_search_policy: "defer_until_db_graphqlite_read_paths_stabilize".into(),
         checkpoint_rollback_api_enabled: false,
         checkpoint_rollback_policy: "defer_until_checkpoints_reliably_stored".into(),
+        graph_algorithms_enabled: false,
+        graph_algorithm_policy: "revisit_after_primary_graph_data_stabilizes".into(),
         evidence_item_count: summary.evidence_item_count,
         wiki_page_count: summary.wiki_page_count,
         graph_node_count: summary.graph_node_count,

@@ -50,6 +50,11 @@ fn brain_health_is_clean_for_empty_workspace() {
         store.checkpoint_rollback_policy,
         "defer_until_checkpoints_reliably_stored"
     );
+    assert!(!store.graph_algorithms_enabled);
+    assert_eq!(
+        store.graph_algorithm_policy,
+        "revisit_after_primary_graph_data_stabilizes"
+    );
     assert_eq!(store.evidence_item_count, 0);
     assert_eq!(store.wiki_page_count, 0);
     assert_eq!(store.graph_node_count, 0);

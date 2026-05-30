@@ -1664,6 +1664,8 @@ pub struct BrainKnowledgeStoreReport {
     pub vector_search_policy: String,
     pub checkpoint_rollback_api_enabled: bool,
     pub checkpoint_rollback_policy: String,
+    pub graph_algorithms_enabled: bool,
+    pub graph_algorithm_policy: String,
     pub evidence_item_count: usize,
     pub wiki_page_count: usize,
     pub graph_node_count: usize,

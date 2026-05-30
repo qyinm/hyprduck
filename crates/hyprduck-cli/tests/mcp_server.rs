@@ -269,6 +269,11 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         payload["knowledgeStore"]["checkpointRollbackPolicy"],
         "defer_until_checkpoints_reliably_stored"
     );
+    assert_eq!(payload["knowledgeStore"]["graphAlgorithmsEnabled"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["graphAlgorithmPolicy"],
+        "revisit_after_primary_graph_data_stabilizes"
+    );
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);
