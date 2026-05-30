@@ -25,3 +25,31 @@ contract before the next layer consumes it:
 Deferred work is explicit in health output rather than hidden in prose:
 checkpoint rollback API, vector search, and graph algorithms stay disabled until
 their prerequisite read paths are stable enough to verify.
+
+## Architect Boundary Review
+
+Status: accepted.
+
+SQLite owns durable proof and GraphQLite owns graph-native shape.
+
+SQLite responsibilities:
+
+1. Source identity, source hashes, source pages, typed evidence, evidence refs,
+   provider route, locality, parse warnings, and audit events.
+2. Wiki content, wiki revisions, proposal state, approval state, correction
+   state, checkpoint metadata, and context-pack assembly records.
+3. FTS5 tables for lexical retrieval over evidence, source pages, and wiki text.
+
+GraphQLite responsibilities:
+
+1. Current graph nodes for sources, pages, concepts, entities, claims, and wiki
+   pages.
+2. Current semantic relationships such as mentions, supports, cites, contradicts,
+   derived-from, and source-of.
+3. Graph-neighborhood retrieval and future graph-native algorithms once current
+   graph data has enough stability evidence.
+
+The migration architecture rejects split ownership. A graph mutation that cannot
+commit must prevent the related relational graph-ready state and audit event from
+committing. Citation-ready evidence can exist before graph-ready state, but graph
+state cannot be treated as citation proof without relational evidence rows.
