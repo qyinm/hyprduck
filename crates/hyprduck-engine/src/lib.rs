@@ -1123,6 +1123,8 @@ fn brain_knowledge_store_report(
         canonical_storage: "sqlite+graphqlite".into(),
         primary_graph_store: "graphqlite".into(),
         pure_sqlite_relational_graph_rejected: true,
+        optional_graphqlite_acceleration_rejected: true,
+        graph_store_mode: "required_primary".into(),
         graph_native_query_surface: "graphqlite_cypher".into(),
         db_schema_version: health.db_schema_version,
         graph_schema_version: health.graph_schema_version,

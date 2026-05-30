@@ -1645,6 +1645,8 @@ pub struct BrainKnowledgeStoreReport {
     pub canonical_storage: String,
     pub primary_graph_store: String,
     pub pure_sqlite_relational_graph_rejected: bool,
+    pub optional_graphqlite_acceleration_rejected: bool,
+    pub graph_store_mode: String,
     pub graph_native_query_surface: String,
     pub db_schema_version: i64,
     pub graph_schema_version: i64,

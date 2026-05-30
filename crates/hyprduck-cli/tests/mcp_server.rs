@@ -225,6 +225,14 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         true
     );
     assert_eq!(
+        payload["knowledgeStore"]["optionalGraphqliteAccelerationRejected"],
+        true
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["graphStoreMode"],
+        "required_primary"
+    );
+    assert_eq!(
         payload["knowledgeStore"]["graphNativeQuerySurface"],
         "graphqlite_cypher"
     );
