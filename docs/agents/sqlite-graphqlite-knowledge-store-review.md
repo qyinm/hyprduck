@@ -53,3 +53,30 @@ The migration architecture rejects split ownership. A graph mutation that cannot
 commit must prevent the related relational graph-ready state and audit event from
 committing. Citation-ready evidence can exist before graph-ready state, but graph
 state cannot be treated as citation proof without relational evidence rows.
+
+## Data Integrity Review
+
+Status: accepted.
+
+The integrity gate is satisfied only when schema, transaction, and citation rules
+remain visible in both implementation and tests.
+
+Required invariants:
+
+1. Schema versions are reported for both the relational DB and GraphQLite graph
+   store.
+2. Health output reports GraphQLite as transactional and blocks release when the
+   required primary graph store is unavailable.
+3. Agent write proposals cannot commit with unknown evidence refs.
+4. Agent write commits revalidate evidence refs at commit time so stale evidence
+   cannot slip through after proposal creation.
+5. Context Pack and page-evidence reads resolve citations from evidence rows and
+   preserve source, page, quoted text, hash, provider route, locality, parse
+   confidence, and evidence type.
+
+Representative verification:
+
+1. `brain_health_is_clean_for_empty_workspace`
+2. `agent_session_write_rejects_unknown_evidence_ref`
+3. `agent_session_write_revalidates_evidence_on_commit`
+4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
