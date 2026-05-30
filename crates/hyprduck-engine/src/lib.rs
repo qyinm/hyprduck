@@ -1126,6 +1126,8 @@ fn brain_knowledge_store_report(
         optional_graphqlite_acceleration_rejected: true,
         graph_store_mode: "required_primary".into(),
         graph_native_query_surface: "graphqlite_cypher".into(),
+        migration_mode: "single_db_first_release".into(),
+        long_dual_write_transition_rejected: true,
         db_schema_version: health.db_schema_version,
         graph_schema_version: health.graph_schema_version,
         graphqlite_loaded: health.graphqlite_loaded,

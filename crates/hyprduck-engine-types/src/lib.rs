@@ -1648,6 +1648,8 @@ pub struct BrainKnowledgeStoreReport {
     pub optional_graphqlite_acceleration_rejected: bool,
     pub graph_store_mode: String,
     pub graph_native_query_surface: String,
+    pub migration_mode: String,
+    pub long_dual_write_transition_rejected: bool,
     pub db_schema_version: i64,
     pub graph_schema_version: i64,
     pub graphqlite_loaded: bool,

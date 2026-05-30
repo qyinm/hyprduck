@@ -236,6 +236,14 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         payload["knowledgeStore"]["graphNativeQuerySurface"],
         "graphqlite_cypher"
     );
+    assert_eq!(
+        payload["knowledgeStore"]["migrationMode"],
+        "single_db_first_release"
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["longDualWriteTransitionRejected"],
+        true
+    );
     assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
     assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
     assert_eq!(payload["governance"]["evidenceGoverned"], true);

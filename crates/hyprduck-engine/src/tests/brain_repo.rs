@@ -30,6 +30,8 @@ fn brain_health_is_clean_for_empty_workspace() {
     assert!(store.optional_graphqlite_acceleration_rejected);
     assert_eq!(store.graph_store_mode, "required_primary");
     assert_eq!(store.graph_native_query_surface, "graphqlite_cypher");
+    assert_eq!(store.migration_mode, "single_db_first_release");
+    assert!(store.long_dual_write_transition_rejected);
     assert!(store.graphqlite_loaded);
     assert!(store.graphqlite_transactional);
     assert_eq!(store.evidence_item_count, 0);
