@@ -137,3 +137,25 @@ Representative verification:
 2. `graphqlite_gate`
 3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
 4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
+
+## Executor Completion Review
+
+Status: accepted.
+
+The implementation stayed bounded by module and contract surface:
+
+1. Engine knowledge store changes own SQLite schema, GraphQLite load/gate,
+   transactional graph persistence, migration import, FTS5 retrieval, wiki
+   persistence, checkpoint metadata, and health summary assembly.
+2. Engine type changes expose the new durable contracts as typed API response
+   fields instead of frontend-only state.
+3. CLI and MCP changes preserve the agent-facing contract: read health, context
+   pack, read source, read page evidence, read node, import source, proposal,
+   commit, correction, and save-back surfaces stay narrow and evidence-aware.
+4. Desktop changes consume DB or GraphQLite projections for graph display and do
+   not regain ownership of artifact packaging or provider persistence.
+5. Documentation changes record operational gates only under `docs/agents/`.
+
+Each bounded story closes with its own commit and checkpoint evidence. Deferred
+features are deliberately represented as explicit disabled policies rather than
+partial hidden implementations.
