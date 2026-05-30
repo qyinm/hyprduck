@@ -1132,6 +1132,12 @@ fn brain_knowledge_store_report(
         graph_schema_version: health.graph_schema_version,
         graphqlite_loaded: health.graphqlite_loaded,
         graphqlite_transactional: health.graphqlite_transactional,
+        graphqlite_release_gate: if health.graphqlite_loaded && health.graphqlite_transactional {
+            "passed".into()
+        } else {
+            "blocked".into()
+        },
+        release_blocked_without_graphqlite: true,
         evidence_item_count: summary.evidence_item_count,
         wiki_page_count: summary.wiki_page_count,
         graph_node_count: summary.graph_node_count,

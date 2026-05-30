@@ -1654,6 +1654,8 @@ pub struct BrainKnowledgeStoreReport {
     pub graph_schema_version: i64,
     pub graphqlite_loaded: bool,
     pub graphqlite_transactional: bool,
+    pub graphqlite_release_gate: String,
+    pub release_blocked_without_graphqlite: bool,
     pub evidence_item_count: usize,
     pub wiki_page_count: usize,
     pub graph_node_count: usize,
