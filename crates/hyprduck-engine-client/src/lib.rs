@@ -12,15 +12,17 @@ use hyprduck_engine_types::{
     ApplyCorrectionResponseData, CheckReadinessRequest, CompileProjectRequest,
     CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
     EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackResponseData,
-    KnowledgeProject, LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent,
-    ParseProgress, ParseRequest, ParseResponseData, ReadContextPackRequest,
-    ReadContextPackResponseData, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
-    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadNodeRequest, ReadNodeResponseData,
+    ImportJobRecord, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
+    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
+    ReadContextPackRequest, ReadContextPackResponseData, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
+    ReadImportJobRequest, ReadImportJobResponseData, ReadNodeRequest, ReadNodeResponseData,
     ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
     ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
     ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
     RetryFailedPagesRequest, RetryFailedPagesResponseData, RuntimeReadinessResponseData,
     SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
+    UpdateImportJobGraphStatusRequest, UpdateImportJobGraphStatusResponseData,
     ValidateProviderRequest, ValidateProviderResponseData, WriteCommitAllRequest,
     WriteCommitAllResponseData, WriteCommitRequest, WriteCommitResponseData, WriteListRequest,
     WriteListResponseData, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
@@ -40,6 +42,11 @@ pub trait EngineClient {
 
     fn compile_project(&self, request: CompileProjectRequest)
         -> Result<CompileProjectResponseData>;
+    fn read_import_job(&self, request: ReadImportJobRequest) -> Result<Option<ImportJobRecord>>;
+    fn update_import_job_graph_status(
+        &self,
+        request: UpdateImportJobGraphStatusRequest,
+    ) -> Result<bool>;
     fn load_project(&self, project_id: Option<String>) -> Result<LoadProjectResponseData>;
     fn apply_correction(&self, request: ApplyCorrectionRequest) -> Result<KnowledgeProject>;
     fn answer_project(&self, request: AnswerProjectRequest) -> Result<AnswerResponse>;
@@ -281,6 +288,30 @@ impl EngineClient for SubprocessEngineClient {
             EngineCommand::CompileProject,
             None,
         )
+    }
+
+    fn read_import_job(&self, request: ReadImportJobRequest) -> Result<Option<ImportJobRecord>> {
+        let response = self.run_command::<ReadImportJobResponseData, ReadImportJobResponseData>(
+            EngineRequest::ReadImportJob(request),
+            EngineCommand::ReadImportJob,
+            None,
+        )?;
+        Ok(response.job)
+    }
+
+    fn update_import_job_graph_status(
+        &self,
+        request: UpdateImportJobGraphStatusRequest,
+    ) -> Result<bool> {
+        let response = self.run_command::<
+            UpdateImportJobGraphStatusResponseData,
+            UpdateImportJobGraphStatusResponseData,
+        >(
+            EngineRequest::UpdateImportJobGraphStatus(request),
+            EngineCommand::UpdateImportJobGraphStatus,
+            None,
+        )?;
+        Ok(response.updated)
     }
 
     fn load_project(&self, project_id: Option<String>) -> Result<LoadProjectResponseData> {

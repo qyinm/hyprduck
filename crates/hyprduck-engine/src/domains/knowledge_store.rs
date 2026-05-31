@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use graphqlite::{Graph, PropertyValue};
 #[cfg(test)]
 use hyprduck_engine_types::{
@@ -10,9 +10,9 @@ use hyprduck_engine_types::{
     BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
     ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackParseConfidence,
     ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, EvidenceType,
-    GraphSnapshotSourceRecord, KnowledgeProject, PageEvidenceV0, ReadNodeResponseData,
-    ReadPageEvidenceResponseData, ReadSourceResponseData, SourceArtifactManifest, SourceFormat,
-    SourceRecord, SourceStatus, WikiPage,
+    GraphSnapshotSourceRecord, ImportJobRecord, KnowledgeProject, PageEvidenceV0,
+    ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
+    SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -185,6 +185,147 @@ impl KnowledgeStore {
         })
     }
 
+    pub(crate) fn read_import_job(
+        &self,
+        workspace_id: &str,
+        job_id: Option<&str>,
+        source_id: Option<&str>,
+    ) -> Result<Option<ImportJobRecord>> {
+        self.ensure_schema()?;
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sqlite = graph.connection().sqlite_connection();
+        let mut query = String::from(
+            "SELECT
+                import_jobs.job_id,
+                import_jobs.workspace_id,
+                COALESCE(import_jobs.source_id, ''),
+                import_jobs.status,
+                import_jobs.citation_ready,
+                import_jobs.graph_ready,
+                import_jobs.graph_status,
+                import_jobs.graph_error_category,
+                import_jobs.graph_error_message_redacted,
+                import_jobs.graph_retryable,
+                import_jobs.graph_retry_attempt,
+                import_jobs.graph_max_retry_attempts,
+                import_jobs.graph_next_retry_at,
+                import_jobs.manual_retry_available,
+                COALESCE(sources.markdown_path, ''),
+                COALESCE(sources.source_path, ''),
+                COALESCE(sources.manifest_path, ''),
+                import_jobs.updated_at
+             FROM import_jobs
+             LEFT JOIN sources ON sources.workspace_id = import_jobs.workspace_id
+                AND sources.source_id = import_jobs.source_id
+             WHERE import_jobs.workspace_id = ?1",
+        );
+        if job_id.is_some() {
+            query.push_str(" AND import_jobs.job_id = ?2");
+        } else if source_id.is_some() {
+            query.push_str(" AND import_jobs.source_id = ?2");
+        } else {
+            bail!("read_import_job requires job_id or source_id");
+        }
+        query.push_str(" ORDER BY import_jobs.updated_at DESC LIMIT 1");
+
+        let lookup = job_id.or(source_id).unwrap_or_default();
+        let mut statement = sqlite
+            .prepare(&query)
+            .context("failed preparing import job query")?;
+        let mut rows = statement
+            .query((workspace_id, lookup))
+            .context("failed querying import job")?;
+        let Some(row) = rows.next().context("failed reading import job row")? else {
+            return Ok(None);
+        };
+        Ok(Some(ImportJobRecord {
+            job_id: row.get(0).context("read import job id")?,
+            workspace_id: row.get(1).context("read import job workspace")?,
+            source_id: row.get(2).context("read import job source")?,
+            status: row.get(3).context("read import job status")?,
+            citation_ready: row.get::<_, i64>(4).context("read citation_ready")? != 0,
+            graph_ready: row.get::<_, i64>(5).context("read graph_ready")? != 0,
+            graph_status: row.get(6).context("read graph_status")?,
+            graph_error_category: row.get(7).context("read graph_error_category")?,
+            graph_error_message_redacted: row.get(8).context("read graph error message")?,
+            graph_retryable: row.get::<_, i64>(9).context("read graph_retryable")? != 0,
+            graph_retry_attempt: row
+                .get::<_, i64>(10)
+                .context("read graph_retry_attempt")?
+                .clamp(0, u8::MAX as i64) as u8,
+            graph_max_retry_attempts: row
+                .get::<_, i64>(11)
+                .context("read graph_max_retry_attempts")?
+                .clamp(0, u8::MAX as i64) as u8,
+            graph_next_retry_at: row
+                .get::<_, Option<i64>>(12)
+                .context("read graph_next_retry_at")?
+                .and_then(|value| (value >= 0).then_some(value as u64)),
+            manual_retry_available: row
+                .get::<_, i64>(13)
+                .context("read manual_retry_available")?
+                != 0,
+            source_markdown_path: row.get(14).context("read source markdown path")?,
+            source_document_path: row.get(15).context("read source document path")?,
+            source_manifest_path: row.get(16).context("read source manifest path")?,
+            updated_at: row
+                .get::<_, i64>(17)
+                .context("read import job updated_at")?
+                .max(0) as u64,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn update_import_job_graph_status_from_mcp(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+        status: &str,
+        graph_status: &str,
+        graph_error_category: Option<&str>,
+        graph_error_message_redacted: Option<&str>,
+        graph_retryable: bool,
+        graph_retry_attempt: u8,
+        graph_max_retry_attempts: u8,
+        graph_next_retry_at: Option<u64>,
+        manual_retry_available: bool,
+    ) -> Result<bool> {
+        self.ensure_schema()?;
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sqlite = graph.connection().sqlite_connection();
+        let changed = sqlite
+            .execute(
+                "UPDATE import_jobs
+                 SET status = ?1,
+                     graph_ready = CASE WHEN ?2 IN ('ready', 'rebuilt', 'partially_applied') THEN 1 ELSE 0 END,
+                     graph_status = ?2,
+                     graph_error_category = ?3,
+                     graph_error_message_redacted = ?4,
+                     graph_retryable = ?5,
+                     graph_retry_attempt = ?6,
+                     graph_max_retry_attempts = ?7,
+                     graph_next_retry_at = ?8,
+                     manual_retry_available = ?9,
+                     updated_at = unixepoch()
+                 WHERE workspace_id = ?10 AND source_id = ?11 AND citation_ready = 1",
+                (
+                    status,
+                    graph_status,
+                    graph_error_category.unwrap_or_default(),
+                    graph_error_message_redacted.unwrap_or_default(),
+                    if graph_retryable { 1_i64 } else { 0_i64 },
+                    graph_retry_attempt as i64,
+                    graph_max_retry_attempts as i64,
+                    graph_next_retry_at.map(|value| value as i64),
+                    if manual_retry_available { 1_i64 } else { 0_i64 },
+                    workspace_id,
+                    source_id,
+                ),
+            )
+            .context("failed updating import job graph status")?;
+        Ok(changed > 0)
+    }
+
     pub(crate) fn preserve_artifact_metadata(
         &self,
         metadata: &ContextPackArtifactMetadataV0,
@@ -310,8 +451,8 @@ impl KnowledgeStore {
             )
             .context("failed encoding source warnings for knowledge DB")?;
             sqlite.execute_batch(&format!(
-                "INSERT INTO import_jobs (job_id, workspace_id, source_id, status, citation_ready, graph_ready, created_at, updated_at, error_message)
-                 VALUES ({job_id}, {workspace_id}, {source_id}, {status}, {citation_ready}, 0, {created_at}, {updated_at}, NULL)
+                "INSERT INTO import_jobs (job_id, workspace_id, source_id, status, citation_ready, graph_ready, graph_status, graph_error_category, graph_error_message_redacted, graph_retryable, graph_retry_attempt, graph_max_retry_attempts, graph_next_retry_at, manual_retry_available, created_at, updated_at, error_message)
+                 VALUES ({job_id}, {workspace_id}, {source_id}, {status}, {citation_ready}, 0, '', '', '', 0, 0, 2, NULL, 0, {created_at}, {updated_at}, NULL)
                  ON CONFLICT(job_id) DO UPDATE SET
                    workspace_id=excluded.workspace_id,
                    source_id=excluded.source_id,
@@ -1257,23 +1398,29 @@ impl KnowledgeStore {
         let mut statement = sqlite
             .prepare(
                 "SELECT
-                    source_id,
-                    workspace_id,
-                    original_path,
-                    source_path,
-                    markdown_path,
-                    original_path_redacted,
-                    source_path_redacted,
-                    markdown_path_redacted,
-                    format,
-                    status,
-                    page_count,
-                    success_count,
-                    failed_count,
-                    updated_at
+                    sources.source_id,
+                    sources.workspace_id,
+                    sources.original_path,
+                    sources.source_path,
+                    sources.markdown_path,
+                    sources.original_path_redacted,
+                    sources.source_path_redacted,
+                    sources.markdown_path_redacted,
+                    sources.format,
+                    sources.status,
+                    sources.page_count,
+                    sources.success_count,
+                    sources.failed_count,
+                    sources.updated_at,
+                    COALESCE(import_jobs.citation_ready, CASE WHEN sources.success_count > 0 THEN 1 ELSE 0 END),
+                    COALESCE(import_jobs.graph_ready, 0),
+                    COALESCE(import_jobs.graph_status, ''),
+                    COALESCE(import_jobs.manual_retry_available, 0)
                  FROM sources
-                 WHERE workspace_id = ?1
-                 ORDER BY source_id ASC",
+                 LEFT JOIN import_jobs ON import_jobs.workspace_id = sources.workspace_id
+                    AND import_jobs.source_id = sources.source_id
+                 WHERE sources.workspace_id = ?1
+                 ORDER BY sources.source_id ASC",
             )
             .context("failed preparing graph snapshot source query")?;
         let mut rows = statement
@@ -1327,6 +1474,13 @@ impl KnowledgeStore {
                 description: String::new(),
                 user_context: String::new(),
                 ingest_instruction: String::new(),
+                citation_ready: row.get::<_, i64>(14).context("read citation_ready")? != 0,
+                graph_ready: row.get::<_, i64>(15).context("read graph_ready")? != 0,
+                graph_status: row.get(16).context("read graph_status")?,
+                manual_retry_available: row
+                    .get::<_, i64>(17)
+                    .context("read manual_retry_available")?
+                    != 0,
                 updated_at: row
                     .get::<_, i64>(13)
                     .context("read source updated at")?
@@ -1575,6 +1729,14 @@ impl KnowledgeStore {
                 status TEXT NOT NULL,
                 citation_ready INTEGER NOT NULL DEFAULT 0,
                 graph_ready INTEGER NOT NULL DEFAULT 0,
+                graph_status TEXT NOT NULL DEFAULT '',
+                graph_error_category TEXT NOT NULL DEFAULT '',
+                graph_error_message_redacted TEXT NOT NULL DEFAULT '',
+                graph_retryable INTEGER NOT NULL DEFAULT 0,
+                graph_retry_attempt INTEGER NOT NULL DEFAULT 0,
+                graph_max_retry_attempts INTEGER NOT NULL DEFAULT 0,
+                graph_next_retry_at INTEGER,
+                manual_retry_available INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 error_message TEXT
@@ -1832,6 +1994,25 @@ impl KnowledgeStore {
                 let message = error.to_string();
                 if !message.contains("duplicate column name") {
                     return Err(error).context("failed migrating wiki_pages table");
+                }
+            }
+        }
+        for column in [
+            "graph_status TEXT NOT NULL DEFAULT ''",
+            "graph_error_category TEXT NOT NULL DEFAULT ''",
+            "graph_error_message_redacted TEXT NOT NULL DEFAULT ''",
+            "graph_retryable INTEGER NOT NULL DEFAULT 0",
+            "graph_retry_attempt INTEGER NOT NULL DEFAULT 0",
+            "graph_max_retry_attempts INTEGER NOT NULL DEFAULT 0",
+            "graph_next_retry_at INTEGER",
+            "manual_retry_available INTEGER NOT NULL DEFAULT 0",
+        ] {
+            let result =
+                sqlite.execute(&format!("ALTER TABLE import_jobs ADD COLUMN {column}"), []);
+            if let Err(error) = result {
+                let message = error.to_string();
+                if !message.contains("duplicate column name") {
+                    return Err(error).context("failed migrating import_jobs table");
                 }
             }
         }
@@ -3273,6 +3454,12 @@ fn mark_import_jobs_graph_ready_in_transaction(
         sqlite.execute_batch(&format!(
             "UPDATE import_jobs
              SET graph_ready = 1,
+                 graph_status = 'ready',
+                 graph_error_category = '',
+                 graph_error_message_redacted = '',
+                 graph_retryable = 0,
+                 graph_next_retry_at = NULL,
+                 manual_retry_available = 0,
                  updated_at = {updated_at}
              WHERE workspace_id = {workspace_id}
                AND source_id = {source_id}
@@ -5299,6 +5486,46 @@ mod tests {
             .expect("persist graph snapshot");
 
         assert_eq!(import_job_readiness(&store, "source-a"), (1, 1));
+    }
+
+    #[test]
+    fn import_job_graph_pending_state_round_trips_for_source_retry() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+            .expect("open knowledge store");
+        insert_citation_ready_import_job(&store, "source-a");
+
+        assert!(store
+            .update_import_job_graph_status_from_mcp(
+                "workspace-default",
+                "source-a",
+                "citation_ready_graph_pending",
+                "pending",
+                Some("db_busy"),
+                Some("database is busy"),
+                true,
+                1,
+                2,
+                Some(123),
+                true,
+            )
+            .expect("update graph pending state"));
+
+        let job = store
+            .read_import_job("workspace-default", None, Some("source-a"))
+            .expect("read import job")
+            .expect("job should exist");
+        assert_eq!(job.status, "citation_ready_graph_pending");
+        assert!(job.citation_ready);
+        assert!(!job.graph_ready);
+        assert_eq!(job.graph_status, "pending");
+        assert_eq!(job.graph_error_category, "db_busy");
+        assert_eq!(job.graph_error_message_redacted, "database is busy");
+        assert!(job.graph_retryable);
+        assert_eq!(job.graph_retry_attempt, 1);
+        assert_eq!(job.graph_max_retry_attempts, 2);
+        assert_eq!(job.graph_next_retry_at, Some(123));
+        assert!(job.manual_retry_available);
     }
 
     #[test]

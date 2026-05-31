@@ -23,6 +23,8 @@ pub enum EngineCommand {
     Parse,
     RetryFailedPages,
     CompileProject,
+    ReadImportJob,
+    UpdateImportJobGraphStatus,
     LoadProject,
     ApplyCorrection,
     AnswerProject,
@@ -309,6 +311,82 @@ pub struct CompileProjectResponseData {
     pub graph_generation_skipped_reason: Option<String>,
     #[serde(default)]
     pub graph_generation_error_message: Option<String>,
+    #[serde(default)]
+    pub graph_generation_retryable: Option<bool>,
+    #[serde(default)]
+    pub graph_generation_failed_reason: Option<String>,
+    #[serde(default)]
+    pub graph_generation_stage: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadImportJobRequest {
+    pub scope: BrainReadScope,
+    #[serde(default)]
+    pub job_id: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<SourceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportJobRecord {
+    pub job_id: String,
+    pub workspace_id: WorkspaceId,
+    pub source_id: SourceId,
+    pub status: String,
+    pub citation_ready: bool,
+    pub graph_ready: bool,
+    pub graph_status: String,
+    pub graph_error_category: String,
+    pub graph_error_message_redacted: String,
+    pub graph_retryable: bool,
+    pub graph_retry_attempt: u8,
+    pub graph_max_retry_attempts: u8,
+    #[serde(default)]
+    pub graph_next_retry_at: Option<u64>,
+    pub manual_retry_available: bool,
+    pub source_markdown_path: String,
+    pub source_document_path: String,
+    pub source_manifest_path: String,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadImportJobResponseData {
+    #[serde(default)]
+    pub job: Option<ImportJobRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateImportJobGraphStatusRequest {
+    pub scope: BrainReadScope,
+    pub source_id: SourceId,
+    pub status: String,
+    pub graph_status: String,
+    #[serde(default)]
+    pub graph_error_category: Option<String>,
+    #[serde(default)]
+    pub graph_error_message_redacted: Option<String>,
+    #[serde(default)]
+    pub graph_retryable: bool,
+    #[serde(default)]
+    pub graph_retry_attempt: u8,
+    #[serde(default)]
+    pub graph_max_retry_attempts: u8,
+    #[serde(default)]
+    pub graph_next_retry_at: Option<u64>,
+    #[serde(default)]
+    pub manual_retry_available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateImportJobGraphStatusResponseData {
+    pub updated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -699,6 +777,14 @@ pub struct GraphSnapshotSourceRecord {
     pub user_context: String,
     #[serde(default)]
     pub ingest_instruction: String,
+    #[serde(default)]
+    pub citation_ready: bool,
+    #[serde(default)]
+    pub graph_ready: bool,
+    #[serde(default)]
+    pub graph_status: String,
+    #[serde(default)]
+    pub manual_retry_available: bool,
     pub updated_at: u64,
 }
 
@@ -1718,6 +1804,14 @@ pub struct BrainHealthSourceReport {
     pub content_hash: Option<String>,
     pub content_hash_status: String,
     #[serde(default)]
+    pub citation_ready: bool,
+    #[serde(default)]
+    pub graph_ready: bool,
+    #[serde(default)]
+    pub graph_status: String,
+    #[serde(default)]
+    pub manual_retry_available: bool,
+    #[serde(default)]
     pub warnings: Vec<String>,
 }
 
@@ -1859,6 +1953,8 @@ pub enum EngineRequest {
     Parse(ParseRequest),
     RetryFailedPages(RetryFailedPagesRequest),
     CompileProject(CompileProjectRequest),
+    ReadImportJob(ReadImportJobRequest),
+    UpdateImportJobGraphStatus(UpdateImportJobGraphStatusRequest),
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),
     AnswerProject(AnswerProjectRequest),

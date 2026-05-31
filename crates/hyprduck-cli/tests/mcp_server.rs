@@ -74,6 +74,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
             "import_source",
             "import_status",
             "import_cancel",
+            "import_retry_graph",
             "get_context_pack",
             "read_context_pack",
             "search_documents",
@@ -127,6 +128,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     for name in [
         "import_source",
         "import_cancel",
+        "import_retry_graph",
         "write_propose",
         "write_commit",
         "write_commit_all",
@@ -824,11 +826,12 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .to_string()
         .contains(import_root_arg.as_str()));
     assert_eq!(status_payload["workspaceId"], "default");
-    assert_eq!(status_payload["status"], "context_ready");
-    assert_eq!(status_payload["phase"], "context_ready");
+    assert_eq!(status_payload["status"], "citation_ready_graph_skipped");
+    assert_eq!(status_payload["phase"], "graph_skipped");
     assert_eq!(status_payload["citationReady"], true);
     assert_eq!(status_payload["graphReady"], false);
     assert_eq!(status_payload["graphStatus"], "skipped");
+    assert_eq!(status_payload["manualRetryAvailable"], true);
     let source_id = status_payload["sourceId"]
         .as_str()
         .expect("import source id")
