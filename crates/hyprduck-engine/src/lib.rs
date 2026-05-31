@@ -371,8 +371,21 @@ fn handle_read_import_job(request: ReadImportJobRequest) -> Result<ReadImportJob
     }
     let root = resolve_brain_workspace_root(&request.scope)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let job = store.read_import_job(
+        &request.scope.workspace_id,
+        request.job_id.as_deref(),
+        request.source_id.as_deref(),
+    )?;
+    if job.is_some() {
+        return Ok(ReadImportJobResponseData { job });
+    }
+    let project_store = KnowledgeProjectStore::default()?;
+    if project_store.path == KnowledgeStore::default_path_for_root(&root) {
+        return Ok(ReadImportJobResponseData { job: None });
+    }
+    let project_knowledge_store = KnowledgeStore::open(project_store.path)?;
     Ok(ReadImportJobResponseData {
-        job: store.read_import_job(
+        job: project_knowledge_store.read_import_job(
             &request.scope.workspace_id,
             request.job_id.as_deref(),
             request.source_id.as_deref(),
@@ -384,22 +397,41 @@ fn handle_update_import_job_graph_status(
     request: UpdateImportJobGraphStatusRequest,
 ) -> Result<UpdateImportJobGraphStatusResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
-    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
-    Ok(UpdateImportJobGraphStatusResponseData {
-        updated: store.update_import_job_graph_status_from_mcp(
-            &request.scope.workspace_id,
-            &request.source_id,
-            &request.status,
-            &request.graph_status,
-            request.graph_error_category.as_deref(),
-            request.graph_error_message_redacted.as_deref(),
-            request.graph_retryable,
-            request.graph_retry_attempt,
-            request.graph_max_retry_attempts,
-            request.graph_next_retry_at,
-            request.manual_retry_available,
-        )?,
-    })
+    let root_path = KnowledgeStore::default_path_for_root(&root);
+    let root_store = KnowledgeStore::open(root_path.clone())?;
+    let mut updated = root_store.update_import_job_graph_status_from_mcp(
+        &request.scope.workspace_id,
+        &request.source_id,
+        &request.status,
+        &request.graph_status,
+        request.graph_error_category.as_deref(),
+        request.graph_error_message_redacted.as_deref(),
+        request.graph_retryable,
+        request.graph_retry_attempt,
+        request.graph_max_retry_attempts,
+        request.graph_next_retry_at,
+        request.manual_retry_available,
+    )?;
+    if !updated {
+        let project_store = KnowledgeProjectStore::default()?;
+        if project_store.path != root_path {
+            let project_knowledge_store = KnowledgeStore::open(project_store.path)?;
+            updated = project_knowledge_store.update_import_job_graph_status_from_mcp(
+                &request.scope.workspace_id,
+                &request.source_id,
+                &request.status,
+                &request.graph_status,
+                request.graph_error_category.as_deref(),
+                request.graph_error_message_redacted.as_deref(),
+                request.graph_retryable,
+                request.graph_retry_attempt,
+                request.graph_max_retry_attempts,
+                request.graph_next_retry_at,
+                request.manual_retry_available,
+            )?;
+        }
+    }
+    Ok(UpdateImportJobGraphStatusResponseData { updated })
 }
 
 fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
