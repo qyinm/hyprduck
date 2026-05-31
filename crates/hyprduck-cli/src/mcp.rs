@@ -9,11 +9,12 @@ use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainReadScope, CompileProjectRequest, DocumentFormat, GetBrainHealthRequest,
-    GetContextPackRequest, ParseInput, ParseOptions, ParseOutputTarget, ParseRequest,
-    ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest,
-    ReadPageEvidenceRequest, ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest,
-    SearchBrainRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
-    WriteProposeRequest, WriteRejectRequest,
+    GetContextPackRequest, ImportJobRecord, ParseInput, ParseOptions, ParseOutputTarget,
+    ParseRequest, ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest,
+    ReadImportJobRequest, ReadNodeRequest, ReadPageEvidenceRequest, ReadRecentEventsRequest,
+    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest, UpdateImportJobGraphStatusRequest,
+    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
+    WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -356,13 +357,22 @@ struct ImportJobSnapshot {
     phase: ImportJobPhase,
     progress_percent: u8,
     source_id: Option<String>,
+    source_markdown_path: Option<String>,
+    source_document_path: Option<String>,
+    source_manifest_path: Option<String>,
     page_count: Option<usize>,
     evidence_count: Option<usize>,
     citation_ready: bool,
     graph_ready: bool,
     graph_status: Option<String>,
+    graph_error_category: Option<String>,
     graph_generation_skipped_reason: Option<String>,
     graph_generation_error_message: Option<String>,
+    retryable: bool,
+    retry_attempt: u8,
+    max_retry_attempts: u8,
+    next_retry_at: Option<u64>,
+    manual_retry_available: bool,
     warnings: Vec<String>,
     error: Option<String>,
     cancel_requested: bool,
@@ -376,6 +386,9 @@ enum ImportJobStatus {
     Parsing,
     Packaging,
     CitationReady,
+    CitationReadyGraphPending,
+    CitationReadyGraphSkipped,
+    GraphRetryWaiting,
     ContextReady,
     Failed,
     Cancelled,
@@ -388,6 +401,9 @@ enum ImportJobPhase {
     Packaging,
     CitationReady,
     ContextMaterializing,
+    GraphRetryWaiting,
+    GraphPending,
+    GraphSkipped,
     ContextReady,
     Failed,
     Cancelled,
@@ -491,13 +507,22 @@ impl ImportJobSnapshot {
             phase: ImportJobPhase::Imported,
             progress_percent: 0,
             source_id: None,
+            source_markdown_path: None,
+            source_document_path: None,
+            source_manifest_path: None,
             page_count: None,
             evidence_count: None,
             citation_ready: false,
             graph_ready: false,
             graph_status: None,
+            graph_error_category: None,
             graph_generation_skipped_reason: None,
             graph_generation_error_message: None,
+            retryable: false,
+            retry_attempt: 0,
+            max_retry_attempts: 2,
+            next_retry_at: None,
+            manual_retry_available: false,
             warnings: Vec::new(),
             error: None,
             cancel_requested: false,
@@ -519,8 +544,14 @@ impl ImportJobSnapshot {
             "citationReady": self.citation_ready,
             "graphReady": self.graph_ready,
             "graphStatus": self.graph_status,
+            "graphErrorCategory": self.graph_error_category,
             "graphGenerationSkippedReason": self.graph_generation_skipped_reason,
             "graphGenerationErrorMessage": self.graph_generation_error_message,
+            "retryable": self.retryable,
+            "retryAttempt": self.retry_attempt,
+            "maxRetryAttempts": self.max_retry_attempts,
+            "nextRetryAt": self.next_retry_at,
+            "manualRetryAvailable": self.manual_retry_available,
             "warnings": self.warnings,
             "error": self.error,
             "cancelRequested": self.cancel_requested,
@@ -537,6 +568,9 @@ impl ImportJobStatus {
             Self::Parsing => "parsing",
             Self::Packaging => "packaging",
             Self::CitationReady => "citation_ready",
+            Self::CitationReadyGraphPending => "citation_ready_graph_pending",
+            Self::CitationReadyGraphSkipped => "citation_ready_graph_skipped",
+            Self::GraphRetryWaiting => "graph_retry_waiting",
             Self::ContextReady => "context_ready",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -544,7 +578,29 @@ impl ImportJobStatus {
     }
 
     fn is_terminal(self) -> bool {
-        matches!(self, Self::ContextReady | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::CitationReadyGraphPending
+                | Self::CitationReadyGraphSkipped
+                | Self::ContextReady
+                | Self::Failed
+                | Self::Cancelled
+        )
+    }
+
+    fn from_persisted(value: &str) -> Self {
+        match value {
+            "imported" => Self::Imported,
+            "parsing" => Self::Parsing,
+            "packaging" => Self::Packaging,
+            "citation_ready" => Self::CitationReady,
+            "citation_ready_graph_skipped" => Self::CitationReadyGraphSkipped,
+            "graph_retry_waiting" => Self::GraphRetryWaiting,
+            "context_ready" => Self::ContextReady,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::CitationReadyGraphPending,
+        }
     }
 }
 
@@ -556,11 +612,77 @@ impl ImportJobPhase {
             Self::Packaging => "packaging",
             Self::CitationReady => "citation_ready",
             Self::ContextMaterializing => "context_materializing",
+            Self::GraphRetryWaiting => "graph_retry_waiting",
+            Self::GraphPending => "graph_pending",
+            Self::GraphSkipped => "graph_skipped",
             Self::ContextReady => "context_ready",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
     }
+
+    fn from_status_and_graph_status(status: ImportJobStatus, graph_status: &str) -> Self {
+        match status {
+            ImportJobStatus::Imported => Self::Imported,
+            ImportJobStatus::Parsing => Self::Parsing,
+            ImportJobStatus::Packaging => Self::Packaging,
+            ImportJobStatus::CitationReady => Self::CitationReady,
+            ImportJobStatus::CitationReadyGraphSkipped => Self::GraphSkipped,
+            ImportJobStatus::GraphRetryWaiting => Self::GraphRetryWaiting,
+            ImportJobStatus::ContextReady => Self::ContextReady,
+            ImportJobStatus::Failed => Self::Failed,
+            ImportJobStatus::Cancelled => Self::Cancelled,
+            ImportJobStatus::CitationReadyGraphPending => {
+                if graph_status == "skipped" {
+                    Self::GraphSkipped
+                } else {
+                    Self::GraphPending
+                }
+            }
+        }
+    }
+}
+
+fn import_job_snapshot_from_record(
+    record: ImportJobRecord,
+    scope: &BrainReadScope,
+) -> ImportJobSnapshot {
+    let status = ImportJobStatus::from_persisted(&record.status);
+    let phase = ImportJobPhase::from_status_and_graph_status(status, &record.graph_status);
+    ImportJobSnapshot {
+        job_id: record.job_id,
+        workspace_id: record.workspace_id,
+        root_dir: scope.root_dir.clone(),
+        status,
+        phase,
+        progress_percent: if status.is_terminal() { 100 } else { 0 },
+        source_id: Some(record.source_id),
+        source_markdown_path: non_empty_string(record.source_markdown_path),
+        source_document_path: non_empty_string(record.source_document_path),
+        source_manifest_path: non_empty_string(record.source_manifest_path),
+        page_count: None,
+        evidence_count: None,
+        citation_ready: record.citation_ready,
+        graph_ready: record.graph_ready,
+        graph_status: non_empty_string(record.graph_status),
+        graph_error_category: non_empty_string(record.graph_error_category),
+        graph_generation_skipped_reason: None,
+        graph_generation_error_message: non_empty_string(record.graph_error_message_redacted),
+        retryable: record.graph_retryable,
+        retry_attempt: record.graph_retry_attempt,
+        max_retry_attempts: record.graph_max_retry_attempts.max(2),
+        next_retry_at: record.graph_next_retry_at,
+        manual_retry_available: record.manual_retry_available,
+        warnings: Vec::new(),
+        error: None,
+        cancel_requested: false,
+        created_at: record.updated_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
 }
 
 struct ImportJobRequest {
@@ -643,6 +765,9 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
                     ImportJobPhase::Failed => ImportJobStatus::Failed,
                     ImportJobPhase::CitationReady
                     | ImportJobPhase::ContextMaterializing
+                    | ImportJobPhase::GraphRetryWaiting
+                    | ImportJobPhase::GraphPending
+                    | ImportJobPhase::GraphSkipped
                     | ImportJobPhase::ContextReady
                     | ImportJobPhase::Cancelled => job.status,
                 };
@@ -663,6 +788,9 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         job.phase = ImportJobPhase::Packaging;
         job.progress_percent = 70;
         job.source_id = Some(manifest.source_id.clone());
+        job.source_markdown_path = Some(manifest.markdown_path.clone());
+        job.source_document_path = Some(manifest.source_path.clone());
+        job.source_manifest_path = Some(manifest.manifest_path.clone());
         job.page_count = Some(parse.result.metadata.page_count);
     });
 
@@ -697,13 +825,17 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         job.evidence_count = Some(evidence_count);
         job.citation_ready = evidence_count > 0;
         if request.skip_graph_generation {
-            job.status = ImportJobStatus::ContextReady;
-            job.phase = ImportJobPhase::ContextReady;
+            job.status = ImportJobStatus::CitationReadyGraphSkipped;
+            job.phase = ImportJobPhase::GraphSkipped;
             job.graph_ready = false;
             job.graph_status = Some("skipped".into());
             job.graph_generation_skipped_reason = Some("skipGraphGeneration requested".into());
+            job.manual_retry_available = true;
         }
     });
+    if request.skip_graph_generation {
+        persist_import_job_graph_status(registry, &client, request);
+    }
     if registry.mark_cancelled_if_requested(&request.job_id) || request.skip_graph_generation {
         return Ok(());
     }
@@ -717,14 +849,21 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         return Ok(());
     }
 
-    let graph_compile = client.compile_project(CompileProjectRequest {
-        source_markdown_path: manifest.markdown_path.clone(),
-        source_document_path: Some(manifest.source_path.clone()),
-        source_manifest_path: Some(manifest.manifest_path.clone()),
-        workspace_id: Some(request.scope.workspace_id.clone()),
-        source_id: Some(manifest.source_id.clone()),
-        skip_graph_generation: Some(false),
-    })?;
+    let graph_compile = match compile_graph_stage_with_retry(registry, &client, request, &manifest)
+    {
+        Ok(graph_compile) => graph_compile,
+        Err(error) => {
+            mark_graph_pending(
+                registry,
+                Some(&client),
+                request,
+                &error.to_string(),
+                0,
+                None,
+            );
+            return Ok(());
+        }
+    };
     if registry.mark_cancelled_if_requested(&request.job_id) {
         return Ok(());
     }
@@ -732,15 +871,335 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
     let graph_status = graph_compile.graph_generation_status.clone();
     let graph_ready = graph_status_is_ready(graph_status.as_deref());
     registry.update_active(&request.job_id, |job| {
-        job.status = ImportJobStatus::ContextReady;
-        job.phase = ImportJobPhase::ContextReady;
         job.progress_percent = 100;
         job.graph_ready = graph_ready;
         job.graph_status = graph_status.or_else(|| Some("unknown".into()));
+        job.graph_error_category = graph_compile.graph_generation_failed_reason;
         job.graph_generation_skipped_reason = graph_compile.graph_generation_skipped_reason;
         job.graph_generation_error_message = graph_compile.graph_generation_error_message;
+        job.retryable = graph_compile.graph_generation_retryable.unwrap_or(false);
+        if graph_ready {
+            job.status = ImportJobStatus::ContextReady;
+            job.phase = ImportJobPhase::ContextReady;
+            job.retryable = false;
+            job.next_retry_at = None;
+            job.manual_retry_available = false;
+        } else if matches!(job.graph_status.as_deref(), Some("skipped")) {
+            job.status = ImportJobStatus::CitationReadyGraphSkipped;
+            job.phase = ImportJobPhase::GraphSkipped;
+            job.manual_retry_available = true;
+        } else {
+            job.status = ImportJobStatus::CitationReadyGraphPending;
+            job.phase = ImportJobPhase::GraphPending;
+            job.manual_retry_available = true;
+        }
     });
     Ok(())
+}
+
+fn compile_graph_stage_with_retry(
+    registry: &ImportJobRegistry,
+    client: &SubprocessEngineClient,
+    request: &ImportJobRequest,
+    manifest: &hyprduck_engine_types::SourceArtifactManifest,
+) -> Result<hyprduck_engine_types::CompileProjectResponseData> {
+    let max_attempts = registry
+        .get(&request.job_id)
+        .map(|job| job.max_retry_attempts)
+        .unwrap_or(2);
+    let mut attempt = 0;
+    loop {
+        match compile_graph_stage(client, request, manifest) {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                let message = error.to_string();
+                let classification = classify_graph_failure(&message);
+                if !classification.retryable || attempt >= max_attempts {
+                    mark_graph_pending(registry, Some(client), request, &message, attempt, None);
+                    return Ok(hyprduck_engine_types::CompileProjectResponseData {
+                        project_id: String::new(),
+                        workspace_id: request.scope.workspace_id.clone(),
+                        source_id: manifest.source_id.clone(),
+                        graph_generation_status: Some("pending".into()),
+                        graph_generation_skipped_reason: None,
+                        graph_generation_error_message: Some(sanitize_graph_error_message(
+                            &message,
+                        )),
+                        graph_generation_retryable: Some(classification.retryable),
+                        graph_generation_failed_reason: Some(classification.category.into()),
+                        graph_generation_stage: Some("graph_materialization".into()),
+                    });
+                }
+                attempt = attempt.saturating_add(1);
+                let next_retry_at = unix_timestamp_seconds().saturating_add(1);
+                mark_graph_pending(
+                    registry,
+                    Some(client),
+                    request,
+                    &message,
+                    attempt,
+                    Some(next_retry_at),
+                );
+                thread::sleep(std::time::Duration::from_millis(150));
+                registry.update_active(&request.job_id, |job| {
+                    job.status = ImportJobStatus::CitationReady;
+                    job.phase = ImportJobPhase::ContextMaterializing;
+                    job.progress_percent = 88;
+                    job.next_retry_at = None;
+                });
+            }
+        }
+    }
+}
+
+fn compile_graph_stage(
+    client: &SubprocessEngineClient,
+    request: &ImportJobRequest,
+    manifest: &hyprduck_engine_types::SourceArtifactManifest,
+) -> Result<hyprduck_engine_types::CompileProjectResponseData> {
+    client.compile_project(CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(request.scope.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: Some(false),
+    })
+}
+
+struct GraphFailureClassification {
+    category: &'static str,
+    retryable: bool,
+}
+
+fn classify_graph_failure(message: &str) -> GraphFailureClassification {
+    let lower = message.to_ascii_lowercase();
+    let retryable = lower.contains("database is locked")
+        || lower.contains("database is busy")
+        || lower.contains("sqlite_busy")
+        || lower.contains("sqlite_locked")
+        || lower.contains("provider_timeout")
+        || lower.contains("provider_unavailable")
+        || (lower.contains("readonly database")
+            && (lower.contains("transaction") || lower.contains("connection")));
+    let category = if lower.contains("provider_timeout") {
+        "provider_timeout"
+    } else if lower.contains("provider_unavailable") {
+        "provider_unavailable"
+    } else if lower.contains("database is locked") || lower.contains("sqlite_locked") {
+        "db_locked"
+    } else if lower.contains("database is busy") || lower.contains("sqlite_busy") {
+        "db_busy"
+    } else if lower.contains("readonly database") {
+        "db_readonly"
+    } else {
+        "graph_materialization_failed"
+    };
+    GraphFailureClassification {
+        category,
+        retryable,
+    }
+}
+
+fn mark_graph_pending(
+    registry: &ImportJobRegistry,
+    client: Option<&dyn EngineClient>,
+    request: &ImportJobRequest,
+    message: &str,
+    retry_attempt: u8,
+    next_retry_at: Option<u64>,
+) {
+    let classification = classify_graph_failure(message);
+    registry.update_active(&request.job_id, |job| {
+        job.status = if next_retry_at.is_some() {
+            ImportJobStatus::GraphRetryWaiting
+        } else {
+            ImportJobStatus::CitationReadyGraphPending
+        };
+        job.phase = if next_retry_at.is_some() {
+            ImportJobPhase::GraphRetryWaiting
+        } else {
+            ImportJobPhase::GraphPending
+        };
+        job.progress_percent = 100;
+        job.graph_ready = false;
+        job.graph_status = Some("pending".into());
+        job.graph_error_category = Some(classification.category.into());
+        job.graph_generation_error_message = Some(sanitize_graph_error_message(message));
+        job.retryable = classification.retryable;
+        job.retry_attempt = retry_attempt;
+        job.next_retry_at = next_retry_at;
+        job.manual_retry_available = true;
+    });
+    if let (Some(client), Some(job)) = (client, registry.get(&request.job_id)) {
+        if let Some(source_id) = job.source_id.as_deref() {
+            let result = client.update_import_job_graph_status(UpdateImportJobGraphStatusRequest {
+                scope: request.scope.clone(),
+                source_id: source_id.to_string(),
+                status: job.status.as_str().into(),
+                graph_status: job.graph_status.clone().unwrap_or_else(|| "pending".into()),
+                graph_error_category: job.graph_error_category.clone(),
+                graph_error_message_redacted: job.graph_generation_error_message.clone(),
+                graph_retryable: job.retryable,
+                graph_retry_attempt: job.retry_attempt,
+                graph_max_retry_attempts: job.max_retry_attempts,
+                graph_next_retry_at: job.next_retry_at,
+                manual_retry_available: job.manual_retry_available,
+            });
+            record_graph_status_persist_result(registry, &request.job_id, result);
+        }
+    }
+}
+
+fn sanitize_graph_error_message(message: &str) -> String {
+    redact_local_path_text(message.lines().next().unwrap_or(message).trim())
+}
+
+fn persist_import_job_graph_status(
+    registry: &ImportJobRegistry,
+    client: &dyn EngineClient,
+    request: &ImportJobRequest,
+) {
+    let Some(job) = registry.get(&request.job_id) else {
+        return;
+    };
+    let Some(source_id) = job.source_id.as_deref() else {
+        return;
+    };
+    let result = client.update_import_job_graph_status(UpdateImportJobGraphStatusRequest {
+        scope: request.scope.clone(),
+        source_id: source_id.to_string(),
+        status: job.status.as_str().into(),
+        graph_status: job.graph_status.clone().unwrap_or_else(|| "unknown".into()),
+        graph_error_category: job.graph_error_category.clone(),
+        graph_error_message_redacted: job.graph_generation_error_message.clone(),
+        graph_retryable: job.retryable,
+        graph_retry_attempt: job.retry_attempt,
+        graph_max_retry_attempts: job.max_retry_attempts,
+        graph_next_retry_at: job.next_retry_at,
+        manual_retry_available: job.manual_retry_available,
+    });
+    record_graph_status_persist_result(registry, &request.job_id, result);
+}
+
+fn record_graph_status_persist_result(
+    registry: &ImportJobRegistry,
+    job_id: &str,
+    result: Result<bool>,
+) {
+    match result {
+        Ok(true) => {}
+        Ok(false) => registry.update(job_id, |job| {
+            push_unique_warning(
+                &mut job.warnings,
+                "graph_status_persist_failed: citation-ready import job was not found",
+            );
+        }),
+        Err(error) => {
+            let message = sanitize_graph_error_message(&error.to_string());
+            registry.update(job_id, |job| {
+                push_unique_warning(
+                    &mut job.warnings,
+                    &format!("graph_status_persist_failed: {message}"),
+                );
+            });
+        }
+    }
+}
+
+fn push_unique_warning(warnings: &mut Vec<String>, warning: &str) {
+    if !warnings.iter().any(|existing| existing == warning) {
+        warnings.push(warning.to_string());
+    }
+}
+
+fn retry_import_graph(registry: &ImportJobRegistry, job: &ImportJobSnapshot) -> Result<()> {
+    if !job.citation_ready {
+        return Err(anyhow!(
+            "import graph retry requires a citation-ready source"
+        ));
+    }
+    if job.graph_ready {
+        return Ok(());
+    }
+    let source_markdown_path = job
+        .source_markdown_path
+        .clone()
+        .ok_or_else(|| anyhow!("import graph retry is missing source markdown state"))?;
+    let source_document_path = job.source_document_path.clone();
+    let source_manifest_path = job
+        .source_manifest_path
+        .clone()
+        .ok_or_else(|| anyhow!("import graph retry is missing source manifest state"))?;
+    let source_id = job
+        .source_id
+        .clone()
+        .ok_or_else(|| anyhow!("import graph retry is missing source id"))?;
+
+    registry.update(&job.job_id, |job| {
+        job.status = ImportJobStatus::CitationReady;
+        job.phase = ImportJobPhase::ContextMaterializing;
+        job.progress_percent = 88;
+        job.next_retry_at = None;
+    });
+    let client = SubprocessEngineClient::default();
+    match client.compile_project(CompileProjectRequest {
+        source_markdown_path,
+        source_document_path,
+        source_manifest_path: Some(source_manifest_path),
+        workspace_id: Some(job.workspace_id.clone()),
+        source_id: Some(source_id.clone()),
+        skip_graph_generation: Some(false),
+    }) {
+        Ok(response) => {
+            let graph_status = response.graph_generation_status.clone();
+            let graph_ready = graph_status_is_ready(graph_status.as_deref());
+            registry.update(&job.job_id, |job| {
+                job.progress_percent = 100;
+                job.graph_ready = graph_ready;
+                job.graph_status = graph_status.or_else(|| Some("unknown".into()));
+                job.graph_error_category = response.graph_generation_failed_reason;
+                job.graph_generation_skipped_reason = response.graph_generation_skipped_reason;
+                job.graph_generation_error_message = response.graph_generation_error_message;
+                job.retryable = response.graph_generation_retryable.unwrap_or(false);
+                if graph_ready {
+                    job.status = ImportJobStatus::ContextReady;
+                    job.phase = ImportJobPhase::ContextReady;
+                    job.manual_retry_available = false;
+                    job.retryable = false;
+                } else {
+                    job.status = ImportJobStatus::CitationReadyGraphPending;
+                    job.phase = ImportJobPhase::GraphPending;
+                    job.manual_retry_available = true;
+                }
+            });
+        }
+        Err(error) => {
+            mark_graph_pending(
+                registry,
+                Some(&client),
+                &job_import_request_stub(job),
+                &error.to_string(),
+                0,
+                None,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn job_import_request_stub(job: &ImportJobSnapshot) -> ImportJobRequest {
+    ImportJobRequest {
+        job_id: job.job_id.clone(),
+        scope: BrainReadScope {
+            workspace_id: job.workspace_id.clone(),
+            root_dir: job.root_dir.clone(),
+        },
+        source_path: PathBuf::new(),
+        format: DocumentFormat::Markdown,
+        name: None,
+        skip_graph_generation: false,
+    }
 }
 
 fn graph_status_is_ready(status: Option<&str>) -> bool {
@@ -784,6 +1243,41 @@ fn ensure_import_job_scope(job: &ImportJobSnapshot, scope: &BrainReadScope) -> R
     Ok(())
 }
 
+fn import_job_lookup(arguments: &Map<String, Value>) -> Result<(Option<String>, Option<String>)> {
+    let job_id = optional_string(arguments, "jobId")?;
+    let source_id = optional_string(arguments, "sourceId")?;
+    if job_id.is_none() && source_id.is_none() {
+        return Err(anyhow!("missing required argument: jobId or sourceId"));
+    }
+    Ok((job_id, source_id))
+}
+
+fn resolve_import_job(
+    client: &dyn EngineClient,
+    state: &McpServerState,
+    scope: &BrainReadScope,
+    job_id: Option<String>,
+    source_id: Option<String>,
+) -> Result<ImportJobSnapshot> {
+    if let Some(job_id) = job_id.as_deref() {
+        if let Some(job) = state.import_jobs.get(job_id) {
+            ensure_import_job_scope(&job, scope)?;
+            return Ok(job);
+        }
+    }
+    let record = client
+        .read_import_job(ReadImportJobRequest {
+            scope: scope.clone(),
+            job_id,
+            source_id,
+        })?
+        .ok_or_else(|| anyhow!("import job not found in requested workspace scope"))?;
+    let job = import_job_snapshot_from_record(record, scope);
+    ensure_import_job_scope(&job, scope)?;
+    state.import_jobs.insert(job.clone());
+    Ok(job)
+}
+
 fn call_tool(
     client: &dyn EngineClient,
     state: &McpServerState,
@@ -823,12 +1317,8 @@ fn call_tool(
             job.to_value()
         }
         "import_status" => {
-            let job_id = required_string(arguments, "jobId")?;
-            let job = state
-                .import_jobs
-                .get(&job_id)
-                .ok_or_else(|| anyhow!("import job not found: {job_id}"))?;
-            ensure_import_job_scope(&job, &scope)?;
+            let (job_id, source_id) = import_job_lookup(arguments)?;
+            let job = resolve_import_job(client, state, &scope, job_id, source_id)?;
             job.to_value()
         }
         "import_cancel" => {
@@ -840,6 +1330,16 @@ fn call_tool(
             ensure_import_job_scope(&job, &scope)?;
             let job = state.import_jobs.cancel(&job_id)?;
             job.to_value()
+        }
+        "import_retry_graph" => {
+            let (job_id, source_id) = import_job_lookup(arguments)?;
+            let job = resolve_import_job(client, state, &scope, job_id, source_id)?;
+            retry_import_graph(&state.import_jobs, &job)?;
+            state
+                .import_jobs
+                .get(&job.job_id)
+                .ok_or_else(|| anyhow!("import job not found after graph retry"))?
+                .to_value()
         }
         "search_documents" | "search_brain" => {
             let query = required_string(arguments, "query")?;
@@ -1430,11 +1930,12 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "import_status",
-            "Poll a HyprDuck import job until citationReady and, when enabled, graphReady.",
+            "Poll a HyprDuck import job by jobId, or recover persisted import status by sourceId.",
             json!({
                 "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+                "sourceId": { "type": "string", "description": "Persisted source ID fallback when the live MCP job registry is gone." },
             }),
-            vec!["jobId"],
+            Vec::new(),
             true,
         ),
         tool_definition(
@@ -1444,6 +1945,16 @@ fn tool_definitions() -> Vec<Value> {
                 "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
             }),
             vec!["jobId"],
+            false,
+        ),
+        tool_definition(
+            "import_retry_graph",
+            "Retry graph/wiki materialization for a citation-ready HyprDuck import job without reparsing the source.",
+            json!({
+                "jobId": { "type": "string", "description": "Import job ID returned by import_source." },
+                "sourceId": { "type": "string", "description": "Persisted source ID fallback when the live MCP job registry is gone." },
+            }),
+            Vec::new(),
             false,
         ),
         tool_definition(
@@ -1721,6 +2232,7 @@ mod tests {
         for name in [
             "import_source",
             "import_cancel",
+            "import_retry_graph",
             "write_propose",
             "write_commit",
             "write_commit_all",
@@ -1764,8 +2276,11 @@ mod tests {
         );
         assert_eq!(
             tool_by_name("import_status")["inputSchema"]["required"],
-            json!(["jobId"])
+            json!([])
         );
+        assert!(tool_by_name("import_status")["inputSchema"]["properties"]
+            .get("sourceId")
+            .is_some());
         assert_eq!(
             tool_by_name("import_status")["annotations"]["readOnlyHint"],
             true
@@ -1776,6 +2291,19 @@ mod tests {
         );
         assert_eq!(
             tool_by_name("import_cancel")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            tool_by_name("import_retry_graph")["inputSchema"]["required"],
+            json!([])
+        );
+        assert!(
+            tool_by_name("import_retry_graph")["inputSchema"]["properties"]
+                .get("sourceId")
+                .is_some()
+        );
+        assert_eq!(
+            tool_by_name("import_retry_graph")["annotations"]["readOnlyHint"],
             false
         );
         assert_eq!(
@@ -1863,6 +2391,18 @@ mod tests {
         assert_eq!(ImportJobStatus::Parsing.as_str(), "parsing");
         assert_eq!(ImportJobStatus::Packaging.as_str(), "packaging");
         assert_eq!(ImportJobStatus::CitationReady.as_str(), "citation_ready");
+        assert_eq!(
+            ImportJobStatus::CitationReadyGraphPending.as_str(),
+            "citation_ready_graph_pending"
+        );
+        assert_eq!(
+            ImportJobStatus::CitationReadyGraphSkipped.as_str(),
+            "citation_ready_graph_skipped"
+        );
+        assert_eq!(
+            ImportJobStatus::GraphRetryWaiting.as_str(),
+            "graph_retry_waiting"
+        );
         assert_eq!(ImportJobStatus::ContextReady.as_str(), "context_ready");
         assert_eq!(ImportJobStatus::Failed.as_str(), "failed");
         assert_eq!(ImportJobStatus::Cancelled.as_str(), "cancelled");
@@ -1890,6 +2430,9 @@ mod tests {
         assert!(!ImportJobStatus::Parsing.is_terminal());
         assert!(!ImportJobStatus::Packaging.is_terminal());
         assert!(!ImportJobStatus::CitationReady.is_terminal());
+        assert!(ImportJobStatus::CitationReadyGraphPending.is_terminal());
+        assert!(ImportJobStatus::CitationReadyGraphSkipped.is_terminal());
+        assert!(!ImportJobStatus::GraphRetryWaiting.is_terminal());
         assert!(ImportJobStatus::ContextReady.is_terminal());
         assert!(ImportJobStatus::Failed.is_terminal());
         assert!(ImportJobStatus::Cancelled.is_terminal());
@@ -1932,6 +2475,96 @@ mod tests {
         assert_eq!(value["phase"], json!("citation_ready"));
         assert_eq!(value["citationReady"], json!(true));
         assert_eq!(value["evidenceCount"], json!(3));
+    }
+
+    #[test]
+    fn graph_pending_snapshot_serializes_retry_metadata() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let mut job = ImportJobSnapshot::queued("import-test".into(), &scope);
+        job.status = ImportJobStatus::CitationReadyGraphPending;
+        job.phase = ImportJobPhase::GraphPending;
+        job.citation_ready = true;
+        job.graph_ready = false;
+        job.graph_status = Some("pending".into());
+        job.graph_error_category = Some("db_locked".into());
+        job.graph_generation_error_message = Some("database is locked".into());
+        job.retryable = true;
+        job.retry_attempt = 1;
+        job.max_retry_attempts = 2;
+        job.next_retry_at = Some(1234);
+        job.manual_retry_available = true;
+
+        let value = job.to_value();
+        assert_eq!(value["status"], json!("citation_ready_graph_pending"));
+        assert_eq!(value["phase"], json!("graph_pending"));
+        assert_eq!(value["citationReady"], json!(true));
+        assert_eq!(value["graphReady"], json!(false));
+        assert_eq!(value["graphErrorCategory"], json!("db_locked"));
+        assert_eq!(value["retryable"], json!(true));
+        assert_eq!(value["retryAttempt"], json!(1));
+        assert_eq!(value["maxRetryAttempts"], json!(2));
+        assert_eq!(value["nextRetryAt"], json!(1234));
+        assert_eq!(value["manualRetryAvailable"], json!(true));
+    }
+
+    #[test]
+    fn graph_failure_classifier_keeps_permission_readonly_permanent() {
+        let locked = classify_graph_failure("SQLite error: database is locked");
+        assert_eq!(locked.category, "db_locked");
+        assert!(locked.retryable);
+
+        let readonly_permission = classify_graph_failure("attempt to write a readonly database");
+        assert_eq!(readonly_permission.category, "db_readonly");
+        assert!(!readonly_permission.retryable);
+
+        let provider_timeout = classify_graph_failure("provider_timeout: request timed out");
+        assert_eq!(provider_timeout.category, "provider_timeout");
+        assert!(provider_timeout.retryable);
+    }
+
+    #[test]
+    fn graph_error_sanitizer_redacts_local_paths() {
+        let message =
+            "failed to materialize /tmp/hyprduck/private/source.md\ncaused by more detail";
+        let redacted = sanitize_graph_error_message(message);
+
+        assert_eq!(redacted, "failed to materialize [redacted-local-path]");
+        assert!(!redacted.contains("/tmp/hyprduck"));
+        assert!(!redacted.contains("caused by"));
+    }
+
+    #[test]
+    fn graph_status_persist_failure_adds_warning_without_local_paths() {
+        let registry = ImportJobRegistry::default();
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: None,
+        };
+        let mut job = ImportJobSnapshot::queued("import-test".into(), &scope);
+        job.status = ImportJobStatus::CitationReadyGraphPending;
+        job.phase = ImportJobPhase::GraphPending;
+        registry.insert(job);
+
+        record_graph_status_persist_result(
+            &registry,
+            "import-test",
+            Err(anyhow!(
+                "failed writing /tmp/hyprduck/private/knowledge.sqlite3"
+            )),
+        );
+        record_graph_status_persist_result(&registry, "import-test", Ok(false));
+
+        let job = registry.get("import-test").expect("job");
+        assert_eq!(job.warnings.len(), 2);
+        assert!(job.warnings[0].starts_with("graph_status_persist_failed:"));
+        assert!(!job.warnings[0].contains("/tmp/hyprduck"));
+        assert_eq!(
+            job.warnings[1],
+            "graph_status_persist_failed: citation-ready import job was not found"
+        );
     }
 
     #[test]

@@ -25,6 +25,16 @@ pub(crate) fn encode_success_response(
             EngineCommand::CompileProject,
             crate::handle_compile_project(request)?,
         )),
+        EngineRequest::ReadImportJob(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ReadImportJob,
+            crate::handle_read_import_job(request)?,
+        )),
+        EngineRequest::UpdateImportJobGraphStatus(request) => {
+            serde_json::to_string(&EngineSuccess::new(
+                EngineCommand::UpdateImportJobGraphStatus,
+                crate::handle_update_import_job_graph_status(request)?,
+            ))
+        }
         EngineRequest::LoadProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::LoadProject,
             crate::handle_load_project(request)?,
@@ -150,6 +160,8 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::Parse(_) => EngineCommand::Parse,
         EngineRequest::RetryFailedPages(_) => EngineCommand::RetryFailedPages,
         EngineRequest::CompileProject(_) => EngineCommand::CompileProject,
+        EngineRequest::ReadImportJob(_) => EngineCommand::ReadImportJob,
+        EngineRequest::UpdateImportJobGraphStatus(_) => EngineCommand::UpdateImportJobGraphStatus,
         EngineRequest::LoadProject(_) => EngineCommand::LoadProject,
         EngineRequest::ApplyCorrection(_) => EngineCommand::ApplyCorrection,
         EngineRequest::AnswerProject(_) => EngineCommand::AnswerProject,

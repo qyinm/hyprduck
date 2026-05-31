@@ -20,17 +20,18 @@ use hyprduck_engine_types::{
     GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest,
     LoadProjectResponseData, MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata,
     ParseRequest, ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview,
-    ProjectStatus, ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest,
-    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
-    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
-    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
-    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
+    ProjectStatus, ReadContextPackRequest, ReadContextPackResponseData, ReadImportJobRequest,
+    ReadImportJobResponseData, ReadNodeRequest, ReadNodeResponseData, ReadPageEvidenceRequest,
+    ReadPageEvidenceResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
+    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
+    ReconstructBrainRequest, ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary,
+    RelationKind, RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
     SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
     SourceStatus, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
     StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
     StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    WikiPage, WorkspaceCorrection, WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData,
+    UpdateImportJobGraphStatusRequest, UpdateImportJobGraphStatusResponseData, WikiPage,
+    WorkspaceCorrection, WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData,
     WriteCommitRequest, WriteCommitResponseData, WriteCommitResultItem, WriteListRequest,
     WriteListResponseData, WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData,
     WriteRejectRequest, WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
@@ -279,6 +280,9 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
     let mut graph_generation_status = None;
     let mut graph_generation_skipped_reason = None;
     let mut graph_generation_error_message = None;
+    let mut graph_generation_retryable = None;
+    let mut graph_generation_failed_reason = None;
+    let mut graph_generation_stage = None;
     if let Some(manifest) = &source_manifest {
         let workspace_root = compile_workspace_root(manifest, &workspace_id)?;
         let chunks = chunk_source_markdown(manifest, &markdown);
@@ -310,6 +314,17 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         graph_generation_status = Some(report.status);
         graph_generation_skipped_reason = report.skipped_reason;
         graph_generation_error_message = report.error_message;
+        graph_generation_retryable = Some(report.retryable);
+        graph_generation_failed_reason = report.failed_reason;
+        graph_generation_stage = Some(report.stage);
+        store.update_import_job_graph_status(
+            &workspace_id,
+            &manifest.source_id,
+            graph_generation_status.as_deref().unwrap_or("unknown"),
+            graph_generation_failed_reason.as_deref(),
+            graph_generation_error_message.as_deref(),
+            graph_generation_retryable.unwrap_or(false),
+        )?;
     }
     Ok(CompileProjectResponseData {
         project_id: project.summary.project_id,
@@ -318,6 +333,9 @@ fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProje
         graph_generation_status,
         graph_generation_skipped_reason,
         graph_generation_error_message,
+        graph_generation_retryable,
+        graph_generation_failed_reason,
+        graph_generation_stage,
     })
 }
 
@@ -341,6 +359,79 @@ fn compile_workspace_root(
         workspace_id: workspace_id.into(),
         root_dir: None,
     })
+}
+
+fn graph_status_is_ready(status: Option<&str>) -> bool {
+    matches!(status, Some("rebuilt" | "partially_applied" | "ready"))
+}
+
+fn handle_read_import_job(request: ReadImportJobRequest) -> Result<ReadImportJobResponseData> {
+    if request.job_id.is_none() && request.source_id.is_none() {
+        bail!("read_import_job requires jobId or sourceId");
+    }
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let job = store.read_import_job(
+        &request.scope.workspace_id,
+        request.job_id.as_deref(),
+        request.source_id.as_deref(),
+    )?;
+    if job.is_some() {
+        return Ok(ReadImportJobResponseData { job });
+    }
+    let project_store = KnowledgeProjectStore::default()?;
+    if project_store.path == KnowledgeStore::default_path_for_root(&root) {
+        return Ok(ReadImportJobResponseData { job: None });
+    }
+    let project_knowledge_store = KnowledgeStore::open(project_store.path)?;
+    Ok(ReadImportJobResponseData {
+        job: project_knowledge_store.read_import_job(
+            &request.scope.workspace_id,
+            request.job_id.as_deref(),
+            request.source_id.as_deref(),
+        )?,
+    })
+}
+
+fn handle_update_import_job_graph_status(
+    request: UpdateImportJobGraphStatusRequest,
+) -> Result<UpdateImportJobGraphStatusResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let root_path = KnowledgeStore::default_path_for_root(&root);
+    let root_store = KnowledgeStore::open(root_path.clone())?;
+    let mut updated = root_store.update_import_job_graph_status_from_mcp(
+        &request.scope.workspace_id,
+        &request.source_id,
+        &request.status,
+        &request.graph_status,
+        request.graph_error_category.as_deref(),
+        request.graph_error_message_redacted.as_deref(),
+        request.graph_retryable,
+        request.graph_retry_attempt,
+        request.graph_max_retry_attempts,
+        request.graph_next_retry_at,
+        request.manual_retry_available,
+    )?;
+    if !updated {
+        let project_store = KnowledgeProjectStore::default()?;
+        if project_store.path != root_path {
+            let project_knowledge_store = KnowledgeStore::open(project_store.path)?;
+            updated = project_knowledge_store.update_import_job_graph_status_from_mcp(
+                &request.scope.workspace_id,
+                &request.source_id,
+                &request.status,
+                &request.graph_status,
+                request.graph_error_category.as_deref(),
+                request.graph_error_message_redacted.as_deref(),
+                request.graph_retryable,
+                request.graph_retry_attempt,
+                request.graph_max_retry_attempts,
+                request.graph_next_retry_at,
+                request.manual_retry_available,
+            )?;
+        }
+    }
+    Ok(UpdateImportJobGraphStatusResponseData { updated })
 }
 
 fn handle_load_project(request: LoadProjectRequest) -> Result<LoadProjectResponseData> {
@@ -1286,7 +1377,27 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
     report
         .issues
         .extend(lint_missing_materialized_wiki_refs(&root, &snapshot));
-    let source_reports = brain_health_source_reports(&repo, &snapshot);
+    let mut source_reports = brain_health_source_reports(&repo, &snapshot);
+    for report in &mut source_reports {
+        if let Some(import_job) = knowledge_store.read_import_job(
+            &request.scope.workspace_id,
+            None,
+            Some(report.source_id.as_str()),
+        )? {
+            report.citation_ready = import_job.citation_ready;
+            report.graph_ready = import_job.graph_ready;
+            report.graph_status = import_job.graph_status;
+            report.manual_retry_available = import_job.manual_retry_available;
+            if report.citation_ready && !report.graph_ready {
+                let warning = if report.graph_status == "skipped" {
+                    "citation_ready_graph_skipped"
+                } else {
+                    "citation_ready_graph_pending"
+                };
+                push_health_warning(&mut report.warnings, warning);
+            }
+        }
+    }
     let source_attention_count: usize = source_reports
         .iter()
         .map(|report| report.warnings.len())
@@ -1964,8 +2075,16 @@ fn brain_health_source_report(
         local_only,
         content_hash,
         content_hash_status,
+        citation_ready: success_count_for_health_source(source),
+        graph_ready: false,
+        graph_status: String::new(),
+        manual_retry_available: false,
         warnings,
     }
+}
+
+fn success_count_for_health_source(source: &SourceRecord) -> bool {
+    source.status != SourceStatus::failed() && source.page_count > 0
 }
 
 fn source_pack_health_warning_summary(
@@ -3796,6 +3915,60 @@ impl KnowledgeProjectStore {
             self.run_sql("SELECT workspace_id FROM sources ORDER BY updated_at DESC LIMIT 1;")?;
         let workspace_id = output.trim();
         Ok((!workspace_id.is_empty()).then(|| workspace_id.to_string()))
+    }
+
+    fn update_import_job_graph_status(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+        graph_status: &str,
+        failed_reason: Option<&str>,
+        error_message: Option<&str>,
+        retryable: bool,
+    ) -> Result<()> {
+        self.ensure_schema()?;
+        KnowledgeStore::open(self.path.clone())?;
+        let graph_ready = if graph_status_is_ready(Some(graph_status)) {
+            1
+        } else {
+            0
+        };
+        let manual_retry_available = if graph_ready == 0 && graph_status != "skipped" {
+            1
+        } else {
+            0
+        };
+        let status = if graph_ready == 1 {
+            "context_ready"
+        } else if graph_status == "skipped" {
+            "citation_ready_graph_skipped"
+        } else {
+            "citation_ready_graph_pending"
+        };
+        let sql = format!(
+            "UPDATE import_jobs
+             SET status = '{status}',
+                 graph_ready = {graph_ready},
+                 graph_status = '{graph_status}',
+                 graph_error_category = '{failed_reason}',
+                 graph_error_message_redacted = '{error_message}',
+                 graph_retryable = {retryable},
+                 graph_max_retry_attempts = CASE WHEN graph_max_retry_attempts = 0 THEN 2 ELSE graph_max_retry_attempts END,
+                 manual_retry_available = {manual_retry_available},
+                 updated_at = {updated_at}
+             WHERE workspace_id = '{workspace_id}' AND source_id = '{source_id}' AND citation_ready = 1;",
+            status = escape_sqlite(status),
+            graph_ready = graph_ready,
+            graph_status = escape_sqlite(graph_status),
+            failed_reason = escape_sqlite(failed_reason.unwrap_or_default()),
+            error_message = escape_sqlite(error_message.unwrap_or_default()),
+            retryable = if retryable { 1 } else { 0 },
+            manual_retry_available = manual_retry_available,
+            updated_at = unix_timestamp_seconds(),
+            workspace_id = escape_sqlite(workspace_id),
+            source_id = escape_sqlite(source_id),
+        );
+        self.run_sql(&sql).map(|_| ())
     }
 
     fn load_workspace_id_for_project(&self, project_id: &str) -> Result<Option<WorkspaceId>> {

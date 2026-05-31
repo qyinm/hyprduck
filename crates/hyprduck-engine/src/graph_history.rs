@@ -252,6 +252,10 @@ fn graph_snapshot_source_from_record(
         description: source.description.clone(),
         user_context: source.user_context.clone(),
         ingest_instruction: source.ingest_instruction.clone(),
+        citation_ready: success_count > 0,
+        graph_ready: false,
+        graph_status: String::new(),
+        manual_retry_available: false,
         updated_at: source.updated_at,
     }
 }

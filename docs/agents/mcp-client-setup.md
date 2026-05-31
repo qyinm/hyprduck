@@ -46,8 +46,9 @@ The first successful proof must record:
   `search_documents`, `read_source`, and `read_page_evidence`;
 - if MCP import is part of the proof, `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` is set
   and `import_source` returns a `jobId` without leaking local paths; polling
-  `import_status` reaches `citation_ready` with `citationReady: true`, returns
-  a `sourceId`, and reports nonzero evidence count without leaking local paths;
+  `import_status` reaches a citation-ready state with `citationReady: true`,
+  returns a `sourceId`, and reports nonzero evidence count without leaking local
+  paths;
 - first answer includes at least one `sourceId`, page, and `evidenceRef`;
 - `get_context_pack` returns `contextPack.schemaVersion` as
   `hyprduck.context_pack.v1`, includes `selectedEvidence[].evidenceType`, and
@@ -59,12 +60,33 @@ The first successful proof must record:
 Polling `import_status` should move through:
 
 ```text
-imported -> parsing -> packaging -> citation_ready -> context_ready -> failed
+imported -> parsing -> packaging -> citation_ready -> context_ready
 ```
 
 `citation_ready` is the key HyprDuck import milestone: the source has evidence
 refs an agent can use with citations. `context_ready` is later context/graph
 readiness and should not block citation-backed source inspection.
+
+Graph generation has separate terminal states:
+
+- `context_ready`: citation evidence is usable and the GraphQLite-backed graph
+  materialization committed.
+- `citation_ready_graph_pending`: citation evidence is usable, but graph/wiki
+  inspection is incomplete. Continue with `get_context_pack`,
+  `search_documents`, `read_source`, or `read_page_evidence`; inspect
+  `retryable`, `retryAttempt`, `maxRetryAttempts`, `nextRetryAt`, and
+  `manualRetryAvailable` before retrying graph work.
+- `graph_retry_waiting`: a bounded automatic graph retry is scheduled; keep
+  polling `import_status`.
+- `citation_ready_graph_skipped`: the caller requested `skipGraphGeneration`;
+  citation reads are usable, but graph inspection was intentionally skipped.
+- `failed`: parsing, packaging, or citation evidence commit failed before the
+  source became citation-ready.
+
+If the MCP process has restarted and the original `jobId` is no longer in
+memory, call `import_status` or `import_retry_graph` with the persisted
+`sourceId`. `import_retry_graph` retries only graph/wiki materialization for a
+citation-ready source; it must not be used to reparse a failed import.
 
 ## Failure Classes
 
@@ -78,6 +100,7 @@ Use one of these labels in setup verification logs:
 | `import_allowlist` | MCP `import_source` was called with a path outside `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` or with no import roots configured. | Configure an approved import root or import through the desktop picker. |
 | `parsing` | No usable source artifacts exist for the workspace. | Add a PDF, DOCX, DOC, Markdown, or image file and poll `import_status` until `citation_ready` with `citationReady: true`. |
 | `citation` | `get_context_pack` succeeds but returns no source/page/evidence refs. | Re-import the source or inspect `read_health` before using the answer. |
+| `graph_pending` | `import_status` is `citation_ready_graph_pending` or `read_health` reports `citation_ready_graph_pending`. | Use citation-backed reads immediately; wait for retry or call `import_retry_graph` when `manualRetryAvailable` is true. |
 | `unknown` | The error does not match the classes above. | Capture the command, workspace ID, and raw error for review. |
 
 ## Claude Code External Path

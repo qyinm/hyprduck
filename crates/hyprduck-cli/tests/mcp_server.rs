@@ -74,6 +74,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
             "import_source",
             "import_status",
             "import_cancel",
+            "import_retry_graph",
             "get_context_pack",
             "read_context_pack",
             "search_documents",
@@ -127,6 +128,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     for name in [
         "import_source",
         "import_cancel",
+        "import_retry_graph",
         "write_propose",
         "write_commit",
         "write_commit_all",
@@ -824,11 +826,12 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .to_string()
         .contains(import_root_arg.as_str()));
     assert_eq!(status_payload["workspaceId"], "default");
-    assert_eq!(status_payload["status"], "context_ready");
-    assert_eq!(status_payload["phase"], "context_ready");
+    assert_eq!(status_payload["status"], "citation_ready_graph_skipped");
+    assert_eq!(status_payload["phase"], "graph_skipped");
     assert_eq!(status_payload["citationReady"], true);
     assert_eq!(status_payload["graphReady"], false);
     assert_eq!(status_payload["graphStatus"], "skipped");
+    assert_eq!(status_payload["manualRetryAvailable"], true);
     let source_id = status_payload["sourceId"]
         .as_str()
         .expect("import source id")
@@ -852,7 +855,7 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
                 "arguments": {
                     "workspaceId": "default",
                     "rootDir": root_dir_arg.clone(),
-                    "sourceId": source_id,
+                    "sourceId": source_id.clone(),
                     "page": 1
                 }
             }
@@ -883,6 +886,61 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
 
     drop(stdin);
     let status = child.wait().expect("server exit");
+    assert!(status.success());
+
+    let mut restarted_child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
+        .args(["mcp", "serve"])
+        .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
+        .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", &import_root_arg)
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("restarted mcp server should start");
+    let mut restarted_stdin = restarted_child.stdin.take().expect("restarted stdin");
+    let restarted_stdout = restarted_child.stdout.take().expect("restarted stdout");
+    let mut restarted_reader = BufReader::new(restarted_stdout);
+    initialize_mcp_session(&mut restarted_stdin, &mut restarted_reader);
+
+    write_message(
+        &mut restarted_stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "import_status",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "sourceId": source_id
+                }
+            }
+        }),
+    );
+    let restarted_status_tool = read_message(&mut restarted_reader);
+    assert_eq!(
+        restarted_status_tool["result"]["isError"], false,
+        "{restarted_status_tool:#?}"
+    );
+    let text = restarted_status_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("restarted status text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    let restarted_status: Value = serde_json::from_str(text).expect("restarted status payload");
+    assert_eq!(restarted_status["status"], "citation_ready_graph_skipped");
+    assert_eq!(restarted_status["phase"], "graph_skipped");
+    assert_eq!(restarted_status["citationReady"], true);
+    assert_eq!(restarted_status["graphReady"], false);
+    assert_eq!(restarted_status["graphStatus"], "skipped");
+    assert_eq!(restarted_status["manualRetryAvailable"], true);
+
+    drop(restarted_stdin);
+    let status = restarted_child.wait().expect("restarted server exit");
     assert!(status.success());
     let _ = std::fs::remove_dir_all(root_dir);
     let _ = std::fs::remove_dir_all(import_root);
