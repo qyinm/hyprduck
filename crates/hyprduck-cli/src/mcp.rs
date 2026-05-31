@@ -223,6 +223,7 @@ fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Va
         BrainResourceKind::GraphSnapshot => {
             let snapshot = client.read_graph_snapshot(ReadGraphSnapshotRequest {
                 scope: resource.scope,
+                include_local_paths: false,
             })?;
             let snapshot = redact_local_paths(serde_json::to_value(snapshot)?);
             Ok(json!({
@@ -927,7 +928,10 @@ fn call_tool(
             )?
         }
         "read_graph_snapshot" => {
-            serde_json::to_value(client.read_graph_snapshot(ReadGraphSnapshotRequest { scope })?)?
+            serde_json::to_value(client.read_graph_snapshot(ReadGraphSnapshotRequest {
+                scope,
+                include_local_paths: false,
+            })?)?
         }
         "read_health" => {
             serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
@@ -1024,6 +1028,7 @@ fn read_graph_wiki_cache_state(
 ) -> Result<Option<McpGraphWikiCacheToken>> {
     match client.read_graph_snapshot(ReadGraphSnapshotRequest {
         scope: scope.clone(),
+        include_local_paths: false,
     }) {
         Ok(snapshot) => Ok(Some(McpGraphWikiCacheToken {
             workspace_id: snapshot.workspace_id,

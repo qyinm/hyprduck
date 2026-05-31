@@ -674,6 +674,32 @@ pub struct ReadGraphHistoryResponseData {
 #[serde(rename_all = "camelCase")]
 pub struct ReadGraphSnapshotRequest {
     pub scope: BrainReadScope,
+    #[serde(default)]
+    pub include_local_paths: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphSnapshotSourceRecord {
+    pub source_id: SourceId,
+    pub workspace_id: WorkspaceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: SourceFormat,
+    pub status: SourceStatus,
+    pub page_count: usize,
+    #[serde(default)]
+    pub success_count: usize,
+    #[serde(default)]
+    pub failed_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -691,7 +717,7 @@ pub struct ReadGraphSnapshotResponseData {
     #[serde(default)]
     pub source_paths: Vec<String>,
     #[serde(default)]
-    pub sources: Vec<SourceRecord>,
+    pub sources: Vec<GraphSnapshotSourceRecord>,
     #[serde(default)]
     pub graph_materialization_reports: Vec<GraphMaterializationReportSummary>,
     #[serde(default)]
@@ -2389,6 +2415,7 @@ mod tests {
             }),
             EngineRequest::ReadGraphSnapshot(ReadGraphSnapshotRequest {
                 scope: scope.clone(),
+                include_local_paths: false,
             }),
             EngineRequest::GetContextPack(GetContextPackRequest {
                 scope: scope.clone(),

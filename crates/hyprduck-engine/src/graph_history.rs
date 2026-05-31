@@ -5,8 +5,9 @@ use std::path::Path;
 use anyhow::Result;
 use hyprduck_engine_types::{
     BrainEvent, BrainEventKind, BrainRepoSnapshot, GraphHistoryEntry,
-    GraphMaterializationReportSummary, ReadGraphHistoryRequest, ReadGraphHistoryResponseData,
-    ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData, ReadRecentEventsRequest,
+    GraphMaterializationReportSummary, GraphSnapshotSourceRecord, ReadGraphHistoryRequest,
+    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
+    ReadRecentEventsRequest, SourceRecord, SourceStatus,
 };
 use serde_json::Value;
 
@@ -88,6 +89,13 @@ pub(crate) fn handle_read_graph_snapshot(
                 reader.read_all_wiki_pages()?,
             ),
         };
+    let sources = read_graph_snapshot_sources(
+        reader.root(),
+        &request.scope.workspace_id,
+        &reader.snapshot,
+        request.include_local_paths,
+    )?;
+    let source_paths = graph_snapshot_source_paths(&sources);
 
     Ok(ReadGraphSnapshotResponseData {
         snapshot_id,
@@ -98,8 +106,8 @@ pub(crate) fn handle_read_graph_snapshot(
         created_at,
         materialized_at,
         materialized_paths,
-        source_paths: graph_snapshot_source_paths(&reader.snapshot),
-        sources: reader.snapshot.sources.clone(),
+        source_paths,
+        sources,
         graph_materialization_reports: read_graph_materialization_reports(reader.root()),
         nodes: db_projection.0,
         edges: db_projection.1,
@@ -129,6 +137,27 @@ fn read_graph_canvas_projection(
         return Ok(None);
     }
     KnowledgeStore::open(db_path)?.read_graph_canvas_projection_from_db(workspace_id)
+}
+
+fn read_graph_snapshot_sources(
+    root: &Path,
+    workspace_id: &str,
+    snapshot: &BrainRepoSnapshot,
+    include_local_paths: bool,
+) -> Result<Vec<GraphSnapshotSourceRecord>> {
+    let db_path = KnowledgeStore::default_path_for_root(root);
+    if db_path.exists() {
+        let sources = KnowledgeStore::open(db_path)?
+            .read_graph_snapshot_sources_from_db(workspace_id, include_local_paths)?;
+        if !sources.is_empty() {
+            return Ok(sources);
+        }
+    }
+    Ok(snapshot
+        .sources
+        .iter()
+        .map(|source| graph_snapshot_source_from_record(source, include_local_paths))
+        .collect())
 }
 
 fn read_graph_materialization_reports(root: &Path) -> Vec<GraphMaterializationReportSummary> {
@@ -190,15 +219,61 @@ fn is_completed_graph_materialized_event(event: &BrainEvent) -> bool {
         )
 }
 
-fn graph_snapshot_source_paths(snapshot: &BrainRepoSnapshot) -> Vec<String> {
-    snapshot
-        .sources
+fn graph_snapshot_source_paths(sources: &[GraphSnapshotSourceRecord]) -> Vec<String> {
+    sources
         .iter()
         .flat_map(|source| [source.source_path.clone(), source.markdown_path.clone()])
         .filter(|path| !path.trim().is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn graph_snapshot_source_from_record(
+    source: &SourceRecord,
+    include_local_paths: bool,
+) -> GraphSnapshotSourceRecord {
+    let success_count = if source.status == SourceStatus::failed() {
+        0
+    } else {
+        source.page_count
+    };
+    GraphSnapshotSourceRecord {
+        source_id: source.source_id.clone(),
+        workspace_id: source.workspace_id.clone(),
+        original_path: graph_snapshot_path(&source.original_path, include_local_paths),
+        source_path: graph_snapshot_path(&source.source_path, include_local_paths),
+        markdown_path: graph_snapshot_path(&source.markdown_path, include_local_paths),
+        format: source.format.clone(),
+        status: source.status.clone(),
+        page_count: source.page_count,
+        success_count,
+        failed_count: 0,
+        description: source.description.clone(),
+        user_context: source.user_context.clone(),
+        ingest_instruction: source.ingest_instruction.clone(),
+        updated_at: source.updated_at,
+    }
+}
+
+fn graph_snapshot_path(value: &str, include_local_paths: bool) -> String {
+    if include_local_paths {
+        return value.to_string();
+    }
+    redact_path_for_agent(value)
+}
+
+fn redact_path_for_agent(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "<redacted>".into())
 }
 
 fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<GraphHistoryEntry> {

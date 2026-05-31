@@ -410,8 +410,9 @@ function sourceBackingForNode(
     format: source?.format ?? documentFormatFromPath(sourcePath ?? node.label),
     status: source?.status ?? ("ingested" as const),
     pageCount: source?.pageCount ?? 0,
-    successCount: source?.status === "failed" ? 0 : (source?.pageCount ?? 0),
-    failedCount: 0,
+    successCount:
+      source?.successCount ?? (source?.status === "failed" ? 0 : (source?.pageCount ?? 0)),
+    failedCount: source?.failedCount ?? 0,
     description: source?.description ?? "Materialized source node",
     userContext: source?.userContext ?? "",
     ingestInstruction: source?.ingestInstruction ?? "",
@@ -437,8 +438,9 @@ function sourceSummaryFromPath(
     format: source?.format ?? documentFormatFromPath(sourcePath),
     status: source?.status ?? "ingested",
     page_count: source?.pageCount ?? 0,
-    success_count: source?.status === "failed" ? 0 : (source?.pageCount ?? 0),
-    failed_count: 0,
+    success_count:
+      source?.successCount ?? (source?.status === "failed" ? 0 : (source?.pageCount ?? 0)),
+    failed_count: source?.failedCount ?? 0,
     description: source?.description ?? "",
     user_context: source?.userContext ?? "",
     ingest_instruction: source?.ingestInstruction ?? "",

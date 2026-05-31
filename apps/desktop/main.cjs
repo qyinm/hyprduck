@@ -179,6 +179,7 @@ async function registerIpcHandlers() {
           command: "read_graph_snapshot",
           payload: {
             scope: brainReadScope(workspaceId),
+            includeLocalPaths: true,
           },
         }).then((response) => response.data);
       }

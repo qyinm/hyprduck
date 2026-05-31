@@ -86,6 +86,8 @@ export interface MaterializedSourceRecord {
   format: string;
   status: WorkspaceSourceStatus;
   pageCount: number;
+  successCount?: number;
+  failedCount?: number;
   description?: string;
   userContext?: string;
   ingestInstruction?: string;

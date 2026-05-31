@@ -492,6 +492,8 @@ test("keeps generated wiki pages out of the default graph canvas", () => {
         format: "pdf",
         status: "ingested",
         pageCount: 4,
+        successCount: 3,
+        failedCount: 1,
         description: "Imported source fixture",
         userContext: "",
         ingestInstruction: "",
@@ -622,7 +624,11 @@ test("keeps generated wiki pages out of the default graph canvas", () => {
     "Alpha evidence remains available from the generated wiki topic.",
   );
   expect(envelope.project.detailsByNodeId["source:source-1"]?.source?.pageCount).toBe(4);
+  expect(envelope.project.detailsByNodeId["source:source-1"]?.source?.successCount).toBe(3);
+  expect(envelope.project.detailsByNodeId["source:source-1"]?.source?.failedCount).toBe(1);
   expect(envelope.sources[0].page_count).toBe(4);
+  expect(envelope.sources[0].success_count).toBe(3);
+  expect(envelope.sources[0].failed_count).toBe(1);
 });
 
 test("hydrates delete correction actions for materialized graph nodes", () => {

@@ -9,9 +9,10 @@ use hyprduck_engine_types::{
     BrainContextPack, BrainEvent, BrainNodeKind, BrainNodeRecord, BrainRelationKind,
     BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
     ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackParseConfidence,
-    ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, EvidenceType, KnowledgeProject,
-    PageEvidenceV0, ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
-    SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
+    ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, EvidenceType,
+    GraphSnapshotSourceRecord, KnowledgeProject, PageEvidenceV0, ReadNodeResponseData,
+    ReadPageEvidenceResponseData, ReadSourceResponseData, SourceArtifactManifest, SourceFormat,
+    SourceRecord, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1244,6 +1245,95 @@ impl KnowledgeStore {
             return Ok(None);
         }
         Ok(Some((nodes, relations, wiki_pages)))
+    }
+
+    pub(crate) fn read_graph_snapshot_sources_from_db(
+        &self,
+        workspace_id: &str,
+        include_local_paths: bool,
+    ) -> Result<Vec<GraphSnapshotSourceRecord>> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        let sqlite = graph.connection().sqlite_connection();
+        let mut statement = sqlite
+            .prepare(
+                "SELECT
+                    source_id,
+                    workspace_id,
+                    original_path,
+                    source_path,
+                    markdown_path,
+                    original_path_redacted,
+                    source_path_redacted,
+                    markdown_path_redacted,
+                    format,
+                    status,
+                    page_count,
+                    success_count,
+                    failed_count,
+                    updated_at
+                 FROM sources
+                 WHERE workspace_id = ?1
+                 ORDER BY source_id ASC",
+            )
+            .context("failed preparing graph snapshot source query")?;
+        let mut rows = statement
+            .query((workspace_id,))
+            .context("failed querying graph snapshot sources")?;
+        let mut sources = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .context("failed reading graph snapshot source row")?
+        {
+            let original_path: String = row.get(2).context("read source original path")?;
+            let source_path: String = row.get(3).context("read source path")?;
+            let markdown_path: String = row.get(4).context("read source markdown path")?;
+            let original_path_redacted: String =
+                row.get(5).context("read redacted source original path")?;
+            let source_path_redacted: String = row.get(6).context("read redacted source path")?;
+            let markdown_path_redacted: String =
+                row.get(7).context("read redacted source markdown path")?;
+            sources.push(GraphSnapshotSourceRecord {
+                source_id: row.get(0).context("read source id")?,
+                workspace_id: row.get(1).context("read source workspace")?,
+                original_path: if include_local_paths {
+                    original_path
+                } else {
+                    original_path_redacted
+                },
+                source_path: if include_local_paths {
+                    source_path
+                } else {
+                    source_path_redacted
+                },
+                markdown_path: if include_local_paths {
+                    markdown_path
+                } else {
+                    markdown_path_redacted
+                },
+                format: SourceFormat::from(row.get::<_, String>(8).context("read source format")?),
+                status: SourceStatus::from(row.get::<_, String>(9).context("read source status")?),
+                page_count: row
+                    .get::<_, i64>(10)
+                    .context("read source page count")?
+                    .max(0) as usize,
+                success_count: row
+                    .get::<_, i64>(11)
+                    .context("read source success count")?
+                    .max(0) as usize,
+                failed_count: row
+                    .get::<_, i64>(12)
+                    .context("read source failed count")?
+                    .max(0) as usize,
+                description: String::new(),
+                user_context: String::new(),
+                ingest_instruction: String::new(),
+                updated_at: row
+                    .get::<_, i64>(13)
+                    .context("read source updated at")?
+                    .max(0) as u64,
+            });
+        }
+        Ok(sources)
     }
 
     pub(crate) fn search_brain_from_db(
