@@ -51,6 +51,7 @@ HyprDuck compiles private documents into reusable, cited local context packs for
 - Define the verification target before implementation and loop until it passes or a real blocker is found.
 - Use Bun for JavaScript work; do not introduce new pnpm commands.
 - Keep commands and operational references under `docs/agents/`, not in this file.
+- Check `docs/solutions/` for prior fixes and reusable patterns before re-solving recurring implementation, integration, or workflow problems.
 - Use the narrowest relevant verification command for the files changed.
 - Keep public PR text focused on shipped code and verified behavior.
 - Follow `.github/PULL_REQUEST_TEMPLATE.md` when opening pull requests.
