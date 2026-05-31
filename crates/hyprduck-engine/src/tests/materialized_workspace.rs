@@ -8,6 +8,29 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
     let workspace_root = output_root.join(DEFAULT_WORKSPACE_ID);
     let mut snapshot = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
     snapshot.generated_at = 10;
+    snapshot.sources.push(SourceRecord {
+        source_id: "source-alpha".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: output_root
+            .join("imports/source-alpha/source-fixture.pdf")
+            .display()
+            .to_string(),
+        source_path: output_root
+            .join("sources/source-alpha/source-fixture.pdf")
+            .display()
+            .to_string(),
+        markdown_path: output_root
+            .join("artifacts/source-alpha/source-fixture.md")
+            .display()
+            .to_string(),
+        format: hyprduck_engine_types::SourceFormat::pdf(),
+        status: SourceStatus::partial(),
+        page_count: 3,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 10,
+    });
     snapshot.nodes.push(BrainNodeRecord {
         node_id: "concept-alpha".into(),
         kind: BrainNodeKind::Concept,
@@ -20,6 +43,42 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         updated_at: 10,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized graph");
+    let mut db_snapshot = snapshot.clone();
+    db_snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-beta".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Beta".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: Vec::new(),
+        source_ids: Vec::new(),
+        confidence: Some(0.8),
+        updated_at: 11,
+    });
+    db_snapshot.relations.push(BrainRelationRecord {
+        relation_id: "rel-alpha-beta".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: "concept-alpha".into(),
+        target_node_id: "concept-beta".into(),
+        label: "relates".into(),
+        evidence_ids: Vec::new(),
+        confidence: Some(0.7),
+        updated_at: 11,
+    });
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store");
+    store
+        .persist_graph_snapshot(&db_snapshot)
+        .expect("persist DB graph projection");
+    let graph = graphqlite::Graph::open(store.path().to_path_buf()).expect("open test graph DB");
+    graph
+        .connection()
+        .sqlite_connection()
+        .execute(
+            "UPDATE sources SET success_count = 2, failed_count = 1 WHERE source_id = 'source-alpha'",
+            (),
+        )
+        .expect("update source import counts");
     let artifact_root = workspace_root.join("artifacts/source-alpha");
     fs::create_dir_all(&artifact_root).expect("artifact root");
     write_json_pretty(
@@ -47,6 +106,7 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
             workspace_id: DEFAULT_WORKSPACE_ID.into(),
             root_dir: Some(output_root.display().to_string()),
         },
+        include_local_paths: false,
     })
     .expect("read graph snapshot");
 
@@ -61,6 +121,41 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
     assert_eq!(report.raw_source_graph_node_count, 151);
     assert_eq!(report.canonical_source_graph_node_count, 32);
     assert_eq!(report.canonical_source_graph_relation_count, 48);
+    assert!(response
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-beta"));
+    assert!(response
+        .edges
+        .iter()
+        .any(|edge| edge.relation_id == "rel-alpha-beta"));
+    assert_eq!(
+        response.source_paths,
+        vec![
+            "source-fixture.md".to_string(),
+            "source-fixture.pdf".to_string()
+        ]
+    );
+    let source = response.sources.first().expect("snapshot source");
+    assert_eq!(source.source_path, "source-fixture.pdf");
+    assert_eq!(source.markdown_path, "source-fixture.md");
+    assert_eq!(source.page_count, 3);
+    assert_eq!(source.success_count, 2);
+    assert_eq!(source.failed_count, 1);
+
+    let search_response = handle_search_brain(hyprduck_engine_types::SearchBrainRequest {
+        scope: BrainReadScope {
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            root_dir: Some(output_root.display().to_string()),
+        },
+        query: "Beta".into(),
+        limit: Some(10),
+    })
+    .expect("search DB graph projection");
+    assert!(search_response
+        .results
+        .iter()
+        .any(|result| result.id == "concept-beta"));
 }
 
 #[test]
@@ -107,6 +202,16 @@ fn handle_load_project_defaults_to_workspace_graph_aggregate() {
         .nodes
         .iter()
         .any(|node| node.id == "source:source-a"));
+    let graph_store =
+        KnowledgeStore::open(store_path.clone()).expect("open canonical GraphQLite project store");
+    let projection = graph_store
+        .read_graph_canvas_projection_from_db(DEFAULT_WORKSPACE_ID)
+        .expect("read GraphQLite workspace projection")
+        .expect("workspace graph persisted to GraphQLite");
+    assert!(projection
+        .0
+        .iter()
+        .any(|node| node.node_id == "source:source-a"));
 }
 
 #[test]

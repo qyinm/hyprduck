@@ -14,6 +14,51 @@ fn brain_health_is_clean_for_empty_workspace() {
 
     assert_eq!(health.status, BrainHealthStatus::Clean);
     assert_eq!(health.attention_count, 0);
+    let governance = health.governance.as_ref().expect("governance report");
+    assert_eq!(governance.storage_locality, "local_workspace");
+    assert_eq!(governance.interaction_surface, "desktop_mcp");
+    assert!(governance.evidence_governed);
+    assert!(governance.mutating_tools_require_evidence);
+    assert_eq!(governance.local_path_disclosure_default, "redacted");
+    let store = health
+        .knowledge_store
+        .as_ref()
+        .expect("knowledge store report");
+    assert_eq!(store.canonical_storage, "sqlite+graphqlite");
+    assert_eq!(store.primary_graph_store, "graphqlite");
+    assert!(store.pure_sqlite_relational_graph_rejected);
+    assert!(store.optional_graphqlite_acceleration_rejected);
+    assert_eq!(store.graph_store_mode, "required_primary");
+    assert_eq!(store.graph_native_query_surface, "graphqlite_cypher");
+    assert_eq!(store.migration_mode, "single_db_first_release");
+    assert!(store.long_dual_write_transition_rejected);
+    assert!(store.graphqlite_loaded);
+    assert!(store.graphqlite_transactional);
+    assert_eq!(store.graphqlite_release_gate, "passed");
+    assert!(store.release_blocked_without_graphqlite);
+    assert_eq!(store.migration_blast_radius, "high");
+    assert!(store.broad_verification_required);
+    assert!(!store.json_artifacts_canonical);
+    assert_eq!(store.json_artifact_role, "migration_export_debug_compat");
+    assert!(!store.vector_search_enabled);
+    assert_eq!(
+        store.vector_search_policy,
+        "defer_until_db_graphqlite_read_paths_stabilize"
+    );
+    assert!(!store.checkpoint_rollback_api_enabled);
+    assert_eq!(
+        store.checkpoint_rollback_policy,
+        "defer_until_checkpoints_reliably_stored"
+    );
+    assert!(!store.graph_algorithms_enabled);
+    assert_eq!(
+        store.graph_algorithm_policy,
+        "revisit_after_primary_graph_data_stabilizes"
+    );
+    assert_eq!(store.evidence_item_count, 0);
+    assert_eq!(store.wiki_page_count, 0);
+    assert_eq!(store.graph_node_count, 0);
+    assert_eq!(store.graph_relation_count, 0);
     assert!(health.source_reports.is_empty());
     assert!(health.recent_events.is_empty());
 }
@@ -80,10 +125,28 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
     .expect("list proposals");
     assert_eq!(pending.proposals.len(), 1);
     assert_eq!(pending.proposals[0].proposal_id, proposal.proposal_id);
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store");
+    let persisted = store
+        .load_agent_write_proposal(DEFAULT_WORKSPACE_ID, &proposal.proposal_id)
+        .expect("load persisted proposal")
+        .expect("persisted proposal exists");
+    assert_eq!(persisted.actor_id, MCP_WRITE_AGENT_ID);
+    assert_eq!(persisted.validation_status, "validated");
+    assert_eq!(persisted.approval_status, "pending");
+    assert_eq!(persisted.evidence_refs, vec!["ev-agent-write-1"]);
+    assert!(!persisted.requires_user_approval);
+    fs::remove_file(
+        workspace_root
+            .join("proposals")
+            .join(format!("{}.json", proposal.proposal_id)),
+    )
+    .expect("remove compatibility proposal file");
 
     let committed = handle_write_commit(WriteCommitRequest {
         scope: scope.clone(),
         proposal_id: proposal.proposal_id.clone(),
+        user_approved: false,
     })
     .expect("commit proposal");
     assert!(committed.event_id.starts_with("evt-"));
@@ -92,6 +155,16 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
         .join("proposals")
         .join(format!("{}.json", proposal.proposal_id))
         .exists());
+    let persisted = store
+        .load_agent_write_proposal(DEFAULT_WORKSPACE_ID, &proposal.proposal_id)
+        .expect("reload persisted proposal")
+        .expect("persisted proposal remains");
+    assert_eq!(persisted.approval_status, "committed");
+    let operation = store
+        .load_brain_event_operation(DEFAULT_WORKSPACE_ID, &committed.event_id)
+        .expect("load persisted commit event")
+        .expect("commit event was persisted");
+    assert_eq!(operation, "agent_session_write");
 
     let events = fs::read_to_string(workspace_root.join("events/brain_events.jsonl"))
         .expect("read event log");
@@ -256,11 +329,151 @@ fn agent_session_write_revalidates_evidence_on_commit() {
     let error = handle_write_commit(WriteCommitRequest {
         scope,
         proposal_id: proposal.proposal_id,
+        user_approved: false,
     })
     .expect_err("stale evidence rejected");
     assert!(error
         .to_string()
         .contains("ev-agent-write-stale was not found"));
+}
+
+#[test]
+fn large_semantic_wiki_or_graph_proposals_require_user_approval() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-semantic-approval".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Large semantic wiki and graph changes require user approval.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-semantic-approval".into()),
+        markdown_path: Some("artifacts/source-semantic-approval/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "wiki_page".into(),
+        title: "Large wiki rewrite".into(),
+        body: (0..45)
+            .map(|idx| format!("Semantic section {idx} updates graph-linked wiki content."))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        evidence_refs: vec!["ev-semantic-approval".into()],
+    })
+    .expect("propose semantic write");
+    assert_eq!(proposal.status, "pending_user_approval");
+
+    let error = handle_write_commit(WriteCommitRequest {
+        scope,
+        proposal_id: proposal.proposal_id,
+        user_approved: false,
+    })
+    .expect_err("large semantic proposal requires user approval");
+
+    assert!(error
+        .to_string()
+        .contains("large semantic wiki/graph changes require explicit user approval"));
+}
+
+#[test]
+fn small_evidence_refresh_and_link_repair_proposals_can_commit_without_user_approval() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+
+    let evidence = EvidenceRef {
+        id: "ev-maintenance-auto".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Small evidence refresh and link repair changes may auto-commit.".into(),
+        source_path: Some("/private/docs/source.pdf".into()),
+        source_id: Some("source-maintenance-auto".into()),
+        markdown_path: Some("artifacts/source-maintenance-auto/pages/page_1.md".into()),
+        image_path: None,
+        provenance: Some("test fixture".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let proposal = handle_write_propose(WriteProposeRequest {
+        scope: scope.clone(),
+        content_type: "link_repair".into(),
+        title: "Repair stale source link".into(),
+        body: "Refresh evidence link metadata for an existing cited source.".into(),
+        evidence_refs: vec!["ev-maintenance-auto".into()],
+    })
+    .expect("propose maintenance write");
+    assert_eq!(proposal.status, "pending");
+
+    let committed = handle_write_commit(WriteCommitRequest {
+        scope,
+        proposal_id: proposal.proposal_id,
+        user_approved: false,
+    })
+    .expect("small maintenance write commits without user approval");
+    assert!(committed.event_id.starts_with("evt-"));
+    assert!(committed.memory_id.starts_with("memory-"));
 }
 
 #[test]
@@ -1064,6 +1277,7 @@ fn read_page_evidence_resolves_source_evidence_index_metadata() {
         },
         source_id: source.source_id,
         page: Some(1),
+        include_local_paths: false,
     })
     .expect("page evidence");
 
@@ -1081,12 +1295,138 @@ fn read_page_evidence_resolves_source_evidence_index_metadata() {
         hyprduck_engine_types::ContextPackParseConfidence::High
     );
     assert_eq!(response.evidence[0].content_hash, "fnv64:page-evidence");
-    let expected_markdown_path = markdown_path.display().to_string();
     assert_eq!(
         response.evidence[0].markdown_path.as_deref(),
-        Some(expected_markdown_path.as_str())
+        Some("page_1.md")
     );
     assert!(response.warnings.is_empty());
+}
+
+#[test]
+fn legacy_read_source_and_page_evidence_redact_local_paths_by_default() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-legacy-redaction");
+    let source_root = workspace_root.join("sources/src-legacy-redaction");
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(artifact_root.join("pages")).expect("pages dir");
+    fs::create_dir_all(&source_root).expect("source dir");
+    let source_path = source_root.join("source.pdf");
+    let markdown_path = artifact_root.join("pages/page_1.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, "# legacy page\n").expect("write markdown");
+    let source = SourceRecord {
+        source_id: "src-legacy-redaction".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: workspace_root.join("original.pdf").display().to_string(),
+        source_path: source_path.display().to_string(),
+        markdown_path: workspace_root
+            .join("artifacts/src-legacy-redaction/source.md")
+            .display()
+            .to_string(),
+        format: hyprduck_engine_types::SourceFormat::pdf(),
+        status: hyprduck_engine_types::SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let evidence = EvidenceRef {
+        id: "ev-legacy-redaction".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Legacy fallback evidence.".into(),
+        source_path: Some(source_path.display().to_string()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(markdown_path.display().to_string()),
+        image_path: None,
+        provenance: None,
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: vec![source.clone()],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": source.source_id,
+            "contentHash": "fnv64:legacy-redaction",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-legacy-redaction",
+                "sourceId": "src-legacy-redaction",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Legacy fallback evidence.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:legacy-redaction",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let source_response = handle_read_source(ReadSourceRequest {
+        scope: scope.clone(),
+        source_id: source.source_id.clone(),
+        include_local_paths: false,
+    })
+    .expect("read source");
+    let source_json = serde_json::to_string(&source_response).expect("source json");
+    assert!(!source_json.contains(workspace_root.to_string_lossy().as_ref()));
+    assert_eq!(source_response.source.source_path, "source.pdf");
+    assert_eq!(
+        source_response.evidence[0].markdown_path.as_deref(),
+        Some("page_1.md")
+    );
+
+    let page_response = handle_read_page_evidence(ReadPageEvidenceRequest {
+        scope,
+        source_id: source.source_id,
+        page: Some(1),
+        include_local_paths: false,
+    })
+    .expect("read page evidence");
+    let page_json = serde_json::to_string(&page_response).expect("page json");
+    assert!(!page_json.contains(workspace_root.to_string_lossy().as_ref()));
+    assert_eq!(
+        page_response.evidence[0].markdown_path.as_deref(),
+        Some("page_1.md")
+    );
 }
 
 #[test]
@@ -1178,6 +1518,7 @@ fn read_page_evidence_rejects_cross_workspace_artifacts() {
         },
         source_id: source.source_id,
         page: Some(1),
+        include_local_paths: false,
     })
     .expect("page evidence");
 

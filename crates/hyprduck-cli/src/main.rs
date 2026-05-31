@@ -14,8 +14,8 @@ use hyprduck_engine_types::{
     BrainReadScope, CompileProjectRequest, ContextPackParseConfidence, DocumentFormat,
     EvidenceIndexItemV1, EvidenceIndexV1, EvidenceType, GetContextPackRequest, GraphHistoryEntry,
     IngestStatus, PageArtifact, ParseInput, ParseOptions, ParseOutputTarget, ParseProgress,
-    ParseRequest, ReadRecentEventsRequest, ReconstructBrainResponseData, SearchBrainRequest,
-    SourceArtifactManifest, SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V1_SCHEMA_VERSION,
+    ParseRequest, ReadRecentEventsRequest, SearchBrainRequest, SourceArtifactManifest,
+    SourcePackPageV0, SourcePackV0, EVIDENCE_INDEX_V1_SCHEMA_VERSION,
     SOURCE_PACK_V0_SCHEMA_VERSION,
 };
 use std::path::{Path, PathBuf};
@@ -644,31 +644,6 @@ fn run_brain(command: cli::BrainCommand) -> Result<()> {
             let related_events = client.read_recent_events(related_request)?;
             print_graph_state_inspection(&state, related_events)?;
         }
-        cli::BrainCommand::RollbackState {
-            history_request,
-            mut request,
-            selector,
-        } => {
-            let response = client.read_graph_history(history_request)?;
-            let state = response
-                .states
-                .into_iter()
-                .find(|state| match &selector {
-                    GraphStateSelector::Snapshot(snapshot_id) => state.snapshot_id == *snapshot_id,
-                    GraphStateSelector::Event(event_id) => state.event_id == *event_id,
-                })
-                .ok_or_else(|| match selector {
-                    GraphStateSelector::Snapshot(snapshot_id) => {
-                        anyhow::anyhow!("graph snapshot not found: {snapshot_id}")
-                    }
-                    GraphStateSelector::Event(event_id) => {
-                        anyhow::anyhow!("graph materialization event not found: {event_id}")
-                    }
-                })?;
-            request.up_to_event_id = Some(state.event_id.clone());
-            let restored = client.reconstruct_brain(request)?;
-            print_graph_rollback_result(&state, restored)?;
-        }
     }
     Ok(())
 }
@@ -693,10 +668,6 @@ fn print_graph_history(
             state.wiki_page_count,
             printable_refs(&state.source_markdown_refs),
             printable_refs(&state.storage_locations)
-        );
-        println!(
-            "  rollback-target: {}",
-            state.rollback_target.replay_selector
         );
     }
     Ok(())
@@ -726,26 +697,9 @@ fn print_graph_state_inspection(
         "source-markdown: {}",
         printable_refs(&state.source_markdown_refs)
     );
-    println!("rollback-target: {}", state.rollback_target.replay_selector);
     println!("storage: {}", printable_refs(&state.storage_locations));
     println!("related-events: {}", events.events.len());
     print_event_history(events)?;
-    Ok(())
-}
-
-fn print_graph_rollback_result(
-    state: &GraphHistoryEntry,
-    restored: ReconstructBrainResponseData,
-) -> Result<()> {
-    println!("rollback-applied: {}", state.snapshot_id);
-    println!("event: {}", state.event_id);
-    println!("new-snapshot: {}", restored.snapshot_id);
-    println!("output-root: {}", restored.output_root);
-    println!("replayed-events: {}", restored.replayed_event_count);
-    println!("changed-files: {}", restored.changed_files.len());
-    for path in restored.changed_files {
-        println!("  {path}");
-    }
     Ok(())
 }
 

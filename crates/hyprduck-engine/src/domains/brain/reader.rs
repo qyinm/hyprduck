@@ -48,6 +48,17 @@ impl BrainReader {
         snapshot.memories = repo.read_optional_json_artifact("memory/records.json")?;
         let events = repo.read_brain_events()?;
         snapshot.events = events.clone();
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(repo.root()))?;
+        if store
+            .read_graph_canvas_projection_from_db(workspace_id)?
+            .is_none()
+        {
+            store.persist_graph_snapshot(&snapshot)?;
+        }
+        let artifact_metadata =
+            build_context_pack_artifact_metadata(repo.root(), &snapshot.sources);
+        store.preserve_artifact_metadata(&artifact_metadata)?;
+        store.preserve_context_pack_exports(repo.root(), workspace_id)?;
         Ok(Self {
             repo,
             snapshot,

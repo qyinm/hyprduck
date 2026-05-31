@@ -1685,6 +1685,8 @@ fn relation_kind_slug(kind: BrainRelationKind) -> &'static str {
         BrainRelationKind::DependsOn => "depends_on",
         BrainRelationKind::SourceOf => "source_of",
         BrainRelationKind::DerivedFrom => "derived_from",
+        BrainRelationKind::Cites => "cites",
+        BrainRelationKind::LinksTo => "links_to",
         BrainRelationKind::RelatedTo => "related_to",
     }
 }

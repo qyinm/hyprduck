@@ -2,6 +2,7 @@ use super::cleanup::*;
 use super::origin::*;
 use super::replay::*;
 use super::*;
+use crate::domains::knowledge_store::KnowledgeStore;
 
 pub(crate) fn write_materialized_brain_repo(
     root: &Path,
@@ -81,6 +82,8 @@ pub(crate) fn persist_effective_brain_snapshot(
 
 fn persist_effective_brain_state(root: &Path, effective_state: &EffectiveBrainState) -> Result<()> {
     let effective_snapshot = &effective_state.snapshot;
+    KnowledgeStore::open(KnowledgeStore::default_path_for_root(root))?
+        .persist_graph_snapshot(effective_snapshot)?;
     persist_materialized_graph_and_wiki_state(root, effective_snapshot)?;
     write_json_pretty(
         &root.join("memory/records.json"),

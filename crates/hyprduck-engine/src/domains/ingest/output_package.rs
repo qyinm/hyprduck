@@ -761,6 +761,7 @@ pub(crate) fn source_summary_from_manifest(manifest: &SourceArtifactManifest) ->
         .iter()
         .filter(|page| page.error_message.is_some())
         .count();
+    let success_count = manifest.pages.len().saturating_sub(failed_count);
     SourceSummary {
         workspace_id: manifest.workspace_id.clone(),
         source_id: manifest.source_id.clone(),
@@ -770,8 +771,10 @@ pub(crate) fn source_summary_from_manifest(manifest: &SourceArtifactManifest) ->
         format: manifest.format.clone(),
         status: manifest.status.clone(),
         page_count: manifest.pages.len(),
-        success_count: manifest.pages.len().saturating_sub(failed_count),
+        success_count,
         failed_count,
+        citation_ready: success_count > 0,
+        graph_ready: false,
         description: manifest.description.clone(),
         user_context: manifest.user_context.clone(),
         ingest_instruction: manifest.ingest_instruction.clone(),

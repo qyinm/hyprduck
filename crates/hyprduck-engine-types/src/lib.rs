@@ -248,6 +248,10 @@ pub struct SourceSummary {
     pub success_count: usize,
     pub failed_count: usize,
     #[serde(default)]
+    pub citation_ready: bool,
+    #[serde(default)]
+    pub graph_ready: bool,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub user_context: String,
@@ -387,6 +391,8 @@ pub struct WriteProposeResponseData {
 pub struct WriteCommitRequest {
     pub scope: BrainReadScope,
     pub proposal_id: String,
+    #[serde(default)]
+    pub user_approved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,6 +512,8 @@ pub struct SearchBrainResponseData {
 pub struct ReadSourceRequest {
     pub scope: BrainReadScope,
     pub source_id: SourceId,
+    #[serde(default)]
+    pub include_local_paths: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,6 +533,8 @@ pub struct ReadPageEvidenceRequest {
     pub source_id: SourceId,
     #[serde(default)]
     pub page: Option<usize>,
+    #[serde(default)]
+    pub include_local_paths: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -639,7 +649,6 @@ pub struct GraphHistoryEntry {
     pub snapshot_id: String,
     pub materialized_at: u64,
     pub event_id: String,
-    pub rollback_target: GraphRollbackTarget,
     #[serde(default)]
     pub operation_type: Option<String>,
     #[serde(default)]
@@ -657,15 +666,6 @@ pub struct GraphHistoryEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GraphRollbackTarget {
-    pub snapshot_id: String,
-    pub event_id: String,
-    pub materialized_version: u64,
-    pub replay_selector: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ReadGraphHistoryResponseData {
     pub states: Vec<GraphHistoryEntry>,
 }
@@ -674,6 +674,32 @@ pub struct ReadGraphHistoryResponseData {
 #[serde(rename_all = "camelCase")]
 pub struct ReadGraphSnapshotRequest {
     pub scope: BrainReadScope,
+    #[serde(default)]
+    pub include_local_paths: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphSnapshotSourceRecord {
+    pub source_id: SourceId,
+    pub workspace_id: WorkspaceId,
+    pub original_path: String,
+    pub source_path: String,
+    pub markdown_path: String,
+    pub format: SourceFormat,
+    pub status: SourceStatus,
+    pub page_count: usize,
+    #[serde(default)]
+    pub success_count: usize,
+    #[serde(default)]
+    pub failed_count: usize,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub user_context: String,
+    #[serde(default)]
+    pub ingest_instruction: String,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -690,6 +716,8 @@ pub struct ReadGraphSnapshotResponseData {
     pub materialized_paths: Vec<String>,
     #[serde(default)]
     pub source_paths: Vec<String>,
+    #[serde(default)]
+    pub sources: Vec<GraphSnapshotSourceRecord>,
     #[serde(default)]
     pub graph_materialization_reports: Vec<GraphMaterializationReportSummary>,
     #[serde(default)]
@@ -1624,9 +1652,56 @@ pub struct GetBrainHealthResponseData {
     pub status: BrainHealthStatus,
     pub attention_count: usize,
     #[serde(default)]
+    pub governance: Option<BrainGovernanceReport>,
+    #[serde(default)]
+    pub knowledge_store: Option<BrainKnowledgeStoreReport>,
+    #[serde(default)]
     pub source_reports: Vec<BrainHealthSourceReport>,
     #[serde(default)]
     pub recent_events: Vec<BrainEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainGovernanceReport {
+    pub storage_locality: String,
+    pub interaction_surface: String,
+    pub evidence_governed: bool,
+    pub mutating_tools_require_evidence: bool,
+    pub local_path_disclosure_default: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainKnowledgeStoreReport {
+    pub canonical_storage: String,
+    pub primary_graph_store: String,
+    pub pure_sqlite_relational_graph_rejected: bool,
+    pub optional_graphqlite_acceleration_rejected: bool,
+    pub graph_store_mode: String,
+    pub graph_native_query_surface: String,
+    pub migration_mode: String,
+    pub long_dual_write_transition_rejected: bool,
+    pub db_schema_version: i64,
+    pub graph_schema_version: i64,
+    pub graphqlite_loaded: bool,
+    pub graphqlite_transactional: bool,
+    pub graphqlite_release_gate: String,
+    pub release_blocked_without_graphqlite: bool,
+    pub migration_blast_radius: String,
+    pub broad_verification_required: bool,
+    pub json_artifacts_canonical: bool,
+    pub json_artifact_role: String,
+    pub vector_search_enabled: bool,
+    pub vector_search_policy: String,
+    pub checkpoint_rollback_api_enabled: bool,
+    pub checkpoint_rollback_policy: String,
+    pub graph_algorithms_enabled: bool,
+    pub graph_algorithm_policy: String,
+    pub evidence_item_count: usize,
+    pub wiki_page_count: usize,
+    pub graph_node_count: usize,
+    pub graph_relation_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2303,11 +2378,13 @@ mod tests {
             EngineRequest::ReadSource(ReadSourceRequest {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
+                include_local_paths: false,
             }),
             EngineRequest::ReadPageEvidence(ReadPageEvidenceRequest {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
                 page: Some(1),
+                include_local_paths: false,
             }),
             EngineRequest::ReadContextPack(ReadContextPackRequest {
                 scope: scope.clone(),
@@ -2338,6 +2415,7 @@ mod tests {
             }),
             EngineRequest::ReadGraphSnapshot(ReadGraphSnapshotRequest {
                 scope: scope.clone(),
+                include_local_paths: false,
             }),
             EngineRequest::GetContextPack(GetContextPackRequest {
                 scope: scope.clone(),
@@ -2359,6 +2437,7 @@ mod tests {
             EngineRequest::WriteCommit(WriteCommitRequest {
                 scope: scope.clone(),
                 proposal_id: "prop-1".into(),
+                user_approved: false,
             }),
             EngineRequest::WriteCommitAll(WriteCommitAllRequest {
                 scope: scope.clone(),
@@ -2398,6 +2477,34 @@ mod tests {
             decoded.data.results[0].kind,
             BrainSearchResultKind::WikiPage
         );
+    }
+
+    #[test]
+    fn graph_history_response_does_not_expose_rollback_target() {
+        let response = EngineSuccess::new(
+            EngineCommand::ReadGraphHistory,
+            ReadGraphHistoryResponseData {
+                states: vec![GraphHistoryEntry {
+                    snapshot_id: "snapshot-a".into(),
+                    materialized_at: 10,
+                    event_id: "event-a".into(),
+                    operation_type: Some("graph_snapshot_commit".into()),
+                    source_run_ids: Vec::new(),
+                    source_markdown_refs: Vec::new(),
+                    storage_locations: vec!["hyprduck.sqlite:graphqlite".into()],
+                    node_count: 1,
+                    edge_count: 0,
+                    claim_count: 0,
+                    memory_count: 0,
+                    wiki_page_count: 0,
+                }],
+            },
+        );
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(!json.contains("rollbackTarget"));
+        assert!(!json.contains("replaySelector"));
     }
 
     #[test]

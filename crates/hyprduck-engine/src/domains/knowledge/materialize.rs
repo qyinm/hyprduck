@@ -1069,6 +1069,8 @@ pub(crate) fn publish_latest_readable_graph_snapshot_marker(
         snapshot_id,
         event_id: event.event_id.clone(),
         source_ingest_id: graph_snapshot_source_ingest_id(event),
+        artifact_role: MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT.into(),
+        canonical_state_store: CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE.into(),
         materialized_at,
         published_at: unix_timestamp_seconds(),
         source_markdown_refs: event.source_markdown_refs.clone(),

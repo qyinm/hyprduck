@@ -11,6 +11,7 @@ base64.workspace = true
 dirs.workspace = true
 markitdown = "=0.1.11"
 reqwest.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -18,3 +19,4 @@ thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 hyprduck-engine-types = { path = "../hyprduck-engine-types" }
+graphqlite = "=0.5.0"

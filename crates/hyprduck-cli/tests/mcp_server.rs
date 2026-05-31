@@ -219,6 +219,69 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     let payload: Value = serde_json::from_str(text).expect("health payload");
     assert_eq!(payload["status"], "clean");
     assert_eq!(payload["attentionCount"], 0);
+    assert_eq!(payload["knowledgeStore"]["primaryGraphStore"], "graphqlite");
+    assert_eq!(
+        payload["knowledgeStore"]["pureSqliteRelationalGraphRejected"],
+        true
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["optionalGraphqliteAccelerationRejected"],
+        true
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["graphStoreMode"],
+        "required_primary"
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["graphNativeQuerySurface"],
+        "graphqlite_cypher"
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["migrationMode"],
+        "single_db_first_release"
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["longDualWriteTransitionRejected"],
+        true
+    );
+    assert_eq!(payload["knowledgeStore"]["graphqliteReleaseGate"], "passed");
+    assert_eq!(
+        payload["knowledgeStore"]["releaseBlockedWithoutGraphqlite"],
+        true
+    );
+    assert_eq!(payload["knowledgeStore"]["migrationBlastRadius"], "high");
+    assert_eq!(payload["knowledgeStore"]["broadVerificationRequired"], true);
+    assert_eq!(payload["knowledgeStore"]["jsonArtifactsCanonical"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["jsonArtifactRole"],
+        "migration_export_debug_compat"
+    );
+    assert_eq!(payload["knowledgeStore"]["vectorSearchEnabled"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["vectorSearchPolicy"],
+        "defer_until_db_graphqlite_read_paths_stabilize"
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["checkpointRollbackApiEnabled"],
+        false
+    );
+    assert_eq!(
+        payload["knowledgeStore"]["checkpointRollbackPolicy"],
+        "defer_until_checkpoints_reliably_stored"
+    );
+    assert_eq!(payload["knowledgeStore"]["graphAlgorithmsEnabled"], false);
+    assert_eq!(
+        payload["knowledgeStore"]["graphAlgorithmPolicy"],
+        "revisit_after_primary_graph_data_stabilizes"
+    );
+    assert_eq!(payload["governance"]["storageLocality"], "local_workspace");
+    assert_eq!(payload["governance"]["interactionSurface"], "desktop_mcp");
+    assert_eq!(payload["governance"]["evidenceGoverned"], true);
+    assert_eq!(payload["governance"]["mutatingToolsRequireEvidence"], true);
+    assert_eq!(
+        payload["governance"]["localPathDisclosureDefault"],
+        "redacted"
+    );
 
     write_mcp_snapshot_workspace(&root_dir);
     write_message(
@@ -384,7 +447,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .as_array()
         .expect("search results")
         .iter()
-        .any(|result| result["id"] == "source-mcp"));
+        .any(|result| result["id"] == "source-mcp" || result["id"] == "evidence-mcp"));
 
     write_message(
         &mut stdin,
@@ -572,10 +635,13 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .as_str()
         .expect("unredacted source text");
     let unredacted_source: Value = serde_json::from_str(text).expect("unredacted source payload");
-    assert!(unredacted_source["source"]["sourcePath"]
-        .as_str()
-        .expect("source path")
-        .contains(root_dir_arg.as_str()));
+    assert!(
+        unredacted_source["source"]["sourcePath"]
+            .as_str()
+            .expect("source path")
+            .contains(root_dir_arg.as_str()),
+        "{unredacted_source:#?}"
+    );
 
     write_message(
         &mut stdin,
@@ -1005,7 +1071,7 @@ fn write_mcp_snapshot_workspace(root_dir: &std::path::Path) {
     fs::write(
         workspace.join("brain-manifest.json"),
         format!(
-            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
+            r##"{{"workspaceId":"default","generatedAt":42,"sources":[{{"sourceId":"source-mcp","workspaceId":"default","originalPath":"{root}/source.pdf","sourcePath":"{root}/sources/source-mcp/source.pdf","markdownPath":"{root}/artifacts/source-mcp/source.md","format":"pdf","status":"ingested","pageCount":1,"description":"","userContext":"","ingestInstruction":"","updatedAt":42}}],"nodes":[{{"nodeId":"node-mcp-readable","kind":"concept","label":"MCP readable","scope":"project","aliases":[],"evidenceIds":["evidence-mcp"],"sourceIds":["source-mcp"],"confidence":null,"updatedAt":42}}],"relations":[],"evidence":[{{"id":"evidence-mcp","pageLabel":"Page 1","pageIndex":0,"snippet":"MCP source evidence","sourcePath":"{root}/sources/source-mcp/source.pdf","sourceId":"source-mcp","markdownPath":"{root}/artifacts/source-mcp/pages/page_1.md","imagePath":"{root}/artifacts/source-mcp/images/page_1.png","provenance":null}}],"memories":[],"wikiPages":[{{"pageId":"wiki-mcp-readable","workspaceId":"default","path":"wiki/index.md","title":"MCP Snapshot","body":"# MCP Snapshot\n\nLocal path: {root}\n","nodeRefs":["node-mcp-readable"],"sourceRefs":["source-mcp"],"evidenceRefs":["evidence-mcp"],"updatedAt":42}}],"entities":[],"claims":[],"extractions":[],"events":[]}}"##,
             root = workspace.display()
         ),
     )

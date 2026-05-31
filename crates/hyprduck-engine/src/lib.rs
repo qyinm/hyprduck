@@ -10,30 +10,30 @@ use base64::Engine;
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
     ApplyCorrectionRequest, ApplyCorrectionResponseData, BrainActor, BrainActorType,
-    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainHealthSourceReport,
-    BrainHealthStatus, BrainNodeKind, BrainNodeRecord, BrainReadScope, BrainRelationKind,
-    BrainRelationRecord, BrainRepoSnapshot, BrainScope, BrainSearchResult, BrainSearchResultKind,
-    ClaimRecord, CompileProjectRequest, CompileProjectResponseData, CorrectionAction,
-    CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord, EvidenceRef,
-    GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
-    GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
-    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
-    MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview, ProjectStatus,
-    ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest, ReadNodeResponseData,
-    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RelationEdgeDetail, RelationEdgeSummary, RelationKind, RetryFailedPagesRequest,
-    RetryFailedPagesResponseData, SearchBrainRequest, SearchBrainResponseData,
-    SourceArtifactManifest, SourceBacking, SourceId, SourceRecord, SourceStatus, SourceSummary,
-    StructuredExtractionArtifact, StructuredExtractionClaim, StructuredExtractionEntity,
-    StructuredExtractionMemoryCandidate, StructuredExtractionPageRef, StructuredExtractionRelation,
-    StructuredExtractionTopic, SuggestedAction, SuggestedActionKind, WikiPage, WorkspaceCorrection,
-    WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData, WriteCommitRequest,
-    WriteCommitResponseData, WriteCommitResultItem, WriteListRequest, WriteListResponseData,
-    WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
-    WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
+    BrainContextPack, BrainEvent, BrainEventCausality, BrainEventKind, BrainGovernanceReport,
+    BrainHealthSourceReport, BrainHealthStatus, BrainKnowledgeStoreReport, BrainNodeKind,
+    BrainNodeRecord, BrainReadScope, BrainRelationKind, BrainRelationRecord, BrainRepoSnapshot,
+    BrainScope, BrainSearchResult, BrainSearchResultKind, ClaimRecord, CompileProjectRequest,
+    CompileProjectResponseData, CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand,
+    EngineFailure, EntityRecord, EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData,
+    GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail, GraphNodeKind,
+    GraphNodePosition, GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest,
+    LoadProjectResponseData, MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata,
+    ParseRequest, ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview,
+    ProjectStatus, ReadContextPackRequest, ReadContextPackResponseData, ReadNodeRequest,
+    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
+    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
+    SourceStatus, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
+    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
+    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
+    WikiPage, WorkspaceCorrection, WorkspaceId, WriteCommitAllRequest, WriteCommitAllResponseData,
+    WriteCommitRequest, WriteCommitResponseData, WriteCommitResultItem, WriteListRequest,
+    WriteListResponseData, WriteProposalSummary, WriteProposeRequest, WriteProposeResponseData,
+    WriteRejectRequest, WriteRejectResponseData, BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{
@@ -124,6 +124,7 @@ use domains::ingest::output_package::{
 };
 #[cfg(test)]
 use domains::ingest::output_package::{build_source_id, write_source_manifest};
+use domains::knowledge_store::{AgentWriteProposalRecord, KnowledgeStore};
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,
@@ -151,7 +152,10 @@ const MARKDOWN_INGEST_QUEUE_PATH: &str = "state/markdown-ingest-queue.json";
 #[cfg(test)]
 const MARKDOWN_SOURCE_STATE_PATH: &str = "state/markdown-sources.json";
 const LATEST_READABLE_SNAPSHOT_PATH: &str = "state/latest-readable-snapshot.json";
+const MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT: &str = "migration_input";
+const CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE: &str = "hyprduck.sqlite+graphqlite";
 const PROVIDER_GRAPH_AGENT_ID: &str = "hyprduck-provider-graph-agent";
+const MCP_WRITE_AGENT_ID: &str = "hyprduck-mcp-write-agent";
 const BRAIN_LOCK_DIRECTORY_NAME: &str = ".brain.lock";
 const PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS: u64 = 300;
 
@@ -657,6 +661,19 @@ fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectR
 }
 
 fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let db_results = store.search_brain_from_db(
+        &request.scope.workspace_id,
+        &request.query,
+        request.limit.unwrap_or(10),
+    )?;
+    if !db_results.is_empty() {
+        return Ok(SearchBrainResponseData {
+            results: db_results,
+        });
+    }
+
     let reader = BrainReader::open(&request.scope)?;
     Ok(SearchBrainResponseData {
         results: reader.search(&request.query, request.limit.unwrap_or(10)),
@@ -664,7 +681,33 @@ fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainRespons
 }
 
 fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(mut response) = store.read_source_from_db(
+        &request.scope.workspace_id,
+        &request.source_id,
+        request.include_local_paths,
+    )? {
+        if request.include_local_paths {
+            if let Ok(reader) = BrainReader::open(&request.scope) {
+                enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
+            }
+            expand_read_source_local_paths(&mut response, &root);
+        }
+        return Ok(response);
+    }
     let reader = BrainReader::open(&request.scope)?;
+    if let Some(mut response) = store.read_source_from_db(
+        &request.scope.workspace_id,
+        &request.source_id,
+        request.include_local_paths,
+    )? {
+        if request.include_local_paths {
+            enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
+            expand_read_source_local_paths(&mut response, &root);
+        }
+        return Ok(response);
+    }
     let source = reader
         .snapshot
         .sources
@@ -691,11 +734,15 @@ fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseDa
         .filter(|evidence| evidence.source_id.as_deref() == Some(source.source_id.as_str()))
         .cloned()
         .collect();
-    Ok(ReadSourceResponseData {
+    let mut response = ReadSourceResponseData {
         source,
         wiki_page,
         evidence,
-    })
+    };
+    if !request.include_local_paths {
+        redact_read_source_agent_paths(&mut response);
+    }
+    Ok(response)
 }
 
 fn handle_read_page_evidence(
@@ -703,6 +750,23 @@ fn handle_read_page_evidence(
 ) -> Result<ReadPageEvidenceResponseData> {
     if request.page == Some(0) {
         bail!("argument page must be a positive 1-based integer");
+    }
+
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(mut response) = store.read_page_evidence_from_db(
+        &request.scope.workspace_id,
+        &request.source_id,
+        request.page,
+        request.include_local_paths,
+    )? {
+        if request.include_local_paths {
+            if let Ok(reader) = BrainReader::open(&request.scope) {
+                enrich_page_evidence_with_local_paths(&mut response, &reader, &request.source_id);
+            }
+            expand_page_evidence_local_paths(&mut response, &root);
+        }
+        return Ok(response);
     }
 
     let reader = BrainReader::open(&request.scope)?;
@@ -744,20 +808,213 @@ fn handle_read_page_evidence(
             .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
     });
 
-    Ok(ReadPageEvidenceResponseData {
+    let mut response = ReadPageEvidenceResponseData {
         source,
         evidence,
         warnings: artifact_metadata.warnings,
-    })
+    };
+    if !request.include_local_paths {
+        redact_page_evidence_agent_paths(&mut response);
+    }
+    Ok(response)
+}
+
+fn redact_read_source_agent_paths(response: &mut ReadSourceResponseData) {
+    redact_source_record_agent_paths(&mut response.source);
+    for evidence in &mut response.evidence {
+        redact_optional_agent_path(&mut evidence.source_path);
+        redact_optional_agent_path(&mut evidence.markdown_path);
+        redact_optional_agent_path(&mut evidence.image_path);
+    }
+}
+
+fn redact_page_evidence_agent_paths(response: &mut ReadPageEvidenceResponseData) {
+    redact_source_record_agent_paths(&mut response.source);
+    for evidence in &mut response.evidence {
+        redact_optional_agent_path(&mut evidence.markdown_path);
+        redact_optional_agent_path(&mut evidence.image_path);
+    }
+}
+
+fn redact_source_record_agent_paths(source: &mut SourceRecord) {
+    source.original_path = redact_agent_path(&source.original_path);
+    source.source_path = redact_agent_path(&source.source_path);
+    source.markdown_path = redact_agent_path(&source.markdown_path);
+}
+
+fn redact_optional_agent_path(value: &mut Option<String>) {
+    if let Some(path) = value {
+        *path = redact_agent_path(path);
+    }
+}
+
+fn redact_agent_path(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    Path::new(value)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<redacted>".into())
+}
+
+fn enrich_read_source_with_local_paths(
+    response: &mut ReadSourceResponseData,
+    reader: &BrainReader,
+    source_id: &str,
+) {
+    if let Some(source) = reader
+        .snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+    {
+        response.source.original_path = source.original_path.clone();
+        response.source.source_path = source.source_path.clone();
+        response.source.markdown_path = source.markdown_path.clone();
+    }
+
+    let evidence_by_id = reader
+        .snapshot
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    for evidence in &mut response.evidence {
+        if let Some(raw) = evidence_by_id.get(evidence.id.as_str()) {
+            evidence.source_path = raw.source_path.clone();
+            evidence.markdown_path = raw.markdown_path.clone();
+            evidence.image_path = raw.image_path.clone();
+        }
+    }
+}
+
+fn expand_read_source_local_paths(response: &mut ReadSourceResponseData, workspace_root: &Path) {
+    expand_source_record_local_paths(&mut response.source, workspace_root);
+    for evidence in &mut response.evidence {
+        let source_id = evidence
+            .source_id
+            .as_deref()
+            .unwrap_or(response.source.source_id.as_str());
+        expand_optional_path(
+            &mut evidence.source_path,
+            workspace_root,
+            &["sources", source_id],
+        );
+        expand_optional_path(
+            &mut evidence.markdown_path,
+            workspace_root,
+            &["artifacts", source_id, "pages"],
+        );
+        expand_optional_path(
+            &mut evidence.image_path,
+            workspace_root,
+            &["artifacts", source_id, "images"],
+        );
+    }
+}
+
+fn enrich_page_evidence_with_local_paths(
+    response: &mut ReadPageEvidenceResponseData,
+    reader: &BrainReader,
+    source_id: &str,
+) {
+    if let Some(source) = reader
+        .snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+    {
+        response.source.original_path = source.original_path.clone();
+        response.source.source_path = source.source_path.clone();
+        response.source.markdown_path = source.markdown_path.clone();
+    }
+
+    let evidence_by_id = reader
+        .snapshot
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    for evidence in &mut response.evidence {
+        if let Some(raw) = evidence_by_id.get(evidence.evidence_ref.as_str()) {
+            evidence.markdown_path = raw.markdown_path.clone();
+            evidence.image_path = raw.image_path.clone();
+        }
+    }
+}
+
+fn expand_page_evidence_local_paths(
+    response: &mut ReadPageEvidenceResponseData,
+    workspace_root: &Path,
+) {
+    expand_source_record_local_paths(&mut response.source, workspace_root);
+    let source_id = response.source.source_id.as_str();
+    for evidence in &mut response.evidence {
+        expand_optional_path(
+            &mut evidence.markdown_path,
+            workspace_root,
+            &["artifacts", source_id, "pages"],
+        );
+        expand_optional_path(
+            &mut evidence.image_path,
+            workspace_root,
+            &["artifacts", source_id, "images"],
+        );
+    }
+}
+
+fn expand_source_record_local_paths(source: &mut SourceRecord, workspace_root: &Path) {
+    expand_string_path(&mut source.original_path, workspace_root, &[]);
+    expand_string_path(
+        &mut source.source_path,
+        workspace_root,
+        &["sources", source.source_id.as_str()],
+    );
+    expand_string_path(
+        &mut source.markdown_path,
+        workspace_root,
+        &["artifacts", source.source_id.as_str()],
+    );
+}
+
+fn expand_optional_path(value: &mut Option<String>, workspace_root: &Path, segments: &[&str]) {
+    if let Some(path) = value {
+        expand_string_path(path, workspace_root, segments);
+    }
+}
+
+fn expand_string_path(value: &mut String, workspace_root: &Path, segments: &[&str]) {
+    if value.is_empty() || value == "[redacted-local-path]" || Path::new(value).is_absolute() {
+        return;
+    }
+    let mut path = workspace_root.to_path_buf();
+    for segment in segments {
+        path.push(segment);
+    }
+    path.push(value.as_str());
+    *value = path.to_string_lossy().into_owned();
 }
 
 fn handle_read_wiki_page(request: ReadWikiPageRequest) -> Result<ReadWikiPageResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(page) = store.read_wiki_page_from_db(&request.scope.workspace_id, &request.path)? {
+        return Ok(ReadWikiPageResponseData { page });
+    }
     let reader = BrainReader::open(&request.scope)?;
     let page = reader.read_wiki_page(&request.path)?;
     Ok(ReadWikiPageResponseData { page })
 }
 
 fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    if let Some(response) =
+        store.read_node_from_db(&request.scope.workspace_id, &request.node_id)?
+    {
+        return Ok(response);
+    }
     let reader = BrainReader::open(&request.scope)?;
     let node = reader
         .snapshot
@@ -827,6 +1084,21 @@ fn handle_get_context_pack(request: GetContextPackRequest) -> Result<GetContextP
         generated_at,
         &artifact_metadata,
     );
+    let context_pack_v1 = if request.selected_node_id.is_none() {
+        let root = resolve_brain_workspace_root(&request.scope)?;
+        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+        store
+            .assemble_context_pack_v1_from_db(
+                &request.scope.workspace_id,
+                &request.query,
+                budget,
+                context_pack_v1.pack_id.clone(),
+                context_pack_v1.generated_at.clone(),
+            )
+            .unwrap_or(context_pack_v1)
+    } else {
+        context_pack_v1
+    };
     let persisted_context_pack_path = if request.persist {
         Some(persist_context_pack_v1(&request.scope, &context_pack_v1)?)
     } else {
@@ -995,11 +1267,16 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHealthResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    let knowledge_store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    let knowledge_store_report =
+        brain_knowledge_store_report(&knowledge_store, &request.scope.workspace_id)?;
     let repo = BrainArtifactRepository::new(root.clone());
     if !repo.brain_manifest_path().exists() {
         return Ok(GetBrainHealthResponseData {
             status: BrainHealthStatus::Clean,
             attention_count: 0,
+            governance: Some(brain_governance_report()),
+            knowledge_store: Some(knowledge_store_report),
             source_reports: Vec::new(),
             recent_events: Vec::new(),
         });
@@ -1030,8 +1307,62 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             BrainHealthStatus::AttentionNeeded
         },
         attention_count,
+        governance: Some(brain_governance_report()),
+        knowledge_store: Some(knowledge_store_report),
         source_reports,
         recent_events,
+    })
+}
+
+fn brain_governance_report() -> BrainGovernanceReport {
+    BrainGovernanceReport {
+        storage_locality: "local_workspace".into(),
+        interaction_surface: "desktop_mcp".into(),
+        evidence_governed: true,
+        mutating_tools_require_evidence: true,
+        local_path_disclosure_default: "redacted".into(),
+    }
+}
+
+fn brain_knowledge_store_report(
+    knowledge_store: &KnowledgeStore,
+    workspace_id: &str,
+) -> Result<BrainKnowledgeStoreReport> {
+    let health = knowledge_store.health()?;
+    let summary = knowledge_store.state_summary(workspace_id)?;
+    Ok(BrainKnowledgeStoreReport {
+        canonical_storage: "sqlite+graphqlite".into(),
+        primary_graph_store: "graphqlite".into(),
+        pure_sqlite_relational_graph_rejected: true,
+        optional_graphqlite_acceleration_rejected: true,
+        graph_store_mode: "required_primary".into(),
+        graph_native_query_surface: "graphqlite_cypher".into(),
+        migration_mode: "single_db_first_release".into(),
+        long_dual_write_transition_rejected: true,
+        db_schema_version: health.db_schema_version,
+        graph_schema_version: health.graph_schema_version,
+        graphqlite_loaded: health.graphqlite_loaded,
+        graphqlite_transactional: health.graphqlite_transactional,
+        graphqlite_release_gate: if health.graphqlite_loaded && health.graphqlite_transactional {
+            "passed".into()
+        } else {
+            "blocked".into()
+        },
+        release_blocked_without_graphqlite: true,
+        migration_blast_radius: "high".into(),
+        broad_verification_required: true,
+        json_artifacts_canonical: false,
+        json_artifact_role: "migration_export_debug_compat".into(),
+        vector_search_enabled: false,
+        vector_search_policy: "defer_until_db_graphqlite_read_paths_stabilize".into(),
+        checkpoint_rollback_api_enabled: false,
+        checkpoint_rollback_policy: "defer_until_checkpoints_reliably_stored".into(),
+        graph_algorithms_enabled: false,
+        graph_algorithm_policy: "revisit_after_primary_graph_data_stabilizes".into(),
+        evidence_item_count: summary.evidence_item_count,
+        wiki_page_count: summary.wiki_page_count,
+        graph_node_count: summary.graph_node_count,
+        graph_relation_count: summary.graph_relation_count,
     })
 }
 
@@ -1049,6 +1380,7 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
 
     let now = unix_timestamp_seconds();
     let proposal_id = format!("prop-{}", Uuid::now_v7().as_simple());
+    let approval = write_proposal_approval_policy(&request.content_type, &request.body);
     let proposal = AgentWriteProposal {
         proposal_id: proposal_id.clone(),
         content_type: request.content_type,
@@ -1057,7 +1389,29 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
         evidence_refs: request.evidence_refs,
         created_at: now,
         workspace_id: request.scope.workspace_id,
+        requires_user_approval: approval.requires_user_approval,
+        approval_reason: approval.reason,
     };
+    let status = write_proposal_status(&proposal);
+    let proposal_json =
+        serde_json::to_string(&proposal).context("failed encoding agent write proposal")?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+    store.persist_agent_write_proposal(&AgentWriteProposalRecord {
+        proposal_id: proposal.proposal_id.clone(),
+        workspace_id: proposal.workspace_id.clone(),
+        content_type: proposal.content_type.clone(),
+        title: proposal.title.clone(),
+        body: proposal.body.clone(),
+        evidence_refs: proposal.evidence_refs.clone(),
+        actor_id: MCP_WRITE_AGENT_ID.into(),
+        validation_status: "validated".into(),
+        requires_user_approval: proposal.requires_user_approval,
+        approval_reason: proposal.approval_reason.clone(),
+        approval_status: status.clone(),
+        proposal_json,
+        created_at: now as i64,
+        updated_at: now as i64,
+    })?;
     write_json_pretty(
         &writer
             .root()
@@ -1068,7 +1422,7 @@ fn handle_write_propose(request: WriteProposeRequest) -> Result<WriteProposeResp
 
     Ok(WriteProposeResponseData {
         proposal_id,
-        status: "pending".into(),
+        status,
         created_at: now,
     })
 }
@@ -1077,17 +1431,16 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
     validate_proposal_id(&request.proposal_id)?;
     let root = resolve_brain_workspace_root(&request.scope)?;
     let writer = BrainWorkspaceWriter::open(root.clone())?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposal_path = root
         .join("proposals")
         .join(format!("{}.json", request.proposal_id));
-    if !proposal_path.exists() {
-        bail!(
-            "proposal {} was not found (already committed or rejected)",
-            request.proposal_id
-        );
-    }
-
-    let proposal: AgentWriteProposal = read_json_artifact(&proposal_path)?;
+    let proposal = read_agent_write_proposal(
+        &store,
+        &root,
+        &request.scope.workspace_id,
+        &request.proposal_id,
+    )?;
     validate_committable_proposal(&proposal, &request)?;
 
     let now = unix_timestamp_seconds();
@@ -1115,7 +1468,7 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
         operation_type: Some("agent_session_write".into()),
         actor: BrainActor {
             actor_type: BrainActorType::Agent,
-            actor_id: "hyprduck-mcp-write-agent".into(),
+            actor_id: MCP_WRITE_AGENT_ID.into(),
         },
         source_refs: Vec::new(),
         source_markdown_refs: Vec::new(),
@@ -1135,6 +1488,12 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
         created_at: now,
     };
 
+    store.record_agent_write_commit(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        &event,
+        now as i64,
+    )?;
     writer.repo().append_event(&event)?;
     let mut memories = writer.repo().read_memory_records()?;
     if let Some(existing) = memories.iter_mut().find(|m| m.memory_id == memory_id) {
@@ -1149,8 +1508,15 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
             .then_with(|| left.memory_id.cmp(&right.memory_id))
     });
     writer.repo().write_memory_records(&memories)?;
-
-    fs::remove_file(&proposal_path).ok();
+    match fs::remove_file(&proposal_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed removing committed proposal file {proposal_path:?}")
+            });
+        }
+    }
 
     Ok(WriteCommitResponseData {
         event_id,
@@ -1165,6 +1531,7 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
         match handle_write_commit(WriteCommitRequest {
             scope: request.scope.clone(),
             proposal_id: proposal_id.clone(),
+            user_approved: false,
         }) {
             Ok(response) => results.push(WriteCommitResultItem {
                 proposal_id: proposal_id.clone(),
@@ -1187,20 +1554,32 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
 
 fn handle_write_list(request: WriteListRequest) -> Result<WriteListResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposals_dir = root.join("proposals");
+    let mut proposals = store
+        .list_pending_agent_write_proposals(&request.scope.workspace_id)?
+        .into_iter()
+        .map(write_proposal_summary_from_record)
+        .collect::<Vec<_>>();
+    let mut seen = proposals
+        .iter()
+        .map(|proposal| proposal.proposal_id.clone())
+        .collect::<BTreeSet<_>>();
     if !proposals_dir.exists() {
-        return Ok(WriteListResponseData {
-            proposals: Vec::new(),
-        });
+        return Ok(WriteListResponseData { proposals });
     }
-    let mut proposals = Vec::new();
     for entry in fs::read_dir(&proposals_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "json") {
             if let Ok(proposal) = read_json_artifact::<Value>(&path) {
+                let proposal_id = proposal["proposalId"].as_str().unwrap_or("").to_string();
+                if proposal_id.is_empty() || seen.contains(&proposal_id) {
+                    continue;
+                }
+                seen.insert(proposal_id.clone());
                 proposals.push(WriteProposalSummary {
-                    proposal_id: proposal["proposalId"].as_str().unwrap_or("").to_string(),
+                    proposal_id,
                     content_type: proposal["contentType"]
                         .as_str()
                         .unwrap_or("memory")
@@ -1227,9 +1606,16 @@ fn handle_write_reject(request: WriteRejectRequest) -> Result<WriteRejectRespons
     validate_proposal_id(&request.proposal_id)?;
     let root = resolve_brain_workspace_root(&request.scope)?;
     let _writer = BrainWorkspaceWriter::open(root.clone())?;
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
     let proposal_path = root
         .join("proposals")
         .join(format!("{}.json", request.proposal_id));
+    store.update_agent_write_proposal_status(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        "rejected",
+        unix_timestamp_seconds() as i64,
+    )?;
     if proposal_path.exists() {
         fs::remove_file(&proposal_path)?;
     }
@@ -1237,6 +1623,65 @@ fn handle_write_reject(request: WriteRejectRequest) -> Result<WriteRejectRespons
         proposal_id: request.proposal_id,
         status: "rejected".into(),
     })
+}
+
+fn read_agent_write_proposal(
+    store: &KnowledgeStore,
+    root: &Path,
+    workspace_id: &str,
+    proposal_id: &str,
+) -> Result<AgentWriteProposal> {
+    if let Some(record) = store.load_agent_write_proposal(workspace_id, proposal_id)? {
+        if record.approval_status != "pending" && record.approval_status != "pending_user_approval"
+        {
+            bail!(
+                "proposal {} was not found (already committed or rejected)",
+                proposal_id
+            );
+        }
+        if record.validation_status != "validated" {
+            bail!(
+                "proposal {} is not committable because validation status is {}",
+                proposal_id,
+                record.validation_status
+            );
+        }
+        return Ok(agent_write_proposal_from_record(record));
+    }
+
+    let proposal_path = root.join("proposals").join(format!("{proposal_id}.json"));
+    if !proposal_path.exists() {
+        bail!(
+            "proposal {} was not found (already committed or rejected)",
+            proposal_id
+        );
+    }
+    read_json_artifact(&proposal_path)
+}
+
+fn agent_write_proposal_from_record(record: AgentWriteProposalRecord) -> AgentWriteProposal {
+    AgentWriteProposal {
+        proposal_id: record.proposal_id,
+        content_type: record.content_type,
+        title: record.title,
+        body: record.body,
+        evidence_refs: record.evidence_refs,
+        created_at: record.created_at.max(0) as u64,
+        workspace_id: record.workspace_id,
+        requires_user_approval: record.requires_user_approval,
+        approval_reason: record.approval_reason,
+    }
+}
+
+fn write_proposal_summary_from_record(record: AgentWriteProposalRecord) -> WriteProposalSummary {
+    WriteProposalSummary {
+        proposal_id: record.proposal_id,
+        content_type: record.content_type,
+        title: record.title,
+        body: record.body,
+        evidence_refs: record.evidence_refs,
+        created_at: record.created_at.max(0) as u64,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1249,6 +1694,10 @@ struct AgentWriteProposal {
     evidence_refs: Vec<String>,
     created_at: u64,
     workspace_id: String,
+    #[serde(default)]
+    requires_user_approval: bool,
+    #[serde(default)]
+    approval_reason: Option<String>,
 }
 
 fn validate_proposal_id(proposal_id: &str) -> Result<()> {
@@ -1263,8 +1712,35 @@ fn validate_proposal_id(proposal_id: &str) -> Result<()> {
 
 fn validate_write_content_type(content_type: &str) -> Result<()> {
     match content_type.trim() {
-        "memory" => Ok(()),
-        other => bail!("unsupported contentType {other}; supported contentType: memory"),
+        "memory" | "wiki_page" | "graph_change" | "evidence_refresh" | "link_repair" => Ok(()),
+        other => bail!(
+            "unsupported contentType {other}; supported contentTypes: memory, wiki_page, graph_change, evidence_refresh, link_repair"
+        ),
+    }
+}
+
+struct WriteApprovalPolicy {
+    requires_user_approval: bool,
+    reason: Option<String>,
+}
+
+fn write_proposal_status(proposal: &AgentWriteProposal) -> String {
+    if proposal.requires_user_approval {
+        "pending_user_approval".into()
+    } else {
+        "pending".into()
+    }
+}
+
+fn write_proposal_approval_policy(content_type: &str, body: &str) -> WriteApprovalPolicy {
+    let semantic_content = matches!(content_type.trim(), "wiki_page" | "graph_change");
+    let large_body = body.chars().count() > 2_000 || body.lines().count() > 40;
+    let requires_user_approval = semantic_content && large_body;
+    WriteApprovalPolicy {
+        requires_user_approval,
+        reason: requires_user_approval.then(|| {
+            "large semantic wiki/graph changes require explicit user approval".to_string()
+        }),
     }
 }
 
@@ -1301,6 +1777,21 @@ fn validate_committable_proposal(
         bail!("proposal workspaceId does not match request workspaceId");
     }
     validate_write_content_type(&proposal.content_type)?;
+    if proposal.requires_user_approval && !request.user_approved {
+        bail!(
+            "{}",
+            proposal
+                .approval_reason
+                .as_deref()
+                .unwrap_or("proposal requires explicit user approval before commit")
+        );
+    }
+    if !is_committable_agent_write_content_type(&proposal.content_type) {
+        bail!(
+            "committing contentType {} is not implemented yet",
+            proposal.content_type
+        );
+    }
     if proposal.title.trim().is_empty() {
         bail!("proposal title must not be empty");
     }
@@ -1314,6 +1805,13 @@ fn validate_committable_proposal(
         &snapshot,
         &request.scope.workspace_id,
         &proposal.evidence_refs,
+    )
+}
+
+fn is_committable_agent_write_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type.trim(),
+        "memory" | "evidence_refresh" | "link_repair"
     )
 }
 
@@ -2571,19 +3069,28 @@ fn join_or_none(values: &[String]) -> String {
 
 fn resolve_brain_workspace_root(scope: &BrainReadScope) -> Result<PathBuf> {
     validate_workspace_id(&scope.workspace_id)?;
-    if let Some(root_dir) = &scope.root_dir {
-        return resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id);
-    }
-    if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
-        return resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id);
-    }
-    if let Some(application_support_root) = dirs::data_local_dir() {
-        return resolve_workspace_root_from_base(
+    let root = if let Some(root_dir) = &scope.root_dir {
+        resolve_workspace_root_from_base(&PathBuf::from(root_dir), &scope.workspace_id)?
+    } else if let Some(output_root) = std::env::var_os("HYPRDUCK_OUTPUT_DIR") {
+        resolve_workspace_root_from_base(&PathBuf::from(output_root), &scope.workspace_id)?
+    } else if let Some(application_support_root) = dirs::data_local_dir() {
+        resolve_workspace_root_from_base(
             &application_support_root.join("HyprDuck"),
             &scope.workspace_id,
-        );
-    }
-    resolve_workspace_root_from_base(&std::env::temp_dir().join("HyprDuck"), &scope.workspace_id)
+        )?
+    } else {
+        resolve_workspace_root_from_base(
+            &std::env::temp_dir().join("HyprDuck"),
+            &scope.workspace_id,
+        )?
+    };
+    ensure_workspace_knowledge_store(&root)?;
+    Ok(root)
+}
+
+fn ensure_workspace_knowledge_store(root: &Path) -> Result<()> {
+    KnowledgeStore::open(KnowledgeStore::default_path_for_root(root))?.health()?;
+    Ok(())
 }
 
 fn validate_workspace_id(workspace_id: &str) -> Result<()> {
@@ -2648,12 +3155,24 @@ struct LatestReadableGraphSnapshotMarker {
     snapshot_id: String,
     event_id: String,
     source_ingest_id: String,
+    #[serde(default = "default_materialized_artifact_role")]
+    artifact_role: String,
+    #[serde(default = "default_canonical_state_store")]
+    canonical_state_store: String,
     materialized_at: u64,
     published_at: u64,
     #[serde(default)]
     source_markdown_refs: Vec<String>,
     #[serde(default)]
     materialized_files: Vec<String>,
+}
+
+fn default_materialized_artifact_role() -> String {
+    MATERIALIZED_ARTIFACT_ROLE_MIGRATION_INPUT.into()
+}
+
+fn default_canonical_state_store() -> String {
+    CANONICAL_STATE_STORE_SQLITE_GRAPHQLITE.into()
 }
 
 fn capture_materialized_file_snapshot(root: &Path) -> Result<MaterializedFileSnapshot> {
@@ -2713,48 +3232,6 @@ fn should_skip_materialized_snapshot_path(path: &Path) -> bool {
         || normalized.starts_with("runs/")
         || normalized.contains("/.")
         || normalized.starts_with('.')
-}
-
-fn persist_materialized_snapshot(
-    root: &Path,
-    snapshot_id: &str,
-    snapshot: &MaterializedFileSnapshot,
-) -> Result<()> {
-    let snapshot_root = root.join("snapshots").join(snapshot_id).join("files");
-    for (relative_path, bytes) in &snapshot.files {
-        write_file_atomic(&snapshot_root.join(relative_path), bytes)?;
-    }
-    write_json_pretty(
-        &root
-            .join("snapshots")
-            .join(snapshot_id)
-            .join("manifest.json"),
-        &json!({
-            "snapshotId": snapshot_id,
-            "fileCount": snapshot.files.len(),
-            "createdAt": unix_timestamp_seconds(),
-        }),
-    )
-}
-
-fn restore_materialized_file_snapshot(
-    root: &Path,
-    snapshot: &MaterializedFileSnapshot,
-) -> Result<()> {
-    let after = capture_materialized_file_snapshot(root)?;
-    for relative_path in after.files.keys() {
-        if !snapshot.files.contains_key(relative_path) {
-            let path = root.join(relative_path);
-            if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("failed removing {}", path.display()))?;
-            }
-        }
-    }
-    for (relative_path, bytes) in &snapshot.files {
-        write_file_atomic(&root.join(relative_path), bytes)?;
-    }
-    Ok(())
 }
 
 fn changed_materialized_files(
@@ -2872,14 +3349,16 @@ mod provider_failure_tests {
 
 fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 11 && columns.len() != 12 {
+    if !matches!(columns.len(), 11 | 12 | 13 | 14) {
         bail!(
-            "expected 11 or 12 source summary columns from sqlite, got {}",
+            "expected 11, 12, 13, or 14 source summary columns from sqlite, got {}",
             columns.len()
         );
     }
+    let readiness_offset = (columns.len() >= 13).then_some(11);
+    let manifest_index = if columns.len() >= 13 { 13 } else { 11 };
     let manifest = columns
-        .get(11)
+        .get(manifest_index)
         .map(|encoded| decode_source_manifest_snapshot(encoded))
         .transpose()?;
     Ok(SourceSummary {
@@ -2899,6 +3378,14 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
         failed_count: columns[9]
             .parse()
             .context("failed to parse source failed_count")?,
+        citation_ready: readiness_offset
+            .map(|offset| sqlite_bool(columns[offset]))
+            .transpose()?
+            .unwrap_or_else(|| columns[8].parse::<usize>().unwrap_or_default() > 0),
+        graph_ready: readiness_offset
+            .map(|offset| sqlite_bool(columns[offset + 1]))
+            .transpose()?
+            .unwrap_or(false),
         description: manifest
             .as_ref()
             .map(|manifest| manifest.description.clone())
@@ -2919,14 +3406,16 @@ fn source_summary_from_sqlite_row(line: &str) -> Result<SourceSummary> {
 
 fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
     let columns: Vec<&str> = line.split('|').collect();
-    if columns.len() != 13 && columns.len() != 14 {
+    if !matches!(columns.len(), 13 | 14 | 15 | 16) {
         bail!(
-            "expected 13 or 14 stored source columns from sqlite, got {}",
+            "expected 13, 14, 15, or 16 stored source columns from sqlite, got {}",
             columns.len()
         );
     }
+    let readiness_offset = (columns.len() >= 15).then_some(13);
+    let manifest_index = if columns.len() >= 15 { 15 } else { 13 };
     let manifest = columns
-        .get(13)
+        .get(manifest_index)
         .map(|encoded| decode_source_manifest_snapshot(encoded))
         .transpose()?;
     Ok(StoredSourceRow {
@@ -2947,6 +3436,14 @@ fn stored_source_row_from_sqlite_row(line: &str) -> Result<StoredSourceRow> {
             failed_count: columns[9]
                 .parse()
                 .context("failed to parse source failed_count")?,
+            citation_ready: readiness_offset
+                .map(|offset| sqlite_bool(columns[offset]))
+                .transpose()?
+                .unwrap_or_else(|| columns[8].parse::<usize>().unwrap_or_default() > 0),
+            graph_ready: readiness_offset
+                .map(|offset| sqlite_bool(columns[offset + 1]))
+                .transpose()?
+                .unwrap_or(false),
             description: manifest
                 .as_ref()
                 .map(|manifest| manifest.description.clone())
@@ -3046,6 +3543,14 @@ fn decode_sqlite_hex_text(value: &str) -> Result<String> {
     String::from_utf8(bytes).context("sqlite hex text was not valid UTF-8")
 }
 
+fn sqlite_bool(value: &str) -> Result<bool> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => bail!("expected sqlite boolean 0 or 1, got {other}"),
+    }
+}
+
 fn ingest_status_slug(status: &IngestStatus) -> &'static str {
     match status {
         IngestStatus::Added => "added",
@@ -3132,8 +3637,14 @@ impl KnowledgeProjectStore {
         let root = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .ok_or_else(|| anyhow!("failed to resolve local data directory"))?;
-        let new_path = root.join("HyprDuck/knowledge.sqlite3");
-        let legacy_path = root.join("HyprDuck/knowledge.sqlite3");
+        Self::from_data_root(&root)
+    }
+
+    fn from_data_root(root: &Path) -> Result<Self> {
+        let store_dir = root.join("HyprDuck");
+        let new_path = KnowledgeStore::default_path_for_root(&store_dir);
+        let legacy_path = store_dir.join("knowledge.sqlite3");
+        migrate_legacy_project_store(&legacy_path, &new_path)?;
         Ok(Self {
             path: if new_path.exists() {
                 new_path
@@ -3157,6 +3668,9 @@ impl KnowledgeProjectStore {
         source_manifest: Option<&SourceArtifactManifest>,
     ) -> Result<()> {
         self.ensure_schema()?;
+        if let Some(source_manifest) = source_manifest {
+            self.save_source(project, source_manifest)?;
+        }
         let snapshot_json =
             serde_json::to_string(project).context("failed to encode knowledge project")?;
         let snapshot_base64 = base64::engine::general_purpose::STANDARD.encode(snapshot_json);
@@ -3190,7 +3704,6 @@ impl KnowledgeProjectStore {
         );
         self.run_sql(&sql)?;
         if let Some(source_manifest) = source_manifest {
-            self.save_source(project, source_manifest)?;
             self.materialize_workspace_brain_repo(&source_manifest.workspace_id)?;
         }
         Ok(())
@@ -3299,8 +3812,8 @@ impl KnowledgeProjectStore {
     fn load_sources(&self, workspace_id: &str) -> Result<Vec<SourceSummary>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, manifest_base64 \
-             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            "SELECT hex(sources.workspace_id), hex(sources.source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(sources.status), page_count, success_count, failed_count, sources.updated_at, COALESCE(import_jobs.citation_ready, CASE WHEN success_count > 0 THEN 1 ELSE 0 END), COALESCE(import_jobs.graph_ready, 0), manifest_base64 \
+             FROM sources LEFT JOIN import_jobs ON import_jobs.workspace_id = sources.workspace_id AND import_jobs.source_id = sources.source_id WHERE sources.workspace_id = '{}' ORDER BY sources.updated_at DESC;",
             escape_sqlite(workspace_id)
         );
         let output = self.run_sql(&sql)?;
@@ -3314,8 +3827,8 @@ impl KnowledgeProjectStore {
     fn load_source_rows(&self, workspace_id: &str) -> Result<Vec<StoredSourceRow>> {
         self.ensure_schema()?;
         let sql = format!(
-            "SELECT hex(workspace_id), hex(source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(status), page_count, success_count, failed_count, updated_at, hex(project_id), hex(manifest_path), manifest_base64 \
-             FROM sources WHERE workspace_id = '{}' ORDER BY updated_at DESC;",
+            "SELECT hex(sources.workspace_id), hex(sources.source_id), hex(original_path), hex(source_path), hex(markdown_path), hex(format), hex(sources.status), page_count, success_count, failed_count, sources.updated_at, hex(project_id), hex(manifest_path), COALESCE(import_jobs.citation_ready, CASE WHEN success_count > 0 THEN 1 ELSE 0 END), COALESCE(import_jobs.graph_ready, 0), manifest_base64 \
+             FROM sources LEFT JOIN import_jobs ON import_jobs.workspace_id = sources.workspace_id AND import_jobs.source_id = sources.source_id WHERE sources.workspace_id = '{}' ORDER BY sources.updated_at DESC;",
             escape_sqlite(workspace_id)
         );
         let output = self.run_sql(&sql)?;
@@ -3389,6 +3902,7 @@ impl KnowledgeProjectStore {
         project: &KnowledgeProject,
         manifest: &SourceArtifactManifest,
     ) -> Result<()> {
+        KnowledgeStore::open(self.path.clone())?.persist_source_manifest(project, manifest)?;
         let manifest_json =
             serde_json::to_string(manifest).context("failed to encode source manifest snapshot")?;
         let manifest_base64 = base64::engine::general_purpose::STANDARD.encode(manifest_json);
@@ -3483,6 +3997,7 @@ impl KnowledgeProjectStore {
             let workspace_root = fallback_workspace_root(&self.path, workspace_id);
             let mut snapshot = empty_replayed_brain_snapshot(workspace_id);
             snapshot.generated_at = unix_timestamp_seconds();
+            KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
             return write_materialized_brain_repo(&workspace_root, &snapshot);
         }
         let workspace_root = workspace_root_for_rows(&rows)
@@ -3501,6 +4016,7 @@ impl KnowledgeProjectStore {
             &existing_nodes,
             &existing_relations,
         );
+        KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
         write_materialized_brain_repo(&workspace_root, &snapshot)
     }
 
@@ -3509,6 +4025,7 @@ impl KnowledgeProjectStore {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed creating {}", parent.display()))?;
         }
+        KnowledgeStore::open(self.path.clone())?;
         self.run_sql(
             "CREATE TABLE IF NOT EXISTS projects (
                 project_id TEXT PRIMARY KEY,
@@ -3569,6 +4086,24 @@ impl KnowledgeProjectStore {
 
         String::from_utf8(output.stdout).context("sqlite3 output was not valid UTF-8")
     }
+}
+
+fn migrate_legacy_project_store(legacy_path: &Path, new_path: &Path) -> Result<()> {
+    if new_path.exists() || !legacy_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating {}", parent.display()))?;
+    }
+    fs::copy(legacy_path, new_path).with_context(|| {
+        format!(
+            "failed migrating legacy project store from {} to {}",
+            legacy_path.display(),
+            new_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn escape_sqlite(value: &str) -> String {

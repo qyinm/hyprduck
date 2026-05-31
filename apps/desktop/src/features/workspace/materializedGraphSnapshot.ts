@@ -2,6 +2,7 @@ import type {
   MaterializedGraphNodeRecord,
   MaterializedGraphRelationRecord,
   MaterializedGraphSnapshot,
+  MaterializedSourceRecord,
   WorkspaceAnswerResponse,
   WorkspaceEdgeDetail,
   WorkspaceEdgeSummary,
@@ -21,7 +22,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
   snapshot: MaterializedGraphSnapshot,
 ): WorkspaceProjectEnvelope {
   const displayableMaterializedNodes = snapshot.nodes.filter(
-    (node) => !isDerivedMarkdownSourceNode(snapshot, node),
+    (node) => !isHiddenGraphCanvasNode(snapshot, node),
   );
   const displayableNodeIds = new Set(displayableMaterializedNodes.map((node) => node.nodeId));
   const displayableEdges = snapshot.edges.filter(
@@ -399,21 +400,23 @@ function sourceBackingForNode(
   sourcePath: string | null,
   markdownPath: string | null,
 ) {
+  const source = sourceRecordForMaterializedNode(snapshot, node);
   return {
-    workspaceId: snapshot.workspaceId,
-    sourceId: node.sourceIds[0] ?? node.nodeId,
-    originalPath: sourcePath ?? node.label,
-    sourcePath: sourcePath ?? node.label,
-    markdownPath: markdownPath ?? sourcePath ?? node.label,
-    format: documentFormatFromPath(sourcePath ?? node.label),
-    status: "ingested" as const,
-    pageCount: 0,
-    successCount: 0,
-    failedCount: 0,
-    description: "Materialized source node",
-    userContext: "",
-    ingestInstruction: "",
-    updatedAt: node.updatedAt,
+    workspaceId: source?.workspaceId ?? snapshot.workspaceId,
+    sourceId: source?.sourceId ?? node.sourceIds[0] ?? node.nodeId,
+    originalPath: source?.originalPath ?? sourcePath ?? node.label,
+    sourcePath: source?.sourcePath ?? sourcePath ?? node.label,
+    markdownPath: source?.markdownPath ?? markdownPath ?? sourcePath ?? node.label,
+    format: source?.format ?? documentFormatFromPath(sourcePath ?? node.label),
+    status: source?.status ?? ("ingested" as const),
+    pageCount: source?.pageCount ?? 0,
+    successCount:
+      source?.successCount ?? (source?.status === "failed" ? 0 : (source?.pageCount ?? 0)),
+    failedCount: source?.failedCount ?? 0,
+    description: source?.description ?? "Materialized source node",
+    userContext: source?.userContext ?? "",
+    ingestInstruction: source?.ingestInstruction ?? "",
+    updatedAt: source?.updatedAt ?? node.updatedAt,
     manifestPath: null,
   };
 }
@@ -424,22 +427,47 @@ function sourceSummaryFromPath(
   index: number,
 ): WorkspaceSourceSummary {
   const sourceId = sourceIdForSourcePath(snapshot, sourcePath) ?? `source-${index + 1}`;
+  const source = sourceRecordForSourceId(snapshot, sourceId);
   return {
-    workspace_id: snapshot.workspaceId,
-    source_id: sourceId,
-    original_path: sourcePath,
-    source_path: sourcePath,
-    markdown_path: markdownPathForSourcePath(snapshot, sourcePath) ?? sourcePath,
-    format: documentFormatFromPath(sourcePath),
-    status: "ingested",
-    page_count: 0,
-    success_count: 0,
-    failed_count: 0,
-    description: "",
-    user_context: "",
-    ingest_instruction: "",
-    updated_at: snapshot.materializedAt,
+    workspace_id: source?.workspaceId ?? snapshot.workspaceId,
+    source_id: source?.sourceId ?? sourceId,
+    original_path: source?.originalPath ?? sourcePath,
+    source_path: source?.sourcePath ?? sourcePath,
+    markdown_path:
+      source?.markdownPath ?? markdownPathForSourcePath(snapshot, sourcePath) ?? sourcePath,
+    format: source?.format ?? documentFormatFromPath(sourcePath),
+    status: source?.status ?? "ingested",
+    page_count: source?.pageCount ?? 0,
+    success_count:
+      source?.successCount ?? (source?.status === "failed" ? 0 : (source?.pageCount ?? 0)),
+    failed_count: source?.failedCount ?? 0,
+    description: source?.description ?? "",
+    user_context: source?.userContext ?? "",
+    ingest_instruction: source?.ingestInstruction ?? "",
+    updated_at: source?.updatedAt ?? snapshot.materializedAt,
   };
+}
+
+function sourceRecordForMaterializedNode(
+  snapshot: MaterializedGraphSnapshot,
+  node: MaterializedGraphNodeRecord,
+) {
+  for (const sourceId of node.sourceIds) {
+    const source = sourceRecordForSourceId(snapshot, sourceId);
+    if (source) {
+      return source;
+    }
+  }
+  return node.nodeId.startsWith("source:")
+    ? sourceRecordForSourceId(snapshot, node.nodeId.slice("source:".length))
+    : null;
+}
+
+function sourceRecordForSourceId(
+  snapshot: MaterializedGraphSnapshot,
+  sourceId: string,
+): MaterializedSourceRecord | null {
+  return snapshot.sources?.find((source) => source.sourceId === sourceId) ?? null;
 }
 
 function sourceIdForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: string) {
@@ -458,6 +486,17 @@ function sourceIdForSourcePath(snapshot: MaterializedGraphSnapshot, sourcePath: 
 function visibleGraphSourcePaths(snapshot: MaterializedGraphSnapshot) {
   return snapshot.sourcePaths.filter(
     (sourcePath) => !isDerivedMarkdownPath(snapshot, sourcePath),
+  );
+}
+
+function isHiddenGraphCanvasNode(
+  snapshot: MaterializedGraphSnapshot,
+  node: MaterializedGraphNodeRecord,
+) {
+  return (
+    node.kind === "wiki_page" ||
+    node.kind === "claim" ||
+    isDerivedMarkdownSourceNode(snapshot, node)
   );
 }
 
