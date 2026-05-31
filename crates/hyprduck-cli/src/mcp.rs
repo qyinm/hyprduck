@@ -22,13 +22,7 @@ const ROOT_DIR_ENV: &str = "HYPRDUCK_MCP_ALLOW_ROOT_DIR";
 const ROOT_DIR_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_ROOTS";
 const IMPORT_ALLOWED_ROOTS_ENV: &str = "HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS";
 const PROPOSAL_ID_PATTERN: &str = "^prop-[0-9A-Fa-f]{32}$";
-const WRITE_CONTENT_TYPES: [&str; 5] = [
-    "memory",
-    "wiki_page",
-    "graph_change",
-    "evidence_refresh",
-    "link_repair",
-];
+const WRITE_CONTENT_TYPES: [&str; 3] = ["memory", "evidence_refresh", "link_repair"];
 
 pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
@@ -687,6 +681,7 @@ fn run_import_job(registry: &ImportJobRegistry, request: &ImportJobRequest) -> R
         scope: request.scope.clone(),
         source_id: compile.source_id.clone(),
         page: None,
+        include_local_paths: false,
     })?;
     let evidence_count = page_evidence.evidence.len();
     registry.update_active(&request.job_id, |job| {
@@ -880,11 +875,19 @@ fn call_tool(
         }
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
-            serde_json::to_value(client.read_source(ReadSourceRequest { scope, source_id })?)?
+            let include_local_paths =
+                optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
+            serde_json::to_value(client.read_source(ReadSourceRequest {
+                scope,
+                source_id,
+                include_local_paths,
+            })?)?
         }
         "read_page_evidence" => {
             let source_id = required_string(arguments, "sourceId")?;
             let page = optional_usize(arguments, "page")?;
+            let include_local_paths =
+                optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
             if page == Some(0) {
                 return Err(anyhow!("argument page must be a positive 1-based integer"));
             }
@@ -892,6 +895,7 @@ fn call_tool(
                 scope,
                 source_id,
                 page,
+                include_local_paths,
             })?)?
         }
         "read_wiki_page" => {
@@ -1820,7 +1824,7 @@ mod tests {
     #[test]
     fn mcp_write_arguments_reject_broad_or_unauditable_inputs() {
         assert!(validate_mcp_write_content_type("memory").is_ok());
-        assert!(validate_mcp_write_content_type("wiki_page").is_ok());
+        assert!(validate_mcp_write_content_type("wiki_page").is_err());
         assert!(validate_mcp_write_content_type("shell_command").is_err());
         assert!(validate_mcp_write_content_type("../memory").is_err());
 

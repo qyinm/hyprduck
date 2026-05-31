@@ -1,7 +1,5 @@
 use anyhow::{anyhow, Result};
-use hyprduck_engine_types::{
-    ReadGraphHistoryRequest, ReadRecentEventsRequest, ReconstructBrainRequest,
-};
+use hyprduck_engine_types::{ReadGraphHistoryRequest, ReadRecentEventsRequest};
 
 #[derive(Debug)]
 pub struct Cli {
@@ -71,7 +69,7 @@ impl Cli {
             Some("brain") => {
                 let subcommand = args
                     .next()
-                    .ok_or_else(|| anyhow!("usage: hyprduck brain <search|context-pack|event-history|graph-history|inspect-state|rollback-state>"))?;
+                    .ok_or_else(|| anyhow!("usage: hyprduck brain <search|context-pack|event-history|graph-history|inspect-state>"))?;
                 Some(Commands::Brain {
                     command: parse_brain_command(subcommand, args.collect())?,
                 })
@@ -436,42 +434,9 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                 selector,
             })
         }
-        "rollback-state" | "rollback" => {
-            let selector = match (snapshot_id, event_id, positional.first().cloned()) {
-                (Some(snapshot_id), None, _) => GraphStateSelector::Snapshot(snapshot_id),
-                (None, Some(event_id), _) => GraphStateSelector::Event(event_id),
-                (None, None, Some(snapshot_id)) => GraphStateSelector::Snapshot(snapshot_id),
-                (Some(_), Some(_), _) => {
-                    return Err(anyhow!("use only one of --snapshot or --event"))
-                }
-                (None, None, None) => {
-                    return Err(anyhow!(
-                        "hyprduck brain rollback-state needs --snapshot <id> or --event <id>"
-                    ))
-                }
-            };
-            Ok(BrainCommand::RollbackState {
-                history_request: ReadGraphHistoryRequest {
-                    scope: hyprduck_engine_types::BrainReadScope {
-                        workspace_id: workspace.clone(),
-                        root_dir: root_dir.clone(),
-                    },
-                    limit,
-                },
-                request: ReconstructBrainRequest {
-                    scope: hyprduck_engine_types::BrainReadScope {
-                        workspace_id: workspace,
-                        root_dir,
-                    },
-                    up_to_timestamp: None,
-                    up_to_materialized_version: None,
-                    up_to_event_id: None,
-                    output_root: None,
-                    write_materialized: true,
-                },
-                selector,
-            })
-        }
+        "rollback-state" | "rollback" => Err(anyhow!(
+            "checkpoint rollback is disabled in v1; use inspect-state for read-only review"
+        )),
         _ => Err(anyhow!("unknown brain subcommand: {subcommand}")),
     }
 }
@@ -543,11 +508,6 @@ pub enum BrainCommand {
     },
     InspectState {
         request: ReadGraphHistoryRequest,
-        selector: GraphStateSelector,
-    },
-    RollbackState {
-        history_request: ReadGraphHistoryRequest,
-        request: ReconstructBrainRequest,
         selector: GraphStateSelector,
     },
 }

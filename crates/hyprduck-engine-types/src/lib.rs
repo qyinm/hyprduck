@@ -512,6 +512,8 @@ pub struct SearchBrainResponseData {
 pub struct ReadSourceRequest {
     pub scope: BrainReadScope,
     pub source_id: SourceId,
+    #[serde(default)]
+    pub include_local_paths: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -531,6 +533,8 @@ pub struct ReadPageEvidenceRequest {
     pub source_id: SourceId,
     #[serde(default)]
     pub page: Option<usize>,
+    #[serde(default)]
+    pub include_local_paths: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2346,11 +2350,13 @@ mod tests {
             EngineRequest::ReadSource(ReadSourceRequest {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
+                include_local_paths: false,
             }),
             EngineRequest::ReadPageEvidence(ReadPageEvidenceRequest {
                 scope: scope.clone(),
                 source_id: "source-123".into(),
                 page: Some(1),
+                include_local_paths: false,
             }),
             EngineRequest::ReadContextPack(ReadContextPackRequest {
                 scope: scope.clone(),

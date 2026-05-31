@@ -635,10 +635,13 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .as_str()
         .expect("unredacted source text");
     let unredacted_source: Value = serde_json::from_str(text).expect("unredacted source payload");
-    assert!(unredacted_source["source"]["sourcePath"]
-        .as_str()
-        .expect("source path")
-        .contains(root_dir_arg.as_str()));
+    assert!(
+        unredacted_source["source"]["sourcePath"]
+            .as_str()
+            .expect("source path")
+            .contains(root_dir_arg.as_str()),
+        "{unredacted_source:#?}"
+    );
 
     write_message(
         &mut stdin,

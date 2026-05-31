@@ -1277,6 +1277,7 @@ fn read_page_evidence_resolves_source_evidence_index_metadata() {
         },
         source_id: source.source_id,
         page: Some(1),
+        include_local_paths: false,
     })
     .expect("page evidence");
 
@@ -1391,6 +1392,7 @@ fn read_page_evidence_rejects_cross_workspace_artifacts() {
         },
         source_id: source.source_id,
         page: Some(1),
+        include_local_paths: false,
     })
     .expect("page evidence");
 

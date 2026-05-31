@@ -368,6 +368,9 @@ impl KnowledgeStore {
             ))?;
 
             for page in &manifest.pages {
+                let markdown_path_redacted =
+                    page.markdown_path.as_deref().map(redact_path_for_agent);
+                let image_path_redacted = page.image_path.as_deref().map(redact_path_for_agent);
                 let plain_text = page
                     .plain_text_path
                     .as_deref()
@@ -386,8 +389,8 @@ impl KnowledgeStore {
                     source_id = sql_literal(&manifest.source_id),
                     page_index = page.index,
                     page_label = sql_literal(&page.label),
-                    markdown_path = sql_optional_literal(page.markdown_path.as_deref()),
-                    image_path = sql_optional_literal(page.image_path.as_deref()),
+                    markdown_path = sql_optional_literal(markdown_path_redacted.as_deref()),
+                    image_path = sql_optional_literal(image_path_redacted.as_deref()),
                     plain_text = sql_literal(&plain_text),
                     parse_warnings_json = sql_literal(&parse_warnings_json),
                 ))?;
@@ -1096,6 +1099,7 @@ impl KnowledgeStore {
         &self,
         workspace_id: &str,
         source_id: &str,
+        include_local_paths: bool,
     ) -> Result<Option<ReadSourceResponseData>> {
         let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
         let Some(source) = load_context_pack_source_row(&graph, workspace_id, source_id)? else {
@@ -1104,7 +1108,7 @@ impl KnowledgeStore {
         let evidence = load_evidence_refs_for_source(&graph, workspace_id, source_id, None)?;
         let wiki_page = load_wiki_page_for_source(&graph, workspace_id, source_id)?;
         Ok(Some(ReadSourceResponseData {
-            source: source_record_from_context_row(source),
+            source: source_record_from_context_row(source, include_local_paths),
             wiki_page,
             evidence,
         }))
@@ -1116,6 +1120,7 @@ impl KnowledgeStore {
         workspace_id: &str,
         source_id: &str,
         page: Option<usize>,
+        include_local_paths: bool,
     ) -> Result<Option<ReadPageEvidenceResponseData>> {
         let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
         let Some(source) = load_context_pack_source_row(&graph, workspace_id, source_id)? else {
@@ -1149,7 +1154,7 @@ impl KnowledgeStore {
                 .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
         });
         Ok(Some(ReadPageEvidenceResponseData {
-            source: source_record_from_context_row(source),
+            source: source_record_from_context_row(source, include_local_paths),
             evidence,
             warnings: Vec::new(),
         }))
@@ -2253,13 +2258,28 @@ fn wiki_evidence_refs_source(
     Ok(false)
 }
 
-fn source_record_from_context_row(source: ContextPackSourceRow) -> SourceRecord {
+fn source_record_from_context_row(
+    source: ContextPackSourceRow,
+    include_local_paths: bool,
+) -> SourceRecord {
     SourceRecord {
         source_id: source.source_id,
         workspace_id: source.workspace_id,
-        original_path: source.original_path,
-        source_path: source.source_path,
-        markdown_path: source.markdown_path,
+        original_path: if include_local_paths {
+            source.original_path
+        } else {
+            source.original_path_redacted
+        },
+        source_path: if include_local_paths {
+            source.source_path
+        } else {
+            source.source_path_redacted
+        },
+        markdown_path: if include_local_paths {
+            source.markdown_path
+        } else {
+            source.markdown_path_redacted
+        },
         format: SourceFormat::from(source.format),
         status: SourceStatus::from(source.status),
         page_count: source.page_count.max(0) as usize,
@@ -3688,6 +3708,8 @@ struct SourcePageSnapshotRow {
     page_label: String,
     markdown_path_redacted: String,
     image_path_redacted: String,
+    plain_text: String,
+    parse_warnings_json: String,
     snippets: Vec<String>,
 }
 
@@ -3707,6 +3729,53 @@ fn persist_source_pages_snapshot_in_transaction(
                 .filter_map(|evidence| evidence.source_id.clone()),
         )
         .collect::<BTreeSet<_>>();
+    let mut pages = BTreeMap::<(String, usize), SourcePageSnapshotRow>::new();
+    for source_id in &source_ids {
+        let mut statement = sqlite
+            .prepare(
+                "SELECT page_index,
+                        page_label,
+                        COALESCE(markdown_path_redacted, ''),
+                        COALESCE(image_path_redacted, ''),
+                        plain_text,
+                        parse_warnings_json
+                 FROM source_pages
+                 WHERE source_id = ?1",
+            )
+            .with_context(|| {
+                format!("failed preparing source page preservation for {source_id}")
+            })?;
+        let mut rows = statement
+            .query([source_id.as_str()])
+            .with_context(|| format!("failed reading source pages for {source_id}"))?;
+        while let Some(row) = rows
+            .next()
+            .with_context(|| format!("failed reading source page row for {source_id}"))?
+        {
+            let page_index = row
+                .get::<_, i64>(0)
+                .context("read preserved source page index")?;
+            pages.insert(
+                (source_id.clone(), page_index.max(0) as usize),
+                SourcePageSnapshotRow {
+                    page_label: row.get(1).context("read preserved source page label")?,
+                    markdown_path_redacted: row
+                        .get(2)
+                        .context("read preserved source page markdown path")?,
+                    image_path_redacted: row
+                        .get(3)
+                        .context("read preserved source page image path")?,
+                    plain_text: row
+                        .get(4)
+                        .context("read preserved source page plain text")?,
+                    parse_warnings_json: row
+                        .get(5)
+                        .context("read preserved source page warnings")?,
+                    snippets: Vec::new(),
+                },
+            );
+        }
+    }
     for source_id in &source_ids {
         sqlite
             .execute("DELETE FROM source_pages WHERE source_id = ?1", [source_id])
@@ -3719,7 +3788,6 @@ fn persist_source_pages_snapshot_in_transaction(
             .with_context(|| format!("failed clearing source page FTS for {source_id}"))?;
     }
 
-    let mut pages = BTreeMap::<(String, usize), SourcePageSnapshotRow>::new();
     for evidence in &snapshot.evidence {
         let (Some(source_id), Some(page_index)) =
             (evidence.source_id.as_ref(), evidence.page_index)
@@ -3740,10 +3808,26 @@ fn persist_source_pages_snapshot_in_transaction(
                     .as_deref()
                     .map(redact_path_for_agent)
                     .unwrap_or_default(),
+                plain_text: String::new(),
+                parse_warnings_json: "[]".into(),
                 snippets: Vec::new(),
             });
         if row.page_label.is_empty() {
             row.page_label = evidence.page_label.clone();
+        }
+        if row.markdown_path_redacted.is_empty() {
+            row.markdown_path_redacted = evidence
+                .markdown_path
+                .as_deref()
+                .map(redact_path_for_agent)
+                .unwrap_or_default();
+        }
+        if row.image_path_redacted.is_empty() {
+            row.image_path_redacted = evidence
+                .image_path
+                .as_deref()
+                .map(redact_path_for_agent)
+                .unwrap_or_default();
         }
         if !evidence.snippet.trim().is_empty() {
             row.snippets.push(evidence.snippet.clone());
@@ -3751,7 +3835,13 @@ fn persist_source_pages_snapshot_in_transaction(
     }
 
     for ((source_id, page_index), row) in pages {
-        let plain_text = row.snippets.join("\n\n");
+        let plain_text = if !row.plain_text.trim().is_empty() {
+            row.plain_text
+        } else if row.snippets.is_empty() {
+            String::new()
+        } else {
+            row.snippets.join("\n\n")
+        };
         sqlite
             .execute(
                 "INSERT INTO source_pages (
@@ -3762,7 +3852,7 @@ fn persist_source_pages_snapshot_in_transaction(
                     image_path_redacted,
                     plain_text,
                     parse_warnings_json
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]')",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 (
                     source_id.as_str(),
                     page_index as i64,
@@ -3770,23 +3860,26 @@ fn persist_source_pages_snapshot_in_transaction(
                     row.markdown_path_redacted.as_str(),
                     row.image_path_redacted.as_str(),
                     plain_text.as_str(),
+                    row.parse_warnings_json.as_str(),
                 ),
             )
             .with_context(|| {
                 format!("failed inserting migrated source page {source_id}:{page_index}")
             })?;
-        sqlite
-            .execute(
-                "INSERT INTO source_page_fts (source_id, page_index, page_label, text)
+        if !plain_text.trim().is_empty() {
+            sqlite
+                .execute(
+                    "INSERT INTO source_page_fts (source_id, page_index, page_label, text)
                  VALUES (?1, ?2, ?3, ?4)",
-                (
-                    source_id.as_str(),
-                    page_index as i64,
-                    row.page_label.as_str(),
-                    plain_text.as_str(),
-                ),
-            )
-            .with_context(|| format!("failed indexing source page {source_id}:{page_index}"))?;
+                    (
+                        source_id.as_str(),
+                        page_index as i64,
+                        row.page_label.as_str(),
+                        plain_text.as_str(),
+                    ),
+                )
+                .with_context(|| format!("failed indexing source page {source_id}:{page_index}"))?;
+        }
     }
 
     Ok(())
@@ -3871,6 +3964,15 @@ fn persist_wiki_pages_snapshot_in_transaction(
     let sqlite = graph.connection().sqlite_connection();
     sqlite
         .execute(
+            "DELETE FROM wiki_sections
+             WHERE wiki_page_id IN (
+               SELECT wiki_page_id FROM wiki_revisions WHERE workspace_id = ?1
+             )",
+            [snapshot.workspace_id.as_str()],
+        )
+        .context("failed clearing wiki section rows")?;
+    sqlite
+        .execute(
             "DELETE FROM wiki_pages WHERE workspace_id = ?1",
             [snapshot.workspace_id.as_str()],
         )
@@ -3888,6 +3990,28 @@ fn persist_wiki_pages_snapshot_in_transaction(
         )
         .context("failed clearing wiki FTS rows")?;
     for page in &snapshot.wiki_pages {
+        let stored_page_id = {
+            let mut statement = sqlite
+                .prepare("SELECT workspace_id FROM wiki_pages WHERE wiki_page_id = ?1 LIMIT 1")
+                .context("failed preparing wiki page id scope query")?;
+            let mut rows = statement
+                .query([page.page_id.as_str()])
+                .context("failed checking existing wiki page id scope")?;
+            let existing_workspace = rows
+                .next()
+                .context("failed reading existing wiki page id scope")?
+                .map(|row| row.get::<_, String>(0))
+                .transpose()
+                .context("failed decoding existing wiki page id scope")?;
+            if existing_workspace
+                .as_deref()
+                .is_some_and(|existing| existing != snapshot.workspace_id)
+            {
+                format!("{}:{}", snapshot.workspace_id, page.page_id)
+            } else {
+                page.page_id.clone()
+            }
+        };
         let evidence_refs_json = serde_json::to_string(&page.evidence_refs)
             .context("failed encoding wiki evidence refs")?;
         let revision = 1_i64;
@@ -3907,7 +4031,7 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 (
-                    page.page_id.as_str(),
+                    stored_page_id.as_str(),
                     snapshot.workspace_id.as_str(),
                     page.path.as_str(),
                     page.title.as_str(),
@@ -3933,7 +4057,7 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 (
-                    page.page_id.as_str(),
+                    stored_page_id.as_str(),
                     revision,
                     snapshot.workspace_id.as_str(),
                     page.title.as_str(),
@@ -3960,7 +4084,7 @@ fn persist_wiki_pages_snapshot_in_transaction(
                         updated_at
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     (
-                        page.page_id.as_str(),
+                        stored_page_id.as_str(),
                         revision,
                         section.index,
                         section.heading.as_str(),
@@ -3976,7 +4100,7 @@ fn persist_wiki_pages_snapshot_in_transaction(
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     (
                         snapshot.workspace_id.as_str(),
-                        page.page_id.as_str(),
+                        stored_page_id.as_str(),
                         revision,
                         section.index,
                         page.title.as_str(),
@@ -4504,9 +4628,9 @@ mod tests {
             sources: vec![SourceRecord {
                 source_id: "source-a".into(),
                 workspace_id: "workspace-default".into(),
-                original_path: "/tmp/source-a.pdf".into(),
-                source_path: "sources/source-a.pdf".into(),
-                markdown_path: "sources/source-a.md".into(),
+                original_path: "/Users/hyprduck/private/original-source-a.pdf".into(),
+                source_path: "/Users/hyprduck/private/source-a.pdf".into(),
+                markdown_path: "/Users/hyprduck/private/source-a.md".into(),
                 format: SourceFormat::pdf(),
                 status: SourceStatus::ingested(),
                 page_count: 2,
@@ -4743,11 +4867,20 @@ mod tests {
             .get("text")
             .is_some_and(|count| *count >= 1));
         let source_response = store
-            .read_source_from_db("workspace-default", "source-a")
+            .read_source_from_db("workspace-default", "source-a", false)
             .expect("read source from DB")
             .expect("source response");
         assert_eq!(source_response.source.source_id, "source-a");
+        assert_eq!(
+            source_response.source.original_path,
+            "original-source-a.pdf"
+        );
+        assert_eq!(source_response.source.source_path, "source-a.pdf");
+        assert_eq!(source_response.source.markdown_path, "source-a.md");
         assert_eq!(source_response.evidence.len(), 2);
+        let source_response_json =
+            serde_json::to_string(&source_response).expect("serialize source response");
+        assert!(!source_response_json.contains("/Users/hyprduck/private"));
         assert!(source_response
             .evidence
             .iter()
@@ -4764,12 +4897,15 @@ mod tests {
             Some("wiki-alpha")
         );
         let page_response = store
-            .read_page_evidence_from_db("workspace-default", "source-a", Some(1))
+            .read_page_evidence_from_db("workspace-default", "source-a", Some(1), false)
             .expect("read page evidence from DB")
             .expect("page evidence response");
         assert_eq!(page_response.source.source_id, "source-a");
         assert_eq!(page_response.evidence.len(), 1);
         assert_eq!(page_response.evidence[0].evidence_ref, "evidence-a");
+        let page_response_json =
+            serde_json::to_string(&page_response).expect("serialize page evidence response");
+        assert!(!page_response_json.contains("/Users/hyprduck/private"));
         assert_eq!(
             page_response.evidence[0].markdown_path.as_deref(),
             Some("source-a.md")

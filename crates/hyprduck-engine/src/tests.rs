@@ -239,7 +239,7 @@ fn source_import_persists_canonical_db_rows_and_fts() {
         .expect("save project and canonical source rows");
 
     assert_eq!(count_table_rows(&store, "import_jobs"), 1);
-    assert_eq!(import_job_readiness(&store, "source-db"), "1:0");
+    assert_eq!(import_job_readiness(&store, "source-db"), "1:1");
     assert_eq!(count_table_rows(&store, "sources"), 1);
     assert_eq!(count_table_rows(&store, "source_pages"), 2);
     assert_eq!(count_table_rows(&store, "source_page_fts"), 1);
@@ -284,7 +284,7 @@ fn source_import_persists_canonical_db_rows_and_fts() {
         .expect("load source readiness");
     assert_eq!(loaded_sources.len(), 1);
     assert!(loaded_sources[0].citation_ready);
-    assert!(!loaded_sources[0].graph_ready);
+    assert!(loaded_sources[0].graph_ready);
     store
         .run_sql("UPDATE import_jobs SET graph_ready = 1 WHERE source_id = 'source-db';")
         .expect("mark graph ready");
@@ -293,6 +293,40 @@ fn source_import_persists_canonical_db_rows_and_fts() {
         .expect("load graph-ready source");
     assert!(graph_ready_sources[0].citation_ready);
     assert!(graph_ready_sources[0].graph_ready);
+}
+
+#[test]
+fn source_import_redacts_page_artifact_paths() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let db_path = temp.path().join("hyprduck.sqlite");
+    let knowledge_store = KnowledgeStore::open(db_path.clone()).expect("open knowledge store");
+    let store = KnowledgeProjectStore::new(db_path);
+    let markdown = "# Source import\n\n## Page 1\n\nCanonical source evidence persists.\n";
+    let (project, mut manifest) =
+        compile_manifest_fixture_project_with_source(&temp, markdown, "source-db", "alpha", 10);
+    manifest.pages[0].markdown_path = Some(
+        temp.path()
+            .join("default/artifacts/source-db/page-1.md")
+            .display()
+            .to_string(),
+    );
+    manifest.pages[0].image_path = Some(
+        temp.path()
+            .join("default/artifacts/source-db/page-1.png")
+            .display()
+            .to_string(),
+    );
+    knowledge_store
+        .persist_source_manifest(&project, &manifest)
+        .expect("persist source manifest");
+
+    assert_eq!(
+        store
+            .run_sql("SELECT markdown_path_redacted || '|' || image_path_redacted FROM source_pages WHERE source_id = 'source-db' AND page_index = 0;")
+            .expect("read redacted source page paths")
+            .trim(),
+        "page-1.md|page-1.png"
+    );
 }
 
 #[test]

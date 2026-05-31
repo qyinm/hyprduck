@@ -358,7 +358,6 @@ fn brain_inspect_state_prints_selected_graph_state_and_related_events() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("snapshot: snapshot-1"));
     assert!(stdout.contains("event: event-graph-1"));
-    assert!(stdout.contains("rollback-target: --event event-graph-1"));
     assert!(
         stdout.contains("nodes: 1 edges: 1 claims: 1 memories: 1 wiki-pages: 1"),
         "stdout: {stdout}"
@@ -409,19 +408,15 @@ fn brain_rollback_state_applies_selected_graph_state() {
         .output()
         .expect("rollback-state command should run");
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("rollback-applied: snapshot-1"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("checkpoint rollback is disabled in v1"));
     let nodes = fs::read_to_string(workspace.join("graph/nodes.json")).unwrap();
-    assert!(nodes.contains("node-prior"));
-    assert!(!nodes.contains("node-current"));
+    assert!(nodes.contains("node-current"));
+    assert!(!nodes.contains("node-prior"));
     let events = fs::read_to_string(workspace.join("events/brain_events.jsonl")).unwrap();
-    assert!(events.contains("\"operationType\":\"graph_rollback\""));
-    assert_eq!(events.lines().count(), 3);
+    assert!(!events.contains("\"operationType\":\"graph_rollback\""));
+    assert_eq!(events.lines().count(), 2);
     let _ = fs::remove_dir_all(root);
 }
 
