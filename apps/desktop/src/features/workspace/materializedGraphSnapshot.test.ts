@@ -468,6 +468,163 @@ test("hydrates wiki page evidence with the page body and source refs available i
   expect(evidence?.provenance).toBe("wiki/product-plan.md");
 });
 
+test("keeps generated wiki pages out of the default graph canvas", () => {
+  const snapshot: MaterializedGraphSnapshot = {
+    snapshotId: "snapshot-1",
+    sourceIngestId: "ingest-1",
+    workspaceId: "default",
+    sourceOfTruthPath: "events/brain_events.jsonl",
+    latestReadableSnapshotPath: "state/latest-readable-snapshot.json",
+    createdAt: 1,
+    materializedAt: 2,
+    materializedPaths: ["graph/nodes.json", "graph/edges.json", "wiki/index.md"],
+    sourcePaths: [
+      "/brain/default/sources/source-1/report.pdf",
+      "/brain/default/artifacts/source-1/report.md",
+    ],
+    sources: [
+      {
+        sourceId: "source-1",
+        workspaceId: "default",
+        originalPath: "source-fixture.pdf",
+        sourcePath: "/brain/default/sources/source-1/report.pdf",
+        markdownPath: "/brain/default/artifacts/source-1/report.md",
+        format: "pdf",
+        status: "ingested",
+        pageCount: 4,
+        description: "Imported source fixture",
+        userContext: "",
+        ingestInstruction: "",
+        updatedAt: 2,
+      },
+    ],
+    nodes: [
+      {
+        nodeId: "source:source-1",
+        kind: "source",
+        label: "report.pdf",
+        aliases: [],
+        evidenceIds: [],
+        sourceIds: ["source-1"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "concept-alpha",
+        kind: "concept",
+        label: "Project Alpha",
+        aliases: [],
+        evidenceIds: ["ev-alpha"],
+        sourceIds: ["source-1"],
+        confidence: 0.8,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "claim-alpha",
+        kind: "claim",
+        label: "Alpha claim synthesized from evidence.",
+        aliases: [],
+        evidenceIds: ["ev-alpha"],
+        sourceIds: ["source-1"],
+        confidence: null,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "wiki-overview",
+        kind: "wiki_page",
+        label: "Workspace Overview",
+        aliases: ["wiki/overview.md"],
+        evidenceIds: ["ev-alpha"],
+        sourceIds: ["source-1"],
+        confidence: null,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "wiki-log",
+        kind: "wiki_page",
+        label: "Brain Log",
+        aliases: ["wiki/log.md"],
+        evidenceIds: [],
+        sourceIds: [],
+        confidence: null,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "wiki-index",
+        kind: "wiki_page",
+        label: "Brain Index",
+        aliases: ["wiki/index.md"],
+        evidenceIds: [],
+        sourceIds: [],
+        confidence: null,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "wiki-source-source-1",
+        kind: "wiki_page",
+        label: "source-1",
+        aliases: ["wiki/sources/source-1.md"],
+        evidenceIds: [],
+        sourceIds: ["source-1"],
+        confidence: null,
+        updatedAt: 2,
+      },
+      {
+        nodeId: "wiki-topic-concept-alpha",
+        kind: "wiki_page",
+        label: "Project Alpha",
+        aliases: ["wiki/topics/concept-alpha.md"],
+        evidenceIds: ["ev-alpha"],
+        sourceIds: ["source-1"],
+        confidence: null,
+        updatedAt: 2,
+      },
+    ],
+    edges: [
+      {
+        relationId: "edge-source-alpha",
+        kind: "source_of",
+        sourceNodeId: "source:source-1",
+        targetNodeId: "concept-alpha",
+        label: "source of",
+        evidenceIds: ["ev-alpha"],
+        confidence: 1,
+        updatedAt: 2,
+      },
+    ],
+    claims: [],
+    memoryRefs: [],
+    wikiPages: [
+      {
+        pageId: "wiki-topic-concept-alpha",
+        workspaceId: "default",
+        path: "wiki/topics/concept-alpha.md",
+        title: "Project Alpha",
+        body: "Alpha evidence remains available from the generated wiki topic.",
+        nodeRefs: ["concept-alpha"],
+        sourceRefs: ["source-1"],
+        evidenceRefs: ["ev-alpha"],
+        updatedAt: 2,
+      },
+    ],
+  };
+
+  const envelope = materializedGraphSnapshotToWorkspaceEnvelope(snapshot);
+
+  expect(envelope.project.nodes.map((node) => node.label)).toEqual([
+    "report.pdf",
+    "Project Alpha",
+  ]);
+  expect(envelope.project.nodes.some((node) => node.id.startsWith("wiki-"))).toBe(false);
+  expect(envelope.project.nodes.some((node) => node.id.startsWith("claim-"))).toBe(false);
+  expect(envelope.project.edges.map((edge) => edge.id)).toEqual(["edge-source-alpha"]);
+  expect(envelope.project.detailsByNodeId["concept-alpha"]?.evidence[0]?.snippet).toBe(
+    "Alpha evidence remains available from the generated wiki topic.",
+  );
+  expect(envelope.project.detailsByNodeId["source:source-1"]?.source?.pageCount).toBe(4);
+  expect(envelope.sources[0].page_count).toBe(4);
+});
+
 test("hydrates delete correction actions for materialized graph nodes", () => {
   const snapshot: MaterializedGraphSnapshot = {
     snapshotId: "snapshot-1",

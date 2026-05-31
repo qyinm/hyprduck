@@ -691,6 +691,8 @@ pub struct ReadGraphSnapshotResponseData {
     #[serde(default)]
     pub source_paths: Vec<String>,
     #[serde(default)]
+    pub sources: Vec<SourceRecord>,
+    #[serde(default)]
     pub graph_materialization_reports: Vec<GraphMaterializationReportSummary>,
     #[serde(default)]
     pub nodes: Vec<BrainNodeRecord>,

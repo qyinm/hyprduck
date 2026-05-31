@@ -99,6 +99,7 @@ pub(crate) fn handle_read_graph_snapshot(
         materialized_at,
         materialized_paths,
         source_paths: graph_snapshot_source_paths(&reader.snapshot),
+        sources: reader.snapshot.sources.clone(),
         graph_materialization_reports: read_graph_materialization_reports(reader.root()),
         nodes: db_projection.0,
         edges: db_projection.1,

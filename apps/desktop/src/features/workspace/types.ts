@@ -77,6 +77,21 @@ export interface WorkspaceSourceSummary {
   updated_at: number;
 }
 
+export interface MaterializedSourceRecord {
+  sourceId: string;
+  workspaceId: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  format: string;
+  status: WorkspaceSourceStatus;
+  pageCount: number;
+  description?: string;
+  userContext?: string;
+  ingestInstruction?: string;
+  updatedAt: number;
+}
+
 export interface WorkspaceCorrectionAction {
   kind: "merge" | "keep_separate" | "rename" | "split" | "delete";
   label: string;
@@ -253,6 +268,7 @@ export interface MaterializedGraphSnapshot {
   materializedAt: number;
   materializedPaths: string[];
   sourcePaths: string[];
+  sources?: MaterializedSourceRecord[];
   graphMaterializationReports?: GraphMaterializationReportSummary[];
   nodes: MaterializedGraphNodeRecord[];
   edges: MaterializedGraphRelationRecord[];
