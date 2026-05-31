@@ -16,7 +16,6 @@ use hyprduck_engine_types::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
@@ -3030,8 +3029,8 @@ fn persist_graph_checkpoint_metadata_in_transaction(
         "actorId": "hyprduck-knowledge-store"
     })
     .to_string();
-    let checkpoint_id = graph_checkpoint_id(snapshot, report);
     let checksum = graph_checkpoint_checksum(snapshot, report)?;
+    let checkpoint_id = graph_checkpoint_id(snapshot, &checksum);
     let evidence_ref_count = snapshot
         .nodes
         .iter()
@@ -3073,18 +3072,7 @@ fn persist_graph_checkpoint_metadata_in_transaction(
                 storage_ref,
                 created_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            ON CONFLICT(checkpoint_id) DO UPDATE SET
-                reason=excluded.reason,
-                actor_json=excluded.actor_json,
-                related_event_id=excluded.related_event_id,
-                graph_schema_version=excluded.graph_schema_version,
-                graphqlite_extension_version=excluded.graphqlite_extension_version,
-                node_count=excluded.node_count,
-                edge_count=excluded.edge_count,
-                evidence_ref_count=excluded.evidence_ref_count,
-                checksum=excluded.checksum,
-                storage_ref=excluded.storage_ref,
-                created_at=excluded.created_at",
+            ON CONFLICT(checkpoint_id) DO NOTHING",
             (
                 checkpoint_id.as_str(),
                 snapshot.workspace_id.as_str(),
@@ -3105,13 +3093,16 @@ fn persist_graph_checkpoint_metadata_in_transaction(
     Ok(())
 }
 
-fn graph_checkpoint_id(
-    snapshot: &BrainRepoSnapshot,
-    report: &KnowledgeGraphPersistReport,
-) -> String {
+fn graph_checkpoint_id(snapshot: &BrainRepoSnapshot, checksum: &str) -> String {
+    let identity = snapshot
+        .events
+        .last()
+        .map(|event| event.event_id.clone())
+        .unwrap_or_else(|| format!("snapshot-{}", uuid::Uuid::now_v7().as_simple()));
+    let checksum_prefix = checksum.get(..16).unwrap_or(checksum);
     format!(
-        "graph-checkpoint-{}-{}-{}-{}",
-        snapshot.workspace_id, snapshot.generated_at, report.node_count, report.relation_count
+        "graph-checkpoint-{}-{}-{}",
+        snapshot.workspace_id, identity, checksum_prefix
     )
 }
 
@@ -3119,21 +3110,32 @@ fn graph_checkpoint_checksum(
     snapshot: &BrainRepoSnapshot,
     report: &KnowledgeGraphPersistReport,
 ) -> Result<String> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    snapshot.workspace_id.hash(&mut hasher);
-    snapshot.generated_at.hash(&mut hasher);
-    report.node_count.hash(&mut hasher);
-    report.relation_count.hash(&mut hasher);
-    serde_json::to_string(&snapshot.nodes)
-        .context("failed encoding checkpoint nodes")?
-        .hash(&mut hasher);
-    serde_json::to_string(&snapshot.relations)
-        .context("failed encoding checkpoint relations")?
-        .hash(&mut hasher);
-    serde_json::to_string(&snapshot.wiki_pages)
-        .context("failed encoding checkpoint wiki pages")?
-        .hash(&mut hasher);
-    Ok(format!("{:016x}", hasher.finish()))
+    let payload = serde_json::json!({
+        "workspace_id": snapshot.workspace_id,
+        "generated_at": snapshot.generated_at,
+        "node_count": report.node_count,
+        "relation_count": report.relation_count,
+        "nodes": snapshot.nodes,
+        "relations": snapshot.relations,
+        "wiki_pages": snapshot.wiki_pages,
+        "entities": snapshot.entities,
+        "claims": snapshot.claims,
+        "memories": snapshot.memories,
+        "evidence": snapshot.evidence,
+        "events": snapshot.events,
+    });
+    let encoded = serde_json::to_vec(&payload).context("failed encoding checkpoint payload")?;
+    Ok(hex_digest(
+        ring::digest::digest(&ring::digest::SHA256, &encoded).as_ref(),
+    ))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn graphqlite_extension_version() -> &'static str {
@@ -3814,6 +3816,12 @@ fn persist_evidence_snapshot_in_transaction(
             .page_index
             .map(|value| value.to_string())
             .unwrap_or_default();
+        let source_path_redacted =
+            redact_path_for_agent(evidence.source_path.as_deref().unwrap_or_default());
+        let markdown_path_redacted =
+            redact_path_for_agent(evidence.markdown_path.as_deref().unwrap_or_default());
+        let image_path_redacted =
+            redact_path_for_agent(evidence.image_path.as_deref().unwrap_or_default());
         sqlite
             .execute(
                 "INSERT INTO evidence_items (
@@ -3837,9 +3845,9 @@ fn persist_evidence_snapshot_in_transaction(
                     page_index.as_str(),
                     evidence.page_label.as_str(),
                     evidence.snippet.as_str(),
-                    evidence.source_path.as_deref().unwrap_or_default(),
-                    evidence.markdown_path.as_deref().unwrap_or_default(),
-                    evidence.image_path.as_deref().unwrap_or_default(),
+                    source_path_redacted.as_str(),
+                    markdown_path_redacted.as_str(),
+                    image_path_redacted.as_str(),
                     evidence.provenance.as_deref().unwrap_or_default(),
                 ),
             )
@@ -4569,10 +4577,10 @@ mod tests {
                     page_label: "p1".into(),
                     page_index: Some(0),
                     snippet: "Alpha relates to beta.".into(),
-                    source_path: Some("sources/source-a.pdf".into()),
+                    source_path: Some("/Users/hyprduck/private/source-a.pdf".into()),
                     source_id: Some("source-a".into()),
-                    markdown_path: Some("sources/source-a.md".into()),
-                    image_path: None,
+                    markdown_path: Some("/Users/hyprduck/private/source-a.md".into()),
+                    image_path: Some("/Users/hyprduck/private/source-a.png".into()),
                     provenance: Some("test".into()),
                 },
                 EvidenceRef {
@@ -4580,10 +4588,10 @@ mod tests {
                     page_label: "p2".into(),
                     page_index: Some(1),
                     snippet: "Beta neighbor evidence.".into(),
-                    source_path: Some("sources/source-a.pdf".into()),
+                    source_path: Some("/Users/hyprduck/private/source-a.pdf".into()),
                     source_id: Some("source-a".into()),
-                    markdown_path: Some("sources/source-a.md".into()),
-                    image_path: None,
+                    markdown_path: Some("/Users/hyprduck/private/source-a.md".into()),
+                    image_path: Some("/Users/hyprduck/private/source-a.png".into()),
                     provenance: Some("test".into()),
                 },
             ],
@@ -4638,10 +4646,10 @@ mod tests {
                     page_label: "p1".into(),
                     page_index: Some(0),
                     snippet: "Alpha relates to beta.".into(),
-                    source_path: Some("sources/source-a.pdf".into()),
+                    source_path: Some("/Users/hyprduck/private/source-a.pdf".into()),
                     source_id: Some("source-a".into()),
-                    markdown_path: Some("sources/source-a.md".into()),
-                    image_path: None,
+                    markdown_path: Some("/Users/hyprduck/private/source-a.md".into()),
+                    image_path: Some("/Users/hyprduck/private/source-a.png".into()),
                     provenance: Some("test extraction".into()),
                 }],
                 confidence: Some(0.7),
@@ -4725,6 +4733,9 @@ mod tests {
             .selected_evidence
             .iter()
             .any(|evidence| evidence.evidence_ref == "evidence-a"));
+        let context_pack_json =
+            serde_json::to_string(&context_pack).expect("serialize context pack");
+        assert!(!context_pack_json.contains("/Users/hyprduck/private"));
         assert!(context_pack
             .retrieval_trace
             .evidence_type_trace
@@ -4737,6 +4748,14 @@ mod tests {
             .expect("source response");
         assert_eq!(source_response.source.source_id, "source-a");
         assert_eq!(source_response.evidence.len(), 2);
+        assert!(source_response
+            .evidence
+            .iter()
+            .all(|evidence| evidence.source_path.as_deref() == Some("source-a.pdf")));
+        assert!(source_response.evidence.iter().all(|evidence| {
+            evidence.markdown_path.as_deref() == Some("source-a.md")
+                && evidence.image_path.as_deref() == Some("source-a.png")
+        }));
         assert_eq!(
             source_response
                 .wiki_page
@@ -4751,6 +4770,14 @@ mod tests {
         assert_eq!(page_response.source.source_id, "source-a");
         assert_eq!(page_response.evidence.len(), 1);
         assert_eq!(page_response.evidence[0].evidence_ref, "evidence-a");
+        assert_eq!(
+            page_response.evidence[0].markdown_path.as_deref(),
+            Some("source-a.md")
+        );
+        assert_eq!(
+            page_response.evidence[0].image_path.as_deref(),
+            Some("source-a.png")
+        );
         let wiki_page = store
             .read_wiki_page_from_db("workspace-default", "wiki/alpha")
             .expect("read wiki page from DB")
@@ -5204,7 +5231,7 @@ mod tests {
             .expect("graph checkpoint metadata row");
         assert!(row
             .0
-            .starts_with("graph-checkpoint-workspace-default-10-6-3"));
+            .starts_with("graph-checkpoint-workspace-default-event-a-"));
         assert_eq!(row.1, "graph_snapshot_commit");
         assert!(row.2.contains("hyprduck-knowledge-store"));
         assert_eq!(row.3, "event-a");
@@ -5213,7 +5240,7 @@ mod tests {
         assert_eq!(row.6, 6);
         assert_eq!(row.7, 3);
         assert_eq!(row.8, 2);
-        assert_eq!(row.9.len(), 16);
+        assert_eq!(row.9.len(), 64);
         assert_eq!(row.10, "hyprduck.sqlite:graphqlite");
     }
 

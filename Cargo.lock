@@ -1435,6 +1435,7 @@ dependencies = [
  "hyprduck-engine-types",
  "markitdown",
  "reqwest 0.12.23",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",

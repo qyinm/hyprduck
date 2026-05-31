@@ -1277,6 +1277,12 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
         created_at: now,
     };
 
+    store.record_agent_write_commit(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        &event,
+        now as i64,
+    )?;
     writer.repo().append_event(&event)?;
     let mut memories = writer.repo().read_memory_records()?;
     if let Some(existing) = memories.iter_mut().find(|m| m.memory_id == memory_id) {
@@ -1291,14 +1297,15 @@ fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCommitRespons
             .then_with(|| left.memory_id.cmp(&right.memory_id))
     });
     writer.repo().write_memory_records(&memories)?;
-
-    store.record_agent_write_commit(
-        &request.scope.workspace_id,
-        &request.proposal_id,
-        &event,
-        now as i64,
-    )?;
-    fs::remove_file(&proposal_path).ok();
+    match fs::remove_file(&proposal_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed removing committed proposal file {proposal_path:?}")
+            });
+        }
+    }
 
     Ok(WriteCommitResponseData {
         event_id,
