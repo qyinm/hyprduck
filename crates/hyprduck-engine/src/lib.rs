@@ -697,6 +697,17 @@ fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseDa
         return Ok(response);
     }
     let reader = BrainReader::open(&request.scope)?;
+    if let Some(mut response) = store.read_source_from_db(
+        &request.scope.workspace_id,
+        &request.source_id,
+        request.include_local_paths,
+    )? {
+        if request.include_local_paths {
+            enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
+            expand_read_source_local_paths(&mut response, &root);
+        }
+        return Ok(response);
+    }
     let source = reader
         .snapshot
         .sources
@@ -723,11 +734,15 @@ fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseDa
         .filter(|evidence| evidence.source_id.as_deref() == Some(source.source_id.as_str()))
         .cloned()
         .collect();
-    Ok(ReadSourceResponseData {
+    let mut response = ReadSourceResponseData {
         source,
         wiki_page,
         evidence,
-    })
+    };
+    if !request.include_local_paths {
+        redact_read_source_agent_paths(&mut response);
+    }
+    Ok(response)
 }
 
 fn handle_read_page_evidence(
@@ -793,11 +808,54 @@ fn handle_read_page_evidence(
             .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
     });
 
-    Ok(ReadPageEvidenceResponseData {
+    let mut response = ReadPageEvidenceResponseData {
         source,
         evidence,
         warnings: artifact_metadata.warnings,
-    })
+    };
+    if !request.include_local_paths {
+        redact_page_evidence_agent_paths(&mut response);
+    }
+    Ok(response)
+}
+
+fn redact_read_source_agent_paths(response: &mut ReadSourceResponseData) {
+    redact_source_record_agent_paths(&mut response.source);
+    for evidence in &mut response.evidence {
+        redact_optional_agent_path(&mut evidence.source_path);
+        redact_optional_agent_path(&mut evidence.markdown_path);
+        redact_optional_agent_path(&mut evidence.image_path);
+    }
+}
+
+fn redact_page_evidence_agent_paths(response: &mut ReadPageEvidenceResponseData) {
+    redact_source_record_agent_paths(&mut response.source);
+    for evidence in &mut response.evidence {
+        redact_optional_agent_path(&mut evidence.markdown_path);
+        redact_optional_agent_path(&mut evidence.image_path);
+    }
+}
+
+fn redact_source_record_agent_paths(source: &mut SourceRecord) {
+    source.original_path = redact_agent_path(&source.original_path);
+    source.source_path = redact_agent_path(&source.source_path);
+    source.markdown_path = redact_agent_path(&source.markdown_path);
+}
+
+fn redact_optional_agent_path(value: &mut Option<String>) {
+    if let Some(path) = value {
+        *path = redact_agent_path(path);
+    }
+}
+
+fn redact_agent_path(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    Path::new(value)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<redacted>".into())
 }
 
 fn enrich_read_source_with_local_paths(

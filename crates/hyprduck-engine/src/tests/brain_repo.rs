@@ -1295,12 +1295,138 @@ fn read_page_evidence_resolves_source_evidence_index_metadata() {
         hyprduck_engine_types::ContextPackParseConfidence::High
     );
     assert_eq!(response.evidence[0].content_hash, "fnv64:page-evidence");
-    let expected_markdown_path = markdown_path.display().to_string();
     assert_eq!(
         response.evidence[0].markdown_path.as_deref(),
-        Some(expected_markdown_path.as_str())
+        Some("page_1.md")
     );
     assert!(response.warnings.is_empty());
+}
+
+#[test]
+fn legacy_read_source_and_page_evidence_redact_local_paths_by_default() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
+    let artifact_root = workspace_root.join("artifacts/src-legacy-redaction");
+    let source_root = workspace_root.join("sources/src-legacy-redaction");
+    fs::create_dir_all(workspace_root.join("graph")).expect("graph dir");
+    fs::create_dir_all(artifact_root.join("pages")).expect("pages dir");
+    fs::create_dir_all(&source_root).expect("source dir");
+    let source_path = source_root.join("source.pdf");
+    let markdown_path = artifact_root.join("pages/page_1.md");
+    fs::write(&source_path, b"source bytes").expect("write source");
+    fs::write(&markdown_path, "# legacy page\n").expect("write markdown");
+    let source = SourceRecord {
+        source_id: "src-legacy-redaction".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: workspace_root.join("original.pdf").display().to_string(),
+        source_path: source_path.display().to_string(),
+        markdown_path: workspace_root
+            .join("artifacts/src-legacy-redaction/source.md")
+            .display()
+            .to_string(),
+        format: hyprduck_engine_types::SourceFormat::pdf(),
+        status: hyprduck_engine_types::SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 1,
+    };
+    let evidence = EvidenceRef {
+        id: "ev-legacy-redaction".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Legacy fallback evidence.".into(),
+        source_path: Some(source_path.display().to_string()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(markdown_path.display().to_string()),
+        image_path: None,
+        provenance: None,
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        generated_at: 1,
+        sources: vec![source.clone()],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![evidence.clone()],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    write_json_pretty(&workspace_root.join("brain-manifest.json"), &snapshot)
+        .expect("write manifest");
+    write_json_pretty::<Vec<BrainNodeRecord>>(&workspace_root.join("graph/nodes.json"), &vec![])
+        .expect("write nodes");
+    write_json_pretty::<Vec<BrainRelationRecord>>(
+        &workspace_root.join("graph/edges.json"),
+        &vec![],
+    )
+    .expect("write edges");
+    write_json_pretty(&workspace_root.join("graph/evidence.json"), &vec![evidence])
+        .expect("write evidence");
+    fs::write(
+        artifact_root.join("evidence_index.json"),
+        serde_json::json!({
+            "schemaVersion": "hyprduck.evidence_index.v0",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+            "sourceId": source.source_id,
+            "contentHash": "fnv64:legacy-redaction",
+            "providerRoute": "local_demo",
+            "localOnly": true,
+            "evidence": [{
+                "evidenceRef": "ev-legacy-redaction",
+                "sourceId": "src-legacy-redaction",
+                "page": 1,
+                "region": "page:Page 1",
+                "span": "page",
+                "quotedText": "Legacy fallback evidence.",
+                "parseConfidence": "high",
+                "contentHash": "fnv64:legacy-redaction",
+                "markdownPath": markdown_path.display().to_string(),
+                "imagePath": null
+            }],
+            "warnings": [],
+            "generatedAt": 1
+        })
+        .to_string(),
+    )
+    .expect("evidence index");
+
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+    let source_response = handle_read_source(ReadSourceRequest {
+        scope: scope.clone(),
+        source_id: source.source_id.clone(),
+        include_local_paths: false,
+    })
+    .expect("read source");
+    let source_json = serde_json::to_string(&source_response).expect("source json");
+    assert!(!source_json.contains(workspace_root.to_string_lossy().as_ref()));
+    assert_eq!(source_response.source.source_path, "source.pdf");
+    assert_eq!(
+        source_response.evidence[0].markdown_path.as_deref(),
+        Some("page_1.md")
+    );
+
+    let page_response = handle_read_page_evidence(ReadPageEvidenceRequest {
+        scope,
+        source_id: source.source_id,
+        page: Some(1),
+        include_local_paths: false,
+    })
+    .expect("read page evidence");
+    let page_json = serde_json::to_string(&page_response).expect("page json");
+    assert!(!page_json.contains(workspace_root.to_string_lossy().as_ref()));
+    assert_eq!(
+        page_response.evidence[0].markdown_path.as_deref(),
+        Some("page_1.md")
+    );
 }
 
 #[test]
