@@ -869,6 +869,7 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
     let _ = fs::remove_dir_all(&import_root);
     fs::create_dir_all(&root_dir).expect("temp root");
     fs::create_dir_all(&import_root).expect("import root");
+    let config_dir = root_dir.join("config");
     let source_path = import_root.join("agent-notes.md");
     fs::write(
         &source_path,
@@ -879,6 +880,7 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_CONFIG_DIR", &config_dir)
         .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
         .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
         .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", &import_root_arg)
@@ -1005,6 +1007,7 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
     let mut restarted_child = Command::new(env!("CARGO_BIN_EXE_hyprduck"))
         .args(["mcp", "serve"])
         .env("HYPRDUCK_PROJECT_STORE", root_dir.join("knowledge.sqlite3"))
+        .env("HYPRDUCK_CONFIG_DIR", &config_dir)
         .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
         .env("HYPRDUCK_MCP_ALLOWED_ROOTS", &root_dir_arg)
         .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", &import_root_arg)
