@@ -202,7 +202,7 @@ fn handle_tool_call(
             "content": [
                 {
                     "type": "text",
-                    "text": error.to_string()
+                    "text": redact_local_path_text(&error.to_string())
                 }
             ],
             "isError": true
@@ -215,7 +215,7 @@ fn handle_tool_call(
 fn handle_resource_read(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
     match read_resource(client, params) {
         Ok(value) => success_response(id, value),
-        Err(error) => error_response(id, -32602, error.to_string()),
+        Err(error) => error_response(id, -32602, redact_local_path_text(&error.to_string())),
     }
 }
 

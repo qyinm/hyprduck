@@ -427,12 +427,13 @@ impl ImportLifecycleStatus {
             "parsing" => Self::Parsing,
             "packaging" => Self::Packaging,
             "citation_ready" => Self::CitationReady,
+            "citation_ready_graph_pending" | "completed" => Self::CitationReadyGraphPending,
             "citation_ready_graph_skipped" => Self::CitationReadyGraphSkipped,
             "graph_retry_waiting" => Self::GraphRetryWaiting,
             "context_ready" => Self::ContextReady,
             "failed" => Self::Failed,
             "cancelled" => Self::Cancelled,
-            _ => Self::CitationReadyGraphPending,
+            _ => Self::Failed,
         }
     }
 }
@@ -485,7 +486,10 @@ impl ImportLifecycleState {
         retryable: bool,
         manual_retry_available: bool,
     ) -> Self {
-        let status = ImportLifecycleStatus::from_persisted(status);
+        let mut status = ImportLifecycleStatus::from_persisted(status);
+        if graph_ready || graph_status_is_ready(Some(graph_status)) {
+            status = ImportLifecycleStatus::ContextReady;
+        }
         Self {
             status,
             phase: ImportLifecyclePhase::from_status_and_graph_status(status, graph_status),
@@ -4103,7 +4107,20 @@ mod tests {
     }
 
     #[test]
-    fn import_lifecycle_maps_unknown_persisted_status_to_graph_pending() {
+    fn import_lifecycle_maps_legacy_completed_status_to_graph_pending() {
+        let lifecycle =
+            ImportLifecycleState::from_persisted("completed", "", true, false, false, true);
+        assert_eq!(
+            lifecycle.status,
+            ImportLifecycleStatus::CitationReadyGraphPending
+        );
+        assert_eq!(lifecycle.phase, ImportLifecyclePhase::GraphPending);
+        assert!(lifecycle.citation_ready);
+        assert!(!lifecycle.graph_ready);
+    }
+
+    #[test]
+    fn import_lifecycle_rejects_unknown_persisted_status_as_failed() {
         let lifecycle = ImportLifecycleState::from_persisted(
             "legacy_unrecognized",
             "",
@@ -4112,13 +4129,24 @@ mod tests {
             false,
             true,
         );
-        assert_eq!(
-            lifecycle.status,
-            ImportLifecycleStatus::CitationReadyGraphPending
+        assert_eq!(lifecycle.status, ImportLifecycleStatus::Failed);
+        assert_eq!(lifecycle.phase, ImportLifecyclePhase::Failed);
+        assert!(lifecycle.terminal);
+    }
+
+    #[test]
+    fn import_lifecycle_normalizes_ready_graph_state_to_context_ready() {
+        let lifecycle = ImportLifecycleState::from_persisted(
+            "citation_ready_graph_pending",
+            "ready",
+            true,
+            true,
+            false,
+            false,
         );
-        assert_eq!(lifecycle.phase, ImportLifecyclePhase::GraphPending);
-        assert!(lifecycle.citation_ready);
-        assert!(!lifecycle.graph_ready);
+        assert_eq!(lifecycle.status, ImportLifecycleStatus::ContextReady);
+        assert_eq!(lifecycle.phase, ImportLifecyclePhase::ContextReady);
+        assert!(lifecycle.graph_ready);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use hyprduck_engine_types::{
     BrainNodeKind, BrainRepoSnapshot, GraphPatch, GraphPatchNode, GRAPH_PATCH_SCHEMA_VERSION,
 };
 
+#[derive(Debug)]
 pub(crate) struct ValidatedGraphPatchScope {
     pub(crate) source_ids: Vec<String>,
     pub(crate) evidence_refs: Vec<String>,
@@ -69,7 +70,9 @@ fn validate_graph_patch_contract(patch: &GraphPatch) -> Result<()> {
         bail!("graphPatch must include at least one node, relation, claim, or wiki page");
     }
     ensure_unique_nonempty("graphPatch.sourceIds", &patch.source_ids)?;
+    validate_non_empty_refs("graphPatch.sourceIds", &patch.source_ids)?;
     ensure_unique_nonempty("graphPatch.evidenceRefs", &patch.evidence_refs)?;
+    validate_non_empty_refs("graphPatch.evidenceRefs", &patch.evidence_refs)?;
     ensure_unique_nonempty(
         "graphPatch.nodes.nodeId",
         &patch
@@ -181,6 +184,8 @@ fn validate_graph_patch_record_refs(
         .chain(existing_in_scope_node_set.iter().cloned())
         .collect::<BTreeSet<_>>();
 
+    reject_out_of_scope_collisions(patch, snapshot, &source_set, &evidence_set)?;
+
     for node in &patch.nodes {
         if !is_cited_source_node(node, &source_set) {
             validate_non_empty_refs(
@@ -282,6 +287,77 @@ fn validate_graph_patch_record_refs(
                     "graphPatch wiki page {} references unknown nodeRef {}",
                     page.page_id,
                     node_ref
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_out_of_scope_collisions(
+    patch: &GraphPatch,
+    snapshot: &BrainRepoSnapshot,
+    source_set: &BTreeSet<String>,
+    evidence_set: &BTreeSet<String>,
+) -> Result<()> {
+    for node in &patch.nodes {
+        if let Some(existing) = snapshot
+            .nodes
+            .iter()
+            .find(|existing| existing.node_id == node.node_id)
+        {
+            if !refs_intersect(&existing.source_ids, source_set)
+                && !refs_intersect(&existing.evidence_ids, evidence_set)
+            {
+                bail!(
+                    "graphPatch node {} collides with an out-of-scope existing node",
+                    node.node_id
+                );
+            }
+        }
+    }
+    for relation in &patch.relations {
+        if let Some(existing) = snapshot
+            .relations
+            .iter()
+            .find(|existing| existing.relation_id == relation.relation_id)
+        {
+            if !refs_intersect(&existing.evidence_ids, evidence_set) {
+                bail!(
+                    "graphPatch relation {} collides with an out-of-scope existing relation",
+                    relation.relation_id
+                );
+            }
+        }
+    }
+    for claim in &patch.claims {
+        if let Some(existing) = snapshot
+            .claims
+            .iter()
+            .find(|existing| existing.claim_id == claim.claim_id)
+        {
+            if !refs_intersect(&existing.source_refs, source_set)
+                && !refs_intersect(&existing.evidence_refs, evidence_set)
+            {
+                bail!(
+                    "graphPatch claim {} collides with an out-of-scope existing claim",
+                    claim.claim_id
+                );
+            }
+        }
+    }
+    for page in &patch.wiki_pages {
+        if let Some(existing) = snapshot
+            .wiki_pages
+            .iter()
+            .find(|existing| existing.page_id == page.page_id || existing.path == page.path)
+        {
+            if !refs_intersect(&existing.source_refs, source_set)
+                && !refs_intersect(&existing.evidence_refs, evidence_set)
+            {
+                bail!(
+                    "graphPatch wiki page {} collides with an out-of-scope existing wiki page",
+                    page.page_id
                 );
             }
         }
@@ -394,4 +470,157 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyprduck_engine_types::{
+        BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainScope, ClaimRecord,
+        EvidenceRef, GraphPatchRelation, GraphPatchWikiPage, WikiPage,
+    };
+
+    #[test]
+    fn rejects_empty_top_level_scope_even_with_record_refs() {
+        let patch = GraphPatch {
+            schema_version: GRAPH_PATCH_SCHEMA_VERSION.into(),
+            source_ids: Vec::new(),
+            evidence_refs: Vec::new(),
+            nodes: vec![GraphPatchNode {
+                node_id: "node-a".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Alpha".into(),
+                scope: Some(BrainScope::Project),
+                aliases: Vec::new(),
+                source_ids: vec!["source-a".into()],
+                evidence_ids: vec!["ev-a".into()],
+            }],
+            relations: Vec::new(),
+            claims: Vec::new(),
+            wiki_pages: Vec::new(),
+            agent_metadata: Default::default(),
+        };
+
+        let error = ValidatedGraphPatchScope::validate_contract(&patch)
+            .expect_err("empty top-level source/evidence scope should fail");
+
+        assert!(error.to_string().contains("graphPatch.sourceIds"));
+    }
+
+    #[test]
+    fn rejects_out_of_scope_existing_id_collisions() {
+        let patch = GraphPatch {
+            schema_version: GRAPH_PATCH_SCHEMA_VERSION.into(),
+            source_ids: vec!["source-a".into()],
+            evidence_refs: vec!["ev-a".into()],
+            nodes: vec![GraphPatchNode {
+                node_id: "node-b".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Overwritten".into(),
+                scope: Some(BrainScope::Project),
+                aliases: Vec::new(),
+                source_ids: vec!["source-a".into()],
+                evidence_ids: vec!["ev-a".into()],
+            }],
+            relations: vec![GraphPatchRelation {
+                relation_id: "rel-b".into(),
+                kind: BrainRelationKind::Mentions,
+                source_node_id: "node-b".into(),
+                target_node_id: "source:source-a".into(),
+                label: String::new(),
+                evidence_ids: vec!["ev-a".into()],
+            }],
+            claims: vec![hyprduck_engine_types::GraphPatchClaim {
+                claim_id: "claim-b".into(),
+                statement: "Overwritten claim".into(),
+                topic_refs: vec!["node-b".into()],
+                source_refs: vec!["source-a".into()],
+                evidence_refs: vec!["ev-a".into()],
+                status: "agent_generated".into(),
+            }],
+            wiki_pages: vec![GraphPatchWikiPage {
+                page_id: "wiki-b".into(),
+                path: "wiki/b.md".into(),
+                title: "Overwritten wiki".into(),
+                body: "Body".into(),
+                node_refs: vec!["node-b".into()],
+                source_refs: vec!["source-a".into()],
+                evidence_refs: vec!["ev-a".into()],
+            }],
+            agent_metadata: Default::default(),
+        };
+        let scope = ValidatedGraphPatchScope::validate_contract(&patch).expect("valid contract");
+        let snapshot = snapshot_with_out_of_scope_records();
+
+        let error = scope
+            .validate_records(&patch, &snapshot)
+            .expect_err("out-of-scope ID collisions should fail before upsert");
+
+        assert!(error.to_string().contains("out-of-scope existing"));
+    }
+
+    fn snapshot_with_out_of_scope_records() -> BrainRepoSnapshot {
+        BrainRepoSnapshot {
+            workspace_id: "workspace-default".into(),
+            generated_at: 1,
+            sources: Vec::new(),
+            nodes: vec![BrainNodeRecord {
+                node_id: "node-b".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Beta".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["ev-b".into()],
+                source_ids: vec!["source-b".into()],
+                confidence: None,
+                updated_at: 1,
+            }],
+            relations: vec![BrainRelationRecord {
+                relation_id: "rel-b".into(),
+                kind: BrainRelationKind::Mentions,
+                source_node_id: "node-b".into(),
+                target_node_id: "source:source-b".into(),
+                label: String::new(),
+                evidence_ids: vec!["ev-b".into()],
+                confidence: None,
+                updated_at: 1,
+            }],
+            evidence: vec![EvidenceRef {
+                id: "ev-b".into(),
+                page_label: "1".into(),
+                page_index: Some(0),
+                snippet: "Beta".into(),
+                source_path: None,
+                source_id: Some("source-b".into()),
+                markdown_path: None,
+                image_path: None,
+                provenance: None,
+            }],
+            memories: Vec::new(),
+            wiki_pages: vec![WikiPage {
+                page_id: "wiki-b".into(),
+                workspace_id: "workspace-default".into(),
+                path: "wiki/b.md".into(),
+                title: "Beta wiki".into(),
+                body: "Body".into(),
+                node_refs: vec!["node-b".into()],
+                source_refs: vec!["source-b".into()],
+                evidence_refs: vec!["ev-b".into()],
+                updated_at: 1,
+            }],
+            entities: Vec::new(),
+            claims: vec![ClaimRecord {
+                claim_id: "claim-b".into(),
+                workspace_id: "workspace-default".into(),
+                statement: "Beta claim".into(),
+                topic_refs: vec!["node-b".into()],
+                source_refs: vec!["source-b".into()],
+                evidence_refs: vec!["ev-b".into()],
+                status: "provider_generated".into(),
+                updated_at: 1,
+            }],
+            extractions: Vec::new(),
+            events: Vec::new(),
+        }
+    }
 }

@@ -3455,6 +3455,7 @@ fn mark_import_jobs_graph_ready_in_transaction(
         sqlite.execute_batch(&format!(
             "UPDATE import_jobs
              SET graph_ready = 1,
+                 status = 'context_ready',
                  graph_status = 'ready',
                  graph_error_category = '',
                  graph_error_message_redacted = '',
@@ -5487,6 +5488,11 @@ mod tests {
             .expect("persist graph snapshot");
 
         assert_eq!(import_job_readiness(&store, "source-a"), (1, 1));
+        assert_eq!(
+            import_job_status(&store, "source-a"),
+            "context_ready",
+            "graph-ready commits should keep import lifecycle status consistent"
+        );
     }
 
     #[test]
@@ -5602,6 +5608,19 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .expect("read import job readiness")
+    }
+
+    fn import_job_status(store: &KnowledgeStore, source_id: &str) -> String {
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT status FROM import_jobs WHERE source_id = ?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .expect("read import job status")
     }
 
     fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
