@@ -24,11 +24,10 @@ pub(crate) fn parse_image_with_provider(
     let prompt = format!(
         "Convert this document page into clean markdown. Template: {template}. Preserve headings, lists, tables, and code blocks where possible."
     );
-    match &config.provider {
-        ProviderKind::OpenRouter | ProviderKind::Ollama => {
-            parse_openai_compatible(config, &prompt, Some(image_base64))
-        }
-        ProviderKind::Unknown(_) => unreachable!("unknown provider rejected before parse dispatch"),
+    if config.provider.uses_openai_compatible_chat_api() {
+        parse_openai_compatible(config, &prompt, Some(image_base64))
+    } else {
+        unreachable!("unknown provider rejected before parse dispatch")
     }
 }
 
@@ -51,11 +50,10 @@ pub(crate) fn parse_text_with_provider(
     let prompt = format!(
         "Convert the following extracted document text into clean markdown. Template: {template}.\n\n{text}"
     );
-    match &config.provider {
-        ProviderKind::OpenRouter | ProviderKind::Ollama => {
-            parse_openai_compatible(config, &prompt, None)
-        }
-        ProviderKind::Unknown(_) => unreachable!("unknown provider rejected before parse dispatch"),
+    if config.provider.uses_openai_compatible_chat_api() {
+        parse_openai_compatible(config, &prompt, None)
+    } else {
+        unreachable!("unknown provider rejected before parse dispatch")
     }
 }
 

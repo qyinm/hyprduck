@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::policy::redact_path_for_agent;
+
 const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
 const KNOWLEDGE_SCHEMA_VERSION: i64 = 1;
 const GRAPHQLITE_SCHEMA_VERSION: i64 = 1;
@@ -2741,16 +2743,6 @@ fn sql_optional_literal(value: Option<&str>) -> String {
     value.map(sql_literal).unwrap_or_else(|| "NULL".into())
 }
 
-fn redact_path_for_agent(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    Path::new(value)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<redacted>".into())
-}
-
 #[allow(dead_code)]
 fn evidence_graph_neighbor_counts(
     graph: &Graph,
@@ -3463,6 +3455,7 @@ fn mark_import_jobs_graph_ready_in_transaction(
         sqlite.execute_batch(&format!(
             "UPDATE import_jobs
              SET graph_ready = 1,
+                 status = 'context_ready',
                  graph_status = 'ready',
                  graph_error_category = '',
                  graph_error_message_redacted = '',
@@ -5495,6 +5488,11 @@ mod tests {
             .expect("persist graph snapshot");
 
         assert_eq!(import_job_readiness(&store, "source-a"), (1, 1));
+        assert_eq!(
+            import_job_status(&store, "source-a"),
+            "context_ready",
+            "graph-ready commits should keep import lifecycle status consistent"
+        );
     }
 
     #[test]
@@ -5610,6 +5608,19 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .expect("read import job readiness")
+    }
+
+    fn import_job_status(store: &KnowledgeStore, source_id: &str) -> String {
+        let graph = Graph::open(&store.path).expect("open graph");
+        graph
+            .connection()
+            .sqlite_connection()
+            .query_row(
+                "SELECT status FROM import_jobs WHERE source_id = ?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .expect("read import job status")
     }
 
     fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {

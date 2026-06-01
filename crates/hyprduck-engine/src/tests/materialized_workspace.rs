@@ -212,6 +212,57 @@ fn agent_graph_patch_rejects_relations_to_out_of_scope_existing_nodes() {
 }
 
 #[test]
+fn agent_graph_patch_preserves_existing_record_refs_when_updating_in_scope_node() {
+    let (_temp, workspace_root, scope) = seed_agent_patch_workspace();
+    let mut snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read seed snapshot");
+    snapshot.evidence.push(EvidenceRef {
+        id: "ev-other".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Existing cross-source evidence.".into(),
+        source_path: Some("[redacted-local-path]".into()),
+        source_id: Some("source-other".into()),
+        markdown_path: Some("[redacted-local-path]".into()),
+        image_path: None,
+        provenance: Some("test".into()),
+    });
+    snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-agent-graph-patch".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Existing graph concept".into(),
+        scope: BrainScope::Project,
+        aliases: vec!["Existing alias".into()],
+        evidence_ids: vec!["ev-agent-1".into(), "ev-other".into()],
+        source_ids: vec!["source-agent".into(), "source-other".into()],
+        confidence: Some(0.9),
+        updated_at: 10,
+    });
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write existing node");
+
+    let mut patch = agent_graph_patch();
+    patch.nodes[0].aliases = vec!["Patched alias".into()];
+    handle_apply_graph_patch(hyprduck_engine_types::ApplyGraphPatchRequest {
+        scope: scope.clone(),
+        agent_id: Some("codex".into()),
+        graph_patch: patch,
+    })
+    .expect("apply graph patch");
+
+    let node = handle_read_node(hyprduck_engine_types::ReadNodeRequest {
+        scope,
+        node_id: "concept-agent-graph-patch".into(),
+    })
+    .expect("read patched node");
+    assert!(node.node.source_ids.contains(&"source-agent".into()));
+    assert!(node.node.source_ids.contains(&"source-other".into()));
+    assert!(node.node.evidence_ids.contains(&"ev-agent-1".into()));
+    assert!(node.node.evidence_ids.contains(&"ev-other".into()));
+    assert!(node.node.aliases.contains(&"Existing alias".into()));
+    assert!(node.node.aliases.contains(&"Patched alias".into()));
+}
+
+#[test]
 fn read_graph_snapshot_includes_materialization_report_counts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let output_root = temp.path().join("HyprDuck");

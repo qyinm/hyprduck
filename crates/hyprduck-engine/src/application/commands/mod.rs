@@ -5,9 +5,15 @@ use hyprduck_engine_types::{
     SaveConfigResponseData, ValidateProviderRequest,
 };
 
+use crate::application::services::{
+    brain_health_service, brain_read_service, context_pack_service, project_service,
+};
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
+
+pub(crate) mod brain_write;
+pub(crate) mod graph;
 
 pub(crate) fn encode_success_response(
     request: EngineRequest,
@@ -19,61 +25,64 @@ pub(crate) fn encode_success_response(
         }
         EngineRequest::RetryFailedPages(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::RetryFailedPages,
-            crate::handle_retry_failed_pages(request, &config_store.load()?)?,
+            crate::application::services::ingest_service::handle_retry_failed_pages(
+                request,
+                &config_store.load()?,
+            )?,
         )),
         EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::CompileProject,
-            crate::handle_compile_project(request)?,
+            project_service::handle_compile_project(request)?,
         )),
         EngineRequest::ReadImportJob(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadImportJob,
-            crate::handle_read_import_job(request)?,
+            project_service::handle_read_import_job(request)?,
         )),
         EngineRequest::UpdateImportJobGraphStatus(request) => {
             serde_json::to_string(&EngineSuccess::new(
                 EngineCommand::UpdateImportJobGraphStatus,
-                crate::handle_update_import_job_graph_status(request)?,
+                project_service::handle_update_import_job_graph_status(request)?,
             ))
         }
         EngineRequest::LoadProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::LoadProject,
-            crate::handle_load_project(request)?,
+            project_service::handle_load_project(request)?,
         )),
         EngineRequest::ApplyCorrection(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ApplyCorrection,
-            crate::handle_apply_correction(request)?,
+            project_service::handle_apply_correction(request)?,
         )),
         EngineRequest::AnswerProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::AnswerProject,
-            crate::handle_answer_project(request)?,
+            project_service::handle_answer_project(request)?,
         )),
         EngineRequest::SearchBrain(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::SearchBrain,
-            crate::handle_search_brain(request)?,
+            brain_read_service::handle_search_brain(request)?,
         )),
         EngineRequest::ReadSource(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadSource,
-            crate::handle_read_source(request)?,
+            brain_read_service::handle_read_source(request)?,
         )),
         EngineRequest::ReadPageEvidence(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadPageEvidence,
-            crate::handle_read_page_evidence(request)?,
+            brain_read_service::handle_read_page_evidence(request)?,
         )),
         EngineRequest::ReadContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadContextPack,
-            crate::handle_read_context_pack(request)?,
+            context_pack_service::handle_read_context_pack(request)?,
         )),
         EngineRequest::ReadWikiPage(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadWikiPage,
-            crate::handle_read_wiki_page(request)?,
+            brain_read_service::handle_read_wiki_page(request)?,
         )),
         EngineRequest::ReadNode(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadNode,
-            crate::handle_read_node(request)?,
+            brain_read_service::handle_read_node(request)?,
         )),
         EngineRequest::ReadRecentEvents(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadRecentEvents,
-            crate::handle_read_recent_events(request)?,
+            brain_read_service::handle_read_recent_events(request)?,
         )),
         EngineRequest::ReadGraphHistory(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadGraphHistory,
@@ -89,11 +98,11 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::GetContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetContextPack,
-            crate::handle_get_context_pack(request)?,
+            context_pack_service::handle_get_context_pack(request)?,
         )),
         EngineRequest::GetBrainHealth(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetBrainHealth,
-            crate::handle_get_brain_health(request)?,
+            brain_health_service::handle_get_brain_health(request)?,
         )),
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
             let config = config_store.load()?;
@@ -132,27 +141,27 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::ApplyGraphPatch(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ApplyGraphPatch,
-            crate::handle_apply_graph_patch(request)?,
+            graph::handle_apply_graph_patch(request)?,
         )),
         EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WritePropose,
-            crate::handle_write_propose(request)?,
+            brain_write::handle_write_propose(request)?,
         )),
         EngineRequest::WriteCommit(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommit,
-            crate::handle_write_commit(request)?,
+            brain_write::handle_write_commit(request)?,
         )),
         EngineRequest::WriteCommitAll(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommitAll,
-            crate::handle_write_commit_all(request)?,
+            brain_write::handle_write_commit_all(request)?,
         )),
         EngineRequest::WriteList(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteList,
-            crate::handle_write_list(request)?,
+            brain_write::handle_write_list(request)?,
         )),
         EngineRequest::WriteReject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteReject,
-            crate::handle_write_reject(request)?,
+            brain_write::handle_write_reject(request)?,
         )),
     }
     .context("failed to encode engine response")?;

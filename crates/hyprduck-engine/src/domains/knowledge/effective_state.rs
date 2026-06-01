@@ -2,7 +2,7 @@ use super::cleanup::*;
 use super::origin::*;
 use super::replay::*;
 use super::*;
-use crate::domains::knowledge_store::KnowledgeStore;
+use crate::KnowledgeStore;
 
 pub(crate) fn write_materialized_brain_repo(
     root: &Path,

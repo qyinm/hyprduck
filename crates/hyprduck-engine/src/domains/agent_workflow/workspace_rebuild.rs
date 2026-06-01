@@ -18,7 +18,7 @@ use super::response::{
 use super::validation::{
     validate_provider_source_local_graph_snapshot, validate_provider_workspace_linking_snapshot,
 };
-use crate::provider::{EngineConfig, ProviderKind};
+use crate::provider::{EngineConfig, EngineConfigStore, ProviderKind};
 use crate::*;
 
 const PROVIDER_GRAPH_PROMPT_VERSION: u32 = 2;
