@@ -12,7 +12,6 @@ use reqwest::{blocking::Client, Url};
 
 pub(crate) mod catalog;
 pub(crate) mod config;
-pub(crate) mod openai_compatible;
 pub(crate) mod parse_provider;
 pub(crate) mod readiness;
 

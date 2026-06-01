@@ -83,7 +83,7 @@ mod brain_repo {
 }
 
 mod chat_openai_compatible_client {
-    pub(crate) use crate::domains::provider::openai_compatible::*;
+    pub(crate) use crate::adapters::providers::openai_compatible::*;
 }
 
 mod import_context {
