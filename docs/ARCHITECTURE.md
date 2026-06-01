@@ -184,6 +184,10 @@ HyprDuck uses named boundaries only when they protect a real contract.
   dispatch. Handler bodies may move into family modules, such as graph, write,
   read, provider, or ingest, but the public command names and response shapes
   remain grep-friendly and schema-backed.
+- A generic Command trait is not part of the current engine boundary. Add one
+  only if multiple command families need shared middleware for validation,
+  authorization, tracing, or retry semantics that cannot stay clear in the
+  exhaustive enum dispatcher.
 - Builders are for artifacts with cross-field invariants: schema versions,
   required IDs, provider route and local/hosted disclosure, content hashes,
   warnings, or budget metadata. Plain wire DTOs should remain plain serde
