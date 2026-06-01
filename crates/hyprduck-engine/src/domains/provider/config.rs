@@ -87,6 +87,10 @@ impl ProviderKind {
         true
     }
 
+    pub(crate) fn uses_openai_compatible_chat_api(&self) -> bool {
+        matches!(self, Self::OpenRouter | Self::Ollama)
+    }
+
     pub(crate) fn all() -> [ProviderKind; 2] {
         [Self::OpenRouter, Self::Ollama]
     }
@@ -259,5 +263,19 @@ mod tests {
         let surfaced = config.to_payload();
         assert_eq!(surfaced.provider, "legacy_ai");
         assert!(surfaced.model_options.is_empty());
+    }
+
+    #[test]
+    fn provider_strategy_surface_stays_launch_scoped() {
+        let launch_providers = ProviderKind::all()
+            .into_iter()
+            .map(|provider| provider.id_slug().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(launch_providers, ["open_router", "ollama"]);
+        assert!(ProviderKind::OpenRouter.uses_openai_compatible_chat_api());
+        assert!(ProviderKind::Ollama.uses_openai_compatible_chat_api());
+        assert!(!ProviderKind::Unknown("openai".into()).uses_openai_compatible_chat_api());
+        assert!(!ProviderKind::Unknown("anthropic".into()).uses_openai_compatible_chat_api());
     }
 }

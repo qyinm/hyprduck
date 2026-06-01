@@ -199,6 +199,15 @@ HyprDuck uses named boundaries only when they protect a real contract.
   evidence selection. Do not add a provider plugin framework or imply direct
   OpenAI/Anthropic support.
 
+Current strategy audit:
+
+| Area | Boundary decision |
+| --- | --- |
+| Provider calls | Keep `ProviderKind` enum dispatch. OpenRouter and Ollama share the OpenAI-compatible chat adapter; unknown slugs remain preserved but unsupported. |
+| Parser execution | Keep direct format dispatch in ingest parsing. MarkItDown, PDF rendering, visual parsing, and text parsing are concrete paths, not plugin strategies yet. |
+| Retrieval/search | Keep deterministic local query and scoring functions. Add a trait only if multiple retrieval engines need the same call contract. |
+| Evidence selection | Keep current context-pack construction functions until budget or ranking policy varies independently of retrieval. |
+
 ## MCP Surface
 
 `hyprduck mcp serve` exposes read/search tools plus controlled mutating tools:
