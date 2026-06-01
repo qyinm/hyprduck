@@ -5,7 +5,9 @@ use hyprduck_engine_types::{
     SaveConfigResponseData, ValidateProviderRequest,
 };
 
-use crate::application::services::{brain_read_service, context_pack_service, project_service};
+use crate::application::services::{
+    brain_health_service, brain_read_service, context_pack_service, project_service,
+};
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
@@ -100,7 +102,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::GetBrainHealth(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetBrainHealth,
-            crate::handle_get_brain_health(request)?,
+            brain_health_service::handle_get_brain_health(request)?,
         )),
         EngineRequest::LoadConfig(LoadConfigRequest {}) => {
             let config = config_store.load()?;
