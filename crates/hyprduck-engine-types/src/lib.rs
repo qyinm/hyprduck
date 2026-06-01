@@ -769,6 +769,8 @@ pub struct WriteCommitResultItem {
     #[serde(default)]
     pub memory_id: Option<String>,
     #[serde(default)]
+    pub error_category: Option<String>,
+    #[serde(default)]
     pub error: Option<String>,
 }
 

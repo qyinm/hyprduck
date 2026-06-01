@@ -1886,6 +1886,7 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
                 status: "committed".into(),
                 event_id: Some(response.event_id),
                 memory_id: Some(response.memory_id),
+                error_category: None,
                 error: None,
             }),
             Err(error) => results.push(WriteCommitResultItem {
@@ -1893,6 +1894,7 @@ fn handle_write_commit_all(request: WriteCommitAllRequest) -> Result<WriteCommit
                 status: "failed".into(),
                 event_id: None,
                 memory_id: None,
+                error_category: Some(classify_agent_write_error(&error.to_string()).into()),
                 error: Some(error.to_string()),
             }),
         }
@@ -2111,6 +2113,39 @@ fn validate_evidence_refs(
         }
     }
     Ok(())
+}
+
+fn classify_agent_write_error(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("evidence_ref") || lower.contains("evidence ref") {
+        "evidence_scope"
+    } else if lower.contains("proposalid")
+        || lower.contains("proposal ")
+        || lower.contains("not found")
+        || lower.contains("already committed")
+        || lower.contains("already rejected")
+    {
+        "proposal_state"
+    } else if lower.contains("unsupported contenttype")
+        || lower.contains("not implemented")
+        || lower.contains("schema")
+    {
+        "schema"
+    } else if lower.contains("approval") {
+        "approval_required"
+    } else if lower.contains("permission")
+        || lower.contains("readonly")
+        || lower.contains("read-only")
+        || lower.contains("database is locked")
+        || lower.contains("database is busy")
+        || lower.contains("failed writing")
+        || lower.contains("failed removing")
+        || lower.contains("failed committing")
+    {
+        "persistence"
+    } else {
+        "unknown"
+    }
 }
 
 fn validate_committable_proposal(

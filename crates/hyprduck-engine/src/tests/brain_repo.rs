@@ -477,6 +477,33 @@ fn small_evidence_refresh_and_link_repair_proposals_can_commit_without_user_appr
 }
 
 #[test]
+fn write_commit_all_reports_stable_error_categories_per_item() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(temp.path().display().to_string()),
+    };
+
+    let response = handle_write_commit_all(WriteCommitAllRequest {
+        scope,
+        proposal_ids: vec!["prop-0123456789abcdef0123456789abcdef".into()],
+    })
+    .expect("commit all returns per-item failures");
+
+    assert_eq!(response.results.len(), 1);
+    assert_eq!(response.results[0].status, "failed");
+    assert_eq!(
+        response.results[0].error_category.as_deref(),
+        Some("proposal_state")
+    );
+    assert!(response.results[0]
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("not found"));
+}
+
+#[test]
 fn brain_health_reports_source_readiness_metadata() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);
