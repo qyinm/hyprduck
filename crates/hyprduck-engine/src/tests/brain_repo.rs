@@ -149,8 +149,12 @@ fn agent_session_write_proposal_commits_memory_and_reuses_in_context_pack() {
         user_approved: false,
     })
     .expect("commit proposal");
-    assert!(committed.event_id.starts_with("evt-"));
-    assert!(committed.memory_id.starts_with("memory-"));
+    let proposal_suffix = proposal
+        .proposal_id
+        .strip_prefix("prop-")
+        .expect("proposal suffix");
+    assert_eq!(committed.event_id, format!("evt-{proposal_suffix}"));
+    assert_eq!(committed.memory_id, format!("memory-{proposal_suffix}"));
     assert!(!workspace_root
         .join("proposals")
         .join(format!("{}.json", proposal.proposal_id))

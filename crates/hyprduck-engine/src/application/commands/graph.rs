@@ -65,22 +65,55 @@ pub(crate) fn handle_apply_graph_patch(
         evidence_by_id.into_values().collect(),
         |evidence| evidence.id.clone(),
     );
+    let existing_nodes = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.clone(), node.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let existing_relations = snapshot
+        .relations
+        .iter()
+        .map(|relation| (relation.relation_id.clone(), relation.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let existing_claims = snapshot
+        .claims
+        .iter()
+        .map(|claim| (claim.claim_id.clone(), claim.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let existing_wiki_pages = snapshot
+        .wiki_pages
+        .iter()
+        .map(|page| (page.page_id.clone(), page.clone()))
+        .collect::<BTreeMap<_, _>>();
+
     upsert_by_id(
         &mut snapshot.nodes,
         request
             .graph_patch
             .nodes
             .iter()
-            .map(|node| BrainNodeRecord {
-                node_id: node.node_id.clone(),
-                kind: node.kind,
-                label: node.label.clone(),
-                scope: node.scope.unwrap_or(BrainScope::Project),
-                aliases: unique_strings(node.aliases.clone()),
-                evidence_ids: unique_strings(node.evidence_ids.clone()),
-                source_ids: unique_strings(node.source_ids.clone()),
-                confidence: None,
-                updated_at: now,
+            .map(|node| {
+                let existing = existing_nodes.get(&node.node_id);
+                BrainNodeRecord {
+                    node_id: node.node_id.clone(),
+                    kind: node.kind,
+                    label: node.label.clone(),
+                    scope: node
+                        .scope
+                        .or_else(|| existing.map(|record| record.scope))
+                        .unwrap_or(BrainScope::Project),
+                    aliases: merge_strings(existing.map(|record| &record.aliases), &node.aliases),
+                    evidence_ids: merge_strings(
+                        existing.map(|record| &record.evidence_ids),
+                        &node.evidence_ids,
+                    ),
+                    source_ids: merge_strings(
+                        existing.map(|record| &record.source_ids),
+                        &node.source_ids,
+                    ),
+                    confidence: existing.and_then(|record| record.confidence),
+                    updated_at: now,
+                }
             })
             .collect(),
         |node| node.node_id.clone(),
@@ -91,15 +124,21 @@ pub(crate) fn handle_apply_graph_patch(
             .graph_patch
             .relations
             .iter()
-            .map(|relation| BrainRelationRecord {
-                relation_id: relation.relation_id.clone(),
-                kind: relation.kind,
-                source_node_id: relation.source_node_id.clone(),
-                target_node_id: relation.target_node_id.clone(),
-                label: relation.label.clone(),
-                evidence_ids: unique_strings(relation.evidence_ids.clone()),
-                confidence: None,
-                updated_at: now,
+            .map(|relation| {
+                let existing = existing_relations.get(&relation.relation_id);
+                BrainRelationRecord {
+                    relation_id: relation.relation_id.clone(),
+                    kind: relation.kind,
+                    source_node_id: relation.source_node_id.clone(),
+                    target_node_id: relation.target_node_id.clone(),
+                    label: relation.label.clone(),
+                    evidence_ids: merge_strings(
+                        existing.map(|record| &record.evidence_ids),
+                        &relation.evidence_ids,
+                    ),
+                    confidence: existing.and_then(|record| record.confidence),
+                    updated_at: now,
+                }
             })
             .collect(),
         |relation| relation.relation_id.clone(),
@@ -110,15 +149,27 @@ pub(crate) fn handle_apply_graph_patch(
             .graph_patch
             .claims
             .iter()
-            .map(|claim| ClaimRecord {
-                claim_id: claim.claim_id.clone(),
-                workspace_id: request.scope.workspace_id.clone(),
-                statement: claim.statement.clone(),
-                topic_refs: unique_strings(claim.topic_refs.clone()),
-                source_refs: unique_strings(claim.source_refs.clone()),
-                evidence_refs: unique_strings(claim.evidence_refs.clone()),
-                status: claim.status.clone(),
-                updated_at: now,
+            .map(|claim| {
+                let existing = existing_claims.get(&claim.claim_id);
+                ClaimRecord {
+                    claim_id: claim.claim_id.clone(),
+                    workspace_id: request.scope.workspace_id.clone(),
+                    statement: claim.statement.clone(),
+                    topic_refs: merge_strings(
+                        existing.map(|record| &record.topic_refs),
+                        &claim.topic_refs,
+                    ),
+                    source_refs: merge_strings(
+                        existing.map(|record| &record.source_refs),
+                        &claim.source_refs,
+                    ),
+                    evidence_refs: merge_strings(
+                        existing.map(|record| &record.evidence_refs),
+                        &claim.evidence_refs,
+                    ),
+                    status: claim.status.clone(),
+                    updated_at: now,
+                }
             })
             .collect(),
         |claim| claim.claim_id.clone(),
@@ -129,16 +180,28 @@ pub(crate) fn handle_apply_graph_patch(
             .graph_patch
             .wiki_pages
             .iter()
-            .map(|page| WikiPage {
-                page_id: page.page_id.clone(),
-                workspace_id: request.scope.workspace_id.clone(),
-                path: page.path.clone(),
-                title: page.title.clone(),
-                body: page.body.clone(),
-                node_refs: unique_strings(page.node_refs.clone()),
-                source_refs: unique_strings(page.source_refs.clone()),
-                evidence_refs: unique_strings(page.evidence_refs.clone()),
-                updated_at: now,
+            .map(|page| {
+                let existing = existing_wiki_pages.get(&page.page_id);
+                WikiPage {
+                    page_id: page.page_id.clone(),
+                    workspace_id: request.scope.workspace_id.clone(),
+                    path: page.path.clone(),
+                    title: page.title.clone(),
+                    body: page.body.clone(),
+                    node_refs: merge_strings(
+                        existing.map(|record| &record.node_refs),
+                        &page.node_refs,
+                    ),
+                    source_refs: merge_strings(
+                        existing.map(|record| &record.source_refs),
+                        &page.source_refs,
+                    ),
+                    evidence_refs: merge_strings(
+                        existing.map(|record| &record.evidence_refs),
+                        &page.evidence_refs,
+                    ),
+                    updated_at: now,
+                }
             })
             .collect(),
         |page| page.page_id.clone(),
@@ -214,10 +277,13 @@ pub(crate) fn handle_apply_graph_patch(
     })
 }
 
-fn unique_strings(values: Vec<String>) -> Vec<String> {
-    values
+fn merge_strings(existing: Option<&Vec<String>>, incoming: &[String]) -> Vec<String> {
+    existing
         .into_iter()
+        .flat_map(|values| values.iter())
+        .chain(incoming.iter())
         .filter(|value| !value.trim().is_empty())
+        .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()

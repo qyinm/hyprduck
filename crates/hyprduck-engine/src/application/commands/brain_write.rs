@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::brain_repo::{read_materialized_brain_snapshot, BrainWorkspaceWriter};
+use crate::brain_repo::{
+    read_materialized_brain_snapshot, BrainArtifactRepository, BrainWorkspaceWriter,
+};
 use crate::domains::knowledge_store::{AgentWriteProposalRecord, KnowledgeStore};
 use crate::{
     read_json_artifact, resolve_brain_workspace_root, unix_timestamp_seconds, write_json_pretty,
@@ -101,8 +103,12 @@ pub(crate) fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCo
     validate_committable_proposal(&proposal, &request)?;
 
     let now = unix_timestamp_seconds();
-    let memory_id = format!("memory-{}", Uuid::now_v7().as_simple());
-    let event_id = format!("evt-{}", Uuid::now_v7().as_simple());
+    let proposal_suffix = request
+        .proposal_id
+        .strip_prefix("prop-")
+        .expect("proposal id validated");
+    let memory_id = format!("memory-{proposal_suffix}");
+    let event_id = format!("evt-{proposal_suffix}");
 
     let memory = MemoryRecord {
         memory_id: memory_id.clone(),
@@ -145,13 +151,7 @@ pub(crate) fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCo
         created_at: now,
     };
 
-    store.record_agent_write_commit(
-        &request.scope.workspace_id,
-        &request.proposal_id,
-        &event,
-        now as i64,
-    )?;
-    writer.repo().append_event(&event)?;
+    append_event_once(writer.repo(), &event)?;
     let mut memories = writer.repo().read_memory_records()?;
     if let Some(existing) = memories.iter_mut().find(|m| m.memory_id == memory_id) {
         *existing = memory.clone();
@@ -165,6 +165,12 @@ pub(crate) fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCo
             .then_with(|| left.memory_id.cmp(&right.memory_id))
     });
     writer.repo().write_memory_records(&memories)?;
+    store.record_agent_write_commit(
+        &request.scope.workspace_id,
+        &request.proposal_id,
+        &event,
+        now as i64,
+    )?;
     match fs::remove_file(&proposal_path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -180,6 +186,17 @@ pub(crate) fn handle_write_commit(request: WriteCommitRequest) -> Result<WriteCo
         memory_id,
         stored_at: now,
     })
+}
+
+fn append_event_once(repo: &BrainArtifactRepository, event: &BrainEvent) -> Result<()> {
+    if repo
+        .read_brain_events()?
+        .iter()
+        .any(|existing| existing.event_id == event.event_id)
+    {
+        return Ok(());
+    }
+    repo.append_event(event)
 }
 
 pub(crate) fn handle_write_commit_all(

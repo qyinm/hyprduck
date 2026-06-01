@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     graph_status_is_ready, ApplyGraphPatchRequest, BrainReadScope, CompileProjectRequest,
@@ -30,6 +30,7 @@ use policy::{
 use policy::{IMPORT_ALLOWED_ROOTS_ENV, ROOT_DIR_ALLOWED_ROOTS_ENV, ROOT_DIR_ENV};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const LOCAL_PATH_DISCLOSURE_ENV: &str = "HYPRDUCK_MCP_ALLOW_LOCAL_PATHS";
 const PROPOSAL_ID_PATTERN: &str = "^prop-[0-9A-Fa-f]{32}$";
 const WRITE_CONTENT_TYPES: [&str; 3] = ["memory", "evidence_refresh", "link_repair"];
 
@@ -226,8 +227,8 @@ fn handle_tool_call(
         }
         None => return error_response(id, -32602, "Invalid params: missing arguments"),
     };
-    let include_local_paths = match optional_bool(arguments, "includeLocalPaths") {
-        Ok(value) => value.unwrap_or(false),
+    let include_local_paths = match local_path_disclosure_for_tool(name, arguments) {
+        Ok(value) => value,
         Err(error) => {
             return success_response(
                 id,
@@ -238,13 +239,16 @@ fn handle_tool_call(
                             "text": error.to_string()
                         }
                     ],
-                    "isError": true
+                    "isError": true,
+                    "_meta": {
+                        "hyprduckErrorCategory": classify_mcp_error(&error.to_string())
+                    }
                 }),
             )
         }
     };
 
-    let result = match call_tool(client, state, name, arguments) {
+    let result = match call_tool(client, state, name, arguments, include_local_paths) {
         Ok(tool_result) => {
             let value = if include_local_paths {
                 tool_result.value
@@ -1262,6 +1266,7 @@ fn call_tool(
     state: &McpServerState,
     name: &str,
     arguments: &Map<String, Value>,
+    include_local_paths: bool,
 ) -> Result<McpToolResult> {
     let scope = read_scope(arguments)?;
     let cache_scope = scope.clone();
@@ -1355,8 +1360,6 @@ fn call_tool(
         }
         "read_source" => {
             let source_id = required_string(arguments, "sourceId")?;
-            let include_local_paths =
-                optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
             serde_json::to_value(client.read_source(ReadSourceRequest {
                 scope,
                 source_id,
@@ -1366,8 +1369,6 @@ fn call_tool(
         "read_page_evidence" => {
             let source_id = required_string(arguments, "sourceId")?;
             let page = optional_usize(arguments, "page")?;
-            let include_local_paths =
-                optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
             if page == Some(0) {
                 return Err(anyhow!("argument page must be a positive 1-based integer"));
             }
@@ -1409,7 +1410,7 @@ fn call_tool(
         "read_graph_snapshot" => {
             serde_json::to_value(client.read_graph_snapshot(ReadGraphSnapshotRequest {
                 scope,
-                include_local_paths: false,
+                include_local_paths,
             })?)?
         }
         "read_health" => {
@@ -1514,6 +1515,31 @@ struct McpGraphWikiCacheToken {
 
 fn cache_sensitive_tool(name: &str) -> bool {
     matches!(name, "graph_patch_apply" | "read_health")
+}
+
+fn local_path_disclosure_for_tool(name: &str, arguments: &Map<String, Value>) -> Result<bool> {
+    let requested = optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
+    if !requested {
+        return Ok(false);
+    }
+    if !supports_local_path_disclosure(name) {
+        bail!("includeLocalPaths is not supported for tool {name}");
+    }
+    if !local_path_disclosure_allowed() {
+        bail!("includeLocalPaths requires HYPRDUCK_MCP_ALLOW_LOCAL_PATHS=1");
+    }
+    Ok(true)
+}
+
+fn supports_local_path_disclosure(name: &str) -> bool {
+    matches!(
+        name,
+        "read_source" | "read_page_evidence" | "read_graph_snapshot"
+    )
+}
+
+fn local_path_disclosure_allowed() -> bool {
+    std::env::var(LOCAL_PATH_DISCLOSURE_ENV).is_ok_and(|value| value == "1")
 }
 
 fn read_graph_wiki_cache_state(
@@ -2073,13 +2099,15 @@ fn tool_definition(
             "description": "Optional development-only materialized workspace root. Disabled unless HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 and HYPRDUCK_MCP_ALLOWED_ROOTS allow it."
         }),
     );
-    merged_properties.insert(
-        "includeLocalPaths".into(),
-        json!({
-            "type": "boolean",
-            "description": "Include absolute local filesystem paths in responses. Defaults to false; keep false for agent-facing calls."
-        }),
-    );
+    if supports_local_path_disclosure(name) {
+        merged_properties.insert(
+            "includeLocalPaths".into(),
+            json!({
+                "type": "boolean",
+                "description": "Include absolute local filesystem paths in responses only when the MCP server was started with HYPRDUCK_MCP_ALLOW_LOCAL_PATHS=1. Defaults to false; keep false for agent-facing calls."
+            }),
+        );
+    }
 
     let mut annotations = json!({
         "readOnlyHint": read_only,
@@ -2144,6 +2172,7 @@ mod tests {
         std::env::remove_var(ROOT_DIR_ENV);
         std::env::remove_var(ROOT_DIR_ALLOWED_ROOTS_ENV);
         std::env::remove_var(IMPORT_ALLOWED_ROOTS_ENV);
+        std::env::remove_var(LOCAL_PATH_DISCLOSURE_ENV);
     }
 
     fn set_allowed_roots(paths: &[&Path]) {
@@ -3041,6 +3070,32 @@ mod tests {
             redact_local_path_text("relative state/latest-readable-snapshot.json stays"),
             "relative state/latest-readable-snapshot.json stays"
         );
+    }
+
+    #[test]
+    fn include_local_paths_requires_server_opt_in_and_supported_tool() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_root_dir_env();
+
+        let mut arguments = Map::new();
+        arguments.insert("includeLocalPaths".into(), Value::Bool(true));
+        let error = local_path_disclosure_for_tool("read_source", &arguments)
+            .expect_err("server opt-in required");
+        assert!(error
+            .to_string()
+            .contains("HYPRDUCK_MCP_ALLOW_LOCAL_PATHS=1"));
+
+        std::env::set_var(LOCAL_PATH_DISCLOSURE_ENV, "1");
+        let unsupported = local_path_disclosure_for_tool("search_documents", &arguments)
+            .expect_err("unsupported tool rejects local path disclosure");
+        assert!(unsupported
+            .to_string()
+            .contains("includeLocalPaths is not supported"));
+
+        assert!(local_path_disclosure_for_tool("read_source", &arguments)
+            .expect("supported tool can disclose paths when server opted in"));
+
+        clear_root_dir_env();
     }
 
     #[test]
