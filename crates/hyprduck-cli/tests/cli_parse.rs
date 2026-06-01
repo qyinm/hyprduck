@@ -239,6 +239,14 @@ fn mcp_install_codex_registers_server_and_shell_command() {
         .args(["mcp", "install", "codex"])
         .env("HOME", &home)
         .env("HYPRDUCK_CODEX_BIN", &fake_codex)
+        .env("HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS", "/tmp/hyprduck-imports")
+        .env("HYPRDUCK_MCP_ALLOW_ROOT_DIR", "1")
+        .env("HYPRDUCK_MCP_ALLOWED_ROOTS", "/tmp/hyprduck-workspace")
+        .env(
+            "HYPRDUCK_PROJECT_STORE",
+            "/tmp/hyprduck-proof/knowledge.sqlite3",
+        )
+        .env("HYPRDUCK_DISABLE_PROVIDER_GRAPH", "1")
         .output()
         .expect("mcp install command should run");
 
@@ -249,12 +257,21 @@ fn mcp_install_codex_registers_server_and_shell_command() {
     );
     let calls = fs::read_to_string(&log).unwrap();
     assert!(calls.contains("mcp remove hyprduck"));
-    assert!(calls.contains("mcp add hyprduck --"));
+    assert!(calls.contains("mcp add --env"));
+    assert!(calls.contains("hyprduck --"));
+    assert!(calls.contains("--env HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS=/tmp/hyprduck-imports"));
+    assert!(calls.contains("--env HYPRDUCK_MCP_ALLOW_ROOT_DIR=1"));
+    assert!(calls.contains("--env HYPRDUCK_MCP_ALLOWED_ROOTS=/tmp/hyprduck-workspace"));
+    assert!(calls.contains("--env HYPRDUCK_PROJECT_STORE=/tmp/hyprduck-proof/knowledge.sqlite3"));
+    assert!(calls.contains("--env HYPRDUCK_DISABLE_PROVIDER_GRAPH=1"));
     assert!(calls.contains("mcp serve"));
     assert!(home.join(".local/bin/hyprduck").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("shell command:"));
     assert!(stdout.contains("path note:"));
+    assert!(stdout.contains(
+        "env: HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS, HYPRDUCK_MCP_ALLOW_ROOT_DIR, HYPRDUCK_MCP_ALLOWED_ROOTS, HYPRDUCK_PROJECT_STORE, HYPRDUCK_DISABLE_PROVIDER_GRAPH"
+    ));
     let _ = fs::remove_dir_all(home);
 }
 
