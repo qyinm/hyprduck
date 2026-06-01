@@ -296,6 +296,39 @@ fn source_import_persists_canonical_db_rows_and_fts() {
 }
 
 #[test]
+fn source_import_marks_citation_ready_when_warning_pages_still_emit_evidence() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeProjectStore::new(temp.path().join("hyprduck.sqlite"));
+    let markdown = "# Source import\n\n## Page 1\n\nFallback evidence can still be cited.\n";
+    let (project, mut manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        markdown,
+        "source-warning-evidence",
+        "warning-source",
+        11,
+    );
+    manifest.pages[0].error_message = Some("provider_config: fallback markdown used".into());
+    let request = CompileProjectRequest {
+        source_markdown_path: temp.path().join("sample.md").display().to_string(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: None,
+    };
+
+    store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save warning-backed source with evidence");
+
+    assert_eq!(count_table_rows(&store, "evidence_items"), 1);
+    assert_eq!(
+        import_job_readiness(&store, "source-warning-evidence"),
+        "1:1"
+    );
+}
+
+#[test]
 fn source_import_redacts_page_artifact_paths() {
     let temp = tempfile::tempdir().expect("temp dir");
     let db_path = temp.path().join("hyprduck.sqlite");

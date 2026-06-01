@@ -94,6 +94,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |
+| `graph_patch_apply` | `graphPatch` | Auto-apply an agent-generated `hyprduck.graph_patch.v1` graph/wiki patch after validating source IDs, evidence refs, relation endpoints, claim refs, and wiki refs. |
 | `write_propose` | `contentType`, `title`, `body`, `evidenceRefs` | Stage an agent-proposed knowledge item after validating every evidence ref against the current workspace snapshot. |
 | `write_commit` | `proposalId` | Approve one pending proposal and persist it as a `MemoryAccepted` brain event. |
 | `write_commit_all` | `proposalIds` | Approve multiple pending proposals by explicit proposal ID list. |
@@ -180,8 +181,9 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
-{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"graph_patch_apply","arguments":{"workspaceId":"default","agentId":"codex","graphPatch":{"schemaVersion":"hyprduck.graph_patch.v1","sourceIds":["source-example"],"evidenceRefs":["ev-source-example-p1-0001"],"nodes":[{"nodeId":"concept-agent-context","kind":"concept","label":"Agent context","sourceIds":["source-example"],"evidenceIds":["ev-source-example-p1-0001"]}],"relations":[{"relationId":"rel-source-agent-context","kind":"mentions","sourceNodeId":"source:source-example","targetNodeId":"concept-agent-context","label":"mentions","evidenceIds":["ev-source-example-p1-0001"]}]}}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
 
 `import_source` returns before parsing and graph/wiki materialization finish.
@@ -198,6 +200,14 @@ A typical agent-chat approval flow for controlled graph/wiki/memory mutation is:
 4. Approval maps to `write_commit` or `write_commit_all`; rejection maps to `write_reject`.
 5. Approved memory writes append `MemoryAccepted` events and update `memory/records.json`, so later `search_brain` and `get_context_pack` calls can retrieve the saved knowledge.
 
+Agent-generated graph creation is separate from the proposal flow. If an agent
+has already read source/evidence through MCP and is responsible for creating the
+graph with its own model runtime, it calls `graph_patch_apply` directly. Valid
+patches are auto-applied and audited as `agent_graph_patch_apply` graph
+materialization events. Provider graph generation remains available through the
+normal import path and `import_retry_graph`, using the configured
+OpenRouter/Ollama provider.
+
 Tool results return JSON as text content so MCP clients can pass the complete
 source, evidence, node, claim, relation, memory, and event IDs back to agents.
 
@@ -205,9 +215,9 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
 
 - MCP is a controlled read/write agent workflow surface, not a read-only API.
   Agents may propose evidence-backed changes to HyprDuck knowledge state,
-  including memory today and graph/wiki save-back or correction flows as those
-  tools are exposed. Mutating tools must be narrow, auditable, accurately
-  annotated with `readOnlyHint: false`, and backed by explicit approval calls.
+  including memory proposals and direct evidence-backed graph patches. Mutating
+  tools must be narrow, auditable, accurately annotated with
+  `readOnlyHint: false`, and backed by source/evidence validation.
 - Pending proposal inspection such as `write_list` is read-only even though it
   belongs to the write workflow. Approval happens through explicit
   `write_commit` / `write_commit_all` MCP calls, and rejected proposals are

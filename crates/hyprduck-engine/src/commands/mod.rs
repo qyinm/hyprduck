@@ -130,6 +130,10 @@ pub(crate) fn encode_success_response(
             EngineCommand::CheckReadiness,
             check_readiness(config_store),
         )),
+        EngineRequest::ApplyGraphPatch(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::ApplyGraphPatch,
+            crate::handle_apply_graph_patch(request)?,
+        )),
         EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WritePropose,
             crate::handle_write_propose(request)?,
@@ -182,6 +186,7 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::ValidateProvider(_) => EngineCommand::ValidateProvider,
         EngineRequest::ListProviderModels(_) => EngineCommand::ListProviderModels,
         EngineRequest::CheckReadiness(_) => EngineCommand::CheckReadiness,
+        EngineRequest::ApplyGraphPatch(_) => EngineCommand::ApplyGraphPatch,
         EngineRequest::WritePropose(_) => EngineCommand::WritePropose,
         EngineRequest::WriteCommit(_) => EngineCommand::WriteCommit,
         EngineRequest::WriteCommitAll(_) => EngineCommand::WriteCommitAll,

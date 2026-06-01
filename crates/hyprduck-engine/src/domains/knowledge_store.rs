@@ -434,6 +434,15 @@ impl KnowledgeStore {
                 .filter(|page| page.error_message.is_some())
                 .count();
             let success_count = manifest.pages.len().saturating_sub(failed_count);
+            let project_evidence = unique_project_evidence(project);
+            let source_evidence_count = project_evidence
+                .iter()
+                .filter(|evidence| {
+                    evidence.source_id.as_deref().unwrap_or(&manifest.source_id)
+                        == manifest.source_id
+                })
+                .count();
+            let citation_ready = success_count > 0 || source_evidence_count > 0;
             let warnings_json = serde_json::to_string(
                 &manifest
                     .pages
@@ -489,7 +498,7 @@ impl KnowledgeStore {
                 workspace_id = sql_literal(&manifest.workspace_id),
                 source_id = sql_literal(&manifest.source_id),
                 status = sql_literal(&status),
-                citation_ready = if success_count > 0 { 1 } else { 0 },
+                citation_ready = if citation_ready { 1 } else { 0 },
                 created_at = manifest.created_at,
                 updated_at = manifest.updated_at,
                 project_id = sql_literal(&project.summary.project_id),
@@ -548,7 +557,7 @@ impl KnowledgeStore {
                 }
             }
 
-            for evidence in unique_project_evidence(project) {
+            for evidence in project_evidence {
                 let source_id = evidence.source_id.as_deref().unwrap_or(&manifest.source_id);
                 if source_id != manifest.source_id {
                     continue;

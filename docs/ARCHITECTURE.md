@@ -19,8 +19,10 @@ write-gating layer.
 4. Agents read structured context rather than scraping the UI. The Rust engine
    and MCP server expose search, context packs, graph snapshots, source reads,
    wiki reads, event history, and health.
-5. Provider-generated graph output is parsed, normalized, validated, written
-   with run artifacts, and materialized into the local workspace.
+5. Graph output has two supported materialization paths: provider-generated
+   graph output through OpenRouter/Ollama, and agent-generated graph patches
+   submitted over MCP. Both paths validate source/evidence refs before writing
+   GraphQLite graph state.
 
 ## Repository Map
 
@@ -97,6 +99,27 @@ flowchart TB
 - `brain`: reads graph/wiki/source/event artifacts, reconstructs graph state,
   writes corrections, and reports health.
 
+## Graph Materialization Paths
+
+Provider graph generation remains the engine-owned AI calling path. During
+import or graph retry, the Rust engine calls the configured OpenRouter-hosted
+model or local Ollama-compatible endpoint, normalizes provider output, validates
+source/evidence references, writes provider run artifacts, and commits the
+materialized graph/wiki snapshot.
+
+Agent graph patching is the MCP-owned agent path. External agents such as Codex,
+Claude Code, or a local PI agent read source/evidence/context through MCP using
+their own model runtime, then call `graph_patch_apply` with a
+`hyprduck.graph_patch.v1` payload. HyprDuck does not call that model. The engine
+validates the patch schema, source scope, evidence refs, relation endpoints,
+claim refs, and wiki refs, then auto-applies the valid patch through the same
+GraphQLite snapshot commit path and records an audit event with
+`operationType: agent_graph_patch_apply`.
+
+Both paths preserve the desktop graph canvas as the inspection surface and keep
+local paths redacted in agent-facing MCP output unless the caller explicitly
+requests local path disclosure.
+
 ## Engine Commands
 
 The shared engine contract lives in `crates/hyprduck-engine-types/src/lib.rs`.
@@ -109,6 +132,7 @@ The active command surface includes:
 - Brain read commands: `SearchBrain`, `GetContextPack`, `ReadSource`,
   `ReadWikiPage`, `ReadNode`, `ReadRecentEvents`, `ReadGraphHistory`,
   `ReadGraphSnapshot`, `ReconstructBrain`, `GetBrainHealth`.
+- Agent graph write command: `ApplyGraphPatch`.
 
 ## Desktop Boundary
 
@@ -171,6 +195,7 @@ MCP, and resource reads.
 - `read_graph_history`
 - `read_graph_snapshot`
 - `read_health`
+- `graph_patch_apply`
 - `write_propose`
 - `write_commit`
 - `write_commit_all`

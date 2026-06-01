@@ -87,6 +87,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
             "read_graph_history",
             "read_graph_snapshot",
             "read_health",
+            "graph_patch_apply",
             "write_propose",
             "write_commit",
             "write_commit_all",
@@ -129,6 +130,7 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         "import_source",
         "import_cancel",
         "import_retry_graph",
+        "graph_patch_apply",
         "write_propose",
         "write_commit",
         "write_commit_all",
@@ -738,6 +740,118 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         tool_wiki["page"]["body"],
         "# MCP Snapshot\n\nLocal path: [redacted-local-path]\n"
     );
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 33,
+            "method": "tools/call",
+            "params": {
+                "name": "graph_patch_apply",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "agentId": "codex",
+                    "graphPatch": {
+                        "schemaVersion": "hyprduck.graph_patch.v1",
+                        "sourceIds": ["source-mcp"],
+                        "evidenceRefs": ["evidence-mcp"],
+                        "nodes": [{
+                            "nodeId": "concept-mcp-agent-patch",
+                            "kind": "concept",
+                            "label": "MCP agent patch",
+                            "sourceIds": ["source-mcp"],
+                            "evidenceIds": ["evidence-mcp"]
+                        }],
+                        "relations": [{
+                            "relationId": "rel-mcp-agent-patch",
+                            "kind": "mentions",
+                            "sourceNodeId": "source:source-mcp",
+                            "targetNodeId": "concept-mcp-agent-patch",
+                            "label": "mentions",
+                            "evidenceIds": ["evidence-mcp"]
+                        }],
+                        "claims": [{
+                            "claimId": "claim-mcp-agent-patch",
+                            "statement": "MCP graph patches update the latest readable snapshot.",
+                            "topicRefs": ["concept-mcp-agent-patch"],
+                            "sourceRefs": ["source-mcp"],
+                            "evidenceRefs": ["evidence-mcp"],
+                            "status": "agent_generated"
+                        }],
+                        "wikiPages": [{
+                            "pageId": "wiki-mcp-agent-patch",
+                            "path": "wiki/mcp-agent-patch.md",
+                            "title": "MCP agent patch",
+                            "body": "Evidence-backed MCP graph patch page.",
+                            "nodeRefs": ["concept-mcp-agent-patch"],
+                            "sourceRefs": ["source-mcp"],
+                            "evidenceRefs": ["evidence-mcp"]
+                        }]
+                    }
+                }
+            }
+        }),
+    );
+    let graph_patch_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_patch_tool["result"]["isError"], false,
+        "{graph_patch_tool:#?}"
+    );
+    assert_eq!(
+        graph_patch_tool["result"]["_meta"]["hyprduckGraphWikiCache"]["invalidated"], true,
+        "{graph_patch_tool:#?}"
+    );
+    let graph_patch_cache =
+        &graph_patch_tool["result"]["_meta"]["hyprduckGraphWikiCache"]["current"];
+    assert_ne!(graph_patch_cache["snapshotId"], "snapshot-mcp-readable");
+    assert_ne!(graph_patch_cache["materializedAt"], 42);
+    assert_eq!(
+        graph_patch_cache["latestReadableSnapshotPath"],
+        "state/latest-readable-snapshot.json"
+    );
+    let text = graph_patch_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph patch tool text");
+    let graph_patch_payload: Value = serde_json::from_str(text).expect("graph patch payload");
+    assert_eq!(graph_patch_payload["status"], "applied");
+    assert_eq!(graph_patch_payload["graphReady"], true);
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 34,
+            "method": "tools/call",
+            "params": {
+                "name": "read_graph_snapshot",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone()
+                }
+            }
+        }),
+    );
+    let graph_patch_snapshot_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_patch_snapshot_tool["result"]["isError"], false,
+        "{graph_patch_snapshot_tool:#?}"
+    );
+    let text = graph_patch_snapshot_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph patch snapshot text");
+    let graph_patch_snapshot: Value =
+        serde_json::from_str(text).expect("graph patch snapshot payload");
+    assert_eq!(
+        graph_patch_snapshot["snapshotId"],
+        graph_patch_cache["snapshotId"]
+    );
+    assert!(graph_patch_snapshot["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .any(|node| node["nodeId"] == "concept-mcp-agent-patch"));
 
     drop(stdin);
     let status = child.wait().expect("server exit");

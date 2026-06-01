@@ -9,24 +9,24 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_types::{
     AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, ApplyCorrectionRequest,
-    ApplyCorrectionResponseData, CheckReadinessRequest, CompileProjectRequest,
-    CompileProjectResponseData, EngineCommand, EngineConfigPayload, EngineFailure, EngineRequest,
-    EngineSuccess, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackResponseData,
-    ImportJobRecord, KnowledgeProject, LoadConfigRequest, LoadProjectRequest,
-    LoadProjectResponseData, ParseEvent, ParseProgress, ParseRequest, ParseResponseData,
-    ReadContextPackRequest, ReadContextPackResponseData, ReadGraphHistoryRequest,
-    ReadGraphHistoryResponseData, ReadGraphSnapshotRequest, ReadGraphSnapshotResponseData,
-    ReadImportJobRequest, ReadImportJobResponseData, ReadNodeRequest, ReadNodeResponseData,
-    ReadPageEvidenceRequest, ReadPageEvidenceResponseData, ReadRecentEventsRequest,
-    ReadRecentEventsResponseData, ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest,
-    ReadWikiPageResponseData, ReconstructBrainRequest, ReconstructBrainResponseData,
-    RetryFailedPagesRequest, RetryFailedPagesResponseData, RuntimeReadinessResponseData,
-    SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest, SearchBrainResponseData,
-    UpdateImportJobGraphStatusRequest, UpdateImportJobGraphStatusResponseData,
-    ValidateProviderRequest, ValidateProviderResponseData, WriteCommitAllRequest,
-    WriteCommitAllResponseData, WriteCommitRequest, WriteCommitResponseData, WriteListRequest,
-    WriteListResponseData, WriteProposeRequest, WriteProposeResponseData, WriteRejectRequest,
-    WriteRejectResponseData,
+    ApplyCorrectionResponseData, ApplyGraphPatchRequest, ApplyGraphPatchResponseData,
+    CheckReadinessRequest, CompileProjectRequest, CompileProjectResponseData, EngineCommand,
+    EngineConfigPayload, EngineFailure, EngineRequest, EngineSuccess, GetBrainHealthRequest,
+    GetBrainHealthResponseData, GetContextPackResponseData, ImportJobRecord, KnowledgeProject,
+    LoadConfigRequest, LoadProjectRequest, LoadProjectResponseData, ParseEvent, ParseProgress,
+    ParseRequest, ParseResponseData, ReadContextPackRequest, ReadContextPackResponseData,
+    ReadGraphHistoryRequest, ReadGraphHistoryResponseData, ReadGraphSnapshotRequest,
+    ReadGraphSnapshotResponseData, ReadImportJobRequest, ReadImportJobResponseData,
+    ReadNodeRequest, ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RetryFailedPagesRequest, RetryFailedPagesResponseData,
+    RuntimeReadinessResponseData, SaveConfigRequest, SaveConfigResponseData, SearchBrainRequest,
+    SearchBrainResponseData, UpdateImportJobGraphStatusRequest,
+    UpdateImportJobGraphStatusResponseData, ValidateProviderRequest, ValidateProviderResponseData,
+    WriteCommitAllRequest, WriteCommitAllResponseData, WriteCommitRequest, WriteCommitResponseData,
+    WriteListRequest, WriteListResponseData, WriteProposeRequest, WriteProposeResponseData,
+    WriteRejectRequest, WriteRejectResponseData,
 };
 
 pub trait EngineClient {
@@ -93,6 +93,10 @@ pub trait EngineClient {
         config: Option<EngineConfigPayload>,
     ) -> Result<ValidateProviderResponseData>;
     fn check_readiness(&self) -> Result<RuntimeReadinessResponseData>;
+    fn apply_graph_patch(
+        &self,
+        request: ApplyGraphPatchRequest,
+    ) -> Result<ApplyGraphPatchResponseData>;
     fn write_propose(&self, request: WriteProposeRequest) -> Result<WriteProposeResponseData>;
     fn write_commit(&self, request: WriteCommitRequest) -> Result<WriteCommitResponseData>;
     fn write_commit_all(
@@ -499,6 +503,17 @@ impl EngineClient for SubprocessEngineClient {
         self.run_command::<RuntimeReadinessResponseData, RuntimeReadinessResponseData>(
             EngineRequest::CheckReadiness(CheckReadinessRequest {}),
             EngineCommand::CheckReadiness,
+            None,
+        )
+    }
+
+    fn apply_graph_patch(
+        &self,
+        request: ApplyGraphPatchRequest,
+    ) -> Result<ApplyGraphPatchResponseData> {
+        self.run_command::<ApplyGraphPatchResponseData, ApplyGraphPatchResponseData>(
+            EngineRequest::ApplyGraphPatch(request),
+            EngineCommand::ApplyGraphPatch,
             None,
         )
     }

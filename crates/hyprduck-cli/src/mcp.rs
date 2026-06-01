@@ -8,13 +8,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    BrainReadScope, CompileProjectRequest, DocumentFormat, GetBrainHealthRequest,
-    GetContextPackRequest, ImportJobRecord, ParseInput, ParseOptions, ParseOutputTarget,
-    ParseRequest, ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest,
-    ReadImportJobRequest, ReadNodeRequest, ReadPageEvidenceRequest, ReadRecentEventsRequest,
-    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest, UpdateImportJobGraphStatusRequest,
-    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
-    WriteRejectRequest,
+    ApplyGraphPatchRequest, BrainReadScope, CompileProjectRequest, DocumentFormat,
+    GetBrainHealthRequest, GetContextPackRequest, ImportJobRecord, ParseInput, ParseOptions,
+    ParseOutputTarget, ParseRequest, ReadContextPackRequest, ReadGraphHistoryRequest,
+    ReadGraphSnapshotRequest, ReadImportJobRequest, ReadNodeRequest, ReadPageEvidenceRequest,
+    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
+    UpdateImportJobGraphStatusRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
+    WriteProposeRequest, WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -1436,6 +1436,21 @@ fn call_tool(
         "read_health" => {
             serde_json::to_value(client.get_brain_health(GetBrainHealthRequest { scope })?)?
         }
+        "graph_patch_apply" => {
+            let graph_patch_value = arguments
+                .get("graphPatch")
+                .cloned()
+                .ok_or_else(|| anyhow!("missing required argument: graphPatch"))?;
+            let graph_patch: hyprduck_engine_types::GraphPatch =
+                serde_json::from_value(graph_patch_value)
+                    .context("argument graphPatch does not match HyprDuck graph patch schema")?;
+            let agent_id = optional_string(arguments, "agentId")?;
+            serde_json::to_value(client.apply_graph_patch(ApplyGraphPatchRequest {
+                scope,
+                graph_patch,
+                agent_id,
+            })?)?
+        }
         "write_propose" => {
             let content_type = required_string(arguments, "contentType")?;
             validate_mcp_write_content_type(&content_type)?;
@@ -1519,7 +1534,7 @@ struct McpGraphWikiCacheToken {
 }
 
 fn cache_sensitive_tool(name: &str) -> bool {
-    matches!(name, "read_health")
+    matches!(name, "graph_patch_apply" | "read_health")
 }
 
 fn read_graph_wiki_cache_state(
@@ -2074,6 +2089,92 @@ fn tool_definitions() -> Vec<Value> {
             true,
         ),
         tool_definition(
+            "graph_patch_apply",
+            "Apply an agent-generated, evidence-backed graph patch to the current HyprDuck graph. The patch is validated against existing source and evidence refs before auto-apply.",
+            json!({
+                "agentId": { "type": "string", "description": "Optional calling agent identifier for audit records, such as codex, claudecode, or pi-agent." },
+                "graphPatch": {
+                    "type": "object",
+                    "required": ["schemaVersion", "sourceIds", "evidenceRefs"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "schemaVersion": { "type": "string", "const": hyprduck_engine_types::GRAPH_PATCH_SCHEMA_VERSION },
+                        "sourceIds": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+                        "evidenceRefs": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+                        "nodes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["nodeId", "kind", "label"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "nodeId": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "label": { "type": "string" },
+                                    "scope": { "type": "string" },
+                                    "aliases": { "type": "array", "items": { "type": "string" } },
+                                    "sourceIds": { "type": "array", "items": { "type": "string" } },
+                                    "evidenceIds": { "type": "array", "items": { "type": "string" } }
+                                }
+                            }
+                        },
+                        "relations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["relationId", "kind", "sourceNodeId", "targetNodeId"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "relationId": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "sourceNodeId": { "type": "string" },
+                                    "targetNodeId": { "type": "string" },
+                                    "label": { "type": "string" },
+                                    "evidenceIds": { "type": "array", "items": { "type": "string" } }
+                                }
+                            }
+                        },
+                        "claims": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["claimId", "statement"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "claimId": { "type": "string" },
+                                    "statement": { "type": "string" },
+                                    "topicRefs": { "type": "array", "items": { "type": "string" } },
+                                    "sourceRefs": { "type": "array", "items": { "type": "string" } },
+                                    "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+                                    "status": { "type": "string" }
+                                }
+                            }
+                        },
+                        "wikiPages": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["pageId", "path", "title", "body"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "pageId": { "type": "string" },
+                                    "path": { "type": "string" },
+                                    "title": { "type": "string" },
+                                    "body": { "type": "string" },
+                                    "nodeRefs": { "type": "array", "items": { "type": "string" } },
+                                    "sourceRefs": { "type": "array", "items": { "type": "string" } },
+                                    "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+                                }
+                            }
+                        },
+                        "agentMetadata": { "type": "object" }
+                    }
+                },
+            }),
+            vec!["graphPatch"],
+            false,
+        ),
+        tool_definition(
             "write_propose",
             "Propose an evidence-backed knowledge item for approval. Evidence refs must exist in the current workspace snapshot.",
             json!({
@@ -2233,6 +2334,7 @@ mod tests {
             "import_source",
             "import_cancel",
             "import_retry_graph",
+            "graph_patch_apply",
             "write_propose",
             "write_commit",
             "write_commit_all",
@@ -2307,6 +2409,19 @@ mod tests {
             false
         );
         assert_eq!(
+            tool_by_name("graph_patch_apply")["inputSchema"]["required"],
+            json!(["graphPatch"])
+        );
+        assert_eq!(
+            tool_by_name("graph_patch_apply")["inputSchema"]["properties"]["graphPatch"]
+                ["properties"]["schemaVersion"]["const"],
+            json!(hyprduck_engine_types::GRAPH_PATCH_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            tool_by_name("graph_patch_apply")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
             tool_by_name("write_commit_all")["inputSchema"]["required"],
             json!(["proposalIds"])
         );
@@ -2351,6 +2466,136 @@ mod tests {
         assert_eq!(
             tool_by_name("write_reject")["annotations"]["readOnlyHint"],
             false
+        );
+    }
+
+    #[test]
+    fn graph_patch_mcp_schema_covers_engine_contract_fields() {
+        let tools = tool_definitions();
+        let graph_patch_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "graph_patch_apply")
+            .expect("graph_patch_apply tool")["inputSchema"]["properties"]["graphPatch"]
+            .clone();
+        let graph_patch_properties = graph_patch_schema["properties"]
+            .as_object()
+            .expect("graphPatch schema properties");
+        for field in [
+            "schemaVersion",
+            "sourceIds",
+            "evidenceRefs",
+            "nodes",
+            "relations",
+            "claims",
+            "wikiPages",
+            "agentMetadata",
+        ] {
+            assert!(
+                graph_patch_properties.contains_key(field),
+                "missing graphPatch schema field {field}"
+            );
+        }
+
+        let object_item_properties = |field: &str| {
+            graph_patch_properties[field]["items"]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("missing {field} item properties"))
+        };
+        for field in [
+            "nodeId",
+            "kind",
+            "label",
+            "scope",
+            "aliases",
+            "sourceIds",
+            "evidenceIds",
+        ] {
+            assert!(object_item_properties("nodes").contains_key(field));
+        }
+        for field in [
+            "relationId",
+            "kind",
+            "sourceNodeId",
+            "targetNodeId",
+            "label",
+            "evidenceIds",
+        ] {
+            assert!(object_item_properties("relations").contains_key(field));
+        }
+        for field in [
+            "claimId",
+            "statement",
+            "topicRefs",
+            "sourceRefs",
+            "evidenceRefs",
+            "status",
+        ] {
+            assert!(object_item_properties("claims").contains_key(field));
+        }
+        for field in [
+            "pageId",
+            "path",
+            "title",
+            "body",
+            "nodeRefs",
+            "sourceRefs",
+            "evidenceRefs",
+        ] {
+            assert!(object_item_properties("wikiPages").contains_key(field));
+        }
+
+        let graph_patch_value = json!({
+            "schemaVersion": hyprduck_engine_types::GRAPH_PATCH_SCHEMA_VERSION,
+            "sourceIds": ["source-agent"],
+            "evidenceRefs": ["ev-agent-1"],
+            "nodes": [{
+                "nodeId": "concept-agent",
+                "kind": "concept",
+                "label": "Agent",
+                "scope": "project",
+                "aliases": ["Codex"],
+                "sourceIds": ["source-agent"],
+                "evidenceIds": ["ev-agent-1"]
+            }],
+            "relations": [{
+                "relationId": "rel-agent-source",
+                "kind": "mentions",
+                "sourceNodeId": "source:source-agent",
+                "targetNodeId": "concept-agent",
+                "label": "mentions",
+                "evidenceIds": ["ev-agent-1"]
+            }],
+            "claims": [{
+                "claimId": "claim-agent",
+                "statement": "Agents can submit graph patches.",
+                "topicRefs": ["concept-agent"],
+                "sourceRefs": ["source-agent"],
+                "evidenceRefs": ["ev-agent-1"],
+                "status": "agent_generated"
+            }],
+            "wikiPages": [{
+                "pageId": "wiki-agent",
+                "path": "wiki/agent.md",
+                "title": "Agent",
+                "body": "Evidence-backed agent page.",
+                "nodeRefs": ["concept-agent"],
+                "sourceRefs": ["source-agent"],
+                "evidenceRefs": ["ev-agent-1"]
+            }],
+            "agentMetadata": { "agent": "codex" }
+        });
+        let graph_patch: hyprduck_engine_types::GraphPatch =
+            serde_json::from_value(graph_patch_value).expect("deserialize graph patch");
+
+        assert_eq!(
+            graph_patch.nodes[0].scope,
+            Some(hyprduck_engine_types::BrainScope::Project)
+        );
+        assert_eq!(graph_patch.relations[0].label, "mentions");
+        assert_eq!(graph_patch.claims[0].status, "agent_generated");
+        assert_eq!(
+            graph_patch.agent_metadata.get("agent"),
+            Some(&json!("codex"))
         );
     }
 

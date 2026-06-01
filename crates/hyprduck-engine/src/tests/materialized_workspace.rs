@@ -1,5 +1,215 @@
 use super::common::*;
 use super::*;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+fn seed_agent_patch_workspace() -> (tempfile::TempDir, PathBuf, BrainReadScope) {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let output_root = temp.path().join("HyprDuck");
+    let workspace_root = output_root.join(DEFAULT_WORKSPACE_ID);
+    let mut seed = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    seed.generated_at = 10;
+    seed.sources.push(SourceRecord {
+        source_id: "source-agent".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "[redacted-local-path]".into(),
+        source_path: "[redacted-local-path]".into(),
+        markdown_path: "[redacted-local-path]".into(),
+        format: hyprduck_engine_types::SourceFormat::markdown(),
+        status: SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 10,
+    });
+    seed.evidence.push(EvidenceRef {
+        id: "ev-agent-1".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Agents can create graph patches with existing evidence.".into(),
+        source_path: Some("[redacted-local-path]".into()),
+        source_id: Some("source-agent".into()),
+        markdown_path: Some("[redacted-local-path]".into()),
+        image_path: None,
+        provenance: Some("test".into()),
+    });
+    write_materialized_brain_repo(&workspace_root, &seed).expect("write seed repo");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store");
+    store
+        .persist_graph_snapshot(&seed)
+        .expect("persist source/evidence rows");
+    let scope = BrainReadScope {
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        root_dir: Some(output_root.display().to_string()),
+    };
+    (temp, workspace_root, scope)
+}
+
+fn agent_graph_patch() -> hyprduck_engine_types::GraphPatch {
+    hyprduck_engine_types::GraphPatch {
+        schema_version: hyprduck_engine_types::GRAPH_PATCH_SCHEMA_VERSION.into(),
+        source_ids: vec!["source-agent".into()],
+        evidence_refs: vec!["ev-agent-1".into()],
+        nodes: vec![hyprduck_engine_types::GraphPatchNode {
+            node_id: "concept-agent-graph-patch".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Agent graph patch".into(),
+            scope: None,
+            aliases: Vec::new(),
+            source_ids: vec!["source-agent".into()],
+            evidence_ids: vec!["ev-agent-1".into()],
+        }],
+        relations: vec![hyprduck_engine_types::GraphPatchRelation {
+            relation_id: "rel-source-agent-graph-patch".into(),
+            kind: BrainRelationKind::Mentions,
+            source_node_id: "source:source-agent".into(),
+            target_node_id: "concept-agent-graph-patch".into(),
+            label: "mentions".into(),
+            evidence_ids: vec!["ev-agent-1".into()],
+        }],
+        claims: vec![hyprduck_engine_types::GraphPatchClaim {
+            claim_id: "claim-agent-graph-patch".into(),
+            statement: "Agent-created graph patches are evidence-backed.".into(),
+            topic_refs: vec!["concept-agent-graph-patch".into()],
+            source_refs: vec!["source-agent".into()],
+            evidence_refs: vec!["ev-agent-1".into()],
+            status: "agent_generated".into(),
+        }],
+        wiki_pages: vec![hyprduck_engine_types::GraphPatchWikiPage {
+            page_id: "wiki-agent-graph-patch".into(),
+            path: "wiki/agent-graph-patch.md".into(),
+            title: "Agent graph patch".into(),
+            body: "Evidence-backed graph patch page.".into(),
+            node_refs: vec!["concept-agent-graph-patch".into()],
+            source_refs: vec!["source-agent".into()],
+            evidence_refs: vec!["ev-agent-1".into()],
+        }],
+        agent_metadata: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn agent_graph_patch_applies_evidence_backed_nodes_and_relations() {
+    let (_temp, workspace_root, scope) = seed_agent_patch_workspace();
+
+    let response = handle_apply_graph_patch(hyprduck_engine_types::ApplyGraphPatchRequest {
+        scope: scope.clone(),
+        agent_id: Some("codex".into()),
+        graph_patch: agent_graph_patch(),
+    })
+    .expect("apply graph patch");
+
+    assert_eq!(response.status, "applied");
+    assert!(response.graph_ready);
+    assert_eq!(response.changed_node_ids, vec!["concept-agent-graph-patch"]);
+
+    let node = handle_read_node(hyprduck_engine_types::ReadNodeRequest {
+        scope: scope.clone(),
+        node_id: "concept-agent-graph-patch".into(),
+    })
+    .expect("read patched node");
+    assert_eq!(node.node.label, "Agent graph patch");
+    assert_eq!(node.evidence[0].id, "ev-agent-1");
+
+    let snapshot = handle_read_graph_snapshot(hyprduck_engine_types::ReadGraphSnapshotRequest {
+        scope,
+        include_local_paths: false,
+    })
+    .expect("read graph snapshot");
+    assert_eq!(snapshot.materialized_at, response.applied_at);
+    assert_eq!(
+        snapshot.snapshot_id,
+        format!("snapshot-{}-{}", DEFAULT_WORKSPACE_ID, response.applied_at)
+    );
+    assert!(workspace_root.join("graph/entities.json").exists());
+    assert!(workspace_root.join("wiki/agent-graph-patch.md").exists());
+    assert!(workspace_root.join(LATEST_READABLE_SNAPSHOT_PATH).exists());
+    assert!(snapshot
+        .nodes
+        .iter()
+        .any(|node| node.node_id == "concept-agent-graph-patch"));
+    assert!(snapshot
+        .edges
+        .iter()
+        .any(|edge| edge.relation_id == "rel-source-agent-graph-patch"));
+}
+
+#[test]
+fn agent_graph_patch_rejects_records_without_direct_evidence() {
+    let (_temp, _workspace_root, scope) = seed_agent_patch_workspace();
+    let mut patch = agent_graph_patch();
+    patch.nodes[0].evidence_ids.clear();
+
+    let error = handle_apply_graph_patch(hyprduck_engine_types::ApplyGraphPatchRequest {
+        scope,
+        agent_id: Some("codex".into()),
+        graph_patch: patch,
+    })
+    .expect_err("reject graph patch node without evidence");
+
+    assert!(error
+        .to_string()
+        .contains("graphPatch node concept-agent-graph-patch evidenceIds"));
+}
+
+#[test]
+fn agent_graph_patch_rejects_relations_to_out_of_scope_existing_nodes() {
+    let (_temp, workspace_root, scope) = seed_agent_patch_workspace();
+    let mut snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read seed snapshot");
+    snapshot.sources.push(SourceRecord {
+        source_id: "source-other".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        original_path: "[redacted-local-path]".into(),
+        source_path: "[redacted-local-path]".into(),
+        markdown_path: "[redacted-local-path]".into(),
+        format: hyprduck_engine_types::SourceFormat::markdown(),
+        status: SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 10,
+    });
+    snapshot.evidence.push(EvidenceRef {
+        id: "ev-other".into(),
+        page_label: "Page 1".into(),
+        page_index: Some(0),
+        snippet: "Out of scope evidence.".into(),
+        source_path: Some("[redacted-local-path]".into()),
+        source_id: Some("source-other".into()),
+        markdown_path: Some("[redacted-local-path]".into()),
+        image_path: None,
+        provenance: Some("test".into()),
+    });
+    snapshot.nodes.push(BrainNodeRecord {
+        node_id: "concept-out-of-scope".into(),
+        kind: BrainNodeKind::Concept,
+        label: "Out of scope".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec!["ev-other".into()],
+        source_ids: vec!["source-other".into()],
+        confidence: Some(0.9),
+        updated_at: 10,
+    });
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write out-of-scope node");
+    let mut patch = agent_graph_patch();
+    patch.relations[0].target_node_id = "concept-out-of-scope".into();
+
+    let error = handle_apply_graph_patch(hyprduck_engine_types::ApplyGraphPatchRequest {
+        scope,
+        agent_id: Some("codex".into()),
+        graph_patch: patch,
+    })
+    .expect_err("reject relation to out-of-scope node");
+
+    assert!(error
+        .to_string()
+        .contains("references unknown targetNodeId concept-out-of-scope"));
+}
 
 #[test]
 fn read_graph_snapshot_includes_materialization_report_counts() {
