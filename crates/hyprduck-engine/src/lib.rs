@@ -56,10 +56,13 @@ mod commands;
 mod context_pack_artifacts;
 mod domains;
 mod graph_history;
+mod graph_patch_policy;
 mod infra;
 mod policy;
 pub mod runtime;
 mod search_context;
+
+use graph_patch_policy::ValidatedGraphPatchScope;
 
 mod agent_workflow {
     pub(crate) use crate::domains::agent_workflow::*;
@@ -1495,15 +1498,14 @@ fn handle_apply_graph_patch(
     let mut snapshot = read_materialized_brain_snapshot(&root, &request.scope.workspace_id)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
 
-    validate_graph_patch_contract(&request.graph_patch)?;
-    let patch_source_ids = graph_patch_source_ids(&request.graph_patch);
-    if patch_source_ids.is_empty() {
+    let validated_patch = ValidatedGraphPatchScope::validate_contract(&request.graph_patch)?;
+    if validated_patch.source_ids.is_empty() {
         bail!("graphPatch.sourceIds must contain at least one source ID");
     }
 
     let mut source_records = Vec::new();
     let mut evidence_by_id = BTreeMap::new();
-    for source_id in &patch_source_ids {
+    for source_id in &validated_patch.source_ids {
         let response = store
             .read_source_from_db(&request.scope.workspace_id, source_id, false)?
             .ok_or_else(|| anyhow!("graphPatch references unknown sourceId {source_id}"))?;
@@ -1513,48 +1515,22 @@ fn handle_apply_graph_patch(
         }
     }
 
-    let patch_evidence_refs = graph_patch_evidence_refs(&request.graph_patch);
-    if patch_evidence_refs.is_empty() {
+    if validated_patch.evidence_refs.is_empty() {
         bail!("graphPatch must reference at least one evidence ref");
     }
-    for evidence_ref in &patch_evidence_refs {
+    for evidence_ref in &validated_patch.evidence_refs {
         if !evidence_by_id.contains_key(evidence_ref) {
             bail!("graphPatch references unknown or out-of-scope evidence ref {evidence_ref}");
         }
     }
 
-    validate_graph_patch_record_refs(
-        &request.graph_patch,
-        &patch_source_ids,
-        &patch_evidence_refs,
-        &snapshot,
-    )?;
+    validated_patch.validate_records(&request.graph_patch, &snapshot)?;
 
     let now = unix_timestamp_seconds();
-    let node_ids = request
-        .graph_patch
-        .nodes
-        .iter()
-        .map(|node| node.node_id.clone())
-        .collect::<Vec<_>>();
-    let relation_ids = request
-        .graph_patch
-        .relations
-        .iter()
-        .map(|relation| relation.relation_id.clone())
-        .collect::<Vec<_>>();
-    let claim_ids = request
-        .graph_patch
-        .claims
-        .iter()
-        .map(|claim| claim.claim_id.clone())
-        .collect::<Vec<_>>();
-    let wiki_page_ids = request
-        .graph_patch
-        .wiki_pages
-        .iter()
-        .map(|page| page.page_id.clone())
-        .collect::<Vec<_>>();
+    let node_ids = validated_patch.node_ids.clone();
+    let relation_ids = validated_patch.relation_ids.clone();
+    let claim_ids = validated_patch.claim_ids.clone();
+    let wiki_page_ids = validated_patch.wiki_page_ids.clone();
 
     upsert_by_id(&mut snapshot.sources, source_records, |source| {
         source.source_id.clone()
@@ -1658,7 +1634,7 @@ fn handle_apply_graph_patch(
                 .filter(|agent_id| !agent_id.trim().is_empty())
                 .unwrap_or_else(|| "hyprduck-agent-graph-patch".into()),
         },
-        source_refs: patch_source_ids.clone(),
+        source_refs: validated_patch.source_ids.clone(),
         source_markdown_refs: Vec::new(),
         node_refs: node_ids.clone(),
         relation_refs: relation_ids.clone(),
@@ -1668,7 +1644,7 @@ fn handle_apply_graph_patch(
         target_edge_ids: relation_ids.clone(),
         target_claim_ids: claim_ids.clone(),
         target_memory_ids: Vec::new(),
-        evidence_refs: patch_evidence_refs.clone(),
+        evidence_refs: validated_patch.evidence_refs.clone(),
         payload_json: serde_json::to_string(&json!({
             "schemaVersion": GRAPH_PATCH_SCHEMA_VERSION,
             "agentMetadata": request.graph_patch.agent_metadata,
@@ -1679,7 +1655,7 @@ fn handle_apply_graph_patch(
         }))
         .context("failed encoding graph patch event payload")?,
         causality: BrainEventCausality {
-            caused_by_source_ids: patch_source_ids.clone(),
+            caused_by_source_ids: validated_patch.source_ids.clone(),
             snapshot_id: Some(format!("snapshot-{}-{now}", request.scope.workspace_id)),
             materialized_version: Some(now),
             ..Default::default()
@@ -1706,8 +1682,8 @@ fn handle_apply_graph_patch(
         graph_ready: true,
         graph_status: "ready".into(),
         applied_at: now,
-        source_ids: patch_source_ids,
-        evidence_refs: patch_evidence_refs,
+        source_ids: validated_patch.source_ids,
+        evidence_refs: validated_patch.evidence_refs,
         changed_node_ids: node_ids,
         changed_relation_ids: relation_ids,
         changed_claim_ids: claim_ids,
@@ -1718,343 +1694,6 @@ fn handle_apply_graph_patch(
             Vec::new()
         },
     })
-}
-
-fn validate_graph_patch_contract(patch: &hyprduck_engine_types::GraphPatch) -> Result<()> {
-    if patch.schema_version != GRAPH_PATCH_SCHEMA_VERSION {
-        bail!(
-            "unsupported graphPatch.schemaVersion {}; expected {}",
-            patch.schema_version,
-            GRAPH_PATCH_SCHEMA_VERSION
-        );
-    }
-    if patch.nodes.is_empty()
-        && patch.relations.is_empty()
-        && patch.claims.is_empty()
-        && patch.wiki_pages.is_empty()
-    {
-        bail!("graphPatch must include at least one node, relation, claim, or wiki page");
-    }
-    ensure_unique_nonempty("graphPatch.sourceIds", &patch.source_ids)?;
-    ensure_unique_nonempty("graphPatch.evidenceRefs", &patch.evidence_refs)?;
-    ensure_unique_nonempty(
-        "graphPatch.nodes.nodeId",
-        &patch
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect::<Vec<_>>(),
-    )?;
-    ensure_unique_nonempty(
-        "graphPatch.relations.relationId",
-        &patch
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect::<Vec<_>>(),
-    )?;
-    ensure_unique_nonempty(
-        "graphPatch.claims.claimId",
-        &patch
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect::<Vec<_>>(),
-    )?;
-    ensure_unique_nonempty(
-        "graphPatch.wikiPages.pageId",
-        &patch
-            .wiki_pages
-            .iter()
-            .map(|page| page.page_id.clone())
-            .collect::<Vec<_>>(),
-    )?;
-    for node in &patch.nodes {
-        if node.label.trim().is_empty() {
-            bail!("graphPatch node {} label cannot be empty", node.node_id);
-        }
-    }
-    for claim in &patch.claims {
-        if claim.statement.trim().is_empty() {
-            bail!(
-                "graphPatch claim {} statement cannot be empty",
-                claim.claim_id
-            );
-        }
-        if claim.status.trim().is_empty() {
-            bail!("graphPatch claim {} status cannot be empty", claim.claim_id);
-        }
-    }
-    for page in &patch.wiki_pages {
-        if page.path.trim().is_empty()
-            || Path::new(&page.path).is_absolute()
-            || page.path.contains("..")
-        {
-            bail!(
-                "graphPatch wiki page {} path must be workspace-relative",
-                page.page_id
-            );
-        }
-        if page.title.trim().is_empty() || page.body.trim().is_empty() {
-            bail!(
-                "graphPatch wiki page {} title/body cannot be empty",
-                page.page_id
-            );
-        }
-    }
-    Ok(())
-}
-
-fn validate_graph_patch_record_refs(
-    patch: &hyprduck_engine_types::GraphPatch,
-    source_ids: &[String],
-    evidence_refs: &[String],
-    snapshot: &BrainRepoSnapshot,
-) -> Result<()> {
-    let source_set = source_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let evidence_set = evidence_refs.iter().cloned().collect::<BTreeSet<_>>();
-    let patch_node_set = patch
-        .nodes
-        .iter()
-        .map(|node| node.node_id.clone())
-        .collect::<BTreeSet<_>>();
-    let source_node_set = source_ids
-        .iter()
-        .map(|source_id| format!("source:{source_id}"))
-        .collect::<BTreeSet<_>>();
-    let existing_in_scope_node_set = snapshot
-        .nodes
-        .iter()
-        .filter(|node| {
-            refs_intersect(&node.source_ids, &source_set)
-                || refs_intersect(&node.evidence_ids, &evidence_set)
-        })
-        .map(|node| node.node_id.clone())
-        .chain(
-            snapshot
-                .wiki_pages
-                .iter()
-                .filter(|page| {
-                    refs_intersect(&page.source_refs, &source_set)
-                        || refs_intersect(&page.evidence_refs, &evidence_set)
-                })
-                .map(|page| page.page_id.clone()),
-        )
-        .collect::<BTreeSet<_>>();
-    let node_set = patch_node_set
-        .iter()
-        .cloned()
-        .chain(source_node_set.iter().cloned())
-        .chain(existing_in_scope_node_set.iter().cloned())
-        .collect::<BTreeSet<_>>();
-
-    for node in &patch.nodes {
-        if !is_cited_source_node(node, &source_set) {
-            validate_non_empty_refs(
-                &format!("graphPatch node {} sourceIds", node.node_id),
-                &node.source_ids,
-            )?;
-            validate_non_empty_refs(
-                &format!("graphPatch node {} evidenceIds", node.node_id),
-                &node.evidence_ids,
-            )?;
-        }
-        validate_ref_subset(
-            &format!("graphPatch node {} sourceIds", node.node_id),
-            &node.source_ids,
-            &source_set,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch node {} evidenceIds", node.node_id),
-            &node.evidence_ids,
-            &evidence_set,
-        )?;
-    }
-    for relation in &patch.relations {
-        if !node_set.contains(relation.source_node_id.as_str()) {
-            bail!(
-                "graphPatch relation {} references unknown sourceNodeId {}",
-                relation.relation_id,
-                relation.source_node_id
-            );
-        }
-        if !node_set.contains(relation.target_node_id.as_str()) {
-            bail!(
-                "graphPatch relation {} references unknown targetNodeId {}",
-                relation.relation_id,
-                relation.target_node_id
-            );
-        }
-        validate_non_empty_refs(
-            &format!("graphPatch relation {} evidenceIds", relation.relation_id),
-            &relation.evidence_ids,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch relation {} evidenceIds", relation.relation_id),
-            &relation.evidence_ids,
-            &evidence_set,
-        )?;
-    }
-    for claim in &patch.claims {
-        validate_non_empty_refs(
-            &format!("graphPatch claim {} sourceRefs", claim.claim_id),
-            &claim.source_refs,
-        )?;
-        validate_non_empty_refs(
-            &format!("graphPatch claim {} evidenceRefs", claim.claim_id),
-            &claim.evidence_refs,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch claim {} sourceRefs", claim.claim_id),
-            &claim.source_refs,
-            &source_set,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch claim {} evidenceRefs", claim.claim_id),
-            &claim.evidence_refs,
-            &evidence_set,
-        )?;
-        for topic_ref in &claim.topic_refs {
-            if !node_set.contains(topic_ref.as_str()) {
-                bail!(
-                    "graphPatch claim {} references unknown topicRef {}",
-                    claim.claim_id,
-                    topic_ref
-                );
-            }
-        }
-    }
-    for page in &patch.wiki_pages {
-        validate_non_empty_refs(
-            &format!("graphPatch wiki page {} sourceRefs", page.page_id),
-            &page.source_refs,
-        )?;
-        validate_non_empty_refs(
-            &format!("graphPatch wiki page {} evidenceRefs", page.page_id),
-            &page.evidence_refs,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch wiki page {} sourceRefs", page.page_id),
-            &page.source_refs,
-            &source_set,
-        )?;
-        validate_ref_subset(
-            &format!("graphPatch wiki page {} evidenceRefs", page.page_id),
-            &page.evidence_refs,
-            &evidence_set,
-        )?;
-        for node_ref in &page.node_refs {
-            if !node_set.contains(node_ref.as_str()) {
-                bail!(
-                    "graphPatch wiki page {} references unknown nodeRef {}",
-                    page.page_id,
-                    node_ref
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_cited_source_node(
-    node: &hyprduck_engine_types::GraphPatchNode,
-    source_set: &BTreeSet<String>,
-) -> bool {
-    node.kind == BrainNodeKind::Source
-        && node
-            .node_id
-            .strip_prefix("source:")
-            .is_some_and(|source_id| source_set.contains(source_id))
-}
-
-fn refs_intersect(values: &[String], allowed: &BTreeSet<String>) -> bool {
-    values.iter().any(|value| allowed.contains(value))
-}
-
-fn validate_non_empty_refs(label: &str, values: &[String]) -> Result<()> {
-    if values.is_empty() {
-        bail!("{label} must include at least one evidence-scoped ref");
-    }
-    Ok(())
-}
-
-fn graph_patch_source_ids(patch: &hyprduck_engine_types::GraphPatch) -> Vec<String> {
-    unique_strings(
-        patch
-            .source_ids
-            .iter()
-            .cloned()
-            .chain(patch.nodes.iter().flat_map(|node| node.source_ids.clone()))
-            .chain(
-                patch
-                    .claims
-                    .iter()
-                    .flat_map(|claim| claim.source_refs.clone()),
-            )
-            .chain(
-                patch
-                    .wiki_pages
-                    .iter()
-                    .flat_map(|page| page.source_refs.clone()),
-            )
-            .collect(),
-    )
-}
-
-fn graph_patch_evidence_refs(patch: &hyprduck_engine_types::GraphPatch) -> Vec<String> {
-    unique_strings(
-        patch
-            .evidence_refs
-            .iter()
-            .cloned()
-            .chain(
-                patch
-                    .nodes
-                    .iter()
-                    .flat_map(|node| node.evidence_ids.clone()),
-            )
-            .chain(
-                patch
-                    .relations
-                    .iter()
-                    .flat_map(|relation| relation.evidence_ids.clone()),
-            )
-            .chain(
-                patch
-                    .claims
-                    .iter()
-                    .flat_map(|claim| claim.evidence_refs.clone()),
-            )
-            .chain(
-                patch
-                    .wiki_pages
-                    .iter()
-                    .flat_map(|page| page.evidence_refs.clone()),
-            )
-            .collect(),
-    )
-}
-
-fn ensure_unique_nonempty(label: &str, values: &[String]) -> Result<()> {
-    let mut seen = BTreeSet::new();
-    for value in values {
-        if value.trim().is_empty() {
-            bail!("{label} contains an empty value");
-        }
-        if !seen.insert(value.as_str()) {
-            bail!("{label} contains duplicate value {value}");
-        }
-    }
-    Ok(())
-}
-
-fn validate_ref_subset(label: &str, values: &[String], allowed: &BTreeSet<String>) -> Result<()> {
-    for value in values {
-        if !allowed.contains(value) {
-            bail!("{label} references out-of-scope value {value}");
-        }
-    }
-    Ok(())
 }
 
 fn unique_strings(values: Vec<String>) -> Vec<String> {
