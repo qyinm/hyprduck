@@ -1003,6 +1003,20 @@ function resolveEnginePath() {
     return process.env.HYPRDUCK_ENGINE_BIN;
   }
 
+  if (!app.isPackaged) {
+    const devTargetPath = path.join(
+      __dirname,
+      "..",
+      "..",
+      "target",
+      "debug",
+      process.platform === "win32" ? "hyprduck-engine.exe" : "hyprduck-engine",
+    );
+    if (fs.existsSync(devTargetPath)) {
+      return devTargetPath;
+    }
+  }
+
   const engineName = `hyprduck-engine-${hostTriple()}`;
   const devPath = path.join(__dirname, "resources", "binaries", engineName);
   if (fs.existsSync(devPath)) {
