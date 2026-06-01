@@ -49,6 +49,8 @@ use std::io::ErrorKind;
 use tempfile::tempdir;
 use uuid::Uuid;
 
+mod adapters;
+mod application;
 mod commands;
 mod context_pack_artifacts;
 mod domains;
@@ -57,6 +59,7 @@ mod graph_history;
 mod graph_patch_policy;
 mod infra;
 mod policy;
+mod ports;
 pub mod runtime;
 mod search_context;
 
