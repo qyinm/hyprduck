@@ -5,7 +5,7 @@ use hyprduck_engine_types::{
     SaveConfigResponseData, ValidateProviderRequest,
 };
 
-use crate::application::services::{context_pack_service, project_service};
+use crate::application::services::{brain_read_service, context_pack_service, project_service};
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
@@ -56,15 +56,15 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::SearchBrain(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::SearchBrain,
-            crate::handle_search_brain(request)?,
+            brain_read_service::handle_search_brain(request)?,
         )),
         EngineRequest::ReadSource(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadSource,
-            crate::handle_read_source(request)?,
+            brain_read_service::handle_read_source(request)?,
         )),
         EngineRequest::ReadPageEvidence(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadPageEvidence,
-            crate::handle_read_page_evidence(request)?,
+            brain_read_service::handle_read_page_evidence(request)?,
         )),
         EngineRequest::ReadContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadContextPack,
@@ -72,15 +72,15 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::ReadWikiPage(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadWikiPage,
-            crate::handle_read_wiki_page(request)?,
+            brain_read_service::handle_read_wiki_page(request)?,
         )),
         EngineRequest::ReadNode(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadNode,
-            crate::handle_read_node(request)?,
+            brain_read_service::handle_read_node(request)?,
         )),
         EngineRequest::ReadRecentEvents(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadRecentEvents,
-            crate::handle_read_recent_events(request)?,
+            brain_read_service::handle_read_recent_events(request)?,
         )),
         EngineRequest::ReadGraphHistory(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadGraphHistory,
