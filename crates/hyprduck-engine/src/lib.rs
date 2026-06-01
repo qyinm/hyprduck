@@ -57,6 +57,7 @@ mod context_pack_artifacts;
 mod domains;
 mod graph_history;
 mod infra;
+mod policy;
 pub mod runtime;
 mod search_context;
 

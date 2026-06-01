@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::policy::redact_path_for_agent;
+
 const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
 const KNOWLEDGE_SCHEMA_VERSION: i64 = 1;
 const GRAPHQLITE_SCHEMA_VERSION: i64 = 1;
@@ -2739,16 +2741,6 @@ fn sql_literal(value: &str) -> String {
 
 fn sql_optional_literal(value: Option<&str>) -> String {
     value.map(sql_literal).unwrap_or_else(|| "NULL".into())
-}
-
-fn redact_path_for_agent(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    Path::new(value)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<redacted>".into())
 }
 
 #[allow(dead_code)]

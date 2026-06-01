@@ -12,8 +12,9 @@ use hyprduck_engine_types::{
 use serde_json::Value;
 
 use crate::{
-    latest_readable_materialized_file_refs, read_latest_readable_graph_snapshot_marker,
-    BrainReader, KnowledgeStore, MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
+    latest_readable_materialized_file_refs, policy::redact_path_for_agent,
+    read_latest_readable_graph_snapshot_marker, BrainReader, KnowledgeStore,
+    MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
 };
 
 pub(crate) fn handle_read_graph_history(
@@ -265,19 +266,6 @@ fn graph_snapshot_path(value: &str, include_local_paths: bool) -> String {
         return value.to_string();
     }
     redact_path_for_agent(value)
-}
-
-fn redact_path_for_agent(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    Path::new(trimmed)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| "<redacted>".into())
 }
 
 fn graph_history_entry_from_event(root: &Path, event: BrainEvent) -> Result<GraphHistoryEntry> {
