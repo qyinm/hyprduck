@@ -45,6 +45,7 @@ pub enum EngineCommand {
     ValidateProvider,
     ListProviderModels,
     CheckReadiness,
+    ApplyGraphPatch,
     WritePropose,
     WriteCommit,
     WriteCommitAll,
@@ -444,6 +445,118 @@ pub struct BrainReadScope {
     pub workspace_id: WorkspaceId,
     #[serde(default)]
     pub root_dir: Option<String>,
+}
+
+pub const GRAPH_PATCH_SCHEMA_VERSION: &str = "hyprduck.graph_patch.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatch {
+    pub schema_version: String,
+    #[serde(default)]
+    pub source_ids: Vec<SourceId>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub nodes: Vec<GraphPatchNode>,
+    #[serde(default)]
+    pub relations: Vec<GraphPatchRelation>,
+    #[serde(default)]
+    pub claims: Vec<GraphPatchClaim>,
+    #[serde(default)]
+    pub wiki_pages: Vec<GraphPatchWikiPage>,
+    #[serde(default)]
+    pub agent_metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatchNode {
+    pub node_id: String,
+    pub kind: BrainNodeKind,
+    pub label: String,
+    #[serde(default)]
+    pub scope: Option<BrainScope>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_ids: Vec<SourceId>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatchRelation {
+    pub relation_id: String,
+    pub kind: BrainRelationKind,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatchClaim {
+    pub claim_id: String,
+    pub statement: String,
+    #[serde(default)]
+    pub topic_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<SourceId>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default = "default_graph_patch_claim_status")]
+    pub status: String,
+}
+
+fn default_graph_patch_claim_status() -> String {
+    "agent_generated".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatchWikiPage {
+    pub page_id: String,
+    pub path: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<SourceId>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyGraphPatchRequest {
+    pub scope: BrainReadScope,
+    pub graph_patch: GraphPatch,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyGraphPatchResponseData {
+    pub event_id: String,
+    pub status: String,
+    pub graph_ready: bool,
+    pub graph_status: String,
+    pub applied_at: u64,
+    pub source_ids: Vec<SourceId>,
+    pub evidence_refs: Vec<String>,
+    pub changed_node_ids: Vec<String>,
+    pub changed_relation_ids: Vec<String>,
+    pub changed_claim_ids: Vec<String>,
+    pub changed_wiki_page_ids: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1975,6 +2088,7 @@ pub enum EngineRequest {
     ValidateProvider(ValidateProviderRequest),
     ListProviderModels(ListProviderModelsRequest),
     CheckReadiness(CheckReadinessRequest),
+    ApplyGraphPatch(ApplyGraphPatchRequest),
     WritePropose(WriteProposeRequest),
     WriteCommit(WriteCommitRequest),
     WriteCommitAll(WriteCommitAllRequest),
@@ -2522,6 +2636,50 @@ mod tests {
             }),
             EngineRequest::GetBrainHealth(GetBrainHealthRequest {
                 scope: scope.clone(),
+            }),
+            EngineRequest::ApplyGraphPatch(ApplyGraphPatchRequest {
+                scope: scope.clone(),
+                agent_id: Some("codex".into()),
+                graph_patch: GraphPatch {
+                    schema_version: GRAPH_PATCH_SCHEMA_VERSION.into(),
+                    source_ids: vec!["source-123".into()],
+                    evidence_refs: vec!["ev-1".into()],
+                    nodes: vec![GraphPatchNode {
+                        node_id: "concept-agent-context".into(),
+                        kind: BrainNodeKind::Concept,
+                        label: "Agent context".into(),
+                        scope: None,
+                        aliases: Vec::new(),
+                        source_ids: vec!["source-123".into()],
+                        evidence_ids: vec!["ev-1".into()],
+                    }],
+                    relations: vec![GraphPatchRelation {
+                        relation_id: "rel-source-agent-context".into(),
+                        kind: BrainRelationKind::Mentions,
+                        source_node_id: "source:source-123".into(),
+                        target_node_id: "concept-agent-context".into(),
+                        label: "mentions".into(),
+                        evidence_ids: vec!["ev-1".into()],
+                    }],
+                    claims: vec![GraphPatchClaim {
+                        claim_id: "claim-agent-context".into(),
+                        statement: "HyprDuck exposes agent context.".into(),
+                        topic_refs: vec!["concept-agent-context".into()],
+                        source_refs: vec!["source-123".into()],
+                        evidence_refs: vec!["ev-1".into()],
+                        status: "agent_generated".into(),
+                    }],
+                    wiki_pages: vec![GraphPatchWikiPage {
+                        page_id: "wiki-agent-context".into(),
+                        path: "wiki/agent-context.md".into(),
+                        title: "Agent context".into(),
+                        body: "Evidence-backed page.".into(),
+                        node_refs: vec!["concept-agent-context".into()],
+                        source_refs: vec!["source-123".into()],
+                        evidence_refs: vec!["ev-1".into()],
+                    }],
+                    agent_metadata: BTreeMap::new(),
+                },
             }),
             EngineRequest::WritePropose(WriteProposeRequest {
                 scope: scope.clone(),

@@ -12,6 +12,27 @@ Register HyprDuck with Codex:
 hyprduck mcp install codex
 ```
 
+For a proof that uses MCP `import_source`, register the approved import root at
+install time so Codex launches HyprDuck with the import allowlist:
+
+```bash
+HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
+  hyprduck mcp install codex
+```
+
+Development proofs that pass `rootDir` also need the development workspace root
+allowlist:
+
+```bash
+HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
+HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 \
+HYPRDUCK_MCP_ALLOWED_ROOTS=/path/to/hyprduck/workspace \
+  hyprduck mcp install codex
+```
+
+Rerun the install command after changing an import root; Codex stores the MCP
+server environment in its MCP entry.
+
 If the shell command is not on `PATH`, use the shim directly:
 
 ```bash
@@ -43,7 +64,8 @@ The first successful proof must record:
 
 - time from install command to first successful `get_context_pack`;
 - `tools/list` includes `import_source`, `import_status`, `get_context_pack`,
-  `search_documents`, `read_source`, and `read_page_evidence`;
+  `search_documents`, `read_source`, `read_page_evidence`, and
+  `graph_patch_apply`;
 - if MCP import is part of the proof, `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` is set
   and `import_source` returns a `jobId` without leaking local paths; polling
   `import_status` reaches a citation-ready state with `citationReady: true`,
@@ -56,6 +78,16 @@ The first successful proof must record:
 - `contextPackV0` remains present for compatibility with older agent clients;
 - second query reuses the same source set or performs a follow-up evidence read;
 - failure class, if any.
+
+For agent-generated graph proof, call `import_source` with
+`skipGraphGeneration: true`, read the imported source/evidence, have the calling
+agent construct a `hyprduck.graph_patch.v1` payload, then call
+`graph_patch_apply`. A passing proof records that `graph_patch_apply` returns
+`status: applied`, `graphReady: true`, `read_graph_snapshot` includes the new
+node/relation, and `read_node` returns the cited evidence. This path keeps the
+existing provider graph path intact: `import_retry_graph` still retries
+OpenRouter/Ollama-backed graph/wiki materialization when provider graph
+generation is desired.
 
 Polling `import_status` should move through:
 
@@ -79,7 +111,9 @@ Graph generation has separate terminal states:
 - `graph_retry_waiting`: a bounded automatic graph retry is scheduled; keep
   polling `import_status`.
 - `citation_ready_graph_skipped`: the caller requested `skipGraphGeneration`;
-  citation reads are usable, but graph inspection was intentionally skipped.
+  citation reads are usable, but provider graph inspection was intentionally
+  skipped. An agent may still build the graph by submitting an evidence-backed
+  `graph_patch_apply` payload.
 - `failed`: parsing, packaging, or citation evidence commit failed before the
   source became citation-ready.
 

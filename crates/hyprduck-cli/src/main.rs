@@ -119,8 +119,12 @@ fn install_codex_mcp() -> Result<()> {
     let _ = std::process::Command::new(&codex_bin)
         .args(["mcp", "remove", "hyprduck"])
         .status();
-    let status = std::process::Command::new(&codex_bin)
-        .args(["mcp", "add", "hyprduck", "--", &current_exe, "mcp", "serve"])
+    let env_args = codex_mcp_env_args();
+    let mut command = std::process::Command::new(&codex_bin);
+    command.args(["mcp", "add"]);
+    command.args(&env_args);
+    let status = command
+        .args(["hyprduck", "--", &current_exe, "mcp", "serve"])
         .status()
         .map_err(|error| anyhow::anyhow!("failed to run codex mcp add: {error}"))?;
     if !status.success() {
@@ -129,7 +133,39 @@ fn install_codex_mcp() -> Result<()> {
 
     println!("Installed HyprDuck MCP for Codex.");
     println!("command: {current_exe} mcp serve");
+    let forwarded_env_names = codex_mcp_forwarded_env_names()
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect::<Vec<_>>();
+    if !forwarded_env_names.is_empty() {
+        println!("env: {}", forwarded_env_names.join(", "));
+    }
     Ok(())
+}
+
+fn codex_mcp_env_args() -> Vec<String> {
+    codex_mcp_forwarded_env_names()
+        .into_iter()
+        .filter_map(|name| {
+            std::env::var_os(name).map(|value| {
+                vec![
+                    "--env".to_string(),
+                    format!("{name}={}", value.to_string_lossy()),
+                ]
+            })
+        })
+        .flatten()
+        .collect()
+}
+
+fn codex_mcp_forwarded_env_names() -> [&'static str; 5] {
+    [
+        "HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS",
+        "HYPRDUCK_MCP_ALLOW_ROOT_DIR",
+        "HYPRDUCK_MCP_ALLOWED_ROOTS",
+        "HYPRDUCK_PROJECT_STORE",
+        "HYPRDUCK_DISABLE_PROVIDER_GRAPH",
+    ]
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {
