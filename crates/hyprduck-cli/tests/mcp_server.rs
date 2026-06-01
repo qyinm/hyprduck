@@ -1001,6 +1001,103 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         "{evidence_payload:#?}"
     );
 
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "What should MCP import create for agents?",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        context_pack_tool["result"]["isError"], false,
+        "{context_pack_tool:#?}"
+    );
+    let text = context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("context pack tool text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    let context_pack_payload: Value = serde_json::from_str(text).expect("context pack payload");
+    assert_eq!(
+        context_pack_payload["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        context_pack_payload["contextPackV1"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        context_pack_payload["contextPackV0"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    let selected_evidence = context_pack_payload["contextPack"]["selectedEvidence"]
+        .as_array()
+        .expect("selected evidence");
+    let imported_evidence = selected_evidence
+        .iter()
+        .find(|evidence| evidence["sourceId"] == source_id)
+        .expect("context pack should include imported source evidence");
+    assert!(imported_evidence.get("evidenceType").is_some());
+    assert!(context_pack_payload["contextPack"]["retrievalTrace"]
+        .get("evidenceTypeTrace")
+        .is_some());
+    let first_answer = cited_answer_from_context_pack(&context_pack_payload["contextPackV0"]);
+    assert!(first_answer.contains(&format!("sourceId={source_id}")));
+    let evidence_ref = imported_evidence["evidenceRef"]
+        .as_str()
+        .expect("imported evidence ref")
+        .to_string();
+    assert!(first_answer.contains(&format!("evidenceRef={evidence_ref}")));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "Use the same source to explain the evidence for agents again.",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let followup_context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        followup_context_pack_tool["result"]["isError"], false,
+        "{followup_context_pack_tool:#?}"
+    );
+    let text = followup_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("follow-up context pack tool text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains(import_root_arg.as_str()));
+    let followup_context_pack_payload: Value =
+        serde_json::from_str(text).expect("follow-up context pack payload");
+    assert!(
+        followup_context_pack_payload["contextPack"]["selectedEvidence"]
+            .as_array()
+            .expect("follow-up selected evidence")
+            .iter()
+            .any(|evidence| evidence["sourceId"] == source_id
+                && evidence["evidenceRef"] == evidence_ref)
+    );
+
     drop(stdin);
     let status = child.wait().expect("server exit");
     assert!(status.success());
