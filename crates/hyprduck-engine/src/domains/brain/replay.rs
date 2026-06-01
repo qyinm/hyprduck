@@ -284,12 +284,11 @@ pub(crate) fn persist_reconstructed_brain_snapshot(
     root: &Path,
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
-    ensure_materialized_brain_repo_dirs(root)?;
-    persist_materialized_graph_and_wiki_state(root, snapshot)?;
+    project_graph_wiki_read_model(root, snapshot)?;
     write_json_pretty(&root.join("memory/records.json"), &snapshot.memories)?;
     write_structured_extraction_artifacts(root, &snapshot.extractions)?;
     write_brain_events_jsonl(&root.join("events/brain_events.jsonl"), &snapshot.events)?;
-    publish_latest_readable_graph_snapshot_marker(root, snapshot)?;
+    publish_graph_wiki_read_model_marker(root, snapshot)?;
     Ok(())
 }
 
@@ -538,6 +537,33 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed parsing graph materialized payload for event `evt-corrupt`"));
+    }
+
+    #[test]
+    fn reconstruct_reports_wrong_workspace_replay_target_as_not_found() {
+        let event = test_graph_event(TestGraphEventInput {
+            workspace_id: "other-workspace",
+            event_id: "evt-other-workspace",
+            operation_type: "graph_materialized",
+            generated_at: 1,
+            sources: &[],
+            nodes: &[],
+            relations: &[],
+            evidence: &[],
+        });
+
+        let error = reconstruct_brain_snapshot_from_events(
+            "default",
+            std::slice::from_ref(&event),
+            None,
+            None,
+            Some("evt-other-workspace"),
+        )
+        .expect_err("target event for another workspace should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("replay target event `evt-other-workspace` was not found"));
     }
 
     fn provider_test_concept(

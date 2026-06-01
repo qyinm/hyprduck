@@ -70,6 +70,7 @@ mod agent_workflow {
 
 mod brain_repo {
     pub(crate) use crate::domains::brain::materialize::*;
+    pub(crate) use crate::domains::brain::projector::*;
     pub(crate) use crate::domains::brain::reader::*;
     pub(crate) use crate::domains::brain::replay::*;
     pub(crate) use crate::domains::brain::repository::*;
