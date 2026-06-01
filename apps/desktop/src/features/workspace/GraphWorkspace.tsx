@@ -929,6 +929,12 @@ function formatImportLifecycleTitle(status: string): string {
       return "Packaging citations";
     case "citation_ready":
       return "Citation-ready";
+    case "citation_ready_graph_pending":
+      return "Citation-ready, graph pending";
+    case "citation_ready_graph_skipped":
+      return "Citation-ready, graph skipped";
+    case "graph_retry_waiting":
+      return "Citation-ready, graph retry waiting";
     case "context_ready":
       return "Context-ready";
     case "partial":
@@ -974,7 +980,12 @@ function GraphImportStatusBanner(props: {
         </div>
         <ImportStatusIndicator
           failed={failed}
-          ready={status.status === "citation_ready" || status.status === "context_ready"}
+          ready={
+            status.status === "citation_ready" ||
+            status.status === "citation_ready_graph_pending" ||
+            status.status === "citation_ready_graph_skipped" ||
+            status.status === "context_ready"
+          }
           progress={progress}
         />
       </div>

@@ -354,6 +354,154 @@ pub struct ImportJobRecord {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportLifecycleStatus {
+    Imported,
+    Parsing,
+    Packaging,
+    CitationReady,
+    CitationReadyGraphPending,
+    CitationReadyGraphSkipped,
+    GraphRetryWaiting,
+    ContextReady,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportLifecyclePhase {
+    Imported,
+    Parsing,
+    Packaging,
+    CitationReady,
+    ContextMaterializing,
+    GraphRetryWaiting,
+    GraphPending,
+    GraphSkipped,
+    ContextReady,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportLifecycleState {
+    pub status: ImportLifecycleStatus,
+    pub phase: ImportLifecyclePhase,
+    pub citation_ready: bool,
+    pub graph_ready: bool,
+    pub retryable: bool,
+    pub manual_retry_available: bool,
+    pub terminal: bool,
+}
+
+impl ImportLifecycleStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Imported => "imported",
+            Self::Parsing => "parsing",
+            Self::Packaging => "packaging",
+            Self::CitationReady => "citation_ready",
+            Self::CitationReadyGraphPending => "citation_ready_graph_pending",
+            Self::CitationReadyGraphSkipped => "citation_ready_graph_skipped",
+            Self::GraphRetryWaiting => "graph_retry_waiting",
+            Self::ContextReady => "context_ready",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::CitationReadyGraphPending
+                | Self::CitationReadyGraphSkipped
+                | Self::ContextReady
+                | Self::Failed
+                | Self::Cancelled
+        )
+    }
+
+    pub fn from_persisted(value: &str) -> Self {
+        match value {
+            "imported" => Self::Imported,
+            "parsing" => Self::Parsing,
+            "packaging" => Self::Packaging,
+            "citation_ready" => Self::CitationReady,
+            "citation_ready_graph_skipped" => Self::CitationReadyGraphSkipped,
+            "graph_retry_waiting" => Self::GraphRetryWaiting,
+            "context_ready" => Self::ContextReady,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::CitationReadyGraphPending,
+        }
+    }
+}
+
+impl ImportLifecyclePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Imported => "imported",
+            Self::Parsing => "parsing",
+            Self::Packaging => "packaging",
+            Self::CitationReady => "citation_ready",
+            Self::ContextMaterializing => "context_materializing",
+            Self::GraphRetryWaiting => "graph_retry_waiting",
+            Self::GraphPending => "graph_pending",
+            Self::GraphSkipped => "graph_skipped",
+            Self::ContextReady => "context_ready",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_status_and_graph_status(status: ImportLifecycleStatus, graph_status: &str) -> Self {
+        match status {
+            ImportLifecycleStatus::Imported => Self::Imported,
+            ImportLifecycleStatus::Parsing => Self::Parsing,
+            ImportLifecycleStatus::Packaging => Self::Packaging,
+            ImportLifecycleStatus::CitationReady => Self::CitationReady,
+            ImportLifecycleStatus::CitationReadyGraphSkipped => Self::GraphSkipped,
+            ImportLifecycleStatus::GraphRetryWaiting => Self::GraphRetryWaiting,
+            ImportLifecycleStatus::ContextReady => Self::ContextReady,
+            ImportLifecycleStatus::Failed => Self::Failed,
+            ImportLifecycleStatus::Cancelled => Self::Cancelled,
+            ImportLifecycleStatus::CitationReadyGraphPending => {
+                if graph_status == "skipped" {
+                    Self::GraphSkipped
+                } else {
+                    Self::GraphPending
+                }
+            }
+        }
+    }
+}
+
+impl ImportLifecycleState {
+    pub fn from_persisted(
+        status: &str,
+        graph_status: &str,
+        citation_ready: bool,
+        graph_ready: bool,
+        retryable: bool,
+        manual_retry_available: bool,
+    ) -> Self {
+        let status = ImportLifecycleStatus::from_persisted(status);
+        Self {
+            status,
+            phase: ImportLifecyclePhase::from_status_and_graph_status(status, graph_status),
+            citation_ready,
+            graph_ready,
+            retryable,
+            manual_retry_available,
+            terminal: status.is_terminal(),
+        }
+    }
+}
+
+pub fn graph_status_is_ready(status: Option<&str>) -> bool {
+    matches!(status, Some("rebuilt" | "partially_applied" | "ready"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadImportJobResponseData {
@@ -3862,6 +4010,126 @@ mod tests {
             serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::CheckReadiness);
         assert!(decoded.data.ready);
+    }
+
+    #[test]
+    fn import_lifecycle_status_strings_are_stable() {
+        assert_eq!(ImportLifecycleStatus::Imported.as_str(), "imported");
+        assert_eq!(ImportLifecycleStatus::Parsing.as_str(), "parsing");
+        assert_eq!(ImportLifecycleStatus::Packaging.as_str(), "packaging");
+        assert_eq!(
+            ImportLifecycleStatus::CitationReady.as_str(),
+            "citation_ready"
+        );
+        assert_eq!(
+            ImportLifecycleStatus::CitationReadyGraphPending.as_str(),
+            "citation_ready_graph_pending"
+        );
+        assert_eq!(
+            ImportLifecycleStatus::CitationReadyGraphSkipped.as_str(),
+            "citation_ready_graph_skipped"
+        );
+        assert_eq!(
+            ImportLifecycleStatus::GraphRetryWaiting.as_str(),
+            "graph_retry_waiting"
+        );
+        assert_eq!(
+            ImportLifecycleStatus::ContextReady.as_str(),
+            "context_ready"
+        );
+        assert_eq!(ImportLifecycleStatus::Failed.as_str(), "failed");
+        assert_eq!(ImportLifecycleStatus::Cancelled.as_str(), "cancelled");
+    }
+
+    #[test]
+    fn import_lifecycle_truth_table_separates_citation_and_graph_readiness() {
+        let pending = ImportLifecycleState::from_persisted(
+            "citation_ready_graph_pending",
+            "pending",
+            true,
+            false,
+            true,
+            true,
+        );
+        assert_eq!(
+            pending.status,
+            ImportLifecycleStatus::CitationReadyGraphPending
+        );
+        assert_eq!(pending.phase, ImportLifecyclePhase::GraphPending);
+        assert!(pending.citation_ready);
+        assert!(!pending.graph_ready);
+        assert!(pending.retryable);
+        assert!(pending.manual_retry_available);
+        assert!(pending.terminal);
+
+        let skipped = ImportLifecycleState::from_persisted(
+            "citation_ready_graph_skipped",
+            "skipped",
+            true,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(skipped.phase, ImportLifecyclePhase::GraphSkipped);
+        assert!(skipped.citation_ready);
+        assert!(!skipped.graph_ready);
+        assert!(skipped.terminal);
+
+        let retry_waiting = ImportLifecycleState::from_persisted(
+            "graph_retry_waiting",
+            "failed_no_materialization",
+            true,
+            false,
+            true,
+            true,
+        );
+        assert_eq!(retry_waiting.phase, ImportLifecyclePhase::GraphRetryWaiting);
+        assert!(retry_waiting.citation_ready);
+        assert!(!retry_waiting.graph_ready);
+        assert!(!retry_waiting.terminal);
+
+        let ready = ImportLifecycleState::from_persisted(
+            "context_ready",
+            "rebuilt",
+            true,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(ready.phase, ImportLifecyclePhase::ContextReady);
+        assert!(ready.citation_ready);
+        assert!(ready.graph_ready);
+        assert!(ready.terminal);
+    }
+
+    #[test]
+    fn import_lifecycle_maps_unknown_persisted_status_to_graph_pending() {
+        let lifecycle = ImportLifecycleState::from_persisted(
+            "legacy_unrecognized",
+            "",
+            true,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            lifecycle.status,
+            ImportLifecycleStatus::CitationReadyGraphPending
+        );
+        assert_eq!(lifecycle.phase, ImportLifecyclePhase::GraphPending);
+        assert!(lifecycle.citation_ready);
+        assert!(!lifecycle.graph_ready);
+    }
+
+    #[test]
+    fn shared_graph_ready_allowlist_rejects_non_ready_graph_states() {
+        assert!(graph_status_is_ready(Some("rebuilt")));
+        assert!(graph_status_is_ready(Some("partially_applied")));
+        assert!(graph_status_is_ready(Some("ready")));
+        assert!(!graph_status_is_ready(Some("skipped")));
+        assert!(!graph_status_is_ready(Some("pending")));
+        assert!(!graph_status_is_ready(Some("failed_no_materialization")));
+        assert!(!graph_status_is_ready(None));
     }
 
     #[test]

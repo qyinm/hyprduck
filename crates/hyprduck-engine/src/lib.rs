@@ -8,8 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use hyprduck_engine_types::{
-    AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse, AnswerStatus,
-    ApplyCorrectionRequest, ApplyCorrectionResponseData, ApplyGraphPatchRequest,
+    graph_status_is_ready, AnswerProjectRequest, AnswerProjectResponseData, AnswerResponse,
+    AnswerStatus, ApplyCorrectionRequest, ApplyCorrectionResponseData, ApplyGraphPatchRequest,
     ApplyGraphPatchResponseData, BrainActor, BrainActorType, BrainContextPack, BrainEvent,
     BrainEventCausality, BrainEventKind, BrainGovernanceReport, BrainHealthSourceReport,
     BrainHealthStatus, BrainKnowledgeStoreReport, BrainNodeKind, BrainNodeRecord, BrainReadScope,
@@ -18,15 +18,16 @@ use hyprduck_engine_types::{
     CorrectionAction, CorrectionKind, DocumentFormat, EngineCommand, EngineFailure, EntityRecord,
     EvidenceRef, GetBrainHealthRequest, GetBrainHealthResponseData, GetContextPackRequest,
     GetContextPackResponseData, GraphNodeDetail, GraphNodeKind, GraphNodePosition,
-    GraphNodeSummary, IngestStatus, KnowledgeProject, LoadProjectRequest, LoadProjectResponseData,
-    MemoryRecord, PageArtifact, PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest,
-    ParseResponseData, ParseResult, ParsedPage, PolicyResult, ProjectOverview, ProjectStatus,
-    ReadContextPackRequest, ReadContextPackResponseData, ReadImportJobRequest,
-    ReadImportJobResponseData, ReadNodeRequest, ReadNodeResponseData, ReadPageEvidenceRequest,
-    ReadPageEvidenceResponseData, ReadRecentEventsRequest, ReadRecentEventsResponseData,
-    ReadSourceRequest, ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData,
-    ReconstructBrainRequest, ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary,
-    RelationKind, RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
+    GraphNodeSummary, ImportLifecycleState, ImportLifecycleStatus, IngestStatus, KnowledgeProject,
+    LoadProjectRequest, LoadProjectResponseData, MemoryRecord, PageArtifact, PageEvidenceV0,
+    ParseEvent, ParseMetadata, ParseRequest, ParseResponseData, ParseResult, ParsedPage,
+    PolicyResult, ProjectOverview, ProjectStatus, ReadContextPackRequest,
+    ReadContextPackResponseData, ReadImportJobRequest, ReadImportJobResponseData, ReadNodeRequest,
+    ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
+    ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
+    ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
+    ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
+    RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
     SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
     SourceStatus, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
     StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
@@ -361,10 +362,6 @@ fn compile_workspace_root(
         workspace_id: workspace_id.into(),
         root_dir: None,
     })
-}
-
-fn graph_status_is_ready(status: Option<&str>) -> bool {
-    matches!(status, Some("rebuilt" | "partially_applied" | "ready"))
 }
 
 fn handle_read_import_job(request: ReadImportJobRequest) -> Result<ReadImportJobResponseData> {
@@ -1386,15 +1383,25 @@ fn handle_get_brain_health(request: GetBrainHealthRequest) -> Result<GetBrainHea
             None,
             Some(report.source_id.as_str()),
         )? {
-            report.citation_ready = import_job.citation_ready;
-            report.graph_ready = import_job.graph_ready;
+            let lifecycle = ImportLifecycleState::from_persisted(
+                &import_job.status,
+                &import_job.graph_status,
+                import_job.citation_ready,
+                import_job.graph_ready,
+                import_job.graph_retryable,
+                import_job.manual_retry_available,
+            );
+            report.citation_ready = lifecycle.citation_ready;
+            report.graph_ready = lifecycle.graph_ready;
             report.graph_status = import_job.graph_status;
-            report.manual_retry_available = import_job.manual_retry_available;
+            report.manual_retry_available = lifecycle.manual_retry_available;
             if report.citation_ready && !report.graph_ready {
-                let warning = if report.graph_status == "skipped" {
-                    "citation_ready_graph_skipped"
-                } else {
-                    "citation_ready_graph_pending"
+                let warning = match lifecycle.status {
+                    ImportLifecycleStatus::CitationReadyGraphSkipped => {
+                        "citation_ready_graph_skipped"
+                    }
+                    ImportLifecycleStatus::GraphRetryWaiting => "graph_retry_waiting",
+                    _ => "citation_ready_graph_pending",
                 };
                 push_health_warning(&mut report.warnings, warning);
             }

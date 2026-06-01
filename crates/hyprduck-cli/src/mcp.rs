@@ -8,13 +8,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
-    ApplyGraphPatchRequest, BrainReadScope, CompileProjectRequest, DocumentFormat,
-    GetBrainHealthRequest, GetContextPackRequest, ImportJobRecord, ParseInput, ParseOptions,
-    ParseOutputTarget, ParseRequest, ReadContextPackRequest, ReadGraphHistoryRequest,
-    ReadGraphSnapshotRequest, ReadImportJobRequest, ReadNodeRequest, ReadPageEvidenceRequest,
-    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
-    UpdateImportJobGraphStatusRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
-    WriteProposeRequest, WriteRejectRequest,
+    graph_status_is_ready, ApplyGraphPatchRequest, BrainReadScope, CompileProjectRequest,
+    DocumentFormat, GetBrainHealthRequest, GetContextPackRequest, ImportJobRecord,
+    ImportLifecyclePhase as ImportJobPhase, ImportLifecycleState,
+    ImportLifecycleStatus as ImportJobStatus, ParseInput, ParseOptions, ParseOutputTarget,
+    ParseRequest, ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest,
+    ReadImportJobRequest, ReadNodeRequest, ReadPageEvidenceRequest, ReadRecentEventsRequest,
+    ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest, UpdateImportJobGraphStatusRequest,
+    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
+    WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -380,35 +382,6 @@ struct ImportJobSnapshot {
     updated_at: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImportJobStatus {
-    Imported,
-    Parsing,
-    Packaging,
-    CitationReady,
-    CitationReadyGraphPending,
-    CitationReadyGraphSkipped,
-    GraphRetryWaiting,
-    ContextReady,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImportJobPhase {
-    Imported,
-    Parsing,
-    Packaging,
-    CitationReady,
-    ContextMaterializing,
-    GraphRetryWaiting,
-    GraphPending,
-    GraphSkipped,
-    ContextReady,
-    Failed,
-    Cancelled,
-}
-
 impl ImportJobRegistry {
     fn insert(&self, job: ImportJobSnapshot) {
         self.jobs
@@ -561,118 +534,42 @@ impl ImportJobSnapshot {
     }
 }
 
-impl ImportJobStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Imported => "imported",
-            Self::Parsing => "parsing",
-            Self::Packaging => "packaging",
-            Self::CitationReady => "citation_ready",
-            Self::CitationReadyGraphPending => "citation_ready_graph_pending",
-            Self::CitationReadyGraphSkipped => "citation_ready_graph_skipped",
-            Self::GraphRetryWaiting => "graph_retry_waiting",
-            Self::ContextReady => "context_ready",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::CitationReadyGraphPending
-                | Self::CitationReadyGraphSkipped
-                | Self::ContextReady
-                | Self::Failed
-                | Self::Cancelled
-        )
-    }
-
-    fn from_persisted(value: &str) -> Self {
-        match value {
-            "imported" => Self::Imported,
-            "parsing" => Self::Parsing,
-            "packaging" => Self::Packaging,
-            "citation_ready" => Self::CitationReady,
-            "citation_ready_graph_skipped" => Self::CitationReadyGraphSkipped,
-            "graph_retry_waiting" => Self::GraphRetryWaiting,
-            "context_ready" => Self::ContextReady,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            _ => Self::CitationReadyGraphPending,
-        }
-    }
-}
-
-impl ImportJobPhase {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Imported => "imported",
-            Self::Parsing => "parsing",
-            Self::Packaging => "packaging",
-            Self::CitationReady => "citation_ready",
-            Self::ContextMaterializing => "context_materializing",
-            Self::GraphRetryWaiting => "graph_retry_waiting",
-            Self::GraphPending => "graph_pending",
-            Self::GraphSkipped => "graph_skipped",
-            Self::ContextReady => "context_ready",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn from_status_and_graph_status(status: ImportJobStatus, graph_status: &str) -> Self {
-        match status {
-            ImportJobStatus::Imported => Self::Imported,
-            ImportJobStatus::Parsing => Self::Parsing,
-            ImportJobStatus::Packaging => Self::Packaging,
-            ImportJobStatus::CitationReady => Self::CitationReady,
-            ImportJobStatus::CitationReadyGraphSkipped => Self::GraphSkipped,
-            ImportJobStatus::GraphRetryWaiting => Self::GraphRetryWaiting,
-            ImportJobStatus::ContextReady => Self::ContextReady,
-            ImportJobStatus::Failed => Self::Failed,
-            ImportJobStatus::Cancelled => Self::Cancelled,
-            ImportJobStatus::CitationReadyGraphPending => {
-                if graph_status == "skipped" {
-                    Self::GraphSkipped
-                } else {
-                    Self::GraphPending
-                }
-            }
-        }
-    }
-}
-
 fn import_job_snapshot_from_record(
     record: ImportJobRecord,
     scope: &BrainReadScope,
 ) -> ImportJobSnapshot {
-    let status = ImportJobStatus::from_persisted(&record.status);
-    let phase = ImportJobPhase::from_status_and_graph_status(status, &record.graph_status);
+    let lifecycle = ImportLifecycleState::from_persisted(
+        &record.status,
+        &record.graph_status,
+        record.citation_ready,
+        record.graph_ready,
+        record.graph_retryable,
+        record.manual_retry_available,
+    );
     ImportJobSnapshot {
         job_id: record.job_id,
         workspace_id: record.workspace_id,
         root_dir: scope.root_dir.clone(),
-        status,
-        phase,
-        progress_percent: if status.is_terminal() { 100 } else { 0 },
+        status: lifecycle.status,
+        phase: lifecycle.phase,
+        progress_percent: if lifecycle.terminal { 100 } else { 0 },
         source_id: Some(record.source_id),
         source_markdown_path: non_empty_string(record.source_markdown_path),
         source_document_path: non_empty_string(record.source_document_path),
         source_manifest_path: non_empty_string(record.source_manifest_path),
         page_count: None,
         evidence_count: None,
-        citation_ready: record.citation_ready,
-        graph_ready: record.graph_ready,
+        citation_ready: lifecycle.citation_ready,
+        graph_ready: lifecycle.graph_ready,
         graph_status: non_empty_string(record.graph_status),
         graph_error_category: non_empty_string(record.graph_error_category),
         graph_generation_skipped_reason: None,
         graph_generation_error_message: non_empty_string(record.graph_error_message_redacted),
-        retryable: record.graph_retryable,
+        retryable: lifecycle.retryable,
         retry_attempt: record.graph_retry_attempt,
         max_retry_attempts: record.graph_max_retry_attempts.max(2),
         next_retry_at: record.graph_next_retry_at,
-        manual_retry_available: record.manual_retry_available,
+        manual_retry_available: lifecycle.manual_retry_available,
         warnings: Vec::new(),
         error: None,
         cancel_requested: false,
@@ -1200,10 +1097,6 @@ fn job_import_request_stub(job: &ImportJobSnapshot) -> ImportJobRequest {
         name: None,
         skip_graph_generation: false,
     }
-}
-
-fn graph_status_is_ready(status: Option<&str>) -> bool {
-    matches!(status, Some("rebuilt" | "partially_applied"))
 }
 
 fn import_phase_from_parse_progress(
