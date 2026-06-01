@@ -134,6 +134,9 @@ mod source_index {
     pub(crate) use crate::domains::retrieval::source_index::*;
 }
 
+pub(crate) use adapters::persistence::knowledge_store::{
+    AgentWriteProposalRecord, KnowledgeGraphPersistReport, KnowledgeStore,
+};
 pub(crate) use adapters::persistence::project_store::*;
 use adapters::process::binary_locator::resolve_binary;
 use agent_workflow::maybe_generate_provider_graph_materialization;
@@ -164,7 +167,6 @@ use domains::ingest::output_package::{build_source_id, write_source_manifest};
 use domains::ingest::output_package::{
     load_source_manifest, resolved_source_ids, source_summary_from_manifest,
 };
-use domains::knowledge_store::KnowledgeStore;
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
     event_matches_recent_events_request, graph_snapshot_source_ingest_id,

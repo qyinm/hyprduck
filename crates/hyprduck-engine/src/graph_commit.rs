@@ -8,7 +8,7 @@ use crate::{
         project_graph_wiki_read_model, publish_graph_wiki_read_model_marker,
         write_brain_events_jsonl,
     },
-    domains::knowledge_store::{KnowledgeGraphPersistReport, KnowledgeStore},
+    KnowledgeGraphPersistReport, KnowledgeStore,
 };
 
 pub(crate) fn commit_graph_materialization(

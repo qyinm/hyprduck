@@ -17,10 +17,9 @@ use uuid::Uuid;
 use crate::brain_repo::{
     read_materialized_brain_snapshot, BrainArtifactRepository, BrainWorkspaceWriter,
 };
-use crate::domains::knowledge_store::{AgentWriteProposalRecord, KnowledgeStore};
 use crate::{
     read_json_artifact, resolve_brain_workspace_root, unix_timestamp_seconds, write_json_pretty,
-    MCP_WRITE_AGENT_ID,
+    AgentWriteProposalRecord, KnowledgeStore, MCP_WRITE_AGENT_ID,
 };
 
 pub(crate) fn handle_write_propose(

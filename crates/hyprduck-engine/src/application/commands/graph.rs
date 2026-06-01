@@ -10,10 +10,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::brain_repo::{read_materialized_brain_snapshot, BrainWorkspaceWriter};
-use crate::domains::knowledge_store::KnowledgeStore;
 use crate::graph_commit::commit_graph_materialization;
 use crate::graph_patch_policy::ValidatedGraphPatchScope;
-use crate::{resolve_brain_workspace_root, unix_timestamp_seconds};
+use crate::{resolve_brain_workspace_root, unix_timestamp_seconds, KnowledgeStore};
 
 pub(crate) fn handle_apply_graph_patch(
     request: ApplyGraphPatchRequest,

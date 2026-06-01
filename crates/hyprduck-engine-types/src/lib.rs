@@ -479,14 +479,19 @@ impl ImportLifecyclePhase {
 
 impl ImportLifecycleState {
     pub fn from_persisted(
-        status: &str,
+        persisted_status: &str,
         graph_status: &str,
         citation_ready: bool,
         graph_ready: bool,
         retryable: bool,
         manual_retry_available: bool,
     ) -> Self {
-        let mut status = ImportLifecycleStatus::from_persisted(status);
+        let mut status = ImportLifecycleStatus::from_persisted(persisted_status);
+        if matches!(status, ImportLifecycleStatus::Failed)
+            && (persisted_status == "ingested" || (persisted_status == "partial" && citation_ready))
+        {
+            status = ImportLifecycleStatus::CitationReadyGraphPending;
+        }
         if graph_ready || graph_status_is_ready(Some(graph_status)) {
             status = ImportLifecycleStatus::ContextReady;
         }
@@ -4119,6 +4124,26 @@ mod tests {
         assert_eq!(lifecycle.phase, ImportLifecyclePhase::GraphPending);
         assert!(lifecycle.citation_ready);
         assert!(!lifecycle.graph_ready);
+    }
+
+    #[test]
+    fn import_lifecycle_maps_source_manifest_statuses_to_graph_pending_when_citation_ready() {
+        let ingested =
+            ImportLifecycleState::from_persisted("ingested", "", true, false, false, true);
+        assert_eq!(
+            ingested.status,
+            ImportLifecycleStatus::CitationReadyGraphPending
+        );
+        assert_eq!(ingested.phase, ImportLifecyclePhase::GraphPending);
+        assert!(ingested.terminal);
+
+        let partial = ImportLifecycleState::from_persisted("partial", "", true, false, false, true);
+        assert_eq!(
+            partial.status,
+            ImportLifecycleStatus::CitationReadyGraphPending
+        );
+        assert_eq!(partial.phase, ImportLifecyclePhase::GraphPending);
+        assert!(partial.terminal);
     }
 
     #[test]
