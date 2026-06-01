@@ -51,7 +51,6 @@ use uuid::Uuid;
 
 mod adapters;
 mod application;
-mod context_pack_artifacts;
 mod domains;
 mod graph_commit;
 mod graph_history;
@@ -123,11 +122,11 @@ use brain_repo::*;
 use chat_openai_compatible_client::{
     parse_openai_compatible_json_schema_with_timeout, provider_unavailable,
 };
-use context_pack_artifacts::{
+use domains::context_pack::artifact_metadata::{
     build_context_pack_artifact_metadata, read_evidence_index_artifact, read_source_pack_v0,
 };
 #[cfg(test)]
-use context_pack_artifacts::{build_context_pack_source_metadata, fnv1a64};
+use domains::context_pack::artifact_metadata::{build_context_pack_source_metadata, fnv1a64};
 #[cfg(test)]
 use domains::ingest::markdown_queue::*;
 use domains::ingest::output_package::retry_failed_page_artifacts;
