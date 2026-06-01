@@ -9,6 +9,8 @@ use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
 
+pub(crate) mod graph;
+
 pub(crate) fn encode_success_response(
     request: EngineRequest,
     config_store: &EngineConfigStore,
@@ -132,7 +134,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::ApplyGraphPatch(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ApplyGraphPatch,
-            crate::handle_apply_graph_patch(request)?,
+            graph::handle_apply_graph_patch(request)?,
         )),
         EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WritePropose,
