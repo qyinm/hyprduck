@@ -5,6 +5,7 @@ use hyprduck_engine_types::{
     SaveConfigResponseData, ValidateProviderRequest,
 };
 
+use crate::application::services::project_service;
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
@@ -29,25 +30,25 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::CompileProject,
-            crate::handle_compile_project(request)?,
+            project_service::handle_compile_project(request)?,
         )),
         EngineRequest::ReadImportJob(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadImportJob,
-            crate::handle_read_import_job(request)?,
+            project_service::handle_read_import_job(request)?,
         )),
         EngineRequest::UpdateImportJobGraphStatus(request) => {
             serde_json::to_string(&EngineSuccess::new(
                 EngineCommand::UpdateImportJobGraphStatus,
-                crate::handle_update_import_job_graph_status(request)?,
+                project_service::handle_update_import_job_graph_status(request)?,
             ))
         }
         EngineRequest::LoadProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::LoadProject,
-            crate::handle_load_project(request)?,
+            project_service::handle_load_project(request)?,
         )),
         EngineRequest::ApplyCorrection(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ApplyCorrection,
-            crate::handle_apply_correction(request)?,
+            project_service::handle_apply_correction(request)?,
         )),
         EngineRequest::AnswerProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::AnswerProject,
