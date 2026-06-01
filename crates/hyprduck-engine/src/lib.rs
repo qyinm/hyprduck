@@ -55,6 +55,7 @@ use uuid::Uuid;
 mod commands;
 mod context_pack_artifacts;
 mod domains;
+mod graph_commit;
 mod graph_history;
 mod graph_patch_policy;
 mod infra;
@@ -62,6 +63,7 @@ mod policy;
 pub mod runtime;
 mod search_context;
 
+use graph_commit::commit_graph_materialization;
 use graph_patch_policy::ValidatedGraphPatchScope;
 
 mod agent_workflow {
@@ -1667,14 +1669,7 @@ fn handle_apply_graph_patch(
     snapshot.generated_at = now;
     snapshot.events.push(event.clone());
 
-    let report = store.persist_graph_snapshot(&snapshot)?;
-    ensure_materialized_brain_repo_dirs(writer.root())?;
-    persist_materialized_graph_and_wiki_state(writer.root(), &snapshot)?;
-    write_brain_events_jsonl(
-        &writer.root().join("events/brain_events.jsonl"),
-        &snapshot.events,
-    )?;
-    publish_latest_readable_graph_snapshot_marker(writer.root(), &snapshot)?;
+    let report = commit_graph_materialization(writer.root(), &store, &snapshot)?;
 
     Ok(ApplyGraphPatchResponseData {
         event_id,
