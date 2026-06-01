@@ -10,6 +10,7 @@ use crate::provider::{
 };
 
 pub(crate) mod graph;
+pub(crate) mod write;
 
 pub(crate) fn encode_success_response(
     request: EngineRequest,
@@ -138,23 +139,23 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WritePropose,
-            crate::handle_write_propose(request)?,
+            write::handle_write_propose(request)?,
         )),
         EngineRequest::WriteCommit(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommit,
-            crate::handle_write_commit(request)?,
+            write::handle_write_commit(request)?,
         )),
         EngineRequest::WriteCommitAll(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommitAll,
-            crate::handle_write_commit_all(request)?,
+            write::handle_write_commit_all(request)?,
         )),
         EngineRequest::WriteList(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteList,
-            crate::handle_write_list(request)?,
+            write::handle_write_list(request)?,
         )),
         EngineRequest::WriteReject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteReject,
-            crate::handle_write_reject(request)?,
+            write::handle_write_reject(request)?,
         )),
     }
     .context("failed to encode engine response")?;
