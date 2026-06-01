@@ -110,6 +110,7 @@ mod source_index {
     pub(crate) use crate::domains::retrieval::source_index::*;
 }
 
+use adapters::process::binary_locator::resolve_binary;
 use agent_workflow::maybe_generate_provider_graph_materialization;
 #[cfg(test)]
 use agent_workflow::{
@@ -147,7 +148,6 @@ pub(crate) use graph_history::{
 use import_context::{
     build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
 };
-use infra::process::resolve_binary;
 use knowledge::*;
 use parse::{parse_document, EventSink, ProcessLocator};
 use provider::{EngineConfig, EngineConfigStore};
