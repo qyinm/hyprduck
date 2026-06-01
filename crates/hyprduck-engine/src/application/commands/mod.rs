@@ -9,8 +9,8 @@ use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
 
+pub(crate) mod brain_write;
 pub(crate) mod graph;
-pub(crate) mod write;
 
 pub(crate) fn encode_success_response(
     request: EngineRequest,
@@ -139,23 +139,23 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::WritePropose(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WritePropose,
-            write::handle_write_propose(request)?,
+            brain_write::handle_write_propose(request)?,
         )),
         EngineRequest::WriteCommit(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommit,
-            write::handle_write_commit(request)?,
+            brain_write::handle_write_commit(request)?,
         )),
         EngineRequest::WriteCommitAll(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteCommitAll,
-            write::handle_write_commit_all(request)?,
+            brain_write::handle_write_commit_all(request)?,
         )),
         EngineRequest::WriteList(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteList,
-            write::handle_write_list(request)?,
+            brain_write::handle_write_list(request)?,
         )),
         EngineRequest::WriteReject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::WriteReject,
-            write::handle_write_reject(request)?,
+            brain_write::handle_write_reject(request)?,
         )),
     }
     .context("failed to encode engine response")?;

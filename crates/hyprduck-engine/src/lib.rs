@@ -51,7 +51,6 @@ use uuid::Uuid;
 
 mod adapters;
 mod application;
-mod commands;
 mod context_pack_artifacts;
 mod domains;
 mod graph_commit;
@@ -64,12 +63,12 @@ pub mod runtime;
 mod search_context;
 
 #[cfg(test)]
-pub(crate) use commands::graph::handle_apply_graph_patch;
-#[cfg(test)]
-pub(crate) use commands::write::{
+pub(crate) use application::commands::brain_write::{
     handle_write_commit, handle_write_commit_all, handle_write_list, handle_write_propose,
     handle_write_reject,
 };
+#[cfg(test)]
+pub(crate) use application::commands::graph::handle_apply_graph_patch;
 
 mod agent_workflow {
     pub(crate) use crate::domains::agent_workflow::*;

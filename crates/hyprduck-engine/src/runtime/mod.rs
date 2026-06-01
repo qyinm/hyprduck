@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
     let config_store = EngineConfigStore::default()?;
     let response = match request {
         EngineRequest::Parse(request) => encode_parse_response(request, &payload, &config_store)?,
-        request => crate::commands::encode_success_response(request, &config_store)?,
+        request => crate::application::commands::encode_success_response(request, &config_store)?,
     };
     io::stdout()
         .write_all(response.as_bytes())
@@ -48,7 +48,7 @@ fn run_runtime_server() -> Result<()> {
 
         let response = match decode_runtime_request(&payload) {
             Ok(envelope) if !is_uuid_v7(envelope.id) => {
-                let command = crate::commands::request_command(&envelope.request);
+                let command = crate::application::commands::request_command(&envelope.request);
                 serde_json::to_string(&EngineRuntimeFailure::new(
                     envelope.id,
                     EngineFailure::new(
@@ -69,12 +69,15 @@ fn run_runtime_server() -> Result<()> {
                             })
                     }
                     request => {
-                        let command = crate::commands::request_command(&request);
-                        crate::commands::encode_success_response(request, &config_store)
-                            .and_then(|response| wrap_runtime_response(id, &response))
-                            .unwrap_or_else(|error| {
-                                encode_runtime_failure_response(id, command, &error)
-                            })
+                        let command = crate::application::commands::request_command(&request);
+                        crate::application::commands::encode_success_response(
+                            request,
+                            &config_store,
+                        )
+                        .and_then(|response| wrap_runtime_response(id, &response))
+                        .unwrap_or_else(|error| {
+                            encode_runtime_failure_response(id, command, &error)
+                        })
                     }
                 }
             }
