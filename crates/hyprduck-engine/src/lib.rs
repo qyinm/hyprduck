@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
@@ -19,25 +19,25 @@ use hyprduck_engine_types::{
     GetContextPackRequest, GetContextPackResponseData, GraphNodeDetail, GraphNodeKind,
     GraphNodePosition, GraphNodeSummary, ImportLifecycleState, ImportLifecycleStatus, IngestStatus,
     KnowledgeProject, LoadProjectRequest, LoadProjectResponseData, MemoryRecord, PageArtifact,
-    PageEvidenceV0, ParseEvent, ParseMetadata, ParseRequest, ParseResponseData, ParseResult,
-    ParsedPage, ProjectOverview, ProjectStatus, ReadContextPackRequest,
+    PageEvidenceV0, ProjectOverview, ProjectStatus, ReadContextPackRequest,
     ReadContextPackResponseData, ReadImportJobRequest, ReadImportJobResponseData, ReadNodeRequest,
     ReadNodeResponseData, ReadPageEvidenceRequest, ReadPageEvidenceResponseData,
     ReadRecentEventsRequest, ReadRecentEventsResponseData, ReadSourceRequest,
     ReadSourceResponseData, ReadWikiPageRequest, ReadWikiPageResponseData, ReconstructBrainRequest,
     ReconstructBrainResponseData, RelationEdgeDetail, RelationEdgeSummary, RelationKind,
-    RetryFailedPagesRequest, RetryFailedPagesResponseData, SearchBrainRequest,
-    SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId, SourceRecord,
-    SourceStatus, SourceSummary, StructuredExtractionArtifact, StructuredExtractionClaim,
-    StructuredExtractionEntity, StructuredExtractionMemoryCandidate, StructuredExtractionPageRef,
-    StructuredExtractionRelation, StructuredExtractionTopic, SuggestedAction, SuggestedActionKind,
-    UpdateImportJobGraphStatusRequest, UpdateImportJobGraphStatusResponseData, WikiPage,
-    WorkspaceCorrection, WorkspaceId, BRAIN_EVENT_SCHEMA_VERSION,
+    SearchBrainRequest, SearchBrainResponseData, SourceArtifactManifest, SourceBacking, SourceId,
+    SourceRecord, SourceStatus, SourceSummary, StructuredExtractionArtifact,
+    StructuredExtractionClaim, StructuredExtractionEntity, StructuredExtractionMemoryCandidate,
+    StructuredExtractionPageRef, StructuredExtractionRelation, StructuredExtractionTopic,
+    SuggestedAction, SuggestedActionKind, UpdateImportJobGraphStatusRequest,
+    UpdateImportJobGraphStatusResponseData, WikiPage, WorkspaceCorrection, WorkspaceId,
+    BRAIN_EVENT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use hyprduck_engine_types::{
     ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0, ContextPackSourceMetadataV0,
-    EvidenceIndexV0, OutputAsset, ParseInput, ParseOptions, RetryPageArtifactUpdate, SourcePackV0,
+    EvidenceIndexV0, OutputAsset, ParseInput, ParseMetadata, ParseOptions, ParseRequest,
+    ParseResult, ParsedPage, RetryFailedPagesRequest, RetryPageArtifactUpdate, SourcePackV0,
     WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
     WriteRejectRequest,
 };
@@ -95,6 +95,7 @@ mod knowledge {
 }
 
 mod parse {
+    #[allow(unused_imports)]
     pub(crate) use crate::domains::ingest::parse::*;
 }
 
@@ -130,15 +131,15 @@ use domains::context_pack::artifact_metadata::{
 use domains::context_pack::artifact_metadata::{build_context_pack_source_metadata, fnv1a64};
 #[cfg(test)]
 use domains::ingest::markdown_queue::*;
+#[cfg(test)]
 use domains::ingest::output_package::retry_failed_page_artifacts;
 #[cfg(test)]
 use domains::ingest::output_package::write_output_package_with_fallback;
-use domains::ingest::output_package::{
-    build_markdown, export_output_package, load_source_manifest, resolved_source_ids,
-    source_summary_from_manifest,
-};
 #[cfg(test)]
 use domains::ingest::output_package::{build_source_id, write_source_manifest};
+use domains::ingest::output_package::{
+    load_source_manifest, resolved_source_ids, source_summary_from_manifest,
+};
 use domains::knowledge_store::KnowledgeStore;
 #[allow(unused_imports)]
 pub(crate) use graph_history::{
@@ -149,9 +150,8 @@ use import_context::{
     build_import_evidence_context, import_evidence_context_allowed_refs, ImportEvidenceContext,
 };
 use knowledge::*;
-use parse::{parse_document, EventSink, ProcessLocator};
-use provider::{EngineConfig, EngineConfigStore};
-pub(crate) use runtime::emit_event;
+#[cfg(test)]
+use provider::EngineConfig;
 #[allow(unused_imports)]
 pub(crate) use search_context::{
     best_snippet, context_pack_warnings, evidence_snippet, match_score, normalize_search_token,
@@ -177,105 +177,6 @@ fn encode_failure_response(command: EngineCommand, error: &anyhow::Error) -> Str
     serde_json::to_string(&engine_failure(command, error)).unwrap_or_else(|_| {
         "{\"ok\":false,\"command\":\"validate_provider\",\"error\":{\"code\":\"runtime_error\",\"message\":\"failed to encode engine failure\",\"details\":null}}".to_string()
     })
-}
-
-fn maybe_write_debug(path: &Option<String>, contents: &str) -> Result<()> {
-    if let Some(path) = path {
-        if let Some(parent) = Path::new(path).parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed creating debug directory {}", parent.display()))?;
-        }
-        fs::write(path, contents)
-            .with_context(|| format!("failed writing debug artifact {}", path))?;
-    }
-    Ok(())
-}
-
-fn handle_parse(
-    request: ParseRequest,
-    config_store: &EngineConfigStore,
-) -> Result<ParseResponseData> {
-    let started = Instant::now();
-    let config = config_store.load()?;
-
-    let mut event_sink = RuntimeParseEventSink;
-
-    event_sink.emit(ParseEvent::Queued)?;
-    event_sink.emit(ParseEvent::DocumentOpened {
-        format: request.input.format.clone(),
-    })?;
-
-    let process_locator = RuntimeProcessLocator;
-    let parse = parse_document(
-        &request.input,
-        &request.template,
-        &request.options,
-        &config,
-        &mut event_sink,
-        &process_locator,
-    )?;
-    let markdown = build_markdown(
-        request
-            .output
-            .as_ref()
-            .and_then(|target| target.name.clone())
-            .unwrap_or_else(|| {
-                Path::new(&request.input.path)
-                    .file_stem()
-                    .map(|value| value.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "document".to_string())
-            }),
-        &parse.pages,
-    );
-
-    event_sink.emit(ParseEvent::Packaging)?;
-    let result = ParseResult {
-        version: request.version.clone(),
-        markdown,
-        pages: parse.pages,
-        assets: parse.assets,
-        metadata: ParseMetadata {
-            engine_id: format!("{}/{}", config.provider.id_slug(), config.model_id),
-            duration_ms: started.elapsed().as_millis() as u64,
-            page_count: parse.page_count,
-        },
-        success_count: parse.success_count,
-        failed_count: parse.failed_count,
-    };
-
-    let source_manifest = export_output_package(&request, &result, &config)?;
-    let saved_output_path = source_manifest
-        .as_ref()
-        .map(|manifest| manifest.markdown_path.clone());
-    event_sink.emit(ParseEvent::Completed)?;
-    Ok(ParseResponseData {
-        result,
-        saved_output_path,
-        source_manifest,
-    })
-}
-
-pub(crate) fn handle_retry_failed_pages(
-    request: RetryFailedPagesRequest,
-    config: &EngineConfig,
-) -> Result<RetryFailedPagesResponseData> {
-    retry_failed_page_artifacts(&request, config)
-}
-
-struct RuntimeParseEventSink;
-
-impl EventSink for RuntimeParseEventSink {
-    fn emit(&mut self, event: ParseEvent) -> Result<()> {
-        emit_event(&event)
-    }
-}
-
-struct RuntimeProcessLocator;
-
-impl ProcessLocator for RuntimeProcessLocator {
-    fn resolve_binary(&self, name: &str, common_paths: &[&str]) -> PathBuf {
-        resolve_binary(name, common_paths)
-    }
 }
 
 fn handle_compile_project(request: CompileProjectRequest) -> Result<CompileProjectResponseData> {

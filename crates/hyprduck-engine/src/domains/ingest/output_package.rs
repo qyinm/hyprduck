@@ -1,5 +1,6 @@
 use crate::provider::{EngineConfig, ProviderKind};
 use crate::*;
+use hyprduck_engine_types::RetryFailedPagesResponseData;
 
 pub(crate) fn build_markdown(title: String, pages: &[ParsedPage]) -> String {
     let mut markdown = format!("# {title}\n\n");

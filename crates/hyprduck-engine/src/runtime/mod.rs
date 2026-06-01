@@ -141,18 +141,22 @@ fn encode_parse_response(
     raw_payload: &str,
     config_store: &EngineConfigStore,
 ) -> Result<String> {
-    crate::maybe_write_debug(&request.options.debug_request_path, raw_payload)?;
+    crate::application::services::ingest_service::maybe_write_debug(
+        &request.options.debug_request_path,
+        raw_payload,
+    )?;
     let debug_result_path = request.options.debug_result_path.clone();
-    let response = crate::handle_parse(request, config_store)
-        .map(|data| serde_json::to_string(&EngineSuccess::new(EngineCommand::Parse, data)))
-        .unwrap_or_else(|error| {
-            let _ = emit_event(&ParseEvent::Failed {
-                message: error.to_string(),
-            });
-            serde_json::to_string(&crate::engine_failure(EngineCommand::Parse, &error))
-        })
-        .context("failed to encode parse response")?;
-    crate::maybe_write_debug(&debug_result_path, &response)?;
+    let response =
+        crate::application::services::ingest_service::handle_parse(request, config_store)
+            .map(|data| serde_json::to_string(&EngineSuccess::new(EngineCommand::Parse, data)))
+            .unwrap_or_else(|error| {
+                let _ = emit_event(&ParseEvent::Failed {
+                    message: error.to_string(),
+                });
+                serde_json::to_string(&crate::engine_failure(EngineCommand::Parse, &error))
+            })
+            .context("failed to encode parse response")?;
+    crate::application::services::ingest_service::maybe_write_debug(&debug_result_path, &response)?;
     Ok(response)
 }
 

@@ -1,5 +1,6 @@
 use crate::*;
 use std::fs::OpenOptions;
+use std::time::Instant;
 
 pub(crate) struct BrainArtifactRepository {
     root: PathBuf,

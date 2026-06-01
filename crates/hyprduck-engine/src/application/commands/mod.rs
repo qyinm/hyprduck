@@ -22,7 +22,10 @@ pub(crate) fn encode_success_response(
         }
         EngineRequest::RetryFailedPages(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::RetryFailedPages,
-            crate::handle_retry_failed_pages(request, &config_store.load()?)?,
+            crate::application::services::ingest_service::handle_retry_failed_pages(
+                request,
+                &config_store.load()?,
+            )?,
         )),
         EngineRequest::CompileProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::CompileProject,
