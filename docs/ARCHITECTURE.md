@@ -176,6 +176,29 @@ wiki files are read models rebuilt from materialization and correction events.
 `state/latest-readable-snapshot.json` is the stable loading marker for desktop,
 MCP, and resource reads.
 
+## Refactor Pattern Criteria
+
+HyprDuck uses named boundaries only when they protect a real contract.
+
+- Command handlers stay as explicit `EngineRequest`/`EngineCommand` enum
+  dispatch. Handler bodies may move into family modules, such as graph, write,
+  read, provider, or ingest, but the public command names and response shapes
+  remain grep-friendly and schema-backed.
+- Builders are for artifacts with cross-field invariants: schema versions,
+  required IDs, provider route and local/hosted disclosure, content hashes,
+  warnings, or budget metadata. Plain wire DTOs should remain plain serde
+  structs.
+- Projectors are event-to-read-model materializers. The current named projector
+  boundary is graph/wiki read-model projection from `BrainRepoSnapshot` into
+  graph JSON, wiki markdown, and the latest-readable marker.
+- Visitor is deferred. Do not introduce it until graph/wiki/claim traversal has
+  repeated passes over a stable model that cannot be kept clear with direct
+  functions.
+- Strategy/Adapter boundaries are allowed for real variation points, such as
+  OpenRouter/Ollama provider calls, parser execution, retrieval/search, and
+  evidence selection. Do not add a provider plugin framework or imply direct
+  OpenAI/Anthropic support.
+
 ## MCP Surface
 
 `hyprduck mcp serve` exposes read/search tools plus controlled mutating tools:

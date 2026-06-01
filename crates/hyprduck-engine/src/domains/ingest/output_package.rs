@@ -409,68 +409,20 @@ fn write_source_pack_and_evidence_index(
     generated_at: u64,
     config: &EngineConfig,
 ) -> Result<()> {
-    let warnings = source_pack_warnings(manifest);
-    let (provider_route, local_only) = provider_disclosure(config);
-    let source_pack = hyprduck_engine_types::SourcePackV0 {
-        schema_version: hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION.into(),
-        workspace_id: manifest.workspace_id.clone(),
-        source_id: manifest.source_id.clone(),
-        original_filename: Path::new(&manifest.original_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(manifest.original_path.as_str())
-            .into(),
-        original_path: manifest.original_path.clone(),
-        source_path: manifest.source_path.clone(),
-        markdown_path: manifest.markdown_path.clone(),
-        artifact_root: manifest.artifact_root.clone(),
-        content_hash: content_hash.to_string(),
-        format: manifest.format.clone(),
-        page_count: manifest.pages.len(),
-        ingestion_status: manifest.status.clone(),
-        provider_route: provider_route.clone(),
-        local_only,
-        pages: manifest
-            .pages
-            .iter()
-            .map(|page| hyprduck_engine_types::SourcePackPageV0 {
-                page: page.index + 1,
-                label: page.label.clone(),
-                image_path: page.image_path.clone(),
-                markdown_path: page.markdown_path.clone(),
-                plain_text_path: page.plain_text_path.clone(),
-                error_message: page.error_message.clone(),
-            })
-            .collect(),
-        warnings: warnings.clone(),
-        created_at: manifest.created_at,
-        updated_at: manifest.updated_at,
-    };
-    let evidence_index = hyprduck_engine_types::EvidenceIndexV1 {
-        schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
-        workspace_id: manifest.workspace_id.clone(),
-        source_id: manifest.source_id.clone(),
-        content_hash: content_hash.to_string(),
-        provider_route,
-        local_only,
-        evidence: manifest
-            .pages
-            .iter()
-            .filter_map(|page| evidence_index_item(manifest, page, content_hash))
-            .collect(),
-        warnings,
-        generated_at,
-    };
+    let artifacts =
+        SourceImportArtifactBuilder::new(manifest, content_hash, generated_at, config)?.build();
     let source_pack_path = Path::new(&manifest.artifact_root).join("source_pack.json");
     let evidence_index_path = Path::new(&manifest.artifact_root).join("evidence_index.json");
     fs::write(
         &source_pack_path,
-        serde_json::to_string_pretty(&source_pack).context("failed to encode source pack")?,
+        serde_json::to_string_pretty(&artifacts.source_pack)
+            .context("failed to encode source pack")?,
     )
     .with_context(|| format!("failed writing source pack {}", source_pack_path.display()))?;
     fs::write(
         &evidence_index_path,
-        serde_json::to_string_pretty(&evidence_index).context("failed to encode evidence index")?,
+        serde_json::to_string_pretty(&artifacts.evidence_index)
+            .context("failed to encode evidence index")?,
     )
     .with_context(|| {
         format!(
@@ -479,6 +431,109 @@ fn write_source_pack_and_evidence_index(
         )
     })?;
     Ok(())
+}
+
+struct SourceImportArtifacts {
+    source_pack: hyprduck_engine_types::SourcePackV0,
+    evidence_index: hyprduck_engine_types::EvidenceIndexV1,
+}
+
+#[derive(Debug)]
+struct SourceImportArtifactBuilder<'a> {
+    manifest: &'a SourceArtifactManifest,
+    content_hash: &'a str,
+    generated_at: u64,
+    provider_route: String,
+    local_only: bool,
+    warnings: Vec<hyprduck_engine_types::SourcePackWarningV0>,
+}
+
+impl<'a> SourceImportArtifactBuilder<'a> {
+    fn new(
+        manifest: &'a SourceArtifactManifest,
+        content_hash: &'a str,
+        generated_at: u64,
+        config: &EngineConfig,
+    ) -> Result<Self> {
+        if manifest.workspace_id.trim().is_empty() {
+            bail!("source import artifacts require workspace_id");
+        }
+        if manifest.source_id.trim().is_empty() {
+            bail!("source import artifacts require source_id");
+        }
+        if content_hash.trim().is_empty() {
+            bail!("source import artifacts require content_hash");
+        }
+
+        let (provider_route, local_only) = provider_disclosure(config);
+        Ok(Self {
+            manifest,
+            content_hash,
+            generated_at,
+            provider_route,
+            local_only,
+            warnings: source_pack_warnings(manifest),
+        })
+    }
+
+    fn build(self) -> SourceImportArtifacts {
+        let source_pack = hyprduck_engine_types::SourcePackV0 {
+            schema_version: hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION.into(),
+            workspace_id: self.manifest.workspace_id.clone(),
+            source_id: self.manifest.source_id.clone(),
+            original_filename: Path::new(&self.manifest.original_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(self.manifest.original_path.as_str())
+                .into(),
+            original_path: self.manifest.original_path.clone(),
+            source_path: self.manifest.source_path.clone(),
+            markdown_path: self.manifest.markdown_path.clone(),
+            artifact_root: self.manifest.artifact_root.clone(),
+            content_hash: self.content_hash.to_string(),
+            format: self.manifest.format.clone(),
+            page_count: self.manifest.pages.len(),
+            ingestion_status: self.manifest.status.clone(),
+            provider_route: self.provider_route.clone(),
+            local_only: self.local_only,
+            pages: self
+                .manifest
+                .pages
+                .iter()
+                .map(|page| hyprduck_engine_types::SourcePackPageV0 {
+                    page: page.index + 1,
+                    label: page.label.clone(),
+                    image_path: page.image_path.clone(),
+                    markdown_path: page.markdown_path.clone(),
+                    plain_text_path: page.plain_text_path.clone(),
+                    error_message: page.error_message.clone(),
+                })
+                .collect(),
+            warnings: self.warnings.clone(),
+            created_at: self.manifest.created_at,
+            updated_at: self.manifest.updated_at,
+        };
+        let evidence_index = hyprduck_engine_types::EvidenceIndexV1 {
+            schema_version: hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION.into(),
+            workspace_id: self.manifest.workspace_id.clone(),
+            source_id: self.manifest.source_id.clone(),
+            content_hash: self.content_hash.to_string(),
+            provider_route: self.provider_route,
+            local_only: self.local_only,
+            evidence: self
+                .manifest
+                .pages
+                .iter()
+                .filter_map(|page| evidence_index_item(self.manifest, page, self.content_hash))
+                .collect(),
+            warnings: self.warnings,
+            generated_at: self.generated_at,
+        };
+        SourceImportArtifacts {
+            source_pack,
+            evidence_index,
+        }
+    }
 }
 
 fn load_source_manifest_from_path(path: &str) -> Result<SourceArtifactManifest> {
@@ -779,5 +834,92 @@ pub(crate) fn source_summary_from_manifest(manifest: &SourceArtifactManifest) ->
         user_context: manifest.user_context.clone(),
         ingest_instruction: manifest.ingest_instruction.clone(),
         updated_at: manifest.updated_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_import_artifact_builder_shares_required_metadata() {
+        let manifest = test_manifest();
+        let mut config = EngineConfig::default();
+        config.provider = ProviderKind::Ollama;
+        config.base_url = Some("http://127.0.0.1:11434".into());
+
+        let artifacts = SourceImportArtifactBuilder::new(&manifest, "sha256:test", 42, &config)
+            .expect("builder should accept complete metadata")
+            .build();
+
+        assert_eq!(
+            artifacts.source_pack.schema_version,
+            hyprduck_engine_types::SOURCE_PACK_V0_SCHEMA_VERSION
+        );
+        assert_eq!(
+            artifacts.evidence_index.schema_version,
+            hyprduck_engine_types::EVIDENCE_INDEX_V1_SCHEMA_VERSION
+        );
+        assert_eq!(artifacts.source_pack.workspace_id, "default");
+        assert_eq!(artifacts.evidence_index.workspace_id, "default");
+        assert_eq!(artifacts.source_pack.source_id, "source-a");
+        assert_eq!(artifacts.evidence_index.source_id, "source-a");
+        assert_eq!(artifacts.source_pack.content_hash, "sha256:test");
+        assert_eq!(artifacts.evidence_index.content_hash, "sha256:test");
+        assert_eq!(artifacts.source_pack.provider_route, "ollama");
+        assert_eq!(artifacts.evidence_index.provider_route, "ollama");
+        assert!(artifacts.source_pack.local_only);
+        assert!(artifacts.evidence_index.local_only);
+        assert_eq!(
+            artifacts.source_pack.warnings,
+            artifacts.evidence_index.warnings
+        );
+        assert_eq!(artifacts.evidence_index.generated_at, 42);
+    }
+
+    #[test]
+    fn source_import_artifact_builder_rejects_missing_required_metadata() {
+        let mut manifest = test_manifest();
+        manifest.source_id.clear();
+
+        let error = SourceImportArtifactBuilder::new(
+            &manifest,
+            "sha256:test",
+            42,
+            &EngineConfig::default(),
+        )
+        .expect_err("source_id is required");
+
+        assert!(error
+            .to_string()
+            .contains("source import artifacts require source_id"));
+    }
+
+    fn test_manifest() -> SourceArtifactManifest {
+        SourceArtifactManifest {
+            workspace_id: "default".into(),
+            source_id: "source-a".into(),
+            original_path: "/tmp/source-a.pdf".into(),
+            source_path: "/tmp/workspace/sources/source-a/source-a.pdf".into(),
+            markdown_path: "/tmp/workspace/artifacts/source-a/source-a.md".into(),
+            artifact_root: "/tmp/workspace/artifacts/source-a".into(),
+            manifest_path: "/tmp/workspace/artifacts/source-a/source-manifest.json".into(),
+            format: DocumentFormat::Pdf,
+            output_name: "source-a".into(),
+            status: IngestStatus::Ingested,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            pages: vec![PageArtifact {
+                index: 0,
+                label: "Page 1".into(),
+                image_path: None,
+                markdown_path: Some("/tmp/workspace/artifacts/source-a/pages/page_1.md".into()),
+                plain_text_path: None,
+                error_message: None,
+            }],
+            created_at: 1,
+            updated_at: 2,
+        }
     }
 }
