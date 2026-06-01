@@ -5,7 +5,7 @@ use hyprduck_engine_types::{
     SaveConfigResponseData, ValidateProviderRequest,
 };
 
-use crate::application::services::project_service;
+use crate::application::services::{context_pack_service, project_service};
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
 };
@@ -68,7 +68,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::ReadContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadContextPack,
-            crate::handle_read_context_pack(request)?,
+            context_pack_service::handle_read_context_pack(request)?,
         )),
         EngineRequest::ReadWikiPage(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::ReadWikiPage,
@@ -96,7 +96,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::GetContextPack(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetContextPack,
-            crate::handle_get_context_pack(request)?,
+            context_pack_service::handle_get_context_pack(request)?,
         )),
         EngineRequest::GetBrainHealth(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::GetBrainHealth,
