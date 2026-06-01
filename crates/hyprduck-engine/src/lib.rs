@@ -87,10 +87,9 @@ pub(crate) use application::services::brain_read_service::{
 pub(crate) use application::services::context_pack_service::{
     handle_get_context_pack, handle_read_context_pack, persist_context_pack_v1,
 };
-use application::services::project_service::empty_workspace_project;
 #[cfg(test)]
 pub(crate) use application::services::project_service::{
-    handle_apply_correction, handle_load_project,
+    handle_answer_project, handle_apply_correction, handle_load_project, load_answerable_project,
 };
 
 mod agent_workflow {
@@ -201,22 +200,6 @@ fn encode_failure_response(command: EngineCommand, error: &anyhow::Error) -> Str
     serde_json::to_string(&engine_failure(command, error)).unwrap_or_else(|_| {
         "{\"ok\":false,\"command\":\"validate_provider\",\"error\":{\"code\":\"runtime_error\",\"message\":\"failed to encode engine failure\",\"details\":null}}".to_string()
     })
-}
-
-fn handle_answer_project(request: AnswerProjectRequest) -> Result<AnswerProjectResponseData> {
-    let store = KnowledgeProjectStore::default()?;
-    if let Some(workspace_id) = workspace_id_from_project_id(&request.project_id) {
-        let workspace_root = store.workspace_root(workspace_id)?;
-        if !workspace_root.join("brain-manifest.json").exists() {
-            store.materialize_workspace_brain_repo(workspace_id)?;
-        }
-        let reader = BrainReader::open_workspace_root(workspace_root, workspace_id)?;
-        let answer = answer_materialized_workspace_project(&reader, &request)?;
-        return Ok(AnswerProjectResponseData { answer });
-    }
-    let project = load_answerable_project(&store, &request.project_id)?;
-    let answer = answer_project(&project, &request)?;
-    Ok(AnswerProjectResponseData { answer })
 }
 
 pub(crate) fn join_or_none(values: &[String]) -> String {
@@ -418,21 +401,6 @@ fn normalize_wiki_path(path: &str) -> Result<String> {
         bail!("wiki page path cannot contain ..");
     }
     Ok(normalized)
-}
-
-fn load_answerable_project(
-    store: &KnowledgeProjectStore,
-    project_id: &str,
-) -> Result<KnowledgeProject> {
-    if let Some(workspace_id) = project_id.strip_prefix("workspace:") {
-        return Ok(store
-            .load_workspace_project(workspace_id)?
-            .unwrap_or_else(|| empty_workspace_project(workspace_id)));
-    }
-
-    store
-        .load_project(Some(project_id))?
-        .ok_or_else(|| anyhow!("project {project_id} was not found"))
 }
 
 fn build_project_id(request: &CompileProjectRequest) -> String {

@@ -1,5 +1,23 @@
 use crate::*;
 
+pub(crate) fn handle_answer_project(
+    request: AnswerProjectRequest,
+) -> Result<AnswerProjectResponseData> {
+    let store = KnowledgeProjectStore::default()?;
+    if let Some(workspace_id) = workspace_id_from_project_id(&request.project_id) {
+        let workspace_root = store.workspace_root(workspace_id)?;
+        if !workspace_root.join("brain-manifest.json").exists() {
+            store.materialize_workspace_brain_repo(workspace_id)?;
+        }
+        let reader = BrainReader::open_workspace_root(workspace_root, workspace_id)?;
+        let answer = answer_materialized_workspace_project(&reader, &request)?;
+        return Ok(AnswerProjectResponseData { answer });
+    }
+    let project = load_answerable_project(&store, &request.project_id)?;
+    let answer = answer_project(&project, &request)?;
+    Ok(AnswerProjectResponseData { answer })
+}
+
 pub(crate) fn handle_compile_project(
     request: CompileProjectRequest,
 ) -> Result<CompileProjectResponseData> {
@@ -470,4 +488,19 @@ pub(crate) fn empty_workspace_project(workspace_id: &str) -> KnowledgeProject {
         BTreeMap::new(),
         0,
     )
+}
+
+pub(crate) fn load_answerable_project(
+    store: &KnowledgeProjectStore,
+    project_id: &str,
+) -> Result<KnowledgeProject> {
+    if let Some(workspace_id) = project_id.strip_prefix("workspace:") {
+        return Ok(store
+            .load_workspace_project(workspace_id)?
+            .unwrap_or_else(|| empty_workspace_project(workspace_id)));
+    }
+
+    store
+        .load_project(Some(project_id))?
+        .ok_or_else(|| anyhow!("project {project_id} was not found"))
 }

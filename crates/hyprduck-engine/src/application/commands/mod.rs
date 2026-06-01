@@ -54,7 +54,7 @@ pub(crate) fn encode_success_response(
         )),
         EngineRequest::AnswerProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::AnswerProject,
-            crate::handle_answer_project(request)?,
+            project_service::handle_answer_project(request)?,
         )),
         EngineRequest::SearchBrain(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::SearchBrain,
