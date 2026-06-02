@@ -123,7 +123,16 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
-          PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1 || true)"
+          PREVIOUS_TAG="$(gh release list \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --limit 20 \
+            --json tagName \
+            --jq ".[] | select(.tagName != \"v${VERSION}\") | .tagName" \
+            | head -n 1 || true)"
+          if [[ -z "$PREVIOUS_TAG" ]]; then
+            PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1 || true)"
+          fi
           NOTES_ARGS=(-f "tag_name=v${VERSION}")
           if [[ -n "$PREVIOUS_TAG" ]]; then
             NOTES_ARGS+=(-f "previous_tag_name=${PREVIOUS_TAG}")
