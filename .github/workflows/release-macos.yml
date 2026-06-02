@@ -119,16 +119,25 @@ jobs:
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
           PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1 || true)"
-          NOTES_START_TAG_ARGS=()
+          NOTES_ARGS=(-f "tag_name=v${VERSION}")
           if [[ -n "$PREVIOUS_TAG" ]]; then
-            NOTES_START_TAG_ARGS=(--notes-start-tag "$PREVIOUS_TAG")
+            NOTES_ARGS+=(-f "previous_tag_name=${PREVIOUS_TAG}")
+          fi
+          RELEASE_BODY_PATH="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            "${NOTES_ARGS[@]}" \
+            --jq .body > "$RELEASE_BODY_PATH"
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            {
+              printf '\n\n## Main commits\n'
+              git log --no-merges --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..HEAD"
+              printf '\n\n**Full commit log**: https://github.com/%s/compare/%s...v%s\n' "$GITHUB_REPOSITORY" "$PREVIOUS_TAG" "$VERSION"
+            } >> "$RELEASE_BODY_PATH"
           fi
           gh release create "v${VERSION}" \
             "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg" \
             "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip" \
             "apps/desktop/release/electron/latest-mac.yml" \
             --title "HyprDuck v${VERSION}" \
-            --notes "Signed and notarized macOS arm64 release for HyprDuck v${VERSION}." \
-            --generate-notes \
-            "${NOTES_START_TAG_ARGS[@]}" \
+            --notes-file "$RELEASE_BODY_PATH" \
             --verify-tag

@@ -36,6 +36,7 @@ let engineRuntime = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
 let agentTerminalSessions = null;
+let autoUpdateStarted = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -85,6 +86,7 @@ app.whenReady().then(async () => {
     console.error("hyprduck shell command setup skipped:", error);
   }
   createWindow();
+  startAutoUpdateChecks();
 });
 
 app.on("window-all-closed", () => {
@@ -223,6 +225,24 @@ function publishAgentTerminalEvent(payload) {
     return;
   }
   mainWindow.webContents.send(AGENT_TERMINAL_EVENT, payload);
+}
+
+function startAutoUpdateChecks() {
+  if (autoUpdateStarted || !app.isPackaged) {
+    return;
+  }
+  autoUpdateStarted = true;
+  const { updateElectronApp } = require("update-electron-app");
+  updateElectronApp({
+    repo: "qyinm/hyprduck",
+    updateInterval: "10 minutes",
+    logger: {
+      debug: console.error,
+      info: console.error,
+      warn: console.error,
+      error: console.error,
+    },
+  });
 }
 
 function brainReadScope(workspaceId) {
