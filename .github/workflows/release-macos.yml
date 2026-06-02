@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -115,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
-          PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1)"
+          PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1 || true)"
           NOTES_START_TAG_ARGS=()
           if [[ -n "$PREVIOUS_TAG" ]]; then
             NOTES_START_TAG_ARGS=(--notes-start-tag "$PREVIOUS_TAG")
