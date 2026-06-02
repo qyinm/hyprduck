@@ -112,7 +112,9 @@ test("backend data events are accumulated and published", async () => {
     assert.equal(snapshot.output, "hello\r\nworld");
     assert.equal(snapshot.outputSequence, 2);
     assert.equal(published.length, 2);
-    assert.equal(published[1].session.output, "hello\r\nworld");
+    assert.equal(published[0].outputDelta, "hello");
+    assert.equal(published[1].outputDelta, "\r\nworld");
+    assert.equal("output" in published[1].session, false);
     assert.equal("unsubscribe" in published[1].session, false);
   });
 });

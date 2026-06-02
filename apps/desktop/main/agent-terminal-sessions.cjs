@@ -160,8 +160,10 @@ class AgentTerminalSessionManager {
     if (!session) {
       return;
     }
+    let outputDelta = null;
     if (event.type === "data") {
-      session.output += event.data;
+      outputDelta = event.data;
+      session.output += outputDelta;
       if (session.output.length > this.outputLimit) {
         session.output = session.output.slice(-this.outputLimit);
       }
@@ -178,13 +180,16 @@ class AgentTerminalSessionManager {
       }
     }
     session.updatedAt = new Date().toISOString();
-    this.publishSessionUpdate(session, event.type);
+    this.publishSessionUpdate(session, event.type, { outputDelta });
   }
 
-  publishSessionUpdate(session, eventType) {
+  publishSessionUpdate(session, eventType, options = {}) {
     this.onEvent({
       type: eventType,
-      session: serializeSession(session),
+      session: serializeSession(session, {
+        includeOutput: eventType !== "data",
+      }),
+      outputDelta: options.outputDelta ?? undefined,
     });
   }
 }
@@ -279,8 +284,12 @@ function resolveSessionStatus(backendSession) {
     : "handoff_required";
 }
 
-function serializeSession(session) {
+function serializeSession(session, options = {}) {
   const { unsubscribe, ...serializable } = session;
+  if (options.includeOutput === false) {
+    const { output, ...withoutOutput } = serializable;
+    return withoutOutput;
+  }
   return serializable;
 }
 

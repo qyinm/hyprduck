@@ -255,6 +255,7 @@ export interface AgentTerminalSession {
 export interface AgentTerminalEvent {
   type: "data" | "exit" | "session_closed";
   session: AgentTerminalSession;
+  outputDelta?: string;
 }
 
 export interface DesktopCommandMap {

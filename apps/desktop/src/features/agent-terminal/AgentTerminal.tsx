@@ -26,6 +26,8 @@ import hermesIconUrl from "../../../resources/icons/hermesagent.svg?url";
 import openAiIconUrl from "../../../resources/icons/openai.svg?url";
 import piAgentIconUrl from "../../../resources/icons/pi-agent.svg?url";
 
+const TERMINAL_OUTPUT_LIMIT = 300_000;
+
 interface AgentTerminalProps {
   nodeId: string | null;
   onClose: () => void;
@@ -72,6 +74,10 @@ export function AgentTerminal(props: AgentTerminalProps) {
   const renderedSessionIdRef = useRef<string | null>(null);
   const renderedOutputLengthRef = useRef(0);
   const sessionsRef = useRef<AgentTerminalSession[]>([]);
+  const pendingOutputEventsRef = useRef(
+    new Map<string, { session: AgentTerminalSession; outputDelta: string }>(),
+  );
+  const pendingOutputFrameRef = useRef<number | null>(null);
   const onKillSessionRef = useRef(onKillSession);
   const onResizeSessionRef = useRef(onResizeSession);
   const onWriteSessionRef = useRef(onWriteSession);
@@ -121,13 +127,61 @@ export function AgentTerminal(props: AgentTerminalProps) {
     if (!open) {
       return undefined;
     }
-    return onListenAgentTerminalEvents((event) => {
+    function flushOutputEvents() {
+      pendingOutputFrameRef.current = null;
+      const pendingEvents = Array.from(pendingOutputEventsRef.current.values());
+      pendingOutputEventsRef.current.clear();
+      if (pendingEvents.length === 0) {
+        return;
+      }
+      setSessions((current) =>
+        current.map((session) => {
+          const pendingEvent = pendingEvents.find(
+            (candidate) => candidate.session.id === session.id,
+          );
+          if (!pendingEvent) {
+            return session;
+          }
+          return {
+            ...session,
+            ...pendingEvent.session,
+            output: trimTerminalOutput(
+              `${session.output ?? ""}${pendingEvent.outputDelta}`,
+            ),
+          };
+        }),
+      );
+    }
+    function scheduleOutputFlush(event: AgentTerminalEvent) {
+      const current = pendingOutputEventsRef.current.get(event.session.id);
+      pendingOutputEventsRef.current.set(event.session.id, {
+        session: event.session,
+        outputDelta: `${current?.outputDelta ?? ""}${event.outputDelta ?? ""}`,
+      });
+      if (pendingOutputFrameRef.current !== null) {
+        return;
+      }
+      pendingOutputFrameRef.current = window.requestAnimationFrame(flushOutputEvents);
+    }
+    const unlisten = onListenAgentTerminalEvents((event) => {
+      if (event.outputDelta !== undefined) {
+        scheduleOutputFlush(event);
+        return;
+      }
       setSessions((current) =>
         current.map((session) =>
-          session.id === event.session.id ? event.session : session,
+          session.id === event.session.id ? { ...session, ...event.session } : session,
         ),
       );
     });
+    return () => {
+      unlisten();
+      if (pendingOutputFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingOutputFrameRef.current);
+        pendingOutputFrameRef.current = null;
+      }
+      pendingOutputEventsRef.current.clear();
+    };
   }, [onListenAgentTerminalEvents, open]);
 
   useEffect(() => {
@@ -540,6 +594,13 @@ export function AgentTerminal(props: AgentTerminalProps) {
 
 function isApplePlatform() {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+}
+
+function trimTerminalOutput(output: string) {
+  if (output.length <= TERMINAL_OUTPUT_LIMIT) {
+    return output;
+  }
+  return output.slice(-TERMINAL_OUTPUT_LIMIT);
 }
 
 function TerminalMenuAction(props: {
