@@ -89,10 +89,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -n 1)"
+          NOTES_START_TAG_ARGS=()
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            NOTES_START_TAG_ARGS=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
           gh release create "v${VERSION}" \
             "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg" \
             "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip" \
             "apps/desktop/release/electron/latest-mac.yml" \
             --title "HyprDuck v${VERSION}" \
             --notes "Signed and notarized macOS arm64 release for HyprDuck v${VERSION}." \
+            --generate-notes \
+            "${NOTES_START_TAG_ARGS[@]}" \
             --verify-tag
