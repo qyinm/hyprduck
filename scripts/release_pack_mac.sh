@@ -51,6 +51,38 @@ run_with_timeout() {
   wait "$pid"
 }
 
+write_update_manifest() {
+  local version="$1"
+  local zip_path="$2"
+  local dmg_path="$3"
+  local update_path="$4"
+  local zip_sha512
+  local dmg_sha512
+  local zip_size
+  local dmg_size
+  local release_date
+
+  zip_sha512="$(openssl dgst -sha512 -binary "$zip_path" | openssl base64 -A)"
+  dmg_sha512="$(openssl dgst -sha512 -binary "$dmg_path" | openssl base64 -A)"
+  zip_size="$(stat -f%z "$zip_path")"
+  dmg_size="$(stat -f%z "$dmg_path")"
+  release_date="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+
+  cat > "$update_path" <<EOF
+version: $version
+files:
+  - url: HyprDuck-${version}-mac-arm64.zip
+    sha512: $zip_sha512
+    size: $zip_size
+  - url: HyprDuck-${version}-mac-arm64.dmg
+    sha512: $dmg_sha512
+    size: $dmg_size
+path: HyprDuck-${version}-mac-arm64.zip
+sha512: $zip_sha512
+releaseDate: '$release_date'
+EOF
+}
+
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/load_release_env.sh"
 
@@ -99,25 +131,6 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH"
 
-zip_sha512="$(openssl dgst -sha512 -binary "$ZIP_PATH" | openssl base64 -A)"
-dmg_sha512="$(openssl dgst -sha512 -binary "$DMG_PATH" | openssl base64 -A)"
-zip_size="$(stat -f%z "$ZIP_PATH")"
-dmg_size="$(stat -f%z "$DMG_PATH")"
-release_date="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-cat > "$UPDATE_PATH" <<EOF
-version: $VERSION
-files:
-  - url: HyprDuck-${VERSION}-mac-arm64.zip
-    sha512: $zip_sha512
-    size: $zip_size
-  - url: HyprDuck-${VERSION}-mac-arm64.dmg
-    sha512: $dmg_sha512
-    size: $dmg_size
-path: HyprDuck-${VERSION}-mac-arm64.zip
-sha512: $zip_sha512
-releaseDate: '$release_date'
-EOF
-
 if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
   if [[ ! -f "$DMG_PATH" ]]; then
     echo "Expected DMG was not created: $DMG_PATH" >&2
@@ -150,3 +163,5 @@ if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE
 else
   echo "[notarize] Skipping DMG notarization because APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are not all set."
 fi
+
+write_update_manifest "$VERSION" "$ZIP_PATH" "$DMG_PATH" "$UPDATE_PATH"
