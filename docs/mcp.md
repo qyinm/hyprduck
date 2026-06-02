@@ -12,6 +12,12 @@ installs or refreshes the `hyprduck` shell command at `~/.local/bin/hyprduck`.
 If `command -v hyprduck` does not print a path, use the `~/.local/bin/hyprduck`
 fallback shown below or add `~/.local/bin` to `PATH`.
 
+If `~/.local/bin/hyprduck` already points at an unmanaged development binary,
+HyprDuck leaves it unchanged instead of overwriting an unrelated command. In
+that case, use the installed app-bundled CLI path directly for proof runs or
+refresh the shell command from the packaged app before claiming an installed-app
+shell-shim proof.
+
 ```bash
 hyprduck mcp install codex
 hyprduck mcp install claude-code
@@ -80,10 +86,11 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | Tool | Required arguments | Purpose |
 | --- | --- | --- |
 | `import_source` | `sourcePath` | Start importing an allowlisted local PDF, DOCX, DOC, Markdown, or image file and return an import `jobId`. |
-| `import_status` | `jobId` | Poll an import job. Agents can use source evidence once `citationReady` is true; graph/wiki inspection follows `graphReady`. |
+| `import_status` | `jobId` or `sourceId` | Poll an import job, or recover status for a persisted source after MCP restart. Agents can use source evidence once `citationReady` is true; graph/wiki inspection follows `graphReady`. |
 | `import_cancel` | `jobId` | Request best-effort cancellation for a queued or running import job. |
+| `import_retry_graph` | `jobId` or `sourceId` | Retry graph/wiki materialization for a citation-ready source without reparsing it. |
 | `get_context_pack` | `query` | Build an agent-ready Context Pack v1 with selected sources, typed evidence, findings, warnings, and retrieval trace. |
-| `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`. |
+| `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`; v1 packs are projected to the v0 compatibility shape for this reader. |
 | `search_documents` | `query` | Return ranked source-backed document context IDs. |
 | `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |

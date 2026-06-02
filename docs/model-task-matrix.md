@@ -66,5 +66,5 @@ When model defaults change, update this file and verify:
 ```bash
 cargo run -p hyprduck-cli -- eval golden-corpus \
   --mode all
-pnpm --dir apps/desktop build
+bun run --cwd apps/desktop build
 ```
