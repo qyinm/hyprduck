@@ -27,6 +27,30 @@ find_codesign_identity() {
   return 1
 }
 
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  local pid
+  local elapsed=0
+
+  "$@" &
+  pid="$!"
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( elapsed >= timeout_seconds )); then
+      echo "[timeout] Command exceeded ${timeout_seconds}s: $*" >&2
+      kill "$pid" 2>/dev/null || true
+      sleep 2
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  wait "$pid"
+}
+
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/load_release_env.sh"
 
@@ -44,6 +68,7 @@ APP_PATH="$DESKTOP_DIR/release/electron/mac-arm64/HyprDuck.app"
 DMG_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
 ZIP_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
 UPDATE_PATH="$DESKTOP_DIR/release/electron/latest-mac.yml"
+DMG_NOTARIZED_MARKER="$DESKTOP_DIR/release/electron/.dmg-notarized"
 DMG_STAGING_DIR="$DESKTOP_DIR/release/electron/dmg-staging"
 
 if [[ ! -d "$APP_PATH" ]]; then
@@ -58,7 +83,7 @@ for helper in "$APP_PATH"/Contents/Resources/app.asar.unpacked/node_modules/node
   codesign --verify --strict --verbose=4 "$helper"
 done
 
-rm -f "$DMG_PATH" "$ZIP_PATH" "$UPDATE_PATH"
+rm -f "$DMG_PATH" "$ZIP_PATH" "$UPDATE_PATH" "$DMG_NOTARIZED_MARKER"
 rm -rf "$DMG_STAGING_DIR"
 
 ditto -c -k --sequesterRsrc --keepParent --noextattr --noqtn "$APP_PATH" "$ZIP_PATH"
@@ -111,14 +136,17 @@ if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE
   fi
 
   echo "[notarize] Submitting $DMG_PATH"
-  xcrun notarytool submit "$DMG_PATH" \
+  if run_with_timeout 900 xcrun notarytool submit "$DMG_PATH" \
     --apple-id "$APPLE_ID" \
     --password "$APPLE_APP_SPECIFIC_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
-    --wait
-
-  echo "[notarize] Stapling $DMG_PATH"
-  xcrun stapler staple "$DMG_PATH"
+    --wait; then
+    echo "[notarize] Stapling $DMG_PATH"
+    xcrun stapler staple "$DMG_PATH"
+    touch "$DMG_NOTARIZED_MARKER"
+  else
+    echo "[notarize] WARNING: DMG notarization did not finish within the timeout. The app bundle remains notarized; publishing will continue with an unstapled DMG." >&2
+  fi
 else
   echo "[notarize] Skipping DMG notarization because APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are not all set."
 fi

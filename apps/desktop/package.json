@@ -2,7 +2,7 @@
   "name": "hyprduck-desktop",
   "packageManager": "bun@1.2.18",
   "private": true,
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Local document parsing for agent-ready knowledge.",
   "author": "hippoo",
   "repository": {

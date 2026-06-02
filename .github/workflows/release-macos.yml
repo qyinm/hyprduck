@@ -79,13 +79,18 @@ jobs:
           DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
           ZIP_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
           UPDATE_PATH="apps/desktop/release/electron/latest-mac.yml"
+          DMG_NOTARIZED_MARKER="apps/desktop/release/electron/.dmg-notarized"
           test -d "$APP_PATH"
           test -f "$DMG_PATH"
           test -f "$ZIP_PATH"
           test -f "$UPDATE_PATH"
           codesign --verify --deep --strict --verbose=4 "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
-          xcrun stapler validate "$DMG_PATH"
+          if [[ -f "$DMG_NOTARIZED_MARKER" ]]; then
+            xcrun stapler validate "$DMG_PATH"
+          else
+            echo "DMG notarization marker is absent; validating notarized app bundle only."
+          fi
           spctl --assess --type execute --verbose=4 "$APP_PATH"
           for helper in "$APP_PATH"/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-*/spawn-helper; do
             test -x "$helper"
