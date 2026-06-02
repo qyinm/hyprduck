@@ -95,7 +95,7 @@ jobs:
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
           DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
           MOUNT_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
-          MOUNT_POINT="$(printf '%s\n' "$MOUNT_OUTPUT" | awk -F '\t' '/\\/Volumes\\// { print $NF; exit }')"
+          MOUNT_POINT="$(printf '%s\n' "$MOUNT_OUTPUT" | sed -n 's#.*\(/Volumes/.*\)$#\1#p' | tail -n 1)"
           if [[ -z "$MOUNT_POINT" ]]; then
             echo "Failed to resolve DMG mount point." >&2
             printf '%s\n' "$MOUNT_OUTPUT" >&2
