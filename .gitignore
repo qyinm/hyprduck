@@ -47,6 +47,7 @@ apps/desktop/resources/binaries/
 .gstack/
 .vercel
 .env.release.local
+.env.local.release
 
 # private docs
 docs/private

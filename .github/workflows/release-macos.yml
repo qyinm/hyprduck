@@ -1,0 +1,98 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos-arm64:
+    runs-on: macos-15
+
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      CSC_NAME: ${{ secrets.CSC_NAME }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$TAG_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "Tag version v$TAG_VERSION does not match apps/desktop/package.json version $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+
+      - name: Validate signing and notarization secrets
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD CSC_NAME APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing release secret: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Verify Rust formatting
+        run: cargo fmt --check
+
+      - name: Run MCP contract test
+        run: cargo test -p hyprduck-cli --test mcp_server mcp_server_exposes_read_and_agent_session_write_brain_tools
+
+      - name: Build signed and notarized macOS artifacts
+        working-directory: apps/desktop
+        run: bun run release:pack:mac
+
+      - name: Validate notarized artifacts
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          APP_PATH="apps/desktop/release/electron/mac-arm64/HyprDuck.app"
+          DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
+          ZIP_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
+          UPDATE_PATH="apps/desktop/release/electron/latest-mac.yml"
+          test -d "$APP_PATH"
+          test -f "$DMG_PATH"
+          test -f "$ZIP_PATH"
+          test -f "$UPDATE_PATH"
+          codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          xcrun stapler validate "$DMG_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+      - name: Publish GitHub Release
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          gh release create "v${VERSION}" \
+            "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg" \
+            "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip" \
+            "apps/desktop/release/electron/latest-mac.yml" \
+            --title "HyprDuck v${VERSION}" \
+            --notes "Signed and notarized macOS arm64 release for HyprDuck v${VERSION}." \
+            --verify-tag
