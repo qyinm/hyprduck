@@ -199,6 +199,9 @@ function prepareNodePtyRuntime() {
   if (!helperPath || process.platform !== "darwin") {
     return;
   }
+  if (isPackagedAppResource(helperPath)) {
+    return;
+  }
   try {
     const mode = fs.statSync(helperPath).mode;
     if ((mode & 0o111) === 0) {
@@ -207,6 +210,17 @@ function prepareNodePtyRuntime() {
   } catch {
     // node-pty will surface the concrete launch failure if the helper is unusable.
   }
+}
+
+function isPackagedAppResource(candidate) {
+  if (!process.resourcesPath) {
+    return false;
+  }
+  const unpackedResourceDir = path.join(
+    process.resourcesPath,
+    "app.asar.unpacked",
+  );
+  return path.resolve(candidate).startsWith(path.resolve(unpackedResourceDir));
 }
 
 function resolveNodePtySpawnHelper() {
@@ -247,6 +261,7 @@ function normalizeExitSignal(exit) {
 module.exports = {
   PtyAgentTerminalBackend,
   createPtyAgentTerminalBackend,
+  isPackagedAppResource,
   prepareNodePtyRuntime,
   tryCreatePtyAgentTerminalBackend,
 };

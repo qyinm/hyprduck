@@ -37,10 +37,61 @@ fi
 
 cd "$DESKTOP_DIR"
 bun run release:prepare:mac
-electron-builder --mac dmg zip --arm64 --publish never
+electron-builder --mac dir --arm64 --publish never
 
 VERSION="$(node -p "require('./package.json').version")"
+APP_PATH="$DESKTOP_DIR/release/electron/mac-arm64/HyprDuck.app"
 DMG_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
+ZIP_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
+UPDATE_PATH="$DESKTOP_DIR/release/electron/latest-mac.yml"
+DMG_STAGING_DIR="$DESKTOP_DIR/release/electron/dmg-staging"
+
+if [[ ! -d "$APP_PATH" ]]; then
+  echo "Expected app was not created: $APP_PATH" >&2
+  exit 1
+fi
+
+xattr -cr "$APP_PATH"
+codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+for helper in "$APP_PATH"/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-*/spawn-helper; do
+  test -x "$helper"
+  codesign --verify --strict --verbose=4 "$helper"
+done
+
+rm -f "$DMG_PATH" "$ZIP_PATH" "$UPDATE_PATH"
+rm -rf "$DMG_STAGING_DIR"
+
+ditto -c -k --sequesterRsrc --keepParent --noextattr --noqtn "$APP_PATH" "$ZIP_PATH"
+
+mkdir -p "$DMG_STAGING_DIR"
+ditto --noextattr --noqtn "$APP_PATH" "$DMG_STAGING_DIR/HyprDuck.app"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
+xattr -cr "$DMG_STAGING_DIR"
+hdiutil create \
+  -volname "HyprDuck ${VERSION}-arm64" \
+  -srcfolder "$DMG_STAGING_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH"
+
+zip_sha512="$(openssl dgst -sha512 -binary "$ZIP_PATH" | openssl base64 -A)"
+dmg_sha512="$(openssl dgst -sha512 -binary "$DMG_PATH" | openssl base64 -A)"
+zip_size="$(stat -f%z "$ZIP_PATH")"
+dmg_size="$(stat -f%z "$DMG_PATH")"
+release_date="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+cat > "$UPDATE_PATH" <<EOF
+version: $VERSION
+files:
+  - url: HyprDuck-${VERSION}-mac-arm64.zip
+    sha512: $zip_sha512
+    size: $zip_size
+  - url: HyprDuck-${VERSION}-mac-arm64.dmg
+    sha512: $dmg_sha512
+    size: $dmg_size
+path: HyprDuck-${VERSION}-mac-arm64.zip
+sha512: $zip_sha512
+releaseDate: '$release_date'
+EOF
 
 if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
   if [[ ! -f "$DMG_PATH" ]]; then

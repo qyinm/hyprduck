@@ -84,6 +84,32 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           xcrun stapler validate "$DMG_PATH"
           spctl --assess --type execute --verbose=4 "$APP_PATH"
+          for helper in "$APP_PATH"/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-*/spawn-helper; do
+            test -x "$helper"
+            codesign --verify --strict --verbose=4 "$helper"
+          done
+
+      - name: Validate mounted DMG artifacts
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
+          MOUNT_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
+          MOUNT_POINT="$(printf '%s\n' "$MOUNT_OUTPUT" | awk -F '\t' '/\\/Volumes\\// { print $NF; exit }')"
+          if [[ -z "$MOUNT_POINT" ]]; then
+            echo "Failed to resolve DMG mount point." >&2
+            printf '%s\n' "$MOUNT_OUTPUT" >&2
+            exit 1
+          fi
+          trap 'hdiutil detach "$MOUNT_POINT"' EXIT
+          APP_PATH="$MOUNT_POINT/HyprDuck.app"
+          codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+          for helper in "$APP_PATH"/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-*/spawn-helper; do
+            test -x "$helper"
+            codesign --verify --strict --verbose=4 "$helper"
+          done
 
       - name: Publish GitHub Release
         run: |

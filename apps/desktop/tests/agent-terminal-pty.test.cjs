@@ -1,7 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createPtyAgentTerminalBackend } = require("../main/agent-terminal-pty.cjs");
+const {
+  createPtyAgentTerminalBackend,
+  isPackagedAppResource,
+} = require("../main/agent-terminal-pty.cjs");
 
 test("pty backend spawns the detected agent command and forwards lifecycle events", async () => {
   const fakePty = createFakePty();
@@ -86,6 +89,27 @@ test("pty backend replays fast startup output to late subscribers", async () => 
 
   assert.equal(events.length, 1);
   assert.equal(events[0].data, "boot");
+});
+
+test("packaged app resources are not mutated at runtime", () => {
+  const originalResourcesPath = process.resourcesPath;
+  process.resourcesPath = "/Applications/HyprDuck.app/Contents/Resources";
+  try {
+    assert.equal(
+      isPackagedAppResource(
+        "/Applications/HyprDuck.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+      ),
+      true,
+    );
+    assert.equal(
+      isPackagedAppResource(
+        "/Users/hippoo/dev/HyprDuck/apps/desktop/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+      ),
+      false,
+    );
+  } finally {
+    process.resourcesPath = originalResourcesPath;
+  }
 });
 
 function createFakePty() {
