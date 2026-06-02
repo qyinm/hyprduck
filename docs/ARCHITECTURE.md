@@ -219,6 +219,7 @@ Current strategy audit:
 - `import_source`
 - `import_status`
 - `import_cancel`
+- `import_retry_graph`
 - `get_context_pack`
 - `read_context_pack`
 - `search_documents`
@@ -247,5 +248,5 @@ Core checks:
 
 ```bash
 cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
-pnpm --dir apps/desktop build
+bun run --cwd apps/desktop build
 ```

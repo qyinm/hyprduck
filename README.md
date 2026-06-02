@@ -51,11 +51,12 @@ provenance, and agent-readable context.
 - Writes `source_pack.json` and `evidence_index.json` artifacts for imported sources
 - Preserves source IDs, page refs, content hashes, provider route, and parse warnings
 
-### Context Pack v0
-- Builds query-shaped context packs with selected sources and evidence
+### Context Pack v1
+- Builds query-shaped context packs with selected sources and typed evidence
 - Requires findings to point back to selected evidence through `derivedFrom`
 - Emits warnings for partial imports, visual loss, missing evidence, and budget truncation
-- Publishes the stable schema at [`schemas/context-pack.schema.json`](schemas/context-pack.schema.json)
+- Publishes the primary schema at [`schemas/context-pack-v1.schema.json`](schemas/context-pack-v1.schema.json)
+- Keeps [`schemas/context-pack.schema.json`](schemas/context-pack.schema.json) as the v0 compatibility projection
 
 ### Materialized Retrieval Model
 - Represents sources, concepts, entities, claims, memory, and wiki pages as graph records
@@ -78,13 +79,15 @@ provenance, and agent-readable context.
 ## Current Status
 
 HyprDuck is in active development. The parser wedge, local workspace layout,
-Source Pack/Evidence Index artifacts, Context Pack v0, controlled MCP import/read
-surface, and document-context CLI aliases are implemented.
+Source Pack/Evidence Index artifacts, Context Pack v1 with v0 compatibility,
+controlled MCP import/read/write surface, and document-context CLI aliases are
+implemented.
 
-The current demo path proves the protocol-level loop with a comparable MCP
-client dry run: import a known fixture, generate a schema-valid context pack,
-read it over MCP, and produce an answer with source/page/evidence citations.
-The next major work is real user dry runs in Claude Code, Codex, and Cursor.
+The current demo and dogfood path proves the loop end to end: import a known
+fixture, generate a schema-valid context pack, read it over MCP, and produce a
+Codex answer plus follow-up with the same source/page/evidence citation. The
+next major work is installed-app shell-command closeout, Agent Terminal handoff
+dogfood, and a second-client proof beyond Codex.
 
 ---
 
@@ -94,7 +97,7 @@ The next major work is real user dry runs in Claude Code, Codex, and Cursor.
 2. HyprDuck saves source metadata and derived artifacts.
 3. The engine parses the document into markdown and page-level evidence.
 4. HyprDuck writes a source pack and evidence index.
-5. A query generates a schema-valid Context Pack v0.
+5. A query generates a schema-valid Context Pack v1.
 6. Agents consume context packs through CLI or MCP and cite source/page/evidence refs.
 
 ---
@@ -136,9 +139,9 @@ document-context workflows:
 - **Ollama** for local-first and privacy-sensitive workflows
 
 Ollama does not require an API key. Source Pack and Evidence Index artifacts
-record provider-route metadata; Context Pack v0 currently preserves the metadata
-field and falls back to `unknown` when the source artifact does not expose an
-effective route. Task-specific model guidance and latency budgets live in
+record provider-route metadata; Context Pack v1 preserves the metadata field
+and falls back to `unknown` when the source artifact does not expose an effective
+route. Task-specific model guidance and latency budgets live in
 [`docs/model-task-matrix.md`](docs/model-task-matrix.md).
 
 ---

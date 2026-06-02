@@ -4,6 +4,13 @@ HyprDuck's launch agent path is Codex first. Claude Code uses the same local
 MCP server but is an external validation target when the operator does not have
 a Claude Code subscription. Cursor remains a later manual setup target.
 
+The latest installed-app Codex proof is
+`docs/dogfood-reports/2026-06-02-codex-installed-app-distribution-proof.md`.
+It passed active Codex MCP reuse with the app-bundled CLI. The remaining
+distribution follow-up is the shell-command path: if `command -v hyprduck`
+resolves to an unmanaged development symlink, use the app-bundled CLI directly
+or refresh the installed app shell command before claiming a shell-shim proof.
+
 ## Codex Required Path
 
 Register HyprDuck with Codex:
@@ -46,7 +53,8 @@ command -v hyprduck
 codex mcp list
 ```
 
-The Codex entry should be named `hyprduck` and run:
+The Codex entry should be named `hyprduck` and run the canonical binary path
+that performed installation:
 
 ```text
 <HyprDuck binary> mcp serve
@@ -63,9 +71,11 @@ a second question against the same source set.
 The first successful proof must record:
 
 - time from install command to first successful `get_context_pack`;
-- `tools/list` includes `import_source`, `import_status`, `get_context_pack`,
-  `search_documents`, `read_source`, `read_page_evidence`, and
-  `graph_patch_apply`;
+- `command -v hyprduck` resolves to a managed installed-app shell command, or
+  the proof explicitly records that the app-bundled CLI was used instead;
+- `tools/list` includes `import_source`, `import_status`, `import_cancel`,
+  `import_retry_graph`, `get_context_pack`, `search_documents`, `read_source`,
+  `read_page_evidence`, and `graph_patch_apply`;
 - if MCP import is part of the proof, `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` is set
   and `import_source` returns a `jobId` without leaking local paths; polling
   `import_status` reaches a citation-ready state with `citationReady: true`,

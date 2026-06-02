@@ -6,15 +6,40 @@ HyprDuck is moving from a document parser into a local evidence compiler for AI 
 
 The parser remains the wedge, but the next product milestone is not "more chat"
 or a memory OS. The next milestone is proving the reusable cited context loop:
-source pack, evidence index, Context Pack v0, and MCP agent citation quality.
+source pack, evidence index, Context Pack v1, MCP agent citation quality, and
+installed-app distribution.
 
 Current roadmap order:
 
 ```text
-1. Context pack demo and agent citation proof
-2. Distribution proof through Claude Code, Codex, and Cursor
-3. Benchmark proof for document-to-agent-context quality
+1. Close the installed-app shell-command/shim gap found during Codex proof
+2. Dogfood Agent Terminal context handoff with Codex and one second agent
+3. Extend distribution proof beyond Codex when the client is available
+4. Keep benchmark proof current for document-to-agent-context quality
 ```
+
+## Current Next Slice
+
+**What:** Finish the installed-app distribution closeout after the successful
+Codex proof.
+
+**Why:** `docs/dogfood-reports/2026-06-02-codex-installed-app-distribution-proof.md`
+records `pass_active_codex_exec`, but also records that `~/.local/bin/hyprduck`
+can still point at an unmanaged repo-local development binary. The active Codex
+registration used the app-bundled CLI, but the shell-command path still needs a
+clean user-facing story.
+
+**Acceptance:**
+
+- [ ] Opening or installing the packaged app refreshes a managed `hyprduck`
+  shell command without overwriting unrelated unmanaged commands.
+- [ ] `hyprduck doctor` resolves the app-bundled engine runtime for an installed
+  app.
+- [ ] `hyprduck mcp install codex` registers the app-bundled CLI and forwards
+  import-root/project-store environment values.
+- [ ] The Codex installed-app proof can be rerun without the stale-shim warning.
+- [ ] Agent Terminal dogfood records the context handoff state before broad
+  rollout.
 
 ---
 
@@ -140,20 +165,26 @@ retrieval would freeze a poor external contract too early.
 
 ---
 
-## P2 - Read-only MCP v0 - Done
+## P2 - MCP read surface and controlled writes - Done
 
-**What:** Expose HyprDuck's local document context through a read-only MCP
-surface after extraction and retrieval stabilize.
+**What:** Expose HyprDuck's local document context through MCP after extraction
+and retrieval stabilize, then add narrow mutating tools for import, graph
+patches, and evidence-backed save-back flows.
 
-**Why:** The first agent-facing contract should be read-only. Agents should be
-able to retrieve source/page/evidence-backed context before any future write
-surface is considered.
+**Why:** Agents must retrieve source/page/evidence-backed context, and controlled
+agent workflows need explicit, auditable, evidence-scoped mutation paths instead
+of generic filesystem or command access.
 
-**Initial tools:**
+**Core tools:**
 
+- `import_source`
+- `import_status`
+- `import_cancel`
+- `import_retry_graph`
 - `search_documents`
 - `search_brain`
 - `get_context_pack`
+- `read_context_pack`
 - `read_source`
 - `read_page_evidence`
 - `read_wiki_page`
@@ -162,11 +193,17 @@ surface is considered.
 - `read_graph_history`
 - `read_graph_snapshot`
 - `read_health`
+- `graph_patch_apply`
+- `write_propose`
+- `write_commit`
+- `write_commit_all`
+- `write_list`
+- `write_reject`
 
 **Acceptance:**
 
 - [x] MCP tools return the same evidence-backed IDs as the engine/CLI.
-- [x] Tools cannot mutate document context artifacts.
+- [x] Mutating tools are explicit, narrow, auditable, and evidence-scoped.
 - [x] Tool responses include source/evidence provenance.
 - [x] The contract is documented with examples.
 
@@ -197,13 +234,13 @@ losing page evidence.
 - [x] A fixture demo completes under 60 seconds.
 - [x] A sample query writes schema-valid `context_pack.json`.
 - [x] One MCP client can answer with source/page/evidence citations.
-- [x] A Claude Code, Codex, Cursor, or comparable MCP client dry run proves cited context-pack reuse.
+- [x] Active Codex proof reuses the same source and evidence ref through MCP.
 - [x] Default docs and tool lists contain no retired trust-layer UX language.
 - [x] Missing provider and partial import failures produce specific warnings.
 
 **Effort:** L
 **Priority:** P3
-**Depends on:** Read-only MCP, Source Pack/Evidence Index, Context Pack v0
+**Depends on:** MCP read/write surface, Source Pack/Evidence Index, Context Pack v1
 
 ---
 
@@ -232,10 +269,11 @@ losing page evidence.
   - Added evidence IDs to search snippets for agent-readable citations.
   - Added CLI context-pack counts for memories, entities, claims, and relations.
   - Covered plural-token retrieval and graph/evidence expansion with a regression test.
-- [x] Context Pack v0, Source Pack, and Evidence Index artifacts
-  - Added `schemas/context-pack.schema.json`, `schemas/source-pack.schema.json`, and `schemas/evidence-index.schema.json`.
+- [x] Context Pack v1, Context Pack v0 compatibility, Source Pack, and Evidence Index artifacts
+  - Added `schemas/context-pack-v1.schema.json`, `schemas/context-pack.schema.json`, `schemas/source-pack.schema.json`, and `schemas/evidence-index.schema.json`.
   - Writes `source_pack.json` and `evidence_index.json` during output packaging.
-  - Persists query-time `context_pack.json` and history files when requested.
+  - Persists query-time Context Pack v1 as `context_pack.json` and history files when requested.
+  - Returns `contextPackV0` for compatibility with older agent clients.
   - Covers schema and artifact round trips in tests.
 - [x] MCP document-context naming and root hardening
   - Added `search_documents` and `read_page_evidence`.
@@ -250,6 +288,7 @@ losing page evidence.
   - Added Codex and Claude Code installer setup instructions.
   - Documented Cursor manual stdio configuration.
   - Added a verification prompt that requires source/page/evidence citations.
+  - Recorded active Codex installed-app distribution proof in `docs/dogfood-reports/2026-06-02-codex-installed-app-distribution-proof.md`.
 - [x] Save-back and correction persistence
   - Existing workspace rename, merge, and keep-separate corrections remain ledger-backed and replayable.
   - Claim updates now write durable `graph/claims.json` records.

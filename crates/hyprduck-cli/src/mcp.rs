@@ -1838,7 +1838,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "read_context_pack",
-            "Read the latest persisted Context Pack v0, or a specific pack by packId.",
+            "Read the latest persisted context pack, or a specific pack by packId. Context Pack v1 is projected to the v0 compatibility shape for this reader.",
             json!({
                 "packId": { "type": "string", "description": "Optional packId under context_packs/. Defaults to the latest context_pack.json." },
             }),
