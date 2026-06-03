@@ -5,13 +5,9 @@ use hyprduck_engine_client::{EngineClient, SubprocessEngineClient};
 use serde_json::{json, Value};
 
 use super::policy::{redact_local_path_text, redact_local_paths};
-use super::responses::{
-    classify_mcp_error, error_response, error_response_with_data, success_response,
-};
-use super::{
-    call_tool, local_path_disclosure_for_tool, read_resource, resource_definitions,
-    tool_definitions, ImportJobRegistry,
-};
+use super::resources::{handle_resource_read, resource_definitions};
+use super::responses::{classify_mcp_error, error_response, success_response};
+use super::{call_tool, local_path_disclosure_for_tool, tool_definitions, ImportJobRegistry};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -198,18 +194,4 @@ fn handle_tool_call(
     };
 
     success_response(id, result)
-}
-
-fn handle_resource_read(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
-    match read_resource(client, params) {
-        Ok(value) => success_response(id, value),
-        Err(error) => error_response_with_data(
-            id,
-            -32602,
-            redact_local_path_text(&error.to_string()),
-            json!({
-                "hyprduckErrorCategory": classify_mcp_error(&error.to_string())
-            }),
-        ),
-    }
 }

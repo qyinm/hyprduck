@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,25 +21,29 @@ use hyprduck_engine_types::{
 };
 use serde_json::{json, Map, Value};
 
+mod args;
 mod policy;
 mod protocol;
+mod resources;
 mod responses;
 
 pub use protocol::run_mcp_server;
 
-use policy::{
-    redact_local_path_text, redact_local_paths, validate_import_source_path,
-    validate_root_dir_argument,
+use args::{
+    import_document_format, optional_bool, optional_string, optional_usize, read_scope,
+    required_string, required_string_array, validate_mcp_proposal_id,
+    validate_mcp_write_content_type, PROPOSAL_ID_PATTERN, WRITE_CONTENT_TYPES,
 };
+use policy::{redact_local_path_text, validate_import_source_path};
 #[cfg(test)]
 use policy::{IMPORT_ALLOWED_ROOTS_ENV, ROOT_DIR_ALLOWED_ROOTS_ENV, ROOT_DIR_ENV};
 use protocol::McpServerState;
 #[cfg(test)]
+use resources::parse_resource_uri;
+#[cfg(test)]
 use responses::classify_mcp_error;
 
 const LOCAL_PATH_DISCLOSURE_ENV: &str = "HYPRDUCK_MCP_ALLOW_LOCAL_PATHS";
-const PROPOSAL_ID_PATTERN: &str = "^prop-[0-9A-Fa-f]{32}$";
-const WRITE_CONTENT_TYPES: [&str; 3] = ["memory", "evidence_refresh", "link_repair"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MutatingToolPolicy {
@@ -108,141 +114,6 @@ const MUTATING_TOOL_POLICIES: &[MutatingToolPolicy] = &[
             "already rejected or missing proposal IDs are stable proposal_state failures",
     },
 ];
-
-pub(in crate::mcp) fn read_resource(
-    client: &dyn EngineClient,
-    params: Option<&Value>,
-) -> Result<Value> {
-    let params = params.unwrap_or(&Value::Null);
-    let uri = params
-        .get("uri")
-        .and_then(Value::as_str)
-        .filter(|uri| !uri.trim().is_empty())
-        .ok_or_else(|| anyhow!("Invalid params: missing resource uri"))?;
-    let resource = parse_resource_uri(uri)?;
-
-    match resource.kind {
-        BrainResourceKind::GraphSnapshot => {
-            let snapshot = client.read_graph_snapshot(ReadGraphSnapshotRequest {
-                scope: resource.scope,
-                include_local_paths: false,
-            })?;
-            let snapshot = redact_local_paths(serde_json::to_value(snapshot)?);
-            Ok(json!({
-                "contents": [
-                    {
-                        "uri": public_resource_uri(uri),
-                        "mimeType": "application/json",
-                        "text": serde_json::to_string_pretty(&snapshot)?
-                    }
-                ]
-            }))
-        }
-        BrainResourceKind::WikiPage { path } => {
-            let page = client.read_wiki_page(ReadWikiPageRequest {
-                scope: resource.scope,
-                path,
-            })?;
-            let body = redact_local_path_text(&page.page.body);
-            Ok(json!({
-                "contents": [
-                    {
-                        "uri": public_resource_uri(uri),
-                        "mimeType": "text/markdown",
-                        "text": body
-                    }
-                ]
-            }))
-        }
-    }
-}
-
-fn public_resource_uri(uri: &str) -> &str {
-    uri.split_once('?').map_or(uri, |(path, _)| path)
-}
-
-#[derive(Debug)]
-struct BrainResource {
-    scope: BrainReadScope,
-    kind: BrainResourceKind,
-}
-
-#[derive(Debug)]
-enum BrainResourceKind {
-    GraphSnapshot,
-    WikiPage { path: String },
-}
-
-fn parse_resource_uri(uri: &str) -> Result<BrainResource> {
-    let Some(rest) = uri.strip_prefix("hyprduck://brain/") else {
-        return Err(anyhow!("unsupported HyprDuck resource uri: {uri}"));
-    };
-    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let (workspace_id, resource_path) = path
-        .split_once('/')
-        .ok_or_else(|| anyhow!("HyprDuck resource uri must include workspace and resource path"))?;
-    if workspace_id.trim().is_empty() {
-        return Err(anyhow!("HyprDuck resource uri workspace cannot be empty"));
-    }
-    let query = parse_resource_query(query)?;
-    let root_dir = query
-        .get("rootDir")
-        .and_then(Value::as_str)
-        .map(validate_root_dir_argument)
-        .transpose()?;
-    let scope = BrainReadScope {
-        workspace_id: percent_decode(workspace_id)?,
-        root_dir,
-    };
-    let kind = if resource_path == "graph/snapshot" {
-        BrainResourceKind::GraphSnapshot
-    } else if let Some(path) = resource_path.strip_prefix("wiki/") {
-        BrainResourceKind::WikiPage {
-            path: format!("wiki/{}", percent_decode(path)?),
-        }
-    } else {
-        return Err(anyhow!(
-            "unsupported HyprDuck resource path: {resource_path}"
-        ));
-    };
-    Ok(BrainResource { scope, kind })
-}
-
-fn parse_resource_query(query: &str) -> Result<Map<String, Value>> {
-    let mut values = Map::new();
-    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        values.insert(percent_decode(key)?, Value::String(percent_decode(value)?));
-    }
-    Ok(values)
-}
-
-fn percent_decode(value: &str) -> Result<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' if index + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
-                    .context("resource uri contains invalid percent encoding")?;
-                let byte = u8::from_str_radix(hex, 16)
-                    .context("resource uri contains invalid percent encoding")?;
-                decoded.push(byte);
-                index += 3;
-            }
-            b'+' => {
-                decoded.push(b' ');
-                index += 1;
-            }
-            byte => {
-                decoded.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8(decoded).context("resource uri contains invalid utf-8")
-}
 
 #[derive(Clone, Default)]
 pub(in crate::mcp) struct ImportJobRegistry {
@@ -1378,137 +1249,6 @@ fn read_graph_wiki_cache_state(
         }
         Err(error) => Err(error),
     }
-}
-
-fn read_scope(arguments: &Map<String, Value>) -> Result<BrainReadScope> {
-    let root_dir = optional_string(arguments, "rootDir")?;
-    let root_dir = root_dir
-        .as_deref()
-        .map(validate_root_dir_argument)
-        .transpose()?;
-    Ok(BrainReadScope {
-        workspace_id: optional_string(arguments, "workspaceId")?
-            .unwrap_or_else(|| "default".into()),
-        root_dir,
-    })
-}
-
-fn import_document_format(path: &Path, explicit: Option<String>) -> Result<DocumentFormat> {
-    let raw = explicit
-        .map(|value| value.to_ascii_lowercase())
-        .or_else(|| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.to_ascii_lowercase())
-        });
-    match raw.as_deref() {
-        Some("pdf") => Ok(DocumentFormat::Pdf),
-        Some("docx") => Ok(DocumentFormat::Docx),
-        Some("doc") => Ok(DocumentFormat::Doc),
-        Some("md") | Some("markdown") => Ok(DocumentFormat::Markdown),
-        Some("image") | Some("png") | Some("jpg") | Some("jpeg") | Some("webp") | Some("heic")
-        | Some("tiff") => Ok(DocumentFormat::Image),
-        Some(other) => Err(anyhow!(
-            "unsupported import format: {other}; supported formats: pdf, docx, doc, markdown, image"
-        )),
-        None => Err(anyhow!(
-            "cannot infer import format; pass format as pdf, docx, doc, markdown, or image"
-        )),
-    }
-}
-
-fn required_string(arguments: &Map<String, Value>, name: &str) -> Result<String> {
-    optional_string(arguments, name)?.ok_or_else(|| anyhow!("missing required argument: {name}"))
-}
-
-fn optional_string(arguments: &Map<String, Value>, name: &str) -> Result<Option<String>> {
-    match arguments.get(name) {
-        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
-        Some(Value::String(_)) => Err(anyhow!("argument {name} cannot be empty")),
-        Some(_) => Err(anyhow!("argument {name} must be a string")),
-        None => Ok(None),
-    }
-}
-
-fn optional_usize(arguments: &Map<String, Value>, name: &str) -> Result<Option<usize>> {
-    match arguments.get(name) {
-        Some(Value::Number(value)) => value
-            .as_u64()
-            .map(|value| Some(value as usize))
-            .ok_or_else(|| anyhow!("argument {name} must be a positive integer")),
-        Some(Value::String(value)) => value
-            .parse::<usize>()
-            .map(Some)
-            .map_err(|_| anyhow!("argument {name} must be a positive integer")),
-        Some(_) => Err(anyhow!("argument {name} must be a positive integer")),
-        None => Ok(None),
-    }
-}
-
-fn optional_bool(arguments: &Map<String, Value>, name: &str) -> Result<Option<bool>> {
-    match arguments.get(name) {
-        Some(Value::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(anyhow!("argument {name} must be a boolean")),
-        None => Ok(None),
-    }
-}
-
-fn required_string_array(arguments: &Map<String, Value>, name: &str) -> Result<Vec<String>> {
-    let values: Vec<String> = match arguments.get(name) {
-        Some(Value::Array(values)) => values
-            .iter()
-            .map(|value| match value {
-                Value::String(s) if !s.trim().is_empty() => Ok(s.clone()),
-                Value::String(_) => Err(anyhow!("element in {name} cannot be empty")),
-                _ => Err(anyhow!("each element in {name} must be a string")),
-            })
-            .collect::<Result<Vec<_>>>()?,
-        Some(_) => return Err(anyhow!("argument {name} must be an array of strings")),
-        None => return Err(anyhow!("missing required argument: {name}")),
-    };
-    if values.is_empty() {
-        return Err(anyhow!("argument {name} must contain at least one item"));
-    }
-    Ok(values)
-}
-
-fn validate_mcp_proposal_id(proposal_id: &str) -> Result<()> {
-    let suffix = proposal_id
-        .strip_prefix("prop-")
-        .ok_or_else(|| anyhow!("invalid proposalId: expected prop-<32 hex chars>"))?;
-    if suffix.len() != 32 || !suffix.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(anyhow!("invalid proposalId: expected prop-<32 hex chars>"));
-    }
-    Ok(())
-}
-
-fn validate_mcp_write_content_type(content_type: &str) -> Result<()> {
-    let content_type = content_type.trim();
-    if WRITE_CONTENT_TYPES.contains(&content_type) {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "unsupported contentType {content_type}; supported contentTypes: {}",
-            WRITE_CONTENT_TYPES.join(", ")
-        ))
-    }
-}
-
-pub(in crate::mcp) fn resource_definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "uri": "hyprduck://brain/default/graph/snapshot",
-            "name": "Latest graph/wiki snapshot",
-            "description": "Resolved latest completed materialized graph/wiki snapshot for the default workspace.",
-            "mimeType": "application/json"
-        }),
-        json!({
-            "uri": "hyprduck://brain/default/wiki/index.md",
-            "name": "Wiki index",
-            "description": "Current materialized wiki index for the default workspace.",
-            "mimeType": "text/markdown"
-        }),
-    ]
 }
 
 pub(in crate::mcp) fn tool_definitions() -> Vec<Value> {
