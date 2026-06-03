@@ -80,7 +80,10 @@ pub(super) fn read_import_job(
             .get::<_, Option<i64>>(12)
             .context("read graph_next_retry_at")?
             .and_then(|value| (value >= 0).then_some(value as u64)),
-        manual_retry_available: row.get::<_, i64>(13).context("read manual_retry_available")? != 0,
+        manual_retry_available: row
+            .get::<_, i64>(13)
+            .context("read manual_retry_available")?
+            != 0,
         source_markdown_path: row.get(14).context("read source markdown path")?,
         source_document_path: row.get(15).context("read source document path")?,
         source_manifest_path: row.get(16).context("read source manifest path")?,
