@@ -1,3 +1,10 @@
+mod artifact_store;
+mod context_pack_store;
+mod graph_snapshot_store;
+mod import_job_store;
+mod row_decode;
+mod search_store;
+
 pub(crate) mod brain_artifact_repository;
 pub(crate) mod knowledge_store;
 pub(crate) mod project_store;

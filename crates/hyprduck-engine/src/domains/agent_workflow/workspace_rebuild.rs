@@ -1,6 +1,19 @@
 use std::path::Path;
 use std::time::Duration;
 
+#[path = "workspace_rebuild/chunking.rs"]
+mod workspace_rebuild_chunking;
+#[path = "workspace_rebuild/compaction.rs"]
+mod workspace_rebuild_compaction;
+#[path = "workspace_rebuild/events.rs"]
+mod workspace_rebuild_events;
+#[path = "workspace_rebuild/fingerprint.rs"]
+mod workspace_rebuild_fingerprint;
+#[path = "workspace_rebuild/merge.rs"]
+mod workspace_rebuild_merge;
+#[path = "workspace_rebuild/provider_stage.rs"]
+mod workspace_rebuild_provider_stage;
+
 use super::artifacts::{
     provider_workspace_linking_response_schema, provider_workspace_rebuild_response_schema,
     write_provider_graph_run_artifacts, write_provider_graph_run_validation_report,
