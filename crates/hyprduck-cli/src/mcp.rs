@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,6 +20,10 @@ use hyprduck_engine_types::{
 use serde_json::{json, Map, Value};
 
 mod policy;
+mod protocol;
+mod responses;
+
+pub use protocol::run_mcp_server;
 
 use policy::{
     redact_local_path_text, redact_local_paths, validate_import_source_path,
@@ -28,8 +31,10 @@ use policy::{
 };
 #[cfg(test)]
 use policy::{IMPORT_ALLOWED_ROOTS_ENV, ROOT_DIR_ALLOWED_ROOTS_ENV, ROOT_DIR_ENV};
+use protocol::McpServerState;
+#[cfg(test)]
+use responses::classify_mcp_error;
 
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const LOCAL_PATH_DISCLOSURE_ENV: &str = "HYPRDUCK_MCP_ALLOW_LOCAL_PATHS";
 const PROPOSAL_ID_PATTERN: &str = "^prop-[0-9A-Fa-f]{32}$";
 const WRITE_CONTENT_TYPES: [&str; 3] = ["memory", "evidence_refresh", "link_repair"];
@@ -104,206 +109,10 @@ const MUTATING_TOOL_POLICIES: &[MutatingToolPolicy] = &[
     },
 ];
 
-pub fn run_mcp_server() -> Result<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    let client = SubprocessEngineClient::default();
-    let state = McpServerState::default();
-
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some(response) = handle_message(&client, &state, &line) {
-            serde_json::to_writer(&mut stdout, &response)
-                .context("failed to encode MCP response")?;
-            stdout
-                .write_all(b"\n")
-                .context("failed to write MCP response newline")?;
-            stdout.flush().context("failed to flush MCP response")?;
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Clone, Default)]
-struct McpServerState {
-    import_jobs: ImportJobRegistry,
-}
-
-fn handle_message(client: &dyn EngineClient, state: &McpServerState, line: &str) -> Option<Value> {
-    let message = match serde_json::from_str::<Value>(line) {
-        Ok(message) => message,
-        Err(error) => {
-            return Some(error_response(
-                Value::Null,
-                -32700,
-                format!("Parse error: {error}"),
-            ))
-        }
-    };
-
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        return Some(error_response(
-            message.get("id").cloned().unwrap_or(Value::Null),
-            -32600,
-            "Invalid Request: missing method",
-        ));
-    };
-
-    let Some(id) = message.get("id").cloned() else {
-        return handle_notification(method);
-    };
-
-    match method {
-        "initialize" => Some(success_response(id, initialize_result(&message))),
-        "ping" => Some(success_response(id, json!({}))),
-        "tools/list" => Some(success_response(id, json!({ "tools": tool_definitions() }))),
-        "tools/call" => Some(handle_tool_call(client, state, id, message.get("params"))),
-        "resources/list" => Some(success_response(
-            id,
-            json!({ "resources": resource_definitions() }),
-        )),
-        "resources/read" => Some(handle_resource_read(client, id, message.get("params"))),
-        _ => Some(error_response(
-            id,
-            -32601,
-            format!("Method not found: {method}"),
-        )),
-    }
-}
-
-fn handle_notification(method: &str) -> Option<Value> {
-    match method {
-        "notifications/initialized" | "notifications/cancelled" => None,
-        _ => None,
-    }
-}
-
-fn initialize_result(message: &Value) -> Value {
-    let requested_protocol = message
-        .get("params")
-        .and_then(|params| params.get("protocolVersion"))
-        .and_then(Value::as_str)
-        .unwrap_or(MCP_PROTOCOL_VERSION);
-
-    json!({
-        "protocolVersion": requested_protocol,
-        "capabilities": {
-            "tools": {
-                "listChanged": false
-            },
-            "resources": {
-                "subscribe": false,
-                "listChanged": false
-            }
-        },
-        "serverInfo": {
-            "name": "hyprduck",
-            "title": "HyprDuck Local Context",
-            "version": env!("CARGO_PKG_VERSION")
-        },
-        "instructions": "HyprDuck exposes local, desktop-first, evidence-governed document context through read, search, context-pack, snapshot, and health tools. Use get_context_pack first, then search_documents or open cited sources, page evidence, wiki pages, nodes, or event history as needed."
-    })
-}
-
-fn handle_tool_call(
+pub(in crate::mcp) fn read_resource(
     client: &dyn EngineClient,
-    state: &McpServerState,
-    id: Value,
     params: Option<&Value>,
-) -> Value {
-    let params = params.unwrap_or(&Value::Null);
-    let name = match params.get("name").and_then(Value::as_str) {
-        Some(name) => name,
-        None => return error_response(id, -32602, "Invalid params: missing tool name"),
-    };
-    let arguments = match params.get("arguments") {
-        Some(Value::Object(map)) => map,
-        Some(_) => {
-            return error_response(id, -32602, "Invalid params: arguments must be an object")
-        }
-        None => return error_response(id, -32602, "Invalid params: missing arguments"),
-    };
-    let include_local_paths = match local_path_disclosure_for_tool(name, arguments) {
-        Ok(value) => value,
-        Err(error) => {
-            return success_response(
-                id,
-                json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": error.to_string()
-                        }
-                    ],
-                    "isError": true,
-                    "_meta": {
-                        "hyprduckErrorCategory": classify_mcp_error(&error.to_string())
-                    }
-                }),
-            )
-        }
-    };
-
-    let result = match call_tool(client, state, name, arguments, include_local_paths) {
-        Ok(tool_result) => {
-            let value = if include_local_paths {
-                tool_result.value
-            } else {
-                redact_local_paths(tool_result.value)
-            };
-            let mut result = json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": serde_json::to_string_pretty(&value)
-                            .unwrap_or_else(|_| "{}".into())
-                    }
-                ],
-                "isError": false
-            });
-            if let Some(cache_state) = tool_result.cache_state {
-                result["_meta"] = json!({
-                    "hyprduckGraphWikiCache": cache_state
-                });
-            }
-            result
-        }
-        Err(error) => json!({
-            "content": [
-                {
-                    "type": "text",
-                    "text": redact_local_path_text(&error.to_string())
-                }
-            ],
-            "isError": true,
-            "_meta": {
-                "hyprduckErrorCategory": classify_mcp_error(&error.to_string())
-            }
-        }),
-    };
-
-    success_response(id, result)
-}
-
-fn handle_resource_read(client: &dyn EngineClient, id: Value, params: Option<&Value>) -> Value {
-    match read_resource(client, params) {
-        Ok(value) => success_response(id, value),
-        Err(error) => error_response_with_data(
-            id,
-            -32602,
-            redact_local_path_text(&error.to_string()),
-            json!({
-                "hyprduckErrorCategory": classify_mcp_error(&error.to_string())
-            }),
-        ),
-    }
-}
-
-fn read_resource(client: &dyn EngineClient, params: Option<&Value>) -> Result<Value> {
+) -> Result<Value> {
     let params = params.unwrap_or(&Value::Null);
     let uri = params
         .get("uri")
@@ -436,7 +245,7 @@ fn percent_decode(value: &str) -> Result<String> {
 }
 
 #[derive(Clone, Default)]
-struct ImportJobRegistry {
+pub(in crate::mcp) struct ImportJobRegistry {
     jobs: Arc<Mutex<BTreeMap<String, ImportJobSnapshot>>>,
 }
 
@@ -1261,7 +1070,7 @@ fn resolve_import_job(
     Ok(job)
 }
 
-fn call_tool(
+pub(in crate::mcp) fn call_tool(
     client: &dyn EngineClient,
     state: &McpServerState,
     name: &str,
@@ -1517,7 +1326,10 @@ fn cache_sensitive_tool(name: &str) -> bool {
     matches!(name, "graph_patch_apply" | "read_health")
 }
 
-fn local_path_disclosure_for_tool(name: &str, arguments: &Map<String, Value>) -> Result<bool> {
+pub(in crate::mcp) fn local_path_disclosure_for_tool(
+    name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<bool> {
     let requested = optional_bool(arguments, "includeLocalPaths")?.unwrap_or(false);
     if !requested {
         return Ok(false);
@@ -1682,90 +1494,7 @@ fn validate_mcp_write_content_type(content_type: &str) -> Result<()> {
     }
 }
 
-fn success_response(id: Value, result: Value) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": result
-    })
-}
-
-fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": code,
-            "message": message.into()
-        }
-    })
-}
-
-fn error_response_with_data(
-    id: Value,
-    code: i64,
-    message: impl Into<String>,
-    data: Value,
-) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": code,
-            "message": message.into(),
-            "data": data
-        }
-    })
-}
-
-fn classify_mcp_error(message: &str) -> &'static str {
-    let lower = message.to_ascii_lowercase();
-    if lower.contains("rootdir")
-        || lower.contains("root dir")
-        || lower.contains("allowed_root")
-        || lower.contains("allowed roots")
-        || lower.contains("allowed import")
-        || lower.contains("sourcepath")
-        || lower.contains("path")
-    {
-        "path_policy"
-    } else if lower.contains("evidence") || lower.contains("sourceid") {
-        "evidence_scope"
-    } else if lower.contains("graphpatch")
-        || lower.contains("schema")
-        || lower.contains("proposalid")
-        || lower.contains("contenttype")
-        || lower.contains("argument")
-        || lower.contains("invalid params")
-    {
-        "schema"
-    } else if lower.contains("provider") || lower.contains("openrouter") || lower.contains("ollama")
-    {
-        "provider"
-    } else if lower.contains("import job") || lower.contains("lifecycle") || lower.contains("retry")
-    {
-        "lifecycle"
-    } else if lower.contains("database")
-        || lower.contains("sqlite")
-        || lower.contains("graphqlite")
-        || lower.contains("failed reading")
-        || lower.contains("failed committing")
-    {
-        "persistence"
-    } else if lower.contains("graph")
-        || lower.contains("materialization")
-        || lower.contains("snapshot")
-        || lower.contains("wiki")
-    {
-        "graph_materialization"
-    } else if lower.contains("failed writing") {
-        "persistence"
-    } else {
-        "unknown"
-    }
-}
-
-fn resource_definitions() -> Vec<Value> {
+pub(in crate::mcp) fn resource_definitions() -> Vec<Value> {
     vec![
         json!({
             "uri": "hyprduck://brain/default/graph/snapshot",
@@ -1782,7 +1511,7 @@ fn resource_definitions() -> Vec<Value> {
     ]
 }
 
-fn tool_definitions() -> Vec<Value> {
+pub(in crate::mcp) fn tool_definitions() -> Vec<Value> {
     vec![
         tool_definition(
             "import_source",
