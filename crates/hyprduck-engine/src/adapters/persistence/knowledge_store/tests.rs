@@ -1,6 +1,7 @@
 use super::super::row_decode::sql_literal;
 use super::*;
 
+mod agent_write_tests;
 mod schema_tests;
 mod source_tests;
 

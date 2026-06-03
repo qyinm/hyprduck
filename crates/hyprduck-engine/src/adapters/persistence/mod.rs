@@ -1,3 +1,4 @@
+mod agent_write_store;
 mod artifact_store;
 mod context_pack_store;
 mod graph_snapshot_store;

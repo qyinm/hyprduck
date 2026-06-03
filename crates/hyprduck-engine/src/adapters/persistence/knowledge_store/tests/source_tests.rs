@@ -1,5 +1,4 @@
 use super::super::*;
-use super::{brain_event_count, test_brain_event};
 
 #[test]
 fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
@@ -775,4 +774,49 @@ fn assert_string_array(row: &graphqlite::Row, column: &str, expected: &[&str]) {
         other => panic!("unexpected value for {column}: {other:?}"),
     };
     assert_eq!(values, expected);
+}
+
+fn brain_event_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
+    let graph = Graph::open(&store.path).context("open graph")?;
+    let count = graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT COUNT(*) FROM brain_events WHERE workspace_id = ?1",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .context("query brain event count")?;
+    Ok(count)
+}
+
+fn test_brain_event(event_id: &str, workspace_id: &str, evidence_refs: &[&str]) -> BrainEvent {
+    BrainEvent {
+        event_id: event_id.into(),
+        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
+        workspace_id: workspace_id.into(),
+        scope: BrainScope::Project,
+        event_type: BrainEventKind::GraphMaterialized,
+        operation_type: Some("graph_materialized".into()),
+        actor: BrainActor {
+            actor_type: BrainActorType::Agent,
+            actor_id: "test-agent".into(),
+        },
+        source_refs: Vec::new(),
+        source_markdown_refs: Vec::new(),
+        node_refs: Vec::new(),
+        relation_refs: Vec::new(),
+        claim_refs: Vec::new(),
+        memory_refs: Vec::new(),
+        target_node_ids: Vec::new(),
+        target_edge_ids: Vec::new(),
+        target_claim_ids: Vec::new(),
+        target_memory_ids: Vec::new(),
+        evidence_refs: evidence_refs.iter().map(|value| (*value).into()).collect(),
+        payload_json: "{}".into(),
+        causality: BrainEventCausality::default(),
+        confidence: None,
+        policy_result: PolicyResult::materialized(),
+        created_at: 10,
+    }
 }
