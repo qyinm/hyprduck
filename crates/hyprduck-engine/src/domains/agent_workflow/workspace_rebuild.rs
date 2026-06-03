@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::Duration;
 
 #[path = "workspace_rebuild/chunking.rs"]
 mod workspace_rebuild_chunking;
@@ -25,16 +24,25 @@ use self::workspace_rebuild_compaction::normalize_concept_label;
 use self::workspace_rebuild_compaction::{
     compact_source_graph_snapshot, strip_source_of_relations,
 };
+use self::workspace_rebuild_events::{
+    source_graph_build_materialized_event, workspace_linking_materialized_event,
+    write_graph_diff_artifact,
+};
 use self::workspace_rebuild_fingerprint::provider_graph_input_fingerprint;
 #[cfg(test)]
 use self::workspace_rebuild_merge::merge_source_graph_snapshots;
 use self::workspace_rebuild_merge::{
     merge_raw_source_graph_snapshots, parse_and_validate_source_graph_response,
 };
+use self::workspace_rebuild_provider_stage::{
+    mark_source_graph_compaction_failed, mark_workspace_linking_failed,
+    provider_graph_failure_reason, provider_graph_generation_disabled_for_process,
+    provider_graph_report_is_reusable, provider_unavailable_reason, run_provider_graph_stage,
+    run_source_graph_chunk_provider_jobs, source_graph_materialized_status, source_graph_progress,
+    update_materialized_counts, SourceGraphChunkJob,
+};
 use super::artifacts::{
-    provider_workspace_linking_response_schema, provider_workspace_rebuild_response_schema,
-    write_provider_graph_run_artifacts, write_provider_graph_run_validation_report,
-    ProviderGraphRunArtifact,
+    provider_workspace_linking_response_schema, write_provider_graph_run_validation_report,
 };
 use super::prompt::{build_source_chunk_graph_prompt, build_workspace_linking_prompt};
 use super::reports::{
@@ -45,7 +53,9 @@ use super::response::{
     normalize_provider_workspace_linking_snapshot, parse_provider_workspace_rebuild_snapshot,
 };
 use super::validation::validate_provider_workspace_linking_snapshot;
-use crate::provider::{EngineConfig, EngineConfigStore, ProviderKind};
+#[cfg(test)]
+use crate::provider::ProviderKind;
+use crate::provider::{EngineConfig, EngineConfigStore};
 use crate::*;
 
 const PROVIDER_GRAPH_PROMPT_VERSION: u32 = 2;
@@ -61,23 +71,6 @@ const SOURCE_GRAPH_HARD_MAX_RELATIONS: usize = 48;
 const SOURCE_GRAPH_MAX_CLAIMS: usize = 12;
 const SOURCE_GRAPH_MAX_EVIDENCE_PER_NODE: usize = 8;
 const SOURCE_GRAPH_MAX_EVIDENCE_PER_RELATION: usize = 6;
-
-#[derive(Debug, Clone)]
-struct SourceGraphChunkJob {
-    batch_index: usize,
-    run_id: String,
-    chunk_ids: Vec<String>,
-    evidence_refs: Vec<EvidenceRef>,
-    prompt: String,
-}
-
-struct SourceGraphChunkProviderResult {
-    batch_index: usize,
-    run_id: String,
-    chunk_ids: Vec<String>,
-    evidence_refs: Vec<EvidenceRef>,
-    response: Result<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -762,457 +755,6 @@ pub(crate) fn maybe_generate_provider_graph_materialization(
     report.updated_at = unix_timestamp_seconds();
     write_json_pretty(&report_path, &report)?;
     Ok(report)
-}
-
-fn source_graph_progress(report: &ProviderGraphMaterializationReport) -> f32 {
-    if report.chunk_total == 0 {
-        return 0.0;
-    }
-    let completed = report.chunk_succeeded + report.chunk_failed;
-    (completed as f32 / report.chunk_total as f32).clamp(0.0, 1.0)
-}
-
-fn provider_graph_failure_reason(error: &anyhow::Error) -> &'static str {
-    let message = format!("{error:#}");
-    if message.contains("provider_timeout") {
-        "provider_timeout"
-    } else if message.contains("provider_unavailable") {
-        "provider_unavailable"
-    } else {
-        "provider_error"
-    }
-}
-
-fn source_graph_materialized_status(report: &ProviderGraphMaterializationReport) -> &'static str {
-    match (report.chunk_failed > 0, report.chunk_skipped > 0) {
-        (true, true) => "source_partial_with_failures_and_skipped_chunks",
-        (true, false) => "source_partial_with_failures",
-        (false, true) => "source_partial_with_skipped_chunks",
-        (false, false) => "source_graph_materialized",
-    }
-}
-
-fn provider_unavailable_reason(config: &EngineConfig) -> &'static str {
-    match &config.provider {
-        ProviderKind::Unknown(_) => "unsupported_provider",
-        ProviderKind::OpenRouter if config.api_key.trim().is_empty() => "provider_config",
-        _ => "provider_config",
-    }
-}
-
-fn update_materialized_counts(
-    report: &mut ProviderGraphMaterializationReport,
-    snapshot: &BrainRepoSnapshot,
-) {
-    report.materialized_node_count = snapshot.nodes.len();
-    report.materialized_relation_count = snapshot.relations.len();
-    report.materialized_claim_count = snapshot.claims.len();
-    report.materialized_memory_count = snapshot.memories.len();
-}
-
-fn provider_graph_report_is_reusable(
-    report: &ProviderGraphMaterializationReport,
-    manifest: &SourceArtifactManifest,
-    input_fingerprint: &ProviderGraphMaterializationInputFingerprint,
-) -> bool {
-    report.status == "linked"
-        && report.source_id == manifest.source_id
-        && report.input_fingerprint.as_ref() == Some(input_fingerprint)
-}
-
-fn mark_workspace_linking_failed(
-    report: &mut ProviderGraphMaterializationReport,
-    error: &anyhow::Error,
-) {
-    report.status = if report.source_graph_materialized {
-        "source_graph_materialized_linking_failed".into()
-    } else {
-        "failed".into()
-    };
-    report.workspace_linking_materialized = false;
-    report.error_message = Some(format!("{error:#}"));
-    report.retryable = true;
-    report.stage = "workspace_linking_failed".into();
-    report.failed_reason = Some(provider_graph_failure_reason(error).into());
-    report.updated_at = unix_timestamp_seconds();
-}
-
-fn mark_source_graph_compaction_failed(
-    report: &mut ProviderGraphMaterializationReport,
-    artifact_root: &Path,
-    report_path: &Path,
-    raw_snapshot: &BrainRepoSnapshot,
-    error: &anyhow::Error,
-) -> Result<()> {
-    report.status = "failed_no_materialization".into();
-    report.stage = "source_graph_compaction_failed".into();
-    report.retryable = true;
-    report.error_message = Some(format!("{error:#}"));
-    report.failed_reason = Some("source_graph_compaction_failed".into());
-    report.raw_source_graph_node_count = raw_snapshot.nodes.len();
-    report.raw_source_graph_relation_count = raw_snapshot.relations.len();
-    report.compaction_status = Some("failed".into());
-    report.compaction_report_path = Some(
-        artifact_root
-            .join("provider-graph-compaction.json")
-            .to_string_lossy()
-            .into_owned(),
-    );
-    report.updated_at = unix_timestamp_seconds();
-    write_json_pretty(
-        &artifact_root.join("provider-graph-compaction.json"),
-        &json!({
-            "status": "failed",
-            "rawNodeCount": raw_snapshot.nodes.len(),
-            "rawRelationCount": raw_snapshot.relations.len(),
-            "errorMessage": format!("{error:#}"),
-            "updatedAt": report.updated_at,
-        }),
-    )?;
-    write_json_pretty(report_path, report)
-}
-
-fn run_provider_graph_stage(
-    workspace_root: &Path,
-    workspace_id: &str,
-    manifest: &SourceArtifactManifest,
-    config: &EngineConfig,
-    run_id: &str,
-    prompt: &str,
-    response_schema: async_openai::types::chat::ResponseFormatJsonSchema,
-) -> Result<String> {
-    let response = match parse_openai_compatible_json_schema_with_timeout(
-        config,
-        prompt,
-        response_schema,
-        Some(Duration::from_secs(
-            PROVIDER_GRAPH_GENERATION_TIMEOUT_SECONDS,
-        )),
-    ) {
-        Ok(response) => response,
-        Err(error) => {
-            write_provider_graph_run_artifacts(ProviderGraphRunArtifact {
-                workspace_root,
-                run_id,
-                workspace_id,
-                manifest,
-                status: "failed",
-                prompt: Some(prompt),
-                provider_response: None,
-                error_message: Some(format!("{error:#}")),
-            })?;
-            return Err(error);
-        }
-    };
-    write_provider_graph_run_artifacts(ProviderGraphRunArtifact {
-        workspace_root,
-        run_id,
-        workspace_id,
-        manifest,
-        status: "received",
-        prompt: Some(prompt),
-        provider_response: Some(&response),
-        error_message: None,
-    })?;
-    Ok(response)
-}
-
-fn run_source_graph_chunk_provider_jobs(
-    workspace_root: &Path,
-    workspace_id: &str,
-    manifest: &SourceArtifactManifest,
-    config: &EngineConfig,
-    jobs: &[SourceGraphChunkJob],
-) -> Vec<SourceGraphChunkProviderResult> {
-    std::thread::scope(|scope| {
-        let handles = jobs
-            .iter()
-            .map(|job| {
-                scope.spawn(move || SourceGraphChunkProviderResult {
-                    batch_index: job.batch_index,
-                    run_id: job.run_id.clone(),
-                    chunk_ids: job.chunk_ids.clone(),
-                    evidence_refs: job.evidence_refs.clone(),
-                    response: run_provider_graph_stage(
-                        workspace_root,
-                        workspace_id,
-                        manifest,
-                        config,
-                        &job.run_id,
-                        &job.prompt,
-                        provider_workspace_rebuild_response_schema(),
-                    ),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        handles
-            .into_iter()
-            .zip(jobs.iter())
-            .map(|(handle, job)| match handle.join() {
-                Ok(result) => result,
-                Err(_) => SourceGraphChunkProviderResult {
-                    batch_index: job.batch_index,
-                    run_id: job.run_id.clone(),
-                    chunk_ids: job.chunk_ids.clone(),
-                    evidence_refs: job.evidence_refs.clone(),
-                    response: Err(anyhow!("source chunk provider worker panicked")),
-                },
-            })
-            .collect()
-    })
-}
-
-fn write_graph_diff_artifact(
-    workspace_root: &Path,
-    run_id: &str,
-    workspace_id: &str,
-    source_id: &str,
-    changed_files: &[String],
-    snapshot: &BrainRepoSnapshot,
-) -> Result<()> {
-    write_json_pretty(
-        &workspace_root
-            .join("runs")
-            .join(run_id)
-            .join("graph-diff.json"),
-        &json!({
-            "runId": run_id,
-            "workspaceId": workspace_id,
-            "sourceId": source_id,
-            "changedFiles": changed_files,
-            "nodeCount": snapshot.nodes.len(),
-            "relationCount": snapshot.relations.len(),
-            "claimCount": snapshot.claims.len(),
-            "memoryCount": snapshot.memories.len(),
-            "updatedAt": snapshot.generated_at,
-        }),
-    )
-}
-
-fn source_graph_build_materialized_event(
-    workspace_id: &str,
-    run_id: &str,
-    manifest: &SourceArtifactManifest,
-    snapshot: &BrainRepoSnapshot,
-) -> Result<BrainEvent> {
-    provider_graph_materialized_event(
-        workspace_id,
-        run_id,
-        manifest,
-        snapshot,
-        "source_graph_build",
-        "source-graph-build",
-        "provider_source_graph_build",
-    )
-}
-
-fn workspace_linking_materialized_event(
-    workspace_id: &str,
-    run_id: &str,
-    manifest: &SourceArtifactManifest,
-    snapshot: &BrainRepoSnapshot,
-) -> Result<BrainEvent> {
-    let endpoint_node_ids = snapshot
-        .relations
-        .iter()
-        .flat_map(|relation| {
-            [
-                relation.source_node_id.clone(),
-                relation.target_node_id.clone(),
-            ]
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    Ok(BrainEvent {
-        event_id: format!("evt-{run_id}"),
-        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-        workspace_id: workspace_id.to_string(),
-        scope: BrainScope::Project,
-        event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some("workspace_linking".into()),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: format!("{PROVIDER_GRAPH_AGENT_ID}:workspace-linking"),
-        },
-        source_refs: snapshot
-            .relations
-            .iter()
-            .flat_map(|relation| {
-                snapshot
-                    .nodes
-                    .iter()
-                    .filter(move |node| {
-                        node.node_id == relation.source_node_id
-                            || node.node_id == relation.target_node_id
-                    })
-                    .flat_map(|node| node.source_ids.clone())
-            })
-            .chain(std::iter::once(manifest.source_id.clone()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-        source_markdown_refs: vec![manifest.markdown_path.clone()],
-        node_refs: endpoint_node_ids,
-        relation_refs: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        claim_refs: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        memory_refs: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        target_node_ids: Vec::new(),
-        target_edge_ids: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        target_claim_ids: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        target_memory_ids: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        evidence_refs: Vec::new(),
-        payload_json: materialized_graph_event_payload_json(
-            snapshot.generated_at,
-            &[],
-            &[],
-            &snapshot.relations,
-            &[],
-            &snapshot.memories,
-            &snapshot.wiki_pages,
-            &[],
-            &snapshot.claims,
-            &[],
-        )?,
-        causality: BrainEventCausality {
-            caused_by_source_ids: vec![manifest.source_id.clone()],
-            caused_by_event_ids: Vec::new(),
-            snapshot_id: Some(format!("snapshot-{run_id}")),
-            previous_snapshot_id: None,
-            materialized_version: Some(snapshot.generated_at),
-            schema_version: 1,
-        },
-        confidence: Some("provider_workspace_linking".into()),
-        policy_result: "materialized".into(),
-        created_at: snapshot.generated_at,
-    })
-}
-
-fn provider_graph_materialized_event(
-    workspace_id: &str,
-    run_id: &str,
-    manifest: &SourceArtifactManifest,
-    snapshot: &BrainRepoSnapshot,
-    operation_type: &str,
-    actor_suffix: &str,
-    confidence: &str,
-) -> Result<BrainEvent> {
-    Ok(BrainEvent {
-        event_id: format!("evt-{run_id}"),
-        schema_version: BRAIN_EVENT_SCHEMA_VERSION,
-        workspace_id: workspace_id.to_string(),
-        scope: BrainScope::Project,
-        event_type: BrainEventKind::GraphMaterialized,
-        operation_type: Some(operation_type.into()),
-        actor: BrainActor {
-            actor_type: BrainActorType::Agent,
-            actor_id: format!("{PROVIDER_GRAPH_AGENT_ID}:{actor_suffix}"),
-        },
-        source_refs: snapshot
-            .sources
-            .iter()
-            .map(|source| source.source_id.clone())
-            .collect(),
-        source_markdown_refs: vec![manifest.markdown_path.clone()],
-        node_refs: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        relation_refs: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        claim_refs: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        memory_refs: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        target_node_ids: snapshot
-            .nodes
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect(),
-        target_edge_ids: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
-        target_claim_ids: snapshot
-            .claims
-            .iter()
-            .map(|claim| claim.claim_id.clone())
-            .collect(),
-        target_memory_ids: snapshot
-            .memories
-            .iter()
-            .map(|memory| memory.memory_id.clone())
-            .collect(),
-        evidence_refs: snapshot
-            .evidence
-            .iter()
-            .map(|evidence| evidence.id.clone())
-            .collect(),
-        payload_json: materialized_graph_event_payload_json(
-            snapshot.generated_at,
-            &snapshot.sources,
-            &snapshot.nodes,
-            &snapshot.relations,
-            &snapshot.evidence,
-            &snapshot.memories,
-            &snapshot.wiki_pages,
-            &snapshot.entities,
-            &snapshot.claims,
-            &snapshot.extractions,
-        )?,
-        causality: BrainEventCausality {
-            caused_by_source_ids: vec![manifest.source_id.clone()],
-            caused_by_event_ids: Vec::new(),
-            snapshot_id: Some(format!("snapshot-{run_id}")),
-            previous_snapshot_id: None,
-            materialized_version: Some(snapshot.generated_at),
-            schema_version: 1,
-        },
-        confidence: Some(confidence.into()),
-        policy_result: "materialized".into(),
-        created_at: snapshot.generated_at,
-    })
-}
-
-fn provider_graph_generation_disabled_for_process() -> bool {
-    std::env::var_os("HYPRDUCK_DISABLE_PROVIDER_GRAPH").is_some()
-        || (cfg!(test) && std::env::var_os("HYPRDUCK_TEST_ENABLE_PROVIDER_GRAPH").is_none())
 }
 
 #[cfg(test)]
