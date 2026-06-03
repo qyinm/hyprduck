@@ -5,6 +5,7 @@ mod import_job_store;
 mod row_decode;
 mod schema_store;
 mod search_store;
+mod source_manifest_store;
 
 pub(crate) mod brain_artifact_repository;
 pub(crate) mod knowledge_store;

@@ -1,6 +1,7 @@
 //! Internal helpers extracted from the engine facade module.
 
 use anyhow::{anyhow, Context, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 
 use graphqlite::{Row, Value};
@@ -98,4 +99,20 @@ pub(super) fn row_string_array(row: &Row, column: &str) -> Result<Vec<String>> {
             "expected string array column {column}, got {other:?}"
         )),
     }
+}
+
+pub(super) fn json_string_slug<T: Serialize>(value: &T) -> Result<String> {
+    let value = serde_json::to_value(value).context("failed encoding slug value")?;
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("slug value did not encode as a JSON string"))
+}
+
+pub(super) fn sql_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+pub(super) fn sql_optional_literal(value: Option<&str>) -> String {
+    value.map(sql_literal).unwrap_or_else(|| "NULL".into())
 }
