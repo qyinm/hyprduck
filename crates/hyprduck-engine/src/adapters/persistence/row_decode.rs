@@ -23,10 +23,7 @@ pub(super) fn object_i64(properties: &HashMap<String, Value>, key: &str) -> i64 
     }
 }
 
-pub(super) fn object_optional_f32(
-    properties: &HashMap<String, Value>,
-    key: &str,
-) -> Option<f32> {
+pub(super) fn object_optional_f32(properties: &HashMap<String, Value>, key: &str) -> Option<f32> {
     match properties.get(key) {
         Some(Value::Float(value)) => Some(*value as f32),
         Some(Value::Integer(value)) => Some(*value as f32),
@@ -45,7 +42,9 @@ pub(super) fn object_string_array(properties: &HashMap<String, Value>, key: &str
                 _ => None,
             })
             .collect(),
-        Some(Value::String(value)) => serde_json::from_str::<Vec<String>>(value).unwrap_or_default(),
+        Some(Value::String(value)) => {
+            serde_json::from_str::<Vec<String>>(value).unwrap_or_default()
+        }
         _ => Vec::new(),
     }
 }
@@ -91,8 +90,12 @@ pub(super) fn row_string_array(row: &Row, column: &str) -> Result<Vec<String>> {
                 _ => None,
             })
             .collect()),
-        Some(Value::String(value)) => Ok(serde_json::from_str::<Vec<String>>(value).unwrap_or_default()),
+        Some(Value::String(value)) => {
+            Ok(serde_json::from_str::<Vec<String>>(value).unwrap_or_default())
+        }
         Some(Value::Null) | None => Ok(Vec::new()),
-        Some(other) => Err(anyhow!("expected string array column {column}, got {other:?}")),
+        Some(other) => Err(anyhow!(
+            "expected string array column {column}, got {other:?}"
+        )),
     }
 }
