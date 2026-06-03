@@ -15,11 +15,15 @@ use hyprduck_engine_types::{
     SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::policy::redact_path_for_agent;
+use super::row_decode::{
+    non_empty_string, object_i64, object_optional_f32, object_string, object_string_array,
+    row_i64, row_string, row_string_array,
+};
 
 const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
 const KNOWLEDGE_SCHEMA_VERSION: i64 = 1;
@@ -2656,57 +2660,6 @@ fn parse_optional_f32(value: &str) -> Option<f32> {
     }
 }
 
-fn object_string(properties: &HashMap<String, graphqlite::Value>, key: &str) -> String {
-    match properties.get(key) {
-        Some(graphqlite::Value::String(value)) => value.clone(),
-        Some(graphqlite::Value::Integer(value)) => value.to_string(),
-        Some(graphqlite::Value::Float(value)) => value.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn object_i64(properties: &HashMap<String, graphqlite::Value>, key: &str) -> i64 {
-    match properties.get(key) {
-        Some(graphqlite::Value::Integer(value)) => *value,
-        Some(graphqlite::Value::Float(value)) => *value as i64,
-        Some(graphqlite::Value::String(value)) => value.parse::<i64>().unwrap_or_default(),
-        _ => 0,
-    }
-}
-
-fn object_optional_f32(properties: &HashMap<String, graphqlite::Value>, key: &str) -> Option<f32> {
-    match properties.get(key) {
-        Some(graphqlite::Value::Float(value)) => Some(*value as f32),
-        Some(graphqlite::Value::Integer(value)) => Some(*value as f32),
-        Some(graphqlite::Value::String(value)) => parse_optional_f32(value),
-        _ => None,
-    }
-}
-
-fn object_string_array(properties: &HashMap<String, graphqlite::Value>, key: &str) -> Vec<String> {
-    match properties.get(key) {
-        Some(graphqlite::Value::Array(values)) => values
-            .iter()
-            .filter_map(|value| match value {
-                graphqlite::Value::String(value) => Some(value.clone()),
-                _ => None,
-            })
-            .collect(),
-        Some(graphqlite::Value::String(value)) => {
-            serde_json::from_str::<Vec<String>>(value).unwrap_or_default()
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
 fn unique_project_evidence(project: &KnowledgeProject) -> Vec<EvidenceRef> {
     let mut evidence_by_id = std::collections::BTreeMap::new();
     for evidence in project
@@ -2984,52 +2937,6 @@ fn append_cypher_neighbor_evidence_ids(
         }
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn row_string(row: &graphqlite::Row, column: &str) -> Result<String> {
-    match row.get_value(column) {
-        Some(graphqlite::Value::String(value)) => Ok(value.clone()),
-        Some(graphqlite::Value::Integer(value)) => Ok(value.to_string()),
-        Some(graphqlite::Value::Float(value)) => Ok(value.to_string()),
-        Some(graphqlite::Value::Bool(value)) => Ok(value.to_string()),
-        Some(graphqlite::Value::Null) | None => Ok(String::new()),
-        Some(other) => Err(anyhow!("expected scalar column {column}, got {other:?}")),
-    }
-}
-
-#[allow(dead_code)]
-fn row_i64(row: &graphqlite::Row, column: &str) -> Result<i64> {
-    match row.get_value(column) {
-        Some(graphqlite::Value::Integer(value)) => Ok(*value),
-        Some(graphqlite::Value::Float(value)) => Ok(*value as i64),
-        Some(graphqlite::Value::String(value)) if value.trim().is_empty() => Ok(0),
-        Some(graphqlite::Value::String(value)) => value
-            .parse::<i64>()
-            .with_context(|| format!("failed parsing integer column {column}")),
-        Some(graphqlite::Value::Null) | None => Ok(0),
-        Some(other) => Err(anyhow!("expected integer column {column}, got {other:?}")),
-    }
-}
-
-#[allow(dead_code)]
-fn row_string_array(row: &graphqlite::Row, column: &str) -> Result<Vec<String>> {
-    match row.get_value(column) {
-        Some(graphqlite::Value::Array(values)) => Ok(values
-            .iter()
-            .filter_map(|value| match value {
-                graphqlite::Value::String(value) => Some(value.clone()),
-                _ => None,
-            })
-            .collect()),
-        Some(graphqlite::Value::String(value)) => {
-            Ok(serde_json::from_str::<Vec<String>>(value).unwrap_or_default())
-        }
-        Some(graphqlite::Value::Null) | None => Ok(Vec::new()),
-        Some(other) => Err(anyhow!(
-            "expected string array column {column}, got {other:?}"
-        )),
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
