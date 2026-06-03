@@ -12,6 +12,8 @@ mod workspace_rebuild_fingerprint;
 mod workspace_rebuild_merge;
 #[path = "workspace_rebuild/provider_stage.rs"]
 mod workspace_rebuild_provider_stage;
+#[path = "workspace_rebuild/types.rs"]
+mod workspace_rebuild_types;
 
 #[cfg(test)]
 use self::workspace_rebuild_chunking::source_graph_chunk_batches;
@@ -41,6 +43,17 @@ use self::workspace_rebuild_provider_stage::{
     run_source_graph_chunk_provider_jobs, source_graph_materialized_status, source_graph_progress,
     update_materialized_counts, SourceGraphChunkJob,
 };
+pub(crate) use self::workspace_rebuild_types::{
+    GraphCandidateBatch, GraphCandidateNode, GraphCandidateRelation, SourceGraphCompactionReport,
+};
+use self::workspace_rebuild_types::{
+    PROVIDER_GRAPH_PROMPT_VERSION, PROVIDER_SOURCE_GRAPH_SCHEMA_VERSION,
+    PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION, SOURCE_GRAPH_AUTO_BATCH_LIMIT,
+    SOURCE_GRAPH_CHUNK_BATCH_MAX_CHARS, SOURCE_GRAPH_CHUNK_BATCH_MAX_CHUNKS,
+    SOURCE_GRAPH_CHUNK_PARALLELISM, SOURCE_GRAPH_HARD_MAX_CONCEPTS,
+    SOURCE_GRAPH_HARD_MAX_RELATIONS, SOURCE_GRAPH_MAX_CLAIMS, SOURCE_GRAPH_MAX_EVIDENCE_PER_NODE,
+    SOURCE_GRAPH_MAX_EVIDENCE_PER_RELATION, SOURCE_GRAPH_TARGET_CONCEPTS,
+};
 use super::artifacts::{
     provider_workspace_linking_response_schema, write_provider_graph_run_validation_report,
 };
@@ -57,89 +70,6 @@ use super::validation::validate_provider_workspace_linking_snapshot;
 use crate::provider::ProviderKind;
 use crate::provider::{EngineConfig, EngineConfigStore};
 use crate::*;
-
-const PROVIDER_GRAPH_PROMPT_VERSION: u32 = 2;
-const PROVIDER_SOURCE_GRAPH_SCHEMA_VERSION: u32 = 1;
-const PROVIDER_WORKSPACE_LINKING_SCHEMA_VERSION: u32 = 1;
-const SOURCE_GRAPH_CHUNK_BATCH_MAX_CHARS: usize = 80_000;
-const SOURCE_GRAPH_CHUNK_BATCH_MAX_CHUNKS: usize = 40;
-const SOURCE_GRAPH_AUTO_BATCH_LIMIT: usize = 8;
-const SOURCE_GRAPH_CHUNK_PARALLELISM: usize = 4;
-const SOURCE_GRAPH_TARGET_CONCEPTS: usize = 18;
-const SOURCE_GRAPH_HARD_MAX_CONCEPTS: usize = 32;
-const SOURCE_GRAPH_HARD_MAX_RELATIONS: usize = 48;
-const SOURCE_GRAPH_MAX_CLAIMS: usize = 12;
-const SOURCE_GRAPH_MAX_EVIDENCE_PER_NODE: usize = 8;
-const SOURCE_GRAPH_MAX_EVIDENCE_PER_RELATION: usize = 6;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GraphCandidateBatch {
-    pub(crate) run_id: String,
-    pub(crate) chunk_run_id: String,
-    pub(crate) source_id: String,
-    #[serde(default)]
-    pub(crate) chunk_ids: Vec<String>,
-    #[serde(default)]
-    pub(crate) nodes: Vec<GraphCandidateNode>,
-    #[serde(default)]
-    pub(crate) relations: Vec<GraphCandidateRelation>,
-    #[serde(default)]
-    pub(crate) claims: Vec<ClaimRecord>,
-    #[serde(default)]
-    pub(crate) raw_response_ref: Option<String>,
-    pub(crate) created_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GraphCandidateNode {
-    pub(crate) raw_node_id: String,
-    pub(crate) label: String,
-    pub(crate) kind: BrainNodeKind,
-    #[serde(default)]
-    pub(crate) aliases: Vec<String>,
-    #[serde(default)]
-    pub(crate) evidence_ids: Vec<String>,
-    #[serde(default)]
-    pub(crate) page_refs: Vec<String>,
-    #[serde(default)]
-    pub(crate) confidence: Option<f32>,
-    #[serde(default)]
-    pub(crate) reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GraphCandidateRelation {
-    pub(crate) raw_relation_id: String,
-    pub(crate) source_raw_node_id: String,
-    pub(crate) target_raw_node_id: String,
-    pub(crate) kind: BrainRelationKind,
-    #[serde(default)]
-    pub(crate) label: String,
-    #[serde(default)]
-    pub(crate) evidence_ids: Vec<String>,
-    #[serde(default)]
-    pub(crate) confidence: Option<f32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SourceGraphCompactionReport {
-    pub(crate) raw_node_count: usize,
-    pub(crate) raw_relation_count: usize,
-    pub(crate) deduped_node_count: usize,
-    pub(crate) deduped_relation_count: usize,
-    pub(crate) materialized_node_count: usize,
-    pub(crate) materialized_relation_count: usize,
-    pub(crate) dropped_node_count: usize,
-    pub(crate) dropped_relation_count: usize,
-    #[serde(default)]
-    pub(crate) drop_reasons: BTreeMap<String, usize>,
-    #[serde(default)]
-    pub(crate) candidate_to_canonical_map: BTreeMap<String, Option<String>>,
-}
 
 pub(crate) fn maybe_generate_provider_graph_materialization(
     workspace_root: &Path,
