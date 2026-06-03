@@ -3,6 +3,7 @@ mod context_pack_store;
 mod graph_snapshot_store;
 mod import_job_store;
 mod row_decode;
+mod schema_store;
 mod search_store;
 
 pub(crate) mod brain_artifact_repository;
