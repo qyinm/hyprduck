@@ -10,12 +10,10 @@ import {
 } from "react";
 import {
   ArrowLeft,
-  History as HistoryIcon,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  RefreshCw,
   Save,
   Settings,
   Sparkles,
@@ -25,8 +23,6 @@ import {
   type AgentTerminalEvent,
   type AgentTerminalListResult,
   type AgentTerminalSession,
-  type BrainEvent,
-  type BrainHealthResponseData,
   type DesktopCommand,
   type DesktopCommandParameters,
   type DesktopCommandResult,
@@ -298,131 +294,6 @@ function windowChromeButtonClass(): string {
   return "h-7 w-7 rounded-full border border-transparent bg-background/80 text-muted-foreground shadow-none backdrop-blur hover:border-border hover:bg-secondary hover:text-foreground";
 }
 
-function HistoryPanel(props: {
-  health: BrainHealthResponseData | null;
-  onRefresh: () => Promise<void>;
-}) {
-  const { health, onRefresh } = props;
-  const recentEvents = health?.recentEvents ?? [];
-  const visibleEvents = recentEvents.filter(isHistoryActivityEvent);
-  const hasActivity = visibleEvents.length > 0;
-
-  return (
-    <section
-      aria-label="History"
-      className="fixed right-3 top-12 z-50 flex max-h-[min(24rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-background text-sm shadow-xl"
-      data-electron-no-drag
-    >
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <HistoryIcon className="shrink-0 text-muted-foreground" size={15} />
-          <h2 className="truncate text-sm font-semibold text-foreground">
-            History
-          </h2>
-        </div>
-        <div className="flex shrink-0 items-center">
-          <Button
-            aria-label="Refresh history"
-            onClick={() => void onRefresh()}
-            size="icon"
-            title="Refresh"
-            type="button"
-            variant="ghost"
-          >
-            <RefreshCw size={14} />
-          </Button>
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/20 px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground">Recent activity</span>
-          <span className="text-xs text-muted-foreground">
-            {visibleEvents.length} events
-          </span>
-        </div>
-        <div className="grid gap-1.5 p-2">
-          {visibleEvents.map((event) => (
-            <div
-              className="rounded-md border border-border bg-background px-2.5 py-2"
-              key={event.eventId}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-                  {formatEventType(event.eventType)}
-                </span>
-                <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {event.actor.actorType}
-                </span>
-              </div>
-              <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                {formatTimestamp(event.createdAt)}
-                {event.policyResult ? ` · ${formatPolicyResult(event.policyResult)}` : ""}
-              </p>
-              {(event.sourceRefs.length > 0 || event.evidenceRefs.length > 0) && (
-                <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                  {formatRefsSummary(event.sourceRefs.length, event.evidenceRefs.length)}
-                </p>
-              )}
-            </div>
-          ))}
-
-          {health && !hasActivity && (
-            <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-              No history yet.
-            </div>
-          )}
-          {!health && (
-            <div className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-              Loading history.
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function formatEventType(eventType: string): string {
-  return eventType
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function isHistoryActivityEvent(event: BrainEvent): boolean {
-  return Boolean(event.eventType);
-}
-
-function formatPolicyResult(policyResult: string): string {
-  return policyResult
-    .split("_")
-    .filter(Boolean)
-    .join(" ");
-}
-
-function formatRefsSummary(sourceCount: number, evidenceCount: number): string {
-  const parts = [];
-  if (sourceCount > 0) {
-    parts.push(`${sourceCount} source${sourceCount === 1 ? "" : "s"}`);
-  }
-  if (evidenceCount > 0) {
-    parts.push(`${evidenceCount} evidence`);
-  }
-  return parts.join(" · ");
-}
-
-function formatTimestamp(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return "Unknown time";
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(seconds * 1000));
-}
-
 export function App() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
   const [loadedWorkspaceEnvelope, setLoadedWorkspaceEnvelope] =
@@ -438,14 +309,11 @@ export function App() {
     useState<ValidateProviderResponseData | null>(null);
   const [readiness, setReadiness] =
     useState<RuntimeReadinessResponseData | null>(null);
-  const [brainHealth, setBrainHealth] =
-    useState<BrainHealthResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
   const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = useMemo(
     () => buildWorkspacePreview(snapshot.lastResult, Boolean(snapshot.activeJob)),
@@ -528,14 +396,12 @@ export function App() {
         initialConfig,
         initialValidation,
         initialReadiness,
-        initialBrainHealth,
       ] =
         await Promise.all([
           invoke("app_snapshot"),
           invoke("load_engine_config"),
           invoke("validate_engine_config"),
           invoke("engine_readiness"),
-          invoke("brain_health"),
         ]);
       setWorkspaceLoadState({
         status: "loading",
@@ -549,7 +415,6 @@ export function App() {
       setCurrentConfig(initialConfig);
       setValidation(initialValidation);
       setReadiness(initialReadiness);
-      setBrainHealth(initialBrainHealth);
       setLoadedWorkspaceEnvelope(initialWorkspaceLoad.envelope);
       setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad));
 
@@ -730,14 +595,6 @@ export function App() {
     setReadiness(nextReadiness);
   };
 
-  const refreshBrainHealth = async () => {
-    const nextHealth = await invoke("brain_health", {
-      workspace_id:
-        loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
-    });
-    setBrainHealth(nextHealth);
-  };
-
   const loadProviderModels = useCallback(
     (providerId: string) =>
       invoke("get_models_for_provider", {
@@ -788,7 +645,6 @@ export function App() {
             aria-label="Back to Knowledge"
             onClick={() => {
               setActivePanel("knowledge");
-              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -802,7 +658,6 @@ export function App() {
             aria-label="Collapse sidebar"
             onClick={() => {
               setSidebarCollapsed(true);
-              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -816,7 +671,6 @@ export function App() {
             aria-label="Expand sidebar"
             onClick={() => {
               setSidebarCollapsed(false);
-              setHistoryOpen(false);
             }}
             size="icon"
             variant="ghost"
@@ -827,48 +681,22 @@ export function App() {
           </Button>
         )}
       </div>
-      <Button
-        aria-expanded={historyOpen}
-        aria-label="History"
-        title="History"
-        data-electron-no-drag
-        onClick={() => {
-          setHistoryOpen((open) => !open);
-          void refreshBrainHealth();
-        }}
-        size="icon"
-        variant="ghost"
-        className={cn(
-          "fixed top-[10px] z-50",
-          !settingsOpen && workspaceUiState.inspectorOpen ? "" : "right-12",
-          windowChromeButtonClass(),
-        )}
-        style={
-          !settingsOpen && workspaceUiState.inspectorOpen
-            ? { right: "calc(clamp(18rem, 28vw, 24rem) + 0.75rem)" }
-            : undefined
-        }
-        type="button"
-      >
-        <HistoryIcon size={14} />
-      </Button>
       {!settingsOpen && (
         <Button
           aria-expanded={workspaceUiState.inspectorOpen}
           aria-label={
             workspaceUiState.inspectorOpen
-              ? "Collapse right inspector"
-              : "Expand right inspector"
+              ? "Hide details"
+              : "Show details"
           }
           title={
             workspaceUiState.inspectorOpen
-              ? "Collapse right inspector"
-              : "Expand right inspector"
+              ? "Hide details"
+              : "Show details"
           }
           data-electron-no-drag
           onClick={() => {
             dispatchWorkspaceUi({ type: "toggle_inspector" });
-            setHistoryOpen(false);
           }}
           size="icon"
           variant="ghost"
@@ -881,12 +709,6 @@ export function App() {
             <PanelRightOpen size={14} />
           )}
         </Button>
-      )}
-      {historyOpen && (
-        <HistoryPanel
-          health={brainHealth}
-          onRefresh={refreshBrainHealth}
-        />
       )}
       {!settingsOpen && <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}

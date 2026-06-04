@@ -23,6 +23,9 @@ import { cn } from "@/lib/utils";
 import {
   ArrowUp,
   Check,
+  ExternalLink,
+  FileText,
+  FolderOpen,
   LoaderCircle,
   Maximize2,
   Plus,
@@ -150,16 +153,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
   const [agentTerminalOpen, setAgentTerminalOpen] = useState(false);
+  const [correctionsOpen, setCorrectionsOpen] = useState(false);
   const answer = liveAnswer ?? baseAnswer;
-  const hiddenConceptCount = project?.summary.hiddenConceptCount ?? 0;
-  const hiddenRelationCount = project?.summary.hiddenRelationCount ?? 0;
-  const projectionSummary =
-    hiddenConceptCount > 0 || hiddenRelationCount > 0
-      ? `${project?.nodes.filter((node) => node.kind === "concept").length ?? 0} concepts shown · ${hiddenConceptCount} hidden · ${project?.edges.length ?? 0} links shown · ${hiddenRelationCount} hidden`
-      : null;
-  const compactionSummary = project?.summary.compactionSummary ?? null;
-  const graphMaterializationSummary =
-    project?.summary.graphMaterializationSummary ?? null;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
@@ -176,15 +171,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const selectedSourcePath =
     selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
   const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
-  const selectedSourceId =
-    selectedNode?.source?.sourceId ?? selectedNode?.evidence[0]?.sourceId ?? null;
-
   useEffect(() => {
     setRenameValue(selectedNode?.canonicalName ?? "");
     setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
     setPendingCorrectionKind(null);
     setCorrectionError(null);
     setDeleteConfirmNodeId(null);
+    setCorrectionsOpen(false);
   }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
 
   useEffect(() => {
@@ -335,103 +328,84 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
         {uiState.inspectorOpen && (
           <aside
+            aria-label="Selection details"
             className="flex min-h-0 flex-col border-l border-border bg-background pt-14"
             style={{ width: "clamp(18rem, 28vw, 24rem)" }}
           >
-            <div className="border-b border-border/70 px-4 py-3">
-              <h3 className="text-sm font-semibold text-foreground">Right inspector</h3>
-              <p className="text-xs text-muted-foreground">
-                Selection detail, source provenance, and evidence stay visible
-                without leaving the graph.
-              </p>
-              {projectionSummary ? (
-                <p className="mt-2 text-xs font-medium text-muted-foreground">
-                  {projectionSummary}
-                </p>
-              ) : null}
-              {graphMaterializationSummary ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {graphMaterializationSummary}
-                </p>
-              ) : null}
-              {compactionSummary ? (
-                <p className="mt-1 text-xs text-muted-foreground">{compactionSummary}</p>
-              ) : null}
-            </div>
-
             {selectedEdge ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-                <section className="space-y-2">
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+                <section className="space-y-2 border-b border-border/70 pb-3">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline">edge</Badge>
+                    <Badge variant="outline">Connection</Badge>
                     <Badge variant="secondary">
                       {selectedEdge.edge.confidence === null
-                        ? "No confidence yet"
-                        : `${Math.round(selectedEdge.edge.confidence * 100)}% relation confidence`}
+                        ? "Evidence-backed"
+                        : `${Math.round(selectedEdge.edge.confidence * 100)}% confidence`}
                     </Badge>
                   </div>
                   <div>
-                    <h4 className="text-lg font-semibold tracking-tight">
+                    <h4 className="text-base font-semibold leading-6 tracking-tight">
                       {nodeById[selectedEdge.edge.sourceNodeId]?.label ?? selectedEdge.edge.sourceNodeId}
-                      {" -> "}
+                      {" connects to "}
                       {nodeById[selectedEdge.edge.targetNodeId]?.label ?? selectedEdge.edge.targetNodeId}
                     </h4>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
                       {selectedEdge.explanation}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
                       {selectedEdge.edge.label}
                     </span>
                     <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
-                      {selectedEdge.edge.evidenceCount} evidence refs
+                      {selectedEdge.edge.evidenceCount} evidence
                     </span>
                   </div>
                 </section>
 
-                <section className="space-y-3">
+                <section className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h5 className="text-sm font-semibold">Why HyprDuck linked these</h5>
+                    <h5 className="text-sm font-semibold">Why these are connected</h5>
                     <span className="text-xs text-muted-foreground">
-                      {selectedEdge.evidence.length} refs
+                      {selectedEdge.evidence.length} evidence
                     </span>
                   </div>
                   <div className="space-y-2">
-                    {selectedEdge.evidence.map((evidence) => (
+                    {selectedEdge.evidence.slice(0, 3).map((evidence) => (
                       <EvidenceCard
                         evidence={evidence}
                         key={evidence.id}
-                        onOpenArtifact={onOpenArtifact}
                       />
                     ))}
                   </div>
                 </section>
               </div>
             ) : selectedNode ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-                <section className="space-y-2">
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+                <section className="space-y-2 border-b border-border/70 pb-3">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline">{selectedNode.node.kind}</Badge>
+                    <Badge variant="outline">{workspaceSelectionKindLabel(selectedNode.node.kind)}</Badge>
                     <Badge variant="secondary">
                       {selectedNode.node.confidence === null
-                        ? "No confidence yet"
-                        : `${Math.round(selectedNode.node.confidence * 100)}% draft confidence`}
+                        ? "Evidence-backed"
+                        : `${Math.round(selectedNode.node.confidence * 100)}% confidence`}
                     </Badge>
                   </div>
                   <div>
-                    <h4 className="text-lg font-semibold tracking-tight">
+                    <h4 className="text-base font-semibold leading-6 tracking-tight">
                       {selectedNode.canonicalName}
                     </h4>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {selectedNode.description}
-                    </p>
+                    {customerVisibleDescription(selectedNode.description) ? (
+                      <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
+                        {customerVisibleDescription(selectedNode.description)}
+                      </p>
+                    ) : null}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     {selectedNode.aliases.map((alias) => (
                       <span
                         key={alias}
-                        className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
+                        className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground"
                       >
                         {alias}
                       </span>
@@ -442,17 +416,62 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 {selectedNode.source ||
                 selectedNode.node.kind === "source" ||
                 selectedNode.node.kind === "document" ? (
-                  <section className="space-y-3 rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
-                    <div>
-                      <h5 className="text-sm font-semibold">Source Detail</h5>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        Original source copy stays immutable. Derived markdown,
-                        evidence, and linked graph nodes stay adjacent.
-                      </p>
+                  <section className="space-y-2 rounded-lg border border-border/70 bg-muted/10 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h5 className="text-sm font-semibold">Document</h5>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {selectedNode.source?.format ? (
+                          <span className="rounded-full bg-background px-2 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
+                            {selectedNode.source.format}
+                          </span>
+                        ) : null}
+                        <Button
+                          aria-label="Open file"
+                          className="size-7 rounded-full"
+                          disabled={!selectedSourcePath}
+                          onClick={() =>
+                            void handleOpenArtifact(selectedSourcePath, false)
+                          }
+                          size="icon"
+                          title="Open file"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <ExternalLink size={14} />
+                        </Button>
+                        <Button
+                          aria-label="Open extracted text"
+                          className="size-7 rounded-full"
+                          disabled={!selectedMarkdownPath}
+                          onClick={() =>
+                            void handleOpenArtifact(selectedMarkdownPath, false)
+                          }
+                          size="icon"
+                          title="Open extracted text"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <FileText size={14} />
+                        </Button>
+                        <Button
+                          aria-label="Reveal in Finder"
+                          className="size-7 rounded-full"
+                          disabled={!selectedSourcePath}
+                          onClick={() =>
+                            void handleOpenArtifact(selectedSourcePath, true)
+                          }
+                          size="icon"
+                          title="Reveal in Finder"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <FolderOpen size={14} />
+                        </Button>
+                      </div>
                     </div>
-                    <div className="grid gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs">
+                    <div className="grid gap-1.5 text-xs">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Source file</span>
+                        <span className="text-muted-foreground">File</span>
                         <span className="truncate font-medium text-foreground">
                           {fileNameFromPath(
                             selectedNode.source?.sourcePath ??
@@ -472,103 +491,47 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                         <span className="font-medium text-foreground">
                           {selectedNode.source
                             ? `${selectedNode.source.successCount}/${selectedNode.source.pageCount} parsed`
-                            : `${selectedNode.evidence.length} evidence refs`}
+                            : `${selectedNode.evidence.length} evidence`}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Raw markdown</span>
-                        <span className="truncate font-medium text-foreground">
-                          {selectedNode.source?.markdownPath
-                            ? fileNameFromPath(selectedNode.source.markdownPath)
-                            : "Unavailable"}
-                        </span>
-                      </div>
-                      {selectedNode.source?.description ? (
-                        <div className="border-t border-border/70 pt-2">
-                          <span className="text-muted-foreground">Description</span>
-                          <p className="mt-1 leading-5 text-foreground">
-                            {selectedNode.source.description}
-                          </p>
-                        </div>
-                      ) : null}
-                      {selectedNode.source?.userContext ? (
-                        <div className="border-t border-border/70 pt-2">
-                          <span className="text-muted-foreground">User context</span>
-                          <p className="mt-1 leading-5 text-foreground">
-                            {selectedNode.source.userContext}
-                          </p>
-                        </div>
-                      ) : null}
-                      {selectedNode.source?.ingestInstruction ? (
-                        <div className="border-t border-border/70 pt-2">
-                          <span className="text-muted-foreground">Ingest instruction</span>
-                          <p className="mt-1 leading-5 text-foreground">
-                            {selectedNode.source.ingestInstruction}
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="grid gap-2">
-                      <Button
-                        disabled={!selectedSourcePath}
-                        onClick={() =>
-                          void handleOpenArtifact(selectedSourcePath, false)
-                        }
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        Open source copy
-                      </Button>
-                      <Button
-                        disabled={!selectedMarkdownPath}
-                        onClick={() =>
-                          void handleOpenArtifact(selectedMarkdownPath, false)
-                        }
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        Open raw markdown
-                      </Button>
-                      <Button
-                        disabled={!selectedSourcePath}
-                        onClick={() =>
-                          void handleOpenArtifact(selectedSourcePath, true)
-                        }
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        Reveal in Finder
-                      </Button>
                     </div>
                   </section>
                 ) : null}
 
-                <section className="space-y-3">
+                <section className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h5 className="text-sm font-semibold">Visible evidence</h5>
+                    <h5 className="text-sm font-semibold">Evidence</h5>
                     <span className="text-xs text-muted-foreground">
-                      {selectedNode.evidence.length} refs
+                      {selectedNode.evidence.length} evidence
                     </span>
                   </div>
                   <div className="space-y-2">
-                    {selectedNode.evidence.map((evidence) => (
+                    {selectedNode.evidence.slice(0, 3).map((evidence) => (
                       <EvidenceCard
                         evidence={evidence}
                         key={evidence.id}
-                        onOpenArtifact={onOpenArtifact}
                       />
                     ))}
                   </div>
                 </section>
 
                 {(selectedNode.actions ?? []).length > 0 ? (
-                  <section className="space-y-3">
-                    <h5 className="text-sm font-semibold">Correction actions</h5>
-                    <div className="grid gap-2">
-                      {(selectedNode.actions ?? []).map((action) => {
+                  <section className="space-y-2 border-t border-border/70 pt-3">
+                    <Button
+                      className="h-8 w-full justify-between px-2.5 text-xs"
+                      onClick={() => setCorrectionsOpen((open) => !open)}
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <span>Review suggestions</span>
+                      <span className="text-muted-foreground">
+                        {selectedNode.actions.length}
+                      </span>
+                    </Button>
+                    {correctionsOpen ? (
+                      <div className="grid gap-2">
+                        {(selectedNode.actions ?? []).map((action) => {
                         const disabled =
                           Boolean(action.disabledReason) || pendingCorrectionKind !== null;
 
@@ -713,8 +676,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                               </div>
                               <p className="mt-2 text-xs leading-5 text-muted-foreground">
                                 {isSourceDelete
-                                  ? "Remove this source node, the source-backed concept nodes it created, and every connected edge."
-                                  : "Remove this concept node and every connected edge."}
+                                  ? "Remove this document and the knowledge items it created."
+                                  : "Remove this knowledge item and its connected links."}
                               </p>
                             </div>
                           );
@@ -748,8 +711,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                             </p>
                           </div>
                         );
-                      })}
-                    </div>
+                        })}
+                      </div>
+                    ) : null}
                     {correctionError ? (
                       <p className="text-xs leading-5 text-destructive">{correctionError}</p>
                     ) : null}
@@ -759,14 +723,15 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 {selectedNode.node.kind !== "source" &&
                 selectedNode.node.kind !== "document" &&
                 selectedNode.evidence.some((evidence) => evidence.sourceId || evidence.sourcePath) ? (
-                  <section className="space-y-3">
-                    <h5 className="text-sm font-semibold">Source provenance</h5>
-                    <div className="flex flex-wrap gap-2">
+                  <section className="space-y-2 border-t border-border/70 pt-3">
+                    <h5 className="text-xs font-medium text-muted-foreground">From documents</h5>
+                    <div className="flex flex-wrap gap-1.5">
                       {uniqueSourceProvenance(selectedNode.evidence).map((source) => {
                         const sourceNodeId =
                           source.sourceId && sourceNodeBySourceId[source.sourceId];
                         return (
                           <Button
+                            className="h-7 max-w-full justify-start truncate px-2 text-xs"
                             disabled={!sourceNodeId}
                             key={`${source.sourceId ?? "path"}:${source.sourcePath ?? ""}`}
                             onClick={() =>
@@ -787,7 +752,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                Select a node or edge to inspect its evidence and provenance.
+                Select an item or connection to inspect its evidence.
               </div>
             )}
           </aside>
@@ -898,7 +863,7 @@ function CompactEvidenceRow(props: CompactEvidenceRowProps) {
   const { evidence, onOpenArtifact } = props;
   const primaryPath = evidence.markdownPath ?? evidence.sourcePath ?? evidence.imagePath;
   const sourceLabel = fileNameFromPath(
-    evidence.sourcePath ?? evidence.markdownPath ?? evidence.sourceId ?? "Source",
+    evidence.sourcePath ?? evidence.markdownPath ?? evidence.sourceId ?? "Document",
   );
 
   return (
@@ -917,6 +882,34 @@ function CompactEvidenceRow(props: CompactEvidenceRowProps) {
       </p>
     </button>
   );
+}
+
+function workspaceSelectionKindLabel(kind: WorkspaceProject["nodes"][number]["kind"]): string {
+  switch (kind) {
+    case "source":
+    case "document":
+      return "Document";
+    case "page":
+      return "Page";
+    case "concept":
+      return "Concept";
+    default:
+      return "Item";
+  }
+}
+
+function customerVisibleDescription(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^Node\s+\S+\s+is materialized in snapshot\b/.test(trimmed)) {
+    return null;
+  }
+  if (/\bSource refs?:\s*/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 function formatImportLifecycleTitle(status: string): string {
@@ -1308,24 +1301,16 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
 
 interface EvidenceCardProps {
   evidence: WorkspaceEvidenceRef;
-  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
 }
 
 function EvidenceCard(props: EvidenceCardProps) {
-  const { evidence, onOpenArtifact } = props;
+  const { evidence } = props;
   const imageLabel = evidence.imagePath
     ? fileNameFromPath(evidence.imagePath)
     : extractMarkdownImageLabel(evidence.snippet);
-  const artifactRows = [
-    evidence.markdownPath
-      ? { label: "Markdown", path: evidence.markdownPath }
-      : null,
-    evidence.imagePath ? { label: "Page image", path: evidence.imagePath } : null,
-    evidence.sourcePath ? { label: "Source", path: evidence.sourcePath } : null,
-  ].filter((row): row is { label: string; path: string } => Boolean(row));
 
   return (
-    <article className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
+    <article className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2.5">
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
           {evidence.pageLabel}
@@ -1334,41 +1319,15 @@ function EvidenceCard(props: EvidenceCardProps) {
             : ""}
         </span>
         <span className="truncate">
-          {fileNameFromPath(evidence.sourcePath ?? evidence.sourceId ?? "Imported source")}
+          {fileNameFromPath(evidence.sourcePath ?? evidence.sourceId ?? "Imported document")}
         </span>
       </div>
-      {evidence.provenance ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
-          {evidence.provenance}
-        </p>
-      ) : null}
-      <p className="mt-2 text-sm leading-6 text-foreground">
+      <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-foreground">
         {formatEvidenceSnippet(evidence.snippet)}
       </p>
       {imageLabel ? (
-        <div className="mt-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+        <div className="mt-2 truncate rounded-md bg-background px-2 py-1 text-xs text-muted-foreground">
           Page image: {imageLabel}
-        </div>
-      ) : null}
-      {artifactRows.length ? (
-        <div className="mt-3 grid gap-2">
-          {artifactRows.map((row) => (
-            <div
-              className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs"
-              key={`${row.label}:${row.path}`}
-            >
-              <span className="text-muted-foreground">{row.label}</span>
-              <Button
-                className="h-7 min-w-0 max-w-[11rem] justify-start truncate px-2 text-xs"
-                onClick={() => void onOpenArtifact(row.path, false)}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                {fileNameFromPath(row.path)}
-              </Button>
-            </div>
-          ))}
         </div>
       ) : null}
     </article>
