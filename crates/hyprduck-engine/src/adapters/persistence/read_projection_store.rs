@@ -18,10 +18,7 @@ use super::context_pack_store::{
     load_wiki_page_for_source, source_record_from_context_row,
 };
 use super::graph_snapshot_store::KnowledgeGraphPersistReport;
-use super::row_decode::{
-    non_empty_string, object_i64, object_optional_f32, object_string, object_string_array, row_i64,
-    row_string, row_string_array,
-};
+use super::row_decode::{non_empty_string, row_i64, row_string, row_string_array};
 use super::search_store::{
     append_graph_neighbor_hits, append_source_page_fts_hits, append_wiki_fts_hits, db_best_snippet,
     db_float_score, db_match_score, db_search_terms, evidence_graph_neighbor_counts,
@@ -269,25 +266,14 @@ pub(super) fn read_node_from_db(
     node_id: &str,
 ) -> Result<Option<ReadNodeResponseData>> {
     let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let node_value = graph
-        .get_all_nodes(None)
-        .context("failed reading GraphQLite nodes")?
+    let Some(node) = load_graph_canvas_nodes(&graph, workspace_id)?
         .into_iter()
-        .find(|node| {
-            let graphqlite::Value::Object(properties) = node else {
-                return false;
-            };
-            matches!(properties.get("id"), Some(graphqlite::Value::String(id)) if id == node_id)
-        });
-    let Some(graphqlite::Value::Object(properties)) = node_value else {
+        .find(|node| node.node_id == node_id)
+    else {
         return Ok(None);
     };
-    let row_workspace_id = object_string(&properties, "workspace_id");
-    if row_workspace_id != workspace_id {
-        return Ok(None);
-    }
-    let evidence_ids = object_string_array(&properties, "evidence_ids_json");
-    let source_ids = object_string_array(&properties, "source_ids_json");
+    let evidence_ids = node.evidence_ids.clone();
+    let source_ids = node.source_ids.clone();
     let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &evidence_ids)?;
     if evidence.is_empty() {
         for source_id in &source_ids {
@@ -299,22 +285,49 @@ pub(super) fn read_node_from_db(
             )?);
         }
     }
-    let node = BrainNodeRecord {
-        node_id: node_id.into(),
-        kind: parse_brain_node_kind(&object_string(&properties, "kind")),
-        label: object_string(&properties, "label"),
-        scope: parse_brain_scope(&object_string(&properties, "scope")),
-        aliases: object_string_array(&properties, "aliases_json"),
-        evidence_ids,
-        source_ids,
-        confidence: object_optional_f32(&properties, "confidence"),
-        updated_at: object_i64(&properties, "updated_at").max(0) as u64,
-    };
+    let relations = load_node_relations_from_db(&graph, workspace_id, node_id)?;
     Ok(Some(ReadNodeResponseData {
         node,
         evidence,
-        relations: Vec::new(),
+        relations,
     }))
+}
+
+fn load_node_relations_from_db(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Vec<BrainRelationRecord>> {
+    let mut relations = load_graph_canvas_relations(graph, workspace_id)?
+        .into_iter()
+        .filter(|relation| relation.source_node_id == node_id || relation.target_node_id == node_id)
+        .filter(|relation| {
+            relation_evidence_refs_are_eligible(graph, workspace_id, &relation.evidence_ids)
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    Ok(relations)
+}
+
+fn relation_evidence_refs_are_eligible(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_ids: &[String],
+) -> Result<bool> {
+    if evidence_ids.is_empty() {
+        return Ok(false);
+    }
+    for evidence_id in evidence_ids {
+        let Some(evidence_row) = load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
+        else {
+            continue;
+        };
+        if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[allow(dead_code)]

@@ -351,9 +351,22 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .expect("read wiki page from DB")
         .expect("wiki page");
     assert_eq!(wiki_page.page_id, "wiki-alpha");
-    let _ = store
+    let node_response = store
         .read_node_from_db("workspace-default", "node-a")
-        .expect("read node from DB");
+        .expect("read node from DB")
+        .expect("node response");
+    assert_eq!(node_response.node.node_id, "node-a");
+    assert!(node_response
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-a"));
+    assert!(node_response
+        .relations
+        .iter()
+        .all(|relation| !relation.evidence_ids.is_empty()));
+    let node_response_json =
+        serde_json::to_string(&node_response).expect("serialize node response");
+    assert!(!node_response_json.contains("/Users/hyprduck/private"));
     let (graph_nodes, graph_relations, graph_wiki_pages) = store
         .read_graph_canvas_projection_from_db("workspace-default")
         .expect("read graph canvas projection")
