@@ -68,6 +68,17 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 updated_at: 10,
             },
             BrainNodeRecord {
+                node_id: "node-embedded-path".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Project at /Users/alice/private/source.pdf".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
+            BrainNodeRecord {
                 node_id: "wiki-unsafe-alias".into(),
                 kind: BrainNodeKind::WikiPage,
                 label: "Unsafe Alias Wiki".into(),
@@ -116,6 +127,16 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_node_id: "node-a".into(),
                 target_node_id: "docs/private/unsafe-node".into(),
                 label: "docs/private/relation.md".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-embedded-path".into(),
+                kind: BrainRelationKind::Supports,
+                source_node_id: "node-a".into(),
+                target_node_id: "claim-alpha".into(),
+                label: "See C:\\Users\\alice\\Secret.pdf".into(),
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
@@ -219,8 +240,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert_eq!(
         report,
         KnowledgeGraphPersistReport {
-            node_count: 9,
-            relation_count: 4,
+            node_count: 10,
+            relation_count: 5,
         }
     );
     assert_eq!(
@@ -236,8 +257,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         KnowledgeStoreStateSummary {
             evidence_item_count: 2,
             wiki_page_count: 1,
-            graph_node_count: 9,
-            graph_relation_count: 4,
+            graph_node_count: 10,
+            graph_relation_count: 5,
         }
     );
     assert_graph_node_metadata(&store, "node-a");
@@ -314,6 +335,11 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .iter()
         .chain(graph_trail.adjacent.iter())
         .all(|record| record.id != "node-windows-path"));
+    assert!(graph_trail
+        .direct
+        .iter()
+        .chain(graph_trail.adjacent.iter())
+        .all(|record| record.id != "node-embedded-path" && record.id != "rel-embedded-path"));
     assert!(graph_trail.adjacent.iter().any(|record| {
         record.record_type == ContextPackGraphRecordKindV1::Node && record.id == "node-b"
     }));
@@ -348,6 +374,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(!context_pack_json.contains("/Users/hyprduck/private"));
     assert!(!context_pack_json.contains("docs/private"));
     assert!(!context_pack_json.contains("DOCS/PRIVATE"));
+    assert!(!context_pack_json.contains("/Users/alice"));
     assert!(!context_pack_json.contains("C:\\Users"));
     assert!(!context_pack_json.contains("../"));
     assert!(context_pack
@@ -742,8 +769,8 @@ fn assert_graph_checkpoint_metadata(store: &KnowledgeStore, workspace_id: &str) 
     assert_eq!(row.3, "event-a");
     assert_eq!(row.4, GRAPHQLITE_SCHEMA_VERSION);
     assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
-    assert_eq!(row.6, 9);
-    assert_eq!(row.7, 4);
+    assert_eq!(row.6, 10);
+    assert_eq!(row.7, 5);
     assert_eq!(row.8, 2);
     assert_eq!(row.9.len(), 64);
     assert_eq!(row.10, "hyprduck.sqlite:graphqlite");

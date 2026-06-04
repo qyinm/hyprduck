@@ -636,8 +636,10 @@ impl GraphTrailIndex {
             eligible_source_ids,
         };
 
-        for evidence_id in &index.eligible_evidence_ids {
-            for node in load_graph_trail_nodes_for_evidence(graph, workspace_id, evidence_id)? {
+        for (evidence_id, nodes) in
+            load_graph_trail_nodes_by_evidence(graph, workspace_id, &index.eligible_evidence_ids)?
+        {
+            for node in nodes {
                 if index.node_is_eligible(&node) {
                     index
                         .nodes_by_evidence
@@ -646,9 +648,13 @@ impl GraphTrailIndex {
                         .push(node);
                 }
             }
-            for link in
-                load_graph_trail_relation_links_for_evidence(graph, workspace_id, evidence_id)?
-            {
+        }
+        for (evidence_id, links) in load_graph_trail_relation_links_by_evidence(
+            graph,
+            workspace_id,
+            &index.eligible_evidence_ids,
+        )? {
+            for link in links {
                 if index.relation_is_eligible(&link.relation) {
                     index
                         .relation_links_by_evidence
@@ -1034,43 +1040,70 @@ fn push_context_pack_follow_up(
     }
 }
 
-fn load_graph_trail_nodes_for_evidence(
+fn load_graph_trail_nodes_by_evidence(
     graph: &Graph,
     workspace_id: &str,
-    evidence_id: &str,
-) -> Result<Vec<GraphTrailNode>> {
-    let node_ids = graphqlite_ids_with_text_property_like(
+    evidence_ids: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<GraphTrailNode>>> {
+    let node_ids_by_evidence = graphqlite_ids_by_text_property_refs(
         graph,
         "node_props_text",
         "node_id",
         "evidence_ids_json",
-        &graph_trail_json_ref_like_pattern(evidence_id),
+        evidence_ids,
         graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
-    let mut nodes = Vec::new();
-    for node_id in node_ids {
-        if let Some(node) = load_graph_trail_node_by_internal_id(graph, workspace_id, node_id)? {
-            nodes.push(node);
+    let mut node_cache = BTreeMap::new();
+    let mut nodes_by_evidence: BTreeMap<String, Vec<GraphTrailNode>> = BTreeMap::new();
+    for (evidence_id, node_ids) in node_ids_by_evidence {
+        let nodes = nodes_by_evidence.entry(evidence_id).or_default();
+        for node_id in node_ids {
+            if !node_cache.contains_key(&node_id) {
+                node_cache.insert(
+                    node_id,
+                    load_graph_trail_node_by_internal_id(graph, workspace_id, node_id)?,
+                );
+            }
+            if let Some(Some(node)) = node_cache.get(&node_id) {
+                nodes.push(node.clone());
+            }
         }
+        nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     }
-    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
-    Ok(nodes)
+    Ok(nodes_by_evidence)
 }
 
-fn load_graph_trail_relation_links_for_evidence(
+fn load_graph_trail_relation_links_by_evidence(
     graph: &Graph,
     workspace_id: &str,
-    evidence_id: &str,
-) -> Result<Vec<GraphTrailRelationLink>> {
-    let edge_ids = graphqlite_ids_with_text_property_like(
+    evidence_ids: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<GraphTrailRelationLink>>> {
+    let edge_ids_by_evidence = graphqlite_ids_by_text_property_refs(
         graph,
         "edge_props_text",
         "edge_id",
         "evidence_ids_json",
-        &graph_trail_json_ref_like_pattern(evidence_id),
+        evidence_ids,
         graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
-    load_graph_trail_relation_links_for_edge_ids(graph, workspace_id, edge_ids)
+    let mut link_cache = BTreeMap::new();
+    let mut links_by_evidence: BTreeMap<String, Vec<GraphTrailRelationLink>> = BTreeMap::new();
+    for (evidence_id, edge_ids) in edge_ids_by_evidence {
+        let links = links_by_evidence.entry(evidence_id).or_default();
+        for edge_id in edge_ids {
+            if !link_cache.contains_key(&edge_id) {
+                link_cache.insert(
+                    edge_id,
+                    load_graph_trail_relation_link_by_edge_id(graph, workspace_id, edge_id)?,
+                );
+            }
+            if let Some(Some(link)) = link_cache.get(&edge_id) {
+                links.push(link.clone());
+            }
+        }
+        links.sort_by(|left, right| left.relation.relation_id.cmp(&right.relation.relation_id));
+    }
+    Ok(links_by_evidence)
 }
 
 fn load_graph_trail_relation_links_for_node(
@@ -1153,46 +1186,62 @@ fn load_graph_trail_eligible_refs(
     Ok((eligible_evidence_ids, eligible_source_ids))
 }
 
-fn graph_trail_json_ref_like_pattern(ref_id: &str) -> String {
-    format!("%\"{ref_id}\"%")
-}
-
 fn graph_trail_query_limit(limit: usize) -> usize {
     limit.saturating_mul(GRAPH_TRAIL_QUERY_OVERFETCH_MULTIPLIER)
 }
 
-fn graphqlite_ids_with_text_property_like(
+fn graphqlite_ids_by_text_property_refs(
     graph: &Graph,
     table: &str,
     id_column: &str,
     key: &str,
-    pattern: &str,
+    ref_ids: &BTreeSet<String>,
     limit: usize,
-) -> Result<BTreeSet<i64>> {
+) -> Result<BTreeMap<String, BTreeSet<i64>>> {
+    if ref_ids.is_empty() || limit == 0 {
+        return Ok(BTreeMap::new());
+    }
     let Some(key_id) = graphqlite_text_property_key_id(graph, key)? else {
-        return Ok(BTreeSet::new());
+        return Ok(BTreeMap::new());
     };
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
         .prepare(&format!(
-            "SELECT {id_column}
+            "SELECT {id_column}, value
              FROM {table}
-             WHERE key_id = ?1 AND value LIKE ?2
-             ORDER BY {id_column} ASC
-             LIMIT ?3"
+             WHERE key_id = ?1
+             ORDER BY {id_column} ASC"
         ))
         .with_context(|| format!("failed preparing GraphQLite {table} lookup"))?;
     let mut rows = statement
-        .query((key_id, pattern, limit as i64))
+        .query([key_id])
         .with_context(|| format!("failed querying GraphQLite {table} lookup"))?;
-    let mut ids = BTreeSet::new();
+    let mut ids_by_ref = ref_ids
+        .iter()
+        .map(|ref_id| (ref_id.clone(), BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
     while let Some(row) = rows
         .next()
         .with_context(|| format!("failed reading GraphQLite {table} lookup row"))?
     {
-        ids.insert(row.get(0).context("read GraphQLite property owner id")?);
+        let owner_id = row.get(0).context("read GraphQLite property owner id")?;
+        let value: String = row.get(1).context("read GraphQLite property refs")?;
+        let Ok(owner_refs) = serde_json::from_str::<Vec<String>>(&value) else {
+            continue;
+        };
+        for owner_ref in owner_refs {
+            if let Some(ids) = ids_by_ref.get_mut(&owner_ref) {
+                if ids.len() < limit {
+                    ids.insert(owner_id);
+                }
+            }
+        }
+        if ids_by_ref.values().all(|ids| ids.len() >= limit) {
+            break;
+        }
     }
-    Ok(ids)
+    ids_by_ref.retain(|_, ids| !ids.is_empty());
+    Ok(ids_by_ref)
 }
 
 fn graphqlite_internal_node_id(graph: &Graph, node_id: &str) -> Result<Option<i64>> {
@@ -1367,8 +1416,9 @@ fn graph_trail_agent_text_is_safe(value: &str) -> bool {
     }
     let normalized = value.replace('\\', "/");
     let lower = normalized.to_ascii_lowercase();
-    if lower.starts_with("~/")
+    if graph_trail_text_has_home_path(&lower)
         || graph_trail_text_has_windows_absolute_path(&normalized)
+        || graph_trail_text_has_unix_absolute_path(&normalized)
         || graph_trail_text_has_forbidden_path_marker(&lower)
     {
         return false;
@@ -1380,10 +1430,51 @@ fn graph_trail_agent_text_is_safe(value: &str) -> bool {
             .all(|component| !matches!(component, Component::ParentDir))
 }
 
+fn graph_trail_text_has_home_path(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    bytes
+        .windows(2)
+        .enumerate()
+        .any(|(index, window)| window == b"~/" && graph_trail_path_token_starts_at(bytes, index))
+}
+
 fn graph_trail_text_has_windows_absolute_path(normalized: &str) -> bool {
     let bytes = normalized.as_bytes();
-    normalized.starts_with("//")
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    graph_trail_text_has_unc_path(normalized)
+        || bytes.windows(3).enumerate().any(|(index, window)| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && window[2] == b'/'
+                && graph_trail_path_token_starts_at(bytes, index)
+        })
+}
+
+fn graph_trail_text_has_unc_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window == b"//"
+            && graph_trail_path_token_starts_at(bytes, index)
+            && index
+                .checked_sub(1)
+                .map(|prev| bytes[prev] != b':')
+                .unwrap_or(true)
+    })
+}
+
+fn graph_trail_text_has_unix_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window[0] == b'/' && window[1] != b'/' && graph_trail_path_token_starts_at(bytes, index)
+    })
+}
+
+fn graph_trail_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || bytes[index - 1].is_ascii_whitespace()
+        || matches!(
+            bytes[index - 1],
+            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
+        )
 }
 
 fn graph_trail_text_has_forbidden_path_marker(lower: &str) -> bool {
@@ -1391,6 +1482,7 @@ fn graph_trail_text_has_forbidden_path_marker(lower: &str) -> bool {
         || lower.contains("docs%2fprivate")
         || lower.contains("docs%5cprivate")
         || lower.contains("file://")
+        || lower.contains("../")
         || lower.contains("%2e")
         || lower.contains("%2f")
         || lower.contains("%5c")

@@ -32,6 +32,8 @@ struct NodeRelationRow {
     source_ids: Vec<String>,
 }
 
+const READ_NODE_RELATION_LIMIT: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct RelationalEvidenceProof {
@@ -348,6 +350,7 @@ fn load_node_relations_from_db(
         .collect::<Vec<_>>();
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     relations.dedup_by(|left, right| left.relation_id == right.relation_id);
+    relations.truncate(READ_NODE_RELATION_LIMIT);
     Ok(relations)
 }
 
@@ -357,9 +360,11 @@ fn load_node_relation_rows_from_db(
     node_id: &str,
     cypher: &str,
 ) -> Result<Vec<NodeRelationRow>> {
+    let cypher =
+        format!("{cypher}\n ORDER BY r.relation_id ASC\n LIMIT {READ_NODE_RELATION_LIMIT}");
     let rows = graph
         .connection()
-        .cypher_builder(cypher)
+        .cypher_builder(&cypher)
         .param("workspace_id", workspace_id)
         .param("node_id", node_id)
         .run()
