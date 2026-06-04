@@ -854,6 +854,85 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .iter()
         .any(|node| node["nodeId"] == "concept-mcp-agent-patch"));
 
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 35,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP source evidence",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let graph_trail_context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_trail_context_pack_tool["result"]["isError"], false,
+        "{graph_trail_context_pack_tool:#?}"
+    );
+    let text = graph_trail_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph trail context pack text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains("provider-graph-candidates"));
+    assert!(!text.contains("provider-graph-source-raw-merged"));
+    assert!(!text.contains("docs/private"));
+    assert!(!text.contains("../"));
+    let graph_trail_payload: Value =
+        serde_json::from_str(text).expect("graph trail context pack payload");
+    assert_eq!(
+        graph_trail_payload["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        graph_trail_payload["contextPackV1"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        graph_trail_payload["contextPackV0"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    assert!(graph_trail_payload["contextPackV0"]["selectedEvidence"]
+        .as_array()
+        .expect("v0 selected evidence")
+        .iter()
+        .all(|evidence| evidence.get("graphTrail").is_none()));
+    let selected_evidence = graph_trail_payload["contextPackV1"]["selectedEvidence"]
+        .as_array()
+        .expect("v1 selected evidence");
+    let graph_linked_evidence = selected_evidence
+        .iter()
+        .find(|evidence| evidence.get("graphTrail").is_some())
+        .expect("graph-linked evidence");
+    let graph_trail = graph_linked_evidence
+        .get("graphTrail")
+        .expect("graph trail");
+    assert!(graph_trail["direct"]
+        .as_array()
+        .expect("direct graph records")
+        .iter()
+        .any(|record| record["id"] == "concept-mcp-agent-patch"));
+    let follow_up = graph_trail["followUp"]
+        .as_array()
+        .expect("graph follow-up handles");
+    assert!(follow_up.iter().any(|handle| {
+        handle["tool"] == "read_node"
+            && handle["handleType"] == "node"
+            && handle["arguments"]["nodeId"] == "concept-mcp-agent-patch"
+    }));
+    assert!(follow_up.iter().any(|handle| {
+        handle["tool"] == "read_page_evidence"
+            && handle["handleType"] == "page_evidence"
+            && handle["arguments"]["sourceId"] == "source-mcp"
+            && handle["arguments"]["page"] == 1
+    }));
+
     drop(stdin);
     let status = child.wait().expect("server exit");
     assert!(status.success());
