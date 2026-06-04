@@ -1,4 +1,8 @@
 use crate::*;
+use std::path::{Component, Path};
+
+const READ_NODE_FALLBACK_EVIDENCE_LIMIT: usize = 32;
+const READ_NODE_FALLBACK_RELATION_LIMIT: usize = 64;
 
 pub(crate) fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchBrainResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
@@ -371,6 +375,7 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .evidence
         .iter()
         .filter(|evidence| evidence_ids.contains(&evidence.id))
+        .take(READ_NODE_FALLBACK_EVIDENCE_LIMIT)
         .cloned()
         .collect();
     let relations = reader
@@ -380,6 +385,8 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .filter(|relation| {
             relation.source_node_id == node.node_id || relation.target_node_id == node.node_id
         })
+        .filter(|relation| read_node_fallback_relation_is_agent_safe(relation))
+        .take(READ_NODE_FALLBACK_RELATION_LIMIT)
         .cloned()
         .collect();
     Ok(ReadNodeResponseData {
@@ -387,6 +394,93 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         evidence,
         relations,
     })
+}
+
+fn read_node_fallback_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
+    read_node_fallback_text_is_safe(&relation.relation_id)
+        && read_node_fallback_text_is_safe(&relation.label)
+        && read_node_fallback_text_is_safe(&relation.source_node_id)
+        && read_node_fallback_text_is_safe(&relation.target_node_id)
+}
+
+fn read_node_fallback_text_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let normalized = value.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if read_node_fallback_text_has_home_path(&lower)
+        || read_node_fallback_text_has_windows_absolute_path(&normalized)
+        || read_node_fallback_text_has_unix_absolute_path(&normalized)
+        || read_node_fallback_text_has_forbidden_path_marker(&lower)
+    {
+        return false;
+    }
+    let path = Path::new(&normalized);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
+}
+
+fn read_node_fallback_text_has_home_path(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window == b"~/" && read_node_fallback_path_token_starts_at(bytes, index)
+    })
+}
+
+fn read_node_fallback_text_has_windows_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    read_node_fallback_text_has_unc_path(normalized)
+        || bytes.windows(3).enumerate().any(|(index, window)| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && window[2] == b'/'
+                && read_node_fallback_path_token_starts_at(bytes, index)
+        })
+}
+
+fn read_node_fallback_text_has_unc_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window == b"//"
+            && read_node_fallback_path_token_starts_at(bytes, index)
+            && index
+                .checked_sub(1)
+                .map(|prev| bytes[prev] != b':')
+                .unwrap_or(true)
+    })
+}
+
+fn read_node_fallback_text_has_unix_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window[0] == b'/'
+            && window[1] != b'/'
+            && read_node_fallback_path_token_starts_at(bytes, index)
+    })
+}
+
+fn read_node_fallback_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || bytes[index - 1].is_ascii_whitespace()
+        || matches!(
+            bytes[index - 1],
+            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
+        )
+}
+
+fn read_node_fallback_text_has_forbidden_path_marker(lower: &str) -> bool {
+    lower.contains("docs/private")
+        || lower.contains("docs%2fprivate")
+        || lower.contains("docs%5cprivate")
+        || lower.contains("file://")
+        || lower.contains("../")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
 }
 
 pub(crate) fn handle_read_recent_events(
