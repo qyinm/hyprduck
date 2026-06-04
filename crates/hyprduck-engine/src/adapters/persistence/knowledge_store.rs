@@ -901,7 +901,9 @@ fn build_context_pack_graph_trail(
             .iter()
             .flat_map(|link| [&link.source, &link.target]),
     ) {
-        push_follow_up_for_graph_node(node, &mut follow_up, &mut follow_up_keys);
+        if graph_trail_index.node_is_eligible(node) {
+            push_follow_up_for_graph_node(node, &mut follow_up, &mut follow_up_keys);
+        }
     }
 
     Ok(Some(ContextPackGraphTrailV1 {
@@ -1045,11 +1047,10 @@ fn load_graph_trail_nodes_by_evidence(
     workspace_id: &str,
     evidence_ids: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<GraphTrailNode>>> {
-    let node_ids_by_evidence = graphqlite_ids_by_text_property_refs(
+    let node_ids_by_evidence = graphqlite_ids_by_evidence_index(
         graph,
-        "node_props_text",
-        "node_id",
-        "evidence_ids_json",
+        workspace_id,
+        "node",
         evidence_ids,
         graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
@@ -1078,11 +1079,10 @@ fn load_graph_trail_relation_links_by_evidence(
     workspace_id: &str,
     evidence_ids: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<GraphTrailRelationLink>>> {
-    let edge_ids_by_evidence = graphqlite_ids_by_text_property_refs(
+    let edge_ids_by_evidence = graphqlite_ids_by_evidence_index(
         graph,
-        "edge_props_text",
-        "edge_id",
-        "evidence_ids_json",
+        workspace_id,
+        "edge",
         evidence_ids,
         graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
@@ -1190,54 +1190,47 @@ fn graph_trail_query_limit(limit: usize) -> usize {
     limit.saturating_mul(GRAPH_TRAIL_QUERY_OVERFETCH_MULTIPLIER)
 }
 
-fn graphqlite_ids_by_text_property_refs(
+fn graphqlite_ids_by_evidence_index(
     graph: &Graph,
-    table: &str,
-    id_column: &str,
-    key: &str,
+    workspace_id: &str,
+    record_kind: &str,
     ref_ids: &BTreeSet<String>,
     limit: usize,
 ) -> Result<BTreeMap<String, BTreeSet<i64>>> {
     if ref_ids.is_empty() || limit == 0 {
         return Ok(BTreeMap::new());
     }
-    let Some(key_id) = graphqlite_text_property_key_id(graph, key)? else {
-        return Ok(BTreeMap::new());
-    };
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
-        .prepare(&format!(
-            "SELECT {id_column}, value
-             FROM {table}
-             WHERE key_id = ?1
-             ORDER BY {id_column} ASC"
-        ))
-        .with_context(|| format!("failed preparing GraphQLite {table} lookup"))?;
-    let mut rows = statement
-        .query([key_id])
-        .with_context(|| format!("failed querying GraphQLite {table} lookup"))?;
+        .prepare(
+            "SELECT record_internal_id
+             FROM graph_evidence_record_index
+             WHERE workspace_id = ?1
+               AND evidence_id = ?2
+               AND record_kind = ?3
+             ORDER BY record_internal_id ASC
+             LIMIT ?4",
+        )
+        .context("failed preparing graph evidence record index lookup")?;
     let mut ids_by_ref = ref_ids
         .iter()
         .map(|ref_id| (ref_id.clone(), BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
-    while let Some(row) = rows
-        .next()
-        .with_context(|| format!("failed reading GraphQLite {table} lookup row"))?
-    {
-        let owner_id = row.get(0).context("read GraphQLite property owner id")?;
-        let value: String = row.get(1).context("read GraphQLite property refs")?;
-        let Ok(owner_refs) = serde_json::from_str::<Vec<String>>(&value) else {
-            continue;
-        };
-        for owner_ref in owner_refs {
-            if let Some(ids) = ids_by_ref.get_mut(&owner_ref) {
-                if ids.len() < limit {
-                    ids.insert(owner_id);
-                }
-            }
-        }
-        if ids_by_ref.values().all(|ids| ids.len() >= limit) {
-            break;
+    for ref_id in ref_ids {
+        let mut rows = statement
+            .query((workspace_id, ref_id.as_str(), record_kind, limit as i64))
+            .with_context(|| format!("failed querying graph {record_kind} evidence index"))?;
+        while let Some(row) = rows
+            .next()
+            .with_context(|| format!("failed reading graph {record_kind} evidence index row"))?
+        {
+            let record_internal_id = row
+                .get(0)
+                .context("read graph evidence record internal id")?;
+            ids_by_ref
+                .entry(ref_id.clone())
+                .or_default()
+                .insert(record_internal_id);
         }
     }
     ids_by_ref.retain(|_, ids| !ids.is_empty());
@@ -1505,6 +1498,14 @@ fn is_safe_agent_wiki_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     let lower = normalized.to_ascii_lowercase();
     if !lower.starts_with("wiki/") || graph_trail_text_has_forbidden_path_marker(&lower) {
+        return false;
+    }
+    let path_after_prefix = &normalized["wiki/".len()..];
+    let lower_after_prefix = &lower["wiki/".len()..];
+    if graph_trail_text_has_home_path(lower_after_prefix)
+        || graph_trail_text_has_windows_absolute_path(path_after_prefix)
+        || graph_trail_text_has_unix_absolute_path(path_after_prefix)
+    {
         return false;
     }
     let path = Path::new(&normalized);

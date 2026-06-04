@@ -268,6 +268,16 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
 
+        CREATE TABLE IF NOT EXISTS graph_evidence_record_index (
+            workspace_id TEXT NOT NULL,
+            evidence_id TEXT NOT NULL,
+            record_kind TEXT NOT NULL,
+            record_internal_id INTEGER NOT NULL,
+            PRIMARY KEY (workspace_id, evidence_id, record_kind, record_internal_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_graph_evidence_record_index_lookup
+            ON graph_evidence_record_index(workspace_id, evidence_id, record_kind, record_internal_id);
+
         CREATE TABLE IF NOT EXISTS context_pack_exports (
             pack_id TEXT NOT NULL,
             workspace_id TEXT NOT NULL,

@@ -83,7 +83,12 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 kind: BrainNodeKind::WikiPage,
                 label: "Unsafe Alias Wiki".into(),
                 scope: BrainScope::Project,
-                aliases: vec!["wiki/DOCS/PRIVATE/roadmap.md".into()],
+                aliases: vec![
+                    "wiki/DOCS/PRIVATE/roadmap.md".into(),
+                    "wiki/~/secret.md".into(),
+                    "wiki/C:/Users/alice/Secret.pdf".into(),
+                    "wiki//server/share.md".into(),
+                ],
                 evidence_ids: vec!["evidence-a".into()],
                 source_ids: vec!["source-a".into()],
                 confidence: None,
@@ -137,6 +142,16 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_node_id: "node-a".into(),
                 target_node_id: "claim-alpha".into(),
                 label: "See C:\\Users\\alice\\Secret.pdf".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-safe-to-unsafe".into(),
+                kind: BrainRelationKind::Mentions,
+                source_node_id: "node-a".into(),
+                target_node_id: "node-embedded-path".into(),
+                label: "mentions".into(),
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
@@ -241,7 +256,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         report,
         KnowledgeGraphPersistReport {
             node_count: 10,
-            relation_count: 5,
+            relation_count: 6,
         }
     );
     assert_eq!(
@@ -258,7 +273,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
             evidence_item_count: 2,
             wiki_page_count: 1,
             graph_node_count: 10,
-            graph_relation_count: 5,
+            graph_relation_count: 6,
         }
     );
     assert_graph_node_metadata(&store, "node-a");
@@ -349,8 +364,19 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
             && matches!(
                 &follow_up.arguments,
                 ContextPackGraphFollowUpArgumentsV1::ReadNode(arguments)
-                    if arguments.node_id == "node-a"
+                    if arguments.node_id != "node-embedded-path"
+                        && arguments.node_id != "node-windows-path"
+                        && !arguments.node_id.contains("docs/private")
             )
+    }));
+    assert!(graph_trail.follow_up.iter().all(|follow_up| {
+        !matches!(
+            &follow_up.arguments,
+            ContextPackGraphFollowUpArgumentsV1::ReadNode(arguments)
+                if arguments.node_id == "node-embedded-path"
+                    || arguments.node_id == "node-windows-path"
+                    || arguments.node_id.contains("docs/private")
+        )
     }));
     assert!(graph_trail.follow_up.iter().any(|follow_up| {
         follow_up.tool == ContextPackGraphFollowUpToolV1::ReadPageEvidence
@@ -376,7 +402,11 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(!context_pack_json.contains("DOCS/PRIVATE"));
     assert!(!context_pack_json.contains("/Users/alice"));
     assert!(!context_pack_json.contains("C:\\Users"));
+    assert!(!context_pack_json.contains("wiki/~/"));
+    assert!(!context_pack_json.contains("wiki/C:/"));
+    assert!(!context_pack_json.contains("wiki//server"));
     assert!(!context_pack_json.contains("../"));
+    assert!(context_pack_json.contains("rel-safe-to-unsafe"));
     assert!(context_pack
         .retrieval_trace
         .evidence_type_trace
@@ -770,7 +800,7 @@ fn assert_graph_checkpoint_metadata(store: &KnowledgeStore, workspace_id: &str) 
     assert_eq!(row.4, GRAPHQLITE_SCHEMA_VERSION);
     assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
     assert_eq!(row.6, 10);
-    assert_eq!(row.7, 5);
+    assert_eq!(row.7, 6);
     assert_eq!(row.8, 2);
     assert_eq!(row.9.len(), 64);
     assert_eq!(row.10, "hyprduck.sqlite:graphqlite");

@@ -33,6 +33,7 @@ struct NodeRelationRow {
 }
 
 const READ_NODE_RELATION_LIMIT: usize = 64;
+const READ_NODE_EVIDENCE_LIMIT: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -280,17 +281,27 @@ pub(super) fn read_node_from_db(
     };
     let evidence_ids = node.evidence_ids.clone();
     let source_ids = node.source_ids.clone();
-    let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &evidence_ids)?;
+    let limited_evidence_ids = evidence_ids
+        .iter()
+        .take(READ_NODE_EVIDENCE_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &limited_evidence_ids)?;
     if evidence.is_empty() {
         for source_id in &source_ids {
+            if evidence.len() >= READ_NODE_EVIDENCE_LIMIT {
+                break;
+            }
+            let remaining = READ_NODE_EVIDENCE_LIMIT - evidence.len();
             evidence.extend(load_evidence_refs_for_source(
                 &graph,
                 workspace_id,
                 source_id,
-                None,
+                Some(remaining as i64),
             )?);
         }
     }
+    evidence.truncate(READ_NODE_EVIDENCE_LIMIT);
     let relations = load_node_relations_from_db(&graph, workspace_id, node_id)?;
     Ok(Some(ReadNodeResponseData {
         node,

@@ -96,7 +96,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
 | `read_page_evidence` | `sourceId` | Read source evidence refs, optionally narrowed by 1-based `page`. |
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
-| `read_node` | `nodeId` | Read a graph node with evidence and up to 64 adjacent relations. |
+| `read_node` | `nodeId` | Read a graph node with up to 32 evidence refs and 64 adjacent relations. |
 | `read_recent_events` | none | Read append-only document context event history. |
 | `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
