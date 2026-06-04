@@ -54,5 +54,6 @@ apps/desktop/resources/binaries/
 docs/private
 docs/plans
 docs/dogfood-reports/
+docs/brainstorms
 dogfood-output/
 .codex/*
