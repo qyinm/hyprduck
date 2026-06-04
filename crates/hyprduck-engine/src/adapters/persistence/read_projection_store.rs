@@ -10,7 +10,7 @@ use hyprduck_engine_types::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::context_pack_store::{
     db_parse_confidence, evidence_snippet_from_ids, load_context_pack_evidence_row,
@@ -349,6 +349,7 @@ fn load_node_relations_from_db(
         load_node_relation_eligible_refs(graph, workspace_id, &relation_rows)?;
     let mut relations = relation_rows
         .into_iter()
+        .filter(|row| read_node_relation_is_agent_safe(&row.relation))
         .filter(|row| {
             relation_refs_are_eligible(
                 &eligible_evidence_ids,
@@ -363,6 +364,92 @@ fn load_node_relations_from_db(
     relations.dedup_by(|left, right| left.relation_id == right.relation_id);
     relations.truncate(READ_NODE_RELATION_LIMIT);
     Ok(relations)
+}
+
+fn read_node_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
+    read_node_agent_text_is_safe(&relation.relation_id)
+        && read_node_agent_text_is_safe(&relation.label)
+        && read_node_agent_text_is_safe(&relation.source_node_id)
+        && read_node_agent_text_is_safe(&relation.target_node_id)
+}
+
+fn read_node_agent_text_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let normalized = value.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if read_node_text_has_home_path(&lower)
+        || read_node_text_has_windows_absolute_path(&normalized)
+        || read_node_text_has_unix_absolute_path(&normalized)
+        || read_node_text_has_forbidden_path_marker(&lower)
+    {
+        return false;
+    }
+    let path = Path::new(&normalized);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
+}
+
+fn read_node_text_has_home_path(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    bytes
+        .windows(2)
+        .enumerate()
+        .any(|(index, window)| window == b"~/" && read_node_path_token_starts_at(bytes, index))
+}
+
+fn read_node_text_has_windows_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    read_node_text_has_unc_path(normalized)
+        || bytes.windows(3).enumerate().any(|(index, window)| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && window[2] == b'/'
+                && read_node_path_token_starts_at(bytes, index)
+        })
+}
+
+fn read_node_text_has_unc_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window == b"//"
+            && read_node_path_token_starts_at(bytes, index)
+            && index
+                .checked_sub(1)
+                .map(|prev| bytes[prev] != b':')
+                .unwrap_or(true)
+    })
+}
+
+fn read_node_text_has_unix_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window[0] == b'/' && window[1] != b'/' && read_node_path_token_starts_at(bytes, index)
+    })
+}
+
+fn read_node_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || bytes[index - 1].is_ascii_whitespace()
+        || matches!(
+            bytes[index - 1],
+            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
+        )
+}
+
+fn read_node_text_has_forbidden_path_marker(lower: &str) -> bool {
+    lower.contains("docs/private")
+        || lower.contains("docs%2fprivate")
+        || lower.contains("docs%5cprivate")
+        || lower.contains("file://")
+        || lower.contains("../")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
 }
 
 fn load_node_relation_rows_from_db(

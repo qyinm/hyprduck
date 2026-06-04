@@ -479,9 +479,18 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .relations
         .iter()
         .all(|relation| !relation.evidence_ids.is_empty()));
+    assert!(node_response.relations.iter().all(|relation| {
+        relation.relation_id != "docs/private/rel"
+            && relation.relation_id != "rel-embedded-path"
+            && !relation.source_node_id.contains("docs/private")
+            && !relation.target_node_id.contains("docs/private")
+    }));
     let node_response_json =
         serde_json::to_string(&node_response).expect("serialize node response");
     assert!(!node_response_json.contains("/Users/hyprduck/private"));
+    assert!(!node_response_json.contains("docs/private"));
+    assert!(!node_response_json.contains("/Users/alice"));
+    assert!(!node_response_json.contains("C:\\Users"));
     let (graph_nodes, graph_relations, graph_wiki_pages) = store
         .read_graph_canvas_projection_from_db("workspace-default")
         .expect("read graph canvas projection")
