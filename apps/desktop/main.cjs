@@ -14,7 +14,6 @@ const {
 const { AgentTerminalSessionManager } = require("./main/agent-terminal-sessions.cjs");
 const { DisabledAgentTerminalBackend } = require("./main/agent-terminal-backend.cjs");
 const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-ghostty.cjs");
-const { tryCreatePtyAgentTerminalBackend } = require("./main/agent-terminal-pty.cjs");
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
@@ -110,17 +109,16 @@ app.on("will-quit", () => {
 
 async function registerIpcHandlers() {
   const ghosttyProbe = await createGhosttyNativeBackendFromEnv();
-  const ptyProbe = ghosttyProbe.backend
-    ? { backend: null, reason: null }
-    : tryCreatePtyAgentTerminalBackend();
-  const fallbackBackend =
-    (ghosttyProbe.enabled && ghosttyProbe.reason) || ptyProbe.reason
-      ? new DisabledAgentTerminalBackend({
-          reason: ghosttyProbe.enabled ? ghosttyProbe.reason : ptyProbe.reason,
-        })
-      : undefined;
+  const fallbackBackend = ghosttyProbe.enabled
+    ? new DisabledAgentTerminalBackend({
+        reason: ghosttyProbe.reason ?? "Ghostty native backend is unavailable.",
+      })
+    : new DisabledAgentTerminalBackend({
+        reason:
+          "Agent terminal backend is disabled in packaged builds until native PTY startup loading is isolated.",
+      });
   agentTerminalSessions = new AgentTerminalSessionManager({
-    backend: ghosttyProbe.backend ?? ptyProbe.backend ?? fallbackBackend,
+    backend: ghosttyProbe.backend ?? fallbackBackend,
     getWorkspaceState: () => ({
       workspaceId: snapshot.lastWorkspaceId ?? "default",
       projectId: snapshot.lastProjectId ?? null,
