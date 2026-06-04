@@ -2,10 +2,6 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-const historyPanelSource = appSource.slice(
-  appSource.indexOf("function HistoryPanel"),
-  appSource.indexOf("function formatEventType"),
-);
 const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
@@ -39,7 +35,7 @@ test("app shell exposes only Knowledge and Settings as primary destinations", ()
   expect(appSource).toMatch(/label: "Knowledge"/);
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
-  expect(appSource).toMatch(/History/);
+  expect(appSource).not.toMatch(/History/);
 });
 
 test("app shell exposes fixed window chrome independent of sidebar", () => {
@@ -48,28 +44,21 @@ test("app shell exposes fixed window chrome independent of sidebar", () => {
   expect(appSource).toMatch(/native titlebar area stays empty/);
   expect(appSource).toMatch(/windowChromeButtonClass/);
   expect(appSource).toMatch(/data-electron-no-drag/);
-  expect(appSource).toMatch(/setHistoryOpen\(\(open\) => !open\)/);
   expect(appSource).toMatch(/setSidebarCollapsed\(true\)/);
   expect(appSource).toMatch(/setSidebarCollapsed\(false\)/);
   expect(stylesSource).toMatch(/\[data-electron-no-drag\]/);
   expect(appSource).not.toMatch(/className=\"size-7\"/);
 });
 
-test("History panel exposes recent activity without graph review controls", () => {
-  expect(appSource).toMatch(/HistoryPanel/);
-  expect(historyPanelSource).toMatch(/aria-label="History"/);
-  expect(historyPanelSource).toMatch(/w-\[min\(26rem,calc\(100vw-1\.5rem\)\)\]/);
-  expect(historyPanelSource).toMatch(/max-h-\[min\(24rem,calc\(100vh-4rem\)\)\]/);
-  expect(historyPanelSource).toMatch(/Recent activity/);
-  expect(historyPanelSource).toMatch(/recentEvents\.filter\(isHistoryActivityEvent\)/);
-  expect(historyPanelSource).not.toMatch(/recentEvents\.map/);
-  expect(historyPanelSource).not.toMatch(/Pending changes/);
-  expect(historyPanelSource).not.toMatch(/Review Queue/);
-  expect(historyPanelSource).not.toMatch(/aria-label=\{`Accept \$\{item\.title\}`\}/);
-  expect(historyPanelSource).not.toMatch(/aria-label=\{`Reject \$\{item\.title\}`\}/);
-  expect(appSource).not.toMatch(/brainHealth && brainHealth\.attentionCount > 0/);
+test("app shell removes the History surface from the titlebar", () => {
+  expect(appSource).not.toMatch(/HistoryPanel/);
+  expect(appSource).not.toMatch(/aria-label="History"/);
+  expect(appSource).not.toMatch(/Recent activity/);
+  expect(appSource).not.toMatch(/setHistoryOpen/);
+  expect(appSource).not.toMatch(/brain_health/);
+  expect(appSource).not.toMatch(/Pending changes/);
+  expect(appSource).not.toMatch(/Review Queue/);
   expect(appSource).not.toMatch(/Change proposed|Change resolved/);
-  expect(historyPanelSource).toMatch(/formatEventType/);
 });
 
 test("desktop visual tokens follow DESIGN.md restraint", () => {
@@ -77,6 +66,25 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
   expect(stylesSource).not.toMatch(/0\.55 0\.28 300/);
   expect(stylesSource).not.toMatch(/fontsource-variable\/geist/);
   expect(graphSource).not.toMatch(/teal|gradient/);
+});
+
+test("settings page hides debug readiness internals", () => {
+  expect(settingsSource).toMatch(/AI model/);
+  expect(settingsSource).toMatch(/Connections/);
+  expect(settingsSource).toMatch(/UI language/);
+  expect(settingsSource).toMatch(/English/);
+  expect(settingsSource).toMatch(/한국어/);
+  expect(settingsSource).toMatch(/日本語/);
+  expect(settingsSource).toMatch(/onRefreshReadiness/);
+  expect(settingsSource).toMatch(/Refresh/);
+  expect(settingsSource).toMatch(/export type SettingsTab = "general" \| "ai"/);
+  expect(appSource).toMatch(/label: "General"/);
+  expect(settingsSource).not.toMatch(/<Label htmlFor="prompt-template-select">/);
+  expect(settingsSource).not.toMatch(/Configure prompt templates and output behavior/);
+  expect(settingsSource).not.toMatch(/Document processing/);
+  expect(settingsSource).not.toMatch(/Runtime readiness/);
+  expect(settingsSource).not.toMatch(/\(readiness\?\.checks \?\? \[\]\)\.map/);
+  expect(settingsSource).not.toMatch(/check\.message/);
 });
 
 test("Knowledge empty state focuses first users on importing source files", () => {
@@ -120,14 +128,21 @@ test("Knowledge workspace keeps the graph canvas and removes onboarding checklis
 test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
   expect(graphSource).toMatch(/GraphPromptComposer/);
-  expect(graphSource).toMatch(/Source Detail/);
-  expect(graphSource).toMatch(/Source file/);
-  expect(graphSource).toMatch(/Raw markdown/);
-  expect(graphSource).toMatch(/Open source copy/);
-  expect(graphSource).toMatch(/Open raw markdown/);
-  expect(graphSource).toMatch(/Reveal in Finder/);
-  expect(graphSource).toMatch(/Right inspector/);
-  expect(graphSource).toMatch(/without leaving the graph/);
+  expect(graphSource).toMatch(/Document/);
+  expect(graphSource).toMatch(/File/);
+  expect(graphSource).toMatch(/aria-label="Open file"/);
+  expect(graphSource).toMatch(/aria-label="Open extracted text"/);
+  expect(graphSource).toMatch(/aria-label="Reveal in Finder"/);
+  expect(graphSource).toMatch(/ExternalLink/);
+  expect(graphSource).toMatch(/FileText/);
+  expect(graphSource).toMatch(/FolderOpen/);
+  expect(graphSource).toMatch(/Review suggestions/);
+  expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
+  expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
+  expect(graphSource).toMatch(/customerVisibleDescription/);
+  expect(graphSource).not.toMatch(/<Badge variant="outline">\{selectedNode\.node\.kind\}<\/Badge>/);
+  expect(graphSource).not.toMatch(/graphMaterializationSummary/);
+  expect(graphSource).not.toMatch(/projectionSummary/);
 });
 
 test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
@@ -268,14 +283,14 @@ test("graph import banner names citation-ready and context-ready states", () => 
 });
 
 test("MCP docs describe import lifecycle states", () => {
-  const mcpDocs = readFileSync(new URL("../../../docs/mcp-client-setup.md", import.meta.url), "utf8");
+  const mcpDocs = readFileSync(new URL("../../../docs/mcp.md", import.meta.url), "utf8");
   const agentMcpDocs = readFileSync(
     new URL("../../../docs/agents/mcp-client-setup.md", import.meta.url),
     "utf8",
   );
   const docs = `${mcpDocs}\n${agentMcpDocs}`;
 
-  expect(docs).toMatch(/imported -> parsing -> packaging -> citation_ready -> context_ready -> failed/);
+  expect(docs).toMatch(/imported -> parsing -> packaging -> citation_ready -> context_ready/);
   expect(docs).toMatch(/citation_ready/);
   expect(docs).toMatch(/context_ready/);
   expect(docs).not.toMatch(/poll `import_status` until the job is completed/);

@@ -1,9 +1,5 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-06-02 10:08 KST
-**Commit:** 2908c8b
-**Branch:** main
-
 ## OVERVIEW
 
 HyprDuck compiles private documents into reusable, cited local context packs for coding agents. The active stack is an Electron desktop shell in `apps/desktop`, a Rust engine/CLI workspace in `crates/`, local SQLite + GraphQLite knowledge storage, and MCP as the agent workflow surface.
@@ -110,3 +106,4 @@ HyprDuck/
 - Canonical build, test, run, and just aliases live in `docs/agents/commands.md`.
 - The public site has a GitHub Pages workflow; desktop packaging is local-script driven.
 - `docs/private/` may exist in local checkouts but must not leak into public-facing artifacts.
+- Never force-add or commit files ignored by `.gitignore`.
