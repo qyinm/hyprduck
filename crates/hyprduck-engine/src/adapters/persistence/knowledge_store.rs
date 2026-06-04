@@ -9,14 +9,18 @@ use hyprduck_engine_types::{
 use hyprduck_engine_types::{
     BrainContextPack, BrainEvent, BrainNodeRecord, BrainRelationRecord, BrainRepoSnapshot,
     BrainSearchResult, ContextPackArtifactMetadataV0, ContextPackEvidenceMetadataV0,
-    ContextPackSourceMetadataV0, ContextPackV1, EvidenceRef, GraphSnapshotSourceRecord,
-    ImportJobRecord, KnowledgeProject, ReadNodeResponseData, ReadPageEvidenceResponseData,
-    ReadSourceResponseData, SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus,
-    WikiPage,
+    ContextPackEvidenceV1, ContextPackGraphFollowUpArgumentsV1, ContextPackGraphFollowUpToolV1,
+    ContextPackGraphFollowUpV1, ContextPackGraphHandleTypeV1, ContextPackGraphReadNodeArgumentsV1,
+    ContextPackGraphReadPageEvidenceArgumentsV1, ContextPackGraphReadSourceArgumentsV1,
+    ContextPackGraphReadWikiPageArgumentsV1, ContextPackGraphRecordKindV1,
+    ContextPackGraphRecordV1, ContextPackGraphTrailV1, ContextPackSourceMetadataV0, ContextPackV1,
+    EvidenceRef, GraphSnapshotSourceRecord, ImportJobRecord, KnowledgeProject,
+    ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
+    SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(test)]
 use super::agent_write_store::load_brain_event_operation;
@@ -43,7 +47,7 @@ use super::read_projection_store::{
     read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof, search_brain_from_db,
     RelationalEvidenceProof,
 };
-use super::row_decode::non_empty_string;
+use super::row_decode::{non_empty_string, row_string, row_string_array};
 use super::schema_store::{
     count_rows_for_workspace, ensure_schema, schema_version, validate_graphqlite_gate,
     GraphqliteGateReport, KnowledgeStoreHealth, KnowledgeStoreStateSummary, KNOWLEDGE_DB_FILE_NAME,
@@ -461,6 +465,7 @@ impl KnowledgeStore {
             &artifact_metadata,
         );
         context_pack.retrieval_trace.strategy = "sqlite-graphqlite-fts5-hybrid".into();
+        attach_context_pack_graph_trails(&graph, workspace_id, &mut context_pack)?;
         Ok(context_pack)
     }
 
@@ -555,6 +560,586 @@ impl KnowledgeStore {
     ) -> Result<KnowledgeGraphPersistReport> {
         graph_snapshot_counts(&self.path, workspace_id)
     }
+}
+
+const GRAPH_TRAIL_DIRECT_LIMIT: usize = 8;
+const GRAPH_TRAIL_ADJACENT_LIMIT: usize = 8;
+const GRAPH_TRAIL_FOLLOW_UP_LIMIT: usize = 8;
+
+#[derive(Debug, Clone)]
+struct GraphTrailNode {
+    node_id: String,
+    kind: String,
+    label: String,
+    aliases: Vec<String>,
+    evidence_ids: Vec<String>,
+    source_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GraphTrailRelation {
+    relation_id: String,
+    label: String,
+    evidence_ids: Vec<String>,
+    source_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GraphTrailRelationLink {
+    relation: GraphTrailRelation,
+    source: GraphTrailNode,
+    target: GraphTrailNode,
+}
+
+fn attach_context_pack_graph_trails(
+    graph: &Graph,
+    workspace_id: &str,
+    context_pack: &mut ContextPackV1,
+) -> Result<()> {
+    for evidence in &mut context_pack.selected_evidence {
+        evidence.graph_trail = build_context_pack_graph_trail(graph, workspace_id, evidence)?;
+    }
+    Ok(())
+}
+
+fn build_context_pack_graph_trail(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence: &ContextPackEvidenceV1,
+) -> Result<Option<ContextPackGraphTrailV1>> {
+    let mut direct = Vec::new();
+    let mut adjacent = Vec::new();
+    let mut follow_up = Vec::new();
+    let mut direct_keys = BTreeSet::new();
+    let mut adjacent_keys = BTreeSet::new();
+    let mut follow_up_keys = BTreeSet::new();
+
+    let direct_nodes =
+        load_graph_trail_nodes_for_evidence(graph, workspace_id, &evidence.evidence_ref)?
+            .into_iter()
+            .filter(|node| graph_trail_node_is_eligible(graph, workspace_id, node).unwrap_or(false))
+            .collect::<Vec<_>>();
+    for node in &direct_nodes {
+        push_graph_record(
+            &mut direct,
+            &mut direct_keys,
+            GRAPH_TRAIL_DIRECT_LIMIT,
+            graph_record_kind_for_node(&node.kind),
+            node.node_id.clone(),
+            format!(
+                "Selected evidence directly supports graph node '{}'.",
+                node.label
+            ),
+        );
+    }
+
+    let mut direct_relation_ids = BTreeSet::new();
+    let direct_relation_links =
+        load_graph_trail_relations_for_evidence(graph, workspace_id, &evidence.evidence_ref)?
+            .into_iter()
+            .filter(|link| {
+                graph_trail_relation_is_eligible(graph, workspace_id, &link.relation)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+    for link in &direct_relation_links {
+        direct_relation_ids.insert(link.relation.relation_id.clone());
+        push_graph_record(
+            &mut direct,
+            &mut direct_keys,
+            GRAPH_TRAIL_DIRECT_LIMIT,
+            ContextPackGraphRecordKindV1::Relation,
+            link.relation.relation_id.clone(),
+            format!(
+                "Selected evidence directly supports relation '{}'.",
+                link.relation.label
+            ),
+        );
+        push_adjacent_node_from_relation_endpoint(
+            graph,
+            workspace_id,
+            &link.source,
+            &mut adjacent,
+            &mut adjacent_keys,
+        );
+        push_adjacent_node_from_relation_endpoint(
+            graph,
+            workspace_id,
+            &link.target,
+            &mut adjacent,
+            &mut adjacent_keys,
+        );
+    }
+
+    for node in &direct_nodes {
+        for link in load_graph_trail_relation_links_for_node(graph, workspace_id, &node.node_id)? {
+            if direct_relation_ids.contains(&link.relation.relation_id)
+                || !graph_trail_relation_is_eligible(graph, workspace_id, &link.relation)?
+            {
+                continue;
+            }
+            push_graph_record(
+                &mut adjacent,
+                &mut adjacent_keys,
+                GRAPH_TRAIL_ADJACENT_LIMIT,
+                ContextPackGraphRecordKindV1::Relation,
+                link.relation.relation_id.clone(),
+                format!(
+                    "Relation '{}' is adjacent to directly supported node '{}'.",
+                    link.relation.label, node.label
+                ),
+            );
+            let neighbor = if link.source.node_id == node.node_id {
+                &link.target
+            } else {
+                &link.source
+            };
+            push_adjacent_node_from_relation_endpoint(
+                graph,
+                workspace_id,
+                neighbor,
+                &mut adjacent,
+                &mut adjacent_keys,
+            );
+        }
+    }
+
+    if direct.is_empty() && adjacent.is_empty() {
+        return Ok(None);
+    }
+
+    push_context_pack_follow_up(
+        &mut follow_up,
+        &mut follow_up_keys,
+        ContextPackGraphFollowUpV1 {
+            tool: ContextPackGraphFollowUpToolV1::ReadSource,
+            handle_type: ContextPackGraphHandleTypeV1::Source,
+            arguments: ContextPackGraphFollowUpArgumentsV1::ReadSource(
+                ContextPackGraphReadSourceArgumentsV1 {
+                    source_id: evidence.source_id.clone(),
+                },
+            ),
+            reason: "Read the source that contains this selected evidence.".into(),
+        },
+    );
+    push_context_pack_follow_up(
+        &mut follow_up,
+        &mut follow_up_keys,
+        ContextPackGraphFollowUpV1 {
+            tool: ContextPackGraphFollowUpToolV1::ReadPageEvidence,
+            handle_type: ContextPackGraphHandleTypeV1::PageEvidence,
+            arguments: ContextPackGraphFollowUpArgumentsV1::ReadPageEvidence(
+                ContextPackGraphReadPageEvidenceArgumentsV1 {
+                    source_id: evidence.source_id.clone(),
+                    page: evidence.page,
+                },
+            ),
+            reason: "Read the page evidence behind this graph-linked selection.".into(),
+        },
+    );
+    for node in direct_nodes.iter().chain(
+        direct_relation_links
+            .iter()
+            .flat_map(|link| [&link.source, &link.target]),
+    ) {
+        push_follow_up_for_graph_node(node, &mut follow_up, &mut follow_up_keys);
+    }
+
+    Ok(Some(ContextPackGraphTrailV1 {
+        direct,
+        adjacent,
+        follow_up,
+        unavailable_reason: None,
+    }))
+}
+
+fn push_adjacent_node_from_relation_endpoint(
+    graph: &Graph,
+    workspace_id: &str,
+    node: &GraphTrailNode,
+    adjacent: &mut Vec<ContextPackGraphRecordV1>,
+    adjacent_keys: &mut BTreeSet<String>,
+) {
+    if !graph_trail_node_is_eligible(graph, workspace_id, node).unwrap_or(false) {
+        return;
+    }
+    push_graph_record(
+        adjacent,
+        adjacent_keys,
+        GRAPH_TRAIL_ADJACENT_LIMIT,
+        graph_record_kind_for_node(&node.kind),
+        node.node_id.clone(),
+        format!(
+            "Graph node '{}' is adjacent to directly supported relation context.",
+            node.label
+        ),
+    );
+}
+
+fn push_graph_record(
+    records: &mut Vec<ContextPackGraphRecordV1>,
+    seen: &mut BTreeSet<String>,
+    limit: usize,
+    record_type: ContextPackGraphRecordKindV1,
+    id: String,
+    reason: String,
+) {
+    if records.len() >= limit {
+        return;
+    }
+    let key = format!("{record_type:?}:{id}");
+    if !seen.insert(key) {
+        return;
+    }
+    records.push(ContextPackGraphRecordV1 {
+        record_type,
+        id,
+        reason,
+    });
+}
+
+fn push_follow_up_for_graph_node(
+    node: &GraphTrailNode,
+    follow_up: &mut Vec<ContextPackGraphFollowUpV1>,
+    seen: &mut BTreeSet<String>,
+) {
+    match graph_record_kind_for_node(&node.kind) {
+        ContextPackGraphRecordKindV1::Node => push_context_pack_follow_up(
+            follow_up,
+            seen,
+            ContextPackGraphFollowUpV1 {
+                tool: ContextPackGraphFollowUpToolV1::ReadNode,
+                handle_type: ContextPackGraphHandleTypeV1::Node,
+                arguments: ContextPackGraphFollowUpArgumentsV1::ReadNode(
+                    ContextPackGraphReadNodeArgumentsV1 {
+                        node_id: node.node_id.clone(),
+                    },
+                ),
+                reason: format!("Inspect graph node '{}'.", node.label),
+            },
+        ),
+        ContextPackGraphRecordKindV1::Source => {
+            let source_id = node
+                .source_ids
+                .first()
+                .cloned()
+                .or_else(|| node.node_id.strip_prefix("source:").map(ToOwned::to_owned));
+            if let Some(source_id) = source_id {
+                push_context_pack_follow_up(
+                    follow_up,
+                    seen,
+                    ContextPackGraphFollowUpV1 {
+                        tool: ContextPackGraphFollowUpToolV1::ReadSource,
+                        handle_type: ContextPackGraphHandleTypeV1::Source,
+                        arguments: ContextPackGraphFollowUpArgumentsV1::ReadSource(
+                            ContextPackGraphReadSourceArgumentsV1 { source_id },
+                        ),
+                        reason: format!("Read source node '{}'.", node.label),
+                    },
+                );
+            }
+        }
+        ContextPackGraphRecordKindV1::WikiPage => {
+            if let Some(path) = node
+                .aliases
+                .iter()
+                .find(|path| is_safe_agent_wiki_path(path))
+            {
+                push_context_pack_follow_up(
+                    follow_up,
+                    seen,
+                    ContextPackGraphFollowUpV1 {
+                        tool: ContextPackGraphFollowUpToolV1::ReadWikiPage,
+                        handle_type: ContextPackGraphHandleTypeV1::WikiPage,
+                        arguments: ContextPackGraphFollowUpArgumentsV1::ReadWikiPage(
+                            ContextPackGraphReadWikiPageArgumentsV1 { path: path.clone() },
+                        ),
+                        reason: format!("Read wiki page '{}'.", node.label),
+                    },
+                );
+            }
+        }
+        ContextPackGraphRecordKindV1::Claim
+        | ContextPackGraphRecordKindV1::Relation
+        | ContextPackGraphRecordKindV1::Evidence => {}
+    }
+}
+
+fn push_context_pack_follow_up(
+    follow_up: &mut Vec<ContextPackGraphFollowUpV1>,
+    seen: &mut BTreeSet<String>,
+    item: ContextPackGraphFollowUpV1,
+) {
+    if follow_up.len() >= GRAPH_TRAIL_FOLLOW_UP_LIMIT {
+        return;
+    }
+    let key = format!(
+        "{:?}:{:?}:{:?}",
+        item.tool, item.handle_type, item.arguments
+    );
+    if seen.insert(key) {
+        follow_up.push(item);
+    }
+}
+
+fn load_graph_trail_nodes_for_evidence(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_id: &str,
+) -> Result<Vec<GraphTrailNode>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {workspace_id: $workspace_id})
+             RETURN n.id AS node_id,
+                    n.kind AS kind,
+                    n.label AS label,
+                    n.aliases_json AS aliases_json,
+                    n.evidence_ids_json AS evidence_ids_json,
+                    n.source_ids_json AS source_ids_json,
+                    n.status AS status",
+        )
+        .param("workspace_id", workspace_id)
+        .run()
+        .context("failed querying GraphQLite graph trail nodes")?;
+    let mut nodes = Vec::new();
+    for row in &rows {
+        if !graph_record_status_is_active(&row_string(row, "status")?) {
+            continue;
+        }
+        let evidence_ids = row_string_array(row, "evidence_ids_json")?;
+        if !evidence_ids.iter().any(|value| value == evidence_id) {
+            continue;
+        }
+        nodes.push(GraphTrailNode {
+            node_id: row_string(row, "node_id")?,
+            kind: row_string(row, "kind")?,
+            label: row_string(row, "label")?,
+            aliases: row_string_array(row, "aliases_json")?,
+            evidence_ids,
+            source_ids: row_string_array(row, "source_ids_json")?,
+        });
+    }
+    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    nodes.truncate(GRAPH_TRAIL_DIRECT_LIMIT);
+    Ok(nodes)
+}
+
+fn load_graph_trail_relations_for_evidence(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_id: &str,
+) -> Result<Vec<GraphTrailRelationLink>> {
+    let mut links = load_graph_trail_relation_links(
+        graph,
+        workspace_id,
+        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+         RETURN source.id AS source_node_id,
+                source.kind AS source_kind,
+                source.label AS source_label,
+                source.aliases_json AS source_aliases_json,
+                source.evidence_ids_json AS source_evidence_ids_json,
+                source.source_ids_json AS source_source_ids_json,
+                target.id AS target_node_id,
+                target.kind AS target_kind,
+                target.label AS target_label,
+                target.aliases_json AS target_aliases_json,
+                target.evidence_ids_json AS target_evidence_ids_json,
+                target.source_ids_json AS target_source_ids_json,
+                r.relation_id AS relation_id,
+                r.label AS relation_label,
+                r.evidence_ids_json AS relation_evidence_ids_json,
+                r.source_ids_json AS relation_source_ids_json,
+                r.status AS relation_status",
+        None,
+    )?;
+    links.retain(|link| {
+        link.relation
+            .evidence_ids
+            .iter()
+            .any(|value| value == evidence_id)
+    });
+    links.truncate(GRAPH_TRAIL_DIRECT_LIMIT);
+    Ok(links)
+}
+
+fn load_graph_trail_relation_links_for_node(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Vec<GraphTrailRelationLink>> {
+    let mut links = load_graph_trail_relation_links(
+        graph,
+        workspace_id,
+        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+         RETURN source.id AS source_node_id,
+                source.kind AS source_kind,
+                source.label AS source_label,
+                source.aliases_json AS source_aliases_json,
+                source.evidence_ids_json AS source_evidence_ids_json,
+                source.source_ids_json AS source_source_ids_json,
+                target.id AS target_node_id,
+                target.kind AS target_kind,
+                target.label AS target_label,
+                target.aliases_json AS target_aliases_json,
+                target.evidence_ids_json AS target_evidence_ids_json,
+                target.source_ids_json AS target_source_ids_json,
+                r.relation_id AS relation_id,
+                r.label AS relation_label,
+                r.evidence_ids_json AS relation_evidence_ids_json,
+                r.source_ids_json AS relation_source_ids_json,
+                r.status AS relation_status",
+        Some(node_id),
+    )?;
+    links.extend(load_graph_trail_relation_links(
+        graph,
+        workspace_id,
+        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {id: $node_id, workspace_id: $workspace_id})
+         RETURN source.id AS source_node_id,
+                source.kind AS source_kind,
+                source.label AS source_label,
+                source.aliases_json AS source_aliases_json,
+                source.evidence_ids_json AS source_evidence_ids_json,
+                source.source_ids_json AS source_source_ids_json,
+                target.id AS target_node_id,
+                target.kind AS target_kind,
+                target.label AS target_label,
+                target.aliases_json AS target_aliases_json,
+                target.evidence_ids_json AS target_evidence_ids_json,
+                target.source_ids_json AS target_source_ids_json,
+                r.relation_id AS relation_id,
+                r.label AS relation_label,
+                r.evidence_ids_json AS relation_evidence_ids_json,
+                r.source_ids_json AS relation_source_ids_json,
+                r.status AS relation_status",
+        Some(node_id),
+    )?);
+    links.sort_by(|left, right| left.relation.relation_id.cmp(&right.relation.relation_id));
+    links.dedup_by(|left, right| left.relation.relation_id == right.relation.relation_id);
+    links.truncate(GRAPH_TRAIL_ADJACENT_LIMIT);
+    Ok(links)
+}
+
+fn load_graph_trail_relation_links(
+    graph: &Graph,
+    workspace_id: &str,
+    cypher: &str,
+    node_id: Option<&str>,
+) -> Result<Vec<GraphTrailRelationLink>> {
+    let mut builder = graph
+        .connection()
+        .cypher_builder(cypher)
+        .param("workspace_id", workspace_id);
+    if let Some(node_id) = node_id {
+        builder = builder.param("node_id", node_id);
+    }
+    let rows = builder
+        .run()
+        .context("failed querying GraphQLite graph trail relations")?;
+    let mut links = Vec::new();
+    for row in &rows {
+        if !graph_record_status_is_active(&row_string(row, "relation_status")?) {
+            continue;
+        }
+        links.push(GraphTrailRelationLink {
+            relation: GraphTrailRelation {
+                relation_id: row_string(row, "relation_id")?,
+                label: row_string(row, "relation_label")?,
+                evidence_ids: row_string_array(row, "relation_evidence_ids_json")?,
+                source_ids: row_string_array(row, "relation_source_ids_json")?,
+            },
+            source: graph_trail_node_from_relation_row(row, "source")?,
+            target: graph_trail_node_from_relation_row(row, "target")?,
+        });
+    }
+    Ok(links)
+}
+
+fn graph_trail_node_from_relation_row(
+    row: &graphqlite::Row,
+    prefix: &str,
+) -> Result<GraphTrailNode> {
+    Ok(GraphTrailNode {
+        node_id: row_string(row, &format!("{prefix}_node_id"))?,
+        kind: row_string(row, &format!("{prefix}_kind"))?,
+        label: row_string(row, &format!("{prefix}_label"))?,
+        aliases: row_string_array(row, &format!("{prefix}_aliases_json"))?,
+        evidence_ids: row_string_array(row, &format!("{prefix}_evidence_ids_json"))?,
+        source_ids: row_string_array(row, &format!("{prefix}_source_ids_json"))?,
+    })
+}
+
+fn graph_trail_node_is_eligible(
+    graph: &Graph,
+    workspace_id: &str,
+    node: &GraphTrailNode,
+) -> Result<bool> {
+    graph_record_refs_are_eligible(graph, workspace_id, &node.evidence_ids, &node.source_ids)
+}
+
+fn graph_trail_relation_is_eligible(
+    graph: &Graph,
+    workspace_id: &str,
+    relation: &GraphTrailRelation,
+) -> Result<bool> {
+    graph_record_refs_are_eligible(
+        graph,
+        workspace_id,
+        &relation.evidence_ids,
+        &relation.source_ids,
+    )
+}
+
+fn graph_record_refs_are_eligible(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_ids: &[String],
+    source_ids: &[String],
+) -> Result<bool> {
+    if !evidence_ids.is_empty() {
+        for evidence_id in evidence_ids {
+            let Some(evidence_row) =
+                load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
+            else {
+                continue;
+            };
+            if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some()
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    for source_id in source_ids {
+        if load_context_pack_source_row(graph, workspace_id, source_id)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {
+    match kind {
+        "claim" => ContextPackGraphRecordKindV1::Claim,
+        "wiki_page" => ContextPackGraphRecordKindV1::WikiPage,
+        "source" => ContextPackGraphRecordKindV1::Source,
+        _ => ContextPackGraphRecordKindV1::Node,
+    }
+}
+
+fn graph_record_status_is_active(status: &str) -> bool {
+    status.is_empty() || status == "active"
+}
+
+fn is_safe_agent_wiki_path(path: &str) -> bool {
+    if !path.starts_with("wiki/") || path.contains("docs/private") {
+        return false;
+    }
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 #[cfg(test)]

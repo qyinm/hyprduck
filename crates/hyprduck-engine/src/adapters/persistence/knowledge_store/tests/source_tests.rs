@@ -239,8 +239,59 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .selected_evidence
         .iter()
         .any(|evidence| evidence.evidence_ref == "evidence-a"));
+    let alpha_evidence = context_pack
+        .selected_evidence
+        .iter()
+        .find(|evidence| evidence.evidence_ref == "evidence-a")
+        .expect("alpha selected evidence");
+    let graph_trail = alpha_evidence
+        .graph_trail
+        .as_ref()
+        .expect("graph trail for alpha evidence");
+    assert!(graph_trail
+        .direct
+        .iter()
+        .any(|record| record.record_type == ContextPackGraphRecordKindV1::Node));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Relation && record.id == "rel-a"
+    }));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::WikiPage && record.id == "wiki-alpha"
+    }));
+    assert!(graph_trail.adjacent.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Node && record.id == "node-b"
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadNode
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::Node
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadNode(arguments)
+                    if arguments.node_id == "node-a"
+            )
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadPageEvidence
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::PageEvidence
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadPageEvidence(arguments)
+                    if arguments.source_id == "source-a" && arguments.page == 1
+            )
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadWikiPage
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::WikiPage
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadWikiPage(arguments)
+                    if arguments.path == "wiki/alpha"
+            )
+    }));
     let context_pack_json = serde_json::to_string(&context_pack).expect("serialize context pack");
     assert!(!context_pack_json.contains("/Users/hyprduck/private"));
+    assert!(!context_pack_json.contains("docs/private"));
+    assert!(!context_pack_json.contains("../"));
     assert!(context_pack
         .retrieval_trace
         .evidence_type_trace
@@ -323,6 +374,25 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(filtered_hits
         .iter()
         .all(|hit| hit.evidence_id != "evidence-b"));
+    let filtered_context_pack = store
+        .assemble_context_pack_v1_from_db(
+            "workspace-default",
+            "Alpha",
+            5,
+            "ctx_db_alpha_filtered".into(),
+            "2026-05-29T09:54:26Z".into(),
+        )
+        .expect("assemble filtered DB context pack v1");
+    let filtered_alpha_trail = filtered_context_pack
+        .selected_evidence
+        .iter()
+        .find(|evidence| evidence.evidence_ref == "evidence-a")
+        .and_then(|evidence| evidence.graph_trail.as_ref())
+        .expect("filtered alpha graph trail");
+    assert!(!filtered_alpha_trail
+        .adjacent
+        .iter()
+        .any(|record| record.id == "node-b"));
     let wiki_hits = store
         .hybrid_retrieve("workspace-default", "source evidence", 5)
         .expect("wiki hybrid retrieve");
