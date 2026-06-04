@@ -59,6 +59,8 @@ import type {
   WorkspaceProjectEnvelope,
   WorkspaceProject,
 } from "@/features/workspace/types";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { TranslationKey } from "@/i18n/locales";
 import { cn } from "@/lib/utils";
 import { SettingsPanel, type SettingsTab } from "@/SettingsPanel";
 import { createWebMockApi } from "@/webPreviewApi";
@@ -79,10 +81,10 @@ const IS_WEB_PREVIEW = import.meta.env.VITE_PLATFORM === "web";
 
 const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
-const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
+const MAIN_NAV_ITEMS: { id: ActivePanel; labelKey: TranslationKey; icon: ReactNode }[] = [
   {
     id: "knowledge",
-    label: "Knowledge",
+    labelKey: "nav.knowledge",
     icon: (
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -102,15 +104,15 @@ const MAIN_NAV_ITEMS: { id: ActivePanel; label: string; icon: ReactNode }[] = [
 
 const SETTINGS_NAV_ITEMS: {
   id: SettingsTab;
-  label: string;
+  labelKey: TranslationKey;
   icon: ReactNode;
 }[] = [
   {
     id: "general",
-    label: "General",
+    labelKey: "nav.general",
     icon: <Settings aria-hidden="true" size={18} />,
   },
-  { id: "ai", label: "AI", icon: <Sparkles aria-hidden="true" size={18} /> },
+  { id: "ai", labelKey: "nav.ai", icon: <Sparkles aria-hidden="true" size={18} /> },
 ];
 
 const EMPTY_SNAPSHOT: UiSnapshot = {
@@ -122,18 +124,32 @@ const EMPTY_SNAPSHOT: UiSnapshot = {
 };
 
 class WorkspaceErrorBoundary extends Component<
-  { children: ReactNode },
-  { errorMessage: string | null }
+  {
+    children: ReactNode;
+    renderCopy: {
+      unknownError: string;
+      title: string;
+      body: string;
+    };
+  },
+  { errorMessage: string | null; unknown: boolean }
 > {
-  constructor(props: { children: ReactNode }) {
+  constructor(props: {
+    children: ReactNode;
+    renderCopy: {
+      unknownError: string;
+      title: string;
+      body: string;
+    };
+  }) {
     super(props);
-    this.state = { errorMessage: null };
+    this.state = { errorMessage: null, unknown: false };
   }
 
   static getDerivedStateFromError(error: unknown) {
     return {
-      errorMessage:
-        error instanceof Error ? error.message : "Unknown workspace render error",
+      errorMessage: error instanceof Error ? error.message : null,
+      unknown: !(error instanceof Error),
     };
   }
 
@@ -142,18 +158,17 @@ class WorkspaceErrorBoundary extends Component<
   }
 
   render() {
-    if (this.state.errorMessage) {
+    if (this.state.errorMessage || this.state.unknown) {
       return (
         <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-[24px] border border-red-200 bg-red-50/80 p-8 text-center">
           <h2 className="text-lg font-semibold text-red-900">
-            Graph workspace failed to render
+            {this.props.renderCopy.title}
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-red-800">
-            HyprDuck hit a frontend render error instead of showing the graph.
-            The latest issue is:
+            {this.props.renderCopy.body}
           </p>
           <pre className="mt-4 max-w-3xl overflow-x-auto rounded-2xl bg-white/90 px-4 py-3 text-left text-xs leading-6 text-red-900">
-            {this.state.errorMessage}
+            {this.state.errorMessage ?? this.props.renderCopy.unknownError}
           </pre>
         </div>
       );
@@ -233,28 +248,32 @@ async function loadGraphWorkspaceEnvelopeResult(
   }
 }
 
-function workspaceLoadStateFromResult(result: WorkspaceLoadResult): WorkspaceLoadState {
+function workspaceLoadStateFromResult(
+  result: WorkspaceLoadResult,
+  t: ReturnType<typeof useI18n>["t"],
+): WorkspaceLoadState {
   if (result.source === "materialized") {
     const snapshotPath =
       result.envelope.project?.summary.summary.match(/from (.+)\.$/)?.[1] ??
       "state/latest-readable-snapshot.json";
     return {
       status: "ready",
-      message: `Loaded latest materialized snapshot from ${snapshotPath}.`,
+      message: t("workspace.status.materializedPrefix", { path: snapshotPath }),
     };
   }
 
   return {
     status: "fallback",
-    message:
-      "Materialized snapshot was unavailable, so HyprDuck loaded the legacy workspace project read path.",
+    message: t("workspace.status.legacyFallback"),
   };
 }
 
 function WorkspaceSnapshotStatusBanner({
   state,
+  t,
 }: {
   state: WorkspaceLoadState;
+  t: ReturnType<typeof useI18n>["t"];
 }) {
   if (state.status === "idle" || state.status === "ready") {
     return null;
@@ -262,10 +281,10 @@ function WorkspaceSnapshotStatusBanner({
 
   const title =
     state.status === "loading"
-      ? "Refreshing latest workspace snapshot"
+      ? t("workspace.status.refreshingTitle")
       : state.status === "fallback"
-        ? "Loaded legacy workspace project read path"
-        : "Could not refresh the workspace snapshot";
+        ? t("workspace.status.fallbackTitle")
+        : t("workspace.status.errorTitle");
   const tone =
     state.status === "error"
       ? "border-destructive/30 bg-destructive/5 text-destructive"
@@ -295,6 +314,7 @@ function windowChromeButtonClass(): string {
 }
 
 export function App() {
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<UiSnapshot>(EMPTY_SNAPSHOT);
   const [loadedWorkspaceEnvelope, setLoadedWorkspaceEnvelope] =
     useState<WorkspaceProjectEnvelope | null>(null);
@@ -405,7 +425,7 @@ export function App() {
         ]);
       setWorkspaceLoadState({
         status: "loading",
-        message: "Loading latest materialized graph/wiki snapshot.",
+        message: t("workspace.status.loadingInitial"),
       });
       const initialWorkspaceLoad = await loadGraphWorkspaceEnvelopeResult(
         initialSnapshot.lastWorkspaceId ?? null,
@@ -416,7 +436,7 @@ export function App() {
       setValidation(initialValidation);
       setReadiness(initialReadiness);
       setLoadedWorkspaceEnvelope(initialWorkspaceLoad.envelope);
-      setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad));
+      setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad, t));
 
       unlisten = desktop.listen<UiSnapshot>("hyprduck://snapshot", (message) => {
         setSnapshot(message.payload);
@@ -445,13 +465,13 @@ export function App() {
     if (projectIdToLoad) {
       setWorkspaceLoadState({
         status: "loading",
-        message: "Refreshing from the latest materialized graph/wiki snapshot.",
+        message: t("workspace.status.refreshingInitial"),
       });
       loadGraphWorkspaceEnvelopeResult(snapshot.lastWorkspaceId ?? null, projectIdToLoad)
         .then((result) => {
           if (!cancelled) {
             setLoadedWorkspaceEnvelope(result.envelope);
-            setWorkspaceLoadState(workspaceLoadStateFromResult(result));
+            setWorkspaceLoadState(workspaceLoadStateFromResult(result, t));
           }
         })
         .catch((error: unknown) => {
@@ -535,14 +555,14 @@ export function App() {
     });
     setWorkspaceLoadState({
       status: "loading",
-      message: "Refreshing graph/wiki after correction.",
+      message: t("workspace.status.refreshingAfterCorrection"),
     });
     const nextLoad = await loadGraphWorkspaceEnvelopeResult(
       loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? null,
       appliedProject.summary.projectId,
     );
     setLoadedWorkspaceEnvelope(nextLoad.envelope);
-    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad));
+    setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad, t));
   };
 
   const createAgentTerminalSession = async (args: {
@@ -608,8 +628,8 @@ export function App() {
       <main className="grid min-h-screen place-items-center bg-background p-6">
         <Card className="max-w-xl">
           <CardHeader>
-            <CardTitle>HyprDuck failed to start</CardTitle>
-            <CardDescription>Required runtime is missing.</CardDescription>
+            <CardTitle>{t("app.startup.title")}</CardTitle>
+            <CardDescription>{t("app.startup.description")}</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{startupError}</p>
@@ -655,7 +675,7 @@ export function App() {
           </Button>
         ) : showSidebar ? (
           <Button
-            aria-label="Collapse sidebar"
+            aria-label={t("chrome.collapseSidebar")}
             onClick={() => {
               setSidebarCollapsed(true);
             }}
@@ -668,7 +688,7 @@ export function App() {
           </Button>
         ) : (
           <Button
-            aria-label="Expand sidebar"
+            aria-label={t("chrome.expandSidebar")}
             onClick={() => {
               setSidebarCollapsed(false);
             }}
@@ -710,7 +730,7 @@ export function App() {
           )}
         </Button>
       )}
-      {!settingsOpen && <WorkspaceSnapshotStatusBanner state={workspaceLoadState} />}
+      {!settingsOpen && <WorkspaceSnapshotStatusBanner state={workspaceLoadState} t={t} />}
       {/* Sidebar — native titlebar area stays empty; chrome controls are fixed to the window */}
       {showSidebar && (
         <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
@@ -734,7 +754,7 @@ export function App() {
                       type="button"
                     >
                       <span aria-hidden="true">{item.icon}</span>
-                      <span className="font-medium">{item.label}</span>
+                      <span className="font-medium">{t(item.labelKey)}</span>
                     </Button>
                   ))}
                 </>
@@ -755,7 +775,7 @@ export function App() {
                       type="button"
                     >
                       <span aria-hidden="true">{item.icon}</span>
-                      <span className="font-medium">{item.label}</span>
+                      <span className="font-medium">{t(item.labelKey)}</span>
                     </Button>
                   ))}
                 </>
@@ -774,7 +794,7 @@ export function App() {
                   <span aria-hidden="true">
                     <Settings size={18} />
                   </span>
-                  <span className="font-medium">Settings</span>
+                  <span className="font-medium">{t("nav.settings")}</span>
                 </Button>
               </div>
             )}
@@ -801,7 +821,13 @@ export function App() {
               tab={settingsTab}
             />
           ) : activePanel === "knowledge" ? (
-            <WorkspaceErrorBoundary>
+            <WorkspaceErrorBoundary
+              renderCopy={{
+                unknownError: t("workspace.error.unknownRender"),
+                title: t("workspace.error.renderTitle"),
+                body: t("workspace.error.renderBody"),
+              }}
+            >
               <GraphWorkspace
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}

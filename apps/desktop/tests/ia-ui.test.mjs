@@ -33,7 +33,9 @@ test("desktop IA is the committed source of truth for the Knowledge workspace", 
 
 test("app shell exposes only Knowledge and Settings as primary destinations", () => {
   expect(appSource).toMatch(/type ActivePanel = "knowledge" \| "settings"/);
-  expect(appSource).toMatch(/label: "Knowledge"/);
+  expect(appSource).toMatch(/labelKey: "nav\.knowledge"/);
+  expect(appSource).toMatch(/t\("nav\.settings"\)/);
+  expect(localesSource).toMatch(/"nav\.knowledge": "Knowledge"/);
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
   expect(appSource).not.toMatch(/History/);
@@ -84,7 +86,7 @@ test("settings page hides debug readiness internals", () => {
   expect(settingsSource).toMatch(/onRefreshReadiness/);
   expect(localesSource).toMatch(/Refresh/);
   expect(settingsSource).toMatch(/export type SettingsTab = "general" \| "ai"/);
-  expect(appSource).toMatch(/label: "General"/);
+  expect(appSource).toMatch(/labelKey: "nav\.general"/);
   expect(settingsSource).not.toMatch(/<Label htmlFor="prompt-template-select">/);
   expect(settingsSource).not.toMatch(/Configure prompt templates and output behavior/);
   expect(settingsSource).not.toMatch(/Document processing/);
@@ -252,13 +254,15 @@ test("workspace snapshot refresh exposes loading fallback and error states", () 
   expect(appTypesSource).toMatch(/type WorkspaceLoadStatus =\s*\|\s*"idle"\s*\|\s*"loading"\s*\|\s*"ready"\s*\|\s*"fallback"\s*\|\s*"error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
-  expect(appSource).toMatch(/workspaceLoadStateFromResult\(result\)/);
-  expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad\)/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(result, t\)/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad, t\)/);
   expect(appSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/status: "error"/);
   expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
-  expect(appSource).toMatch(/Refreshing latest workspace snapshot/);
-  expect(appSource).toMatch(/Could not refresh the workspace snapshot/);
+  expect(appSource).toMatch(/workspace\.status\.refreshingTitle/);
+  expect(appSource).toMatch(/workspace\.status\.errorTitle/);
+  expect(localesSource).toMatch(/Refreshing latest workspace snapshot/);
+  expect(localesSource).toMatch(/Could not refresh the workspace snapshot/);
 });
 
 test("partial import failures expose failed-page retry affordance", () => {
