@@ -138,7 +138,8 @@
         },
         "selectionReason": { "$ref": "#/$defs/nonEmptyString" },
         "contentHash": { "$ref": "#/$defs/nonEmptyString" },
-        "evidenceType": { "$ref": "#/$defs/evidenceType" }
+        "evidenceType": { "$ref": "#/$defs/evidenceType" },
+        "graphTrail": { "$ref": "#/$defs/graphTrail" }
       },
       "anyOf": [
         {
@@ -249,6 +250,125 @@
         "sourceId": { "$ref": "#/$defs/nonEmptyString" },
         "page": { "type": "integer", "minimum": 1 },
         "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "safeWikiPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^wiki/(?!.*(^|/)\\.\\.(/|$))(?!.*docs/private).+\\S.*$"
+    },
+    "graphRecordType": {
+      "type": "string",
+      "enum": ["node", "relation", "claim", "wiki_page", "source", "evidence"]
+    },
+    "graphRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "reason"],
+      "properties": {
+        "type": { "$ref": "#/$defs/graphRecordType" },
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "readNodeArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "readSourceArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "readPageEvidenceArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "page"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "page": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "readWikiPageArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "$ref": "#/$defs/safeWikiPath" }
+      }
+    },
+    "graphFollowUp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "handleType", "arguments", "reason"],
+          "properties": {
+            "tool": { "const": "read_node" },
+            "handleType": { "const": "node" },
+            "arguments": { "$ref": "#/$defs/readNodeArguments" },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "handleType", "arguments", "reason"],
+          "properties": {
+            "tool": { "const": "read_source" },
+            "handleType": { "const": "source" },
+            "arguments": { "$ref": "#/$defs/readSourceArguments" },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "handleType", "arguments", "reason"],
+          "properties": {
+            "tool": { "const": "read_page_evidence" },
+            "handleType": { "const": "page_evidence" },
+            "arguments": { "$ref": "#/$defs/readPageEvidenceArguments" },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "handleType", "arguments", "reason"],
+          "properties": {
+            "tool": { "const": "read_wiki_page" },
+            "handleType": { "const": "wiki_page" },
+            "arguments": { "$ref": "#/$defs/readWikiPageArguments" },
+            "reason": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
+      ]
+    },
+    "graphTrail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "direct": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphRecord" }
+        },
+        "adjacent": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphRecord" }
+        },
+        "followUp": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphFollowUp" }
+        },
+        "unavailableReason": { "$ref": "#/$defs/nonEmptyString" }
       }
     }
   }

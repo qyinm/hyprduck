@@ -1304,6 +1304,102 @@ pub struct ContextPackEvidenceV1 {
     pub selection_reason: String,
     pub content_hash: String,
     pub evidence_type: EvidenceType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_trail: Option<ContextPackGraphTrailV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackGraphRecordKindV1 {
+    Node,
+    Relation,
+    Claim,
+    WikiPage,
+    Source,
+    Evidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackGraphRecordV1 {
+    #[serde(rename = "type")]
+    pub record_type: ContextPackGraphRecordKindV1,
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackGraphFollowUpToolV1 {
+    ReadNode,
+    ReadSource,
+    ReadPageEvidence,
+    ReadWikiPage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextPackGraphHandleTypeV1 {
+    Node,
+    Source,
+    PageEvidence,
+    WikiPage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextPackGraphReadNodeArgumentsV1 {
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextPackGraphReadSourceArgumentsV1 {
+    pub source_id: SourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextPackGraphReadPageEvidenceArgumentsV1 {
+    pub source_id: SourceId,
+    pub page: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextPackGraphReadWikiPageArgumentsV1 {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ContextPackGraphFollowUpArgumentsV1 {
+    ReadNode(ContextPackGraphReadNodeArgumentsV1),
+    ReadSource(ContextPackGraphReadSourceArgumentsV1),
+    ReadPageEvidence(ContextPackGraphReadPageEvidenceArgumentsV1),
+    ReadWikiPage(ContextPackGraphReadWikiPageArgumentsV1),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackGraphFollowUpV1 {
+    pub tool: ContextPackGraphFollowUpToolV1,
+    pub handle_type: ContextPackGraphHandleTypeV1,
+    pub arguments: ContextPackGraphFollowUpArgumentsV1,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPackGraphTrailV1 {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct: Vec<ContextPackGraphRecordV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjacent: Vec<ContextPackGraphRecordV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follow_up: Vec<ContextPackGraphFollowUpV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1889,6 +1985,7 @@ impl ContextPackEvidenceV1 {
             selection_reason: evidence.selection_reason.clone(),
             content_hash: evidence.content_hash.clone(),
             evidence_type,
+            graph_trail: None,
         }
     }
 }
@@ -3052,7 +3149,7 @@ mod tests {
     }
 
     #[test]
-    fn context_pack_v1_schema_requires_typed_evidence_trace() {
+    fn context_pack_v1_schema_requires_typed_evidence_trace_and_graph_trail() {
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../schemas/context-pack-v1.schema.json");
         let schema: Value = serde_json::from_str(
@@ -3079,6 +3176,37 @@ mod tests {
         assert!(trace_required
             .iter()
             .any(|value| value.as_str() == Some("evidenceTypeTrace")));
+        assert!(schema
+            .pointer("/$defs/evidence/properties/graphTrail")
+            .is_some());
+        for (variant, tool, handle_type, argument_field) in [
+            (0, "read_node", "node", "nodeId"),
+            (1, "read_source", "source", "sourceId"),
+            (2, "read_page_evidence", "page_evidence", "page"),
+            (3, "read_wiki_page", "wiki_page", "path"),
+        ] {
+            let follow_up = schema
+                .pointer(&format!("/$defs/graphFollowUp/oneOf/{variant}/properties"))
+                .and_then(Value::as_object)
+                .expect("graph follow-up variant properties");
+            assert_eq!(follow_up["tool"]["const"], tool);
+            assert_eq!(follow_up["handleType"]["const"], handle_type);
+            assert!(follow_up["arguments"]
+                .get("$ref")
+                .and_then(Value::as_str)
+                .is_some());
+            let argument_schema_ref = follow_up["arguments"]["$ref"]
+                .as_str()
+                .expect("argument schema ref");
+            let argument_schema = schema
+                .pointer(argument_schema_ref.trim_start_matches('#'))
+                .expect("argument schema");
+            assert!(argument_schema["required"]
+                .as_array()
+                .expect("argument required")
+                .iter()
+                .any(|value| value.as_str() == Some(argument_field)));
+        }
     }
 
     #[test]
@@ -3177,6 +3305,120 @@ mod tests {
         let decoded: EvidenceIndexV0 =
             serde_json::from_str(&serde_json::to_string(&evidence_index).unwrap()).unwrap();
         assert_eq!(decoded, evidence_index);
+    }
+
+    #[test]
+    fn context_pack_v1_round_trip_preserves_graph_trail_handles() {
+        let pack = ContextPackV1 {
+            schema_version: CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
+            pack_id: "ctx_graph_trail".into(),
+            workspace_id: "default".into(),
+            query: "How does the ontology help agents?".into(),
+            generated_at: "2026-06-04T09:00:00Z".into(),
+            source_set: vec![ContextPackSourceV0 {
+                source_id: "src_agent_graph".into(),
+                original_filename: "agent-graph.md".into(),
+                content_hash: "fnv64:graph".into(),
+                page_count: 2,
+                ingestion_status: "ingested".into(),
+                staleness: ContextPackStaleness::Current,
+                provider_route: "ollama".into(),
+                local_only: true,
+            }],
+            selected_evidence: vec![ContextPackEvidenceV1 {
+                evidence_ref: "ev_agent_graph_p1".into(),
+                source_id: "src_agent_graph".into(),
+                page: 1,
+                region: Some("page:Page 1".into()),
+                span: Some("page".into()),
+                quoted_text: "Graph trails expose related concepts for follow-up reads.".into(),
+                parse_confidence: ContextPackParseConfidence::High,
+                selection_reason: "Selected from graph-aware retrieval.".into(),
+                content_hash: "fnv64:graph".into(),
+                evidence_type: EvidenceType::Relationship,
+                graph_trail: Some(ContextPackGraphTrailV1 {
+                    direct: vec![ContextPackGraphRecordV1 {
+                        record_type: ContextPackGraphRecordKindV1::Node,
+                        id: "node-agent-context".into(),
+                        reason: "Evidence directly mentions the agent context concept.".into(),
+                    }],
+                    adjacent: vec![ContextPackGraphRecordV1 {
+                        record_type: ContextPackGraphRecordKindV1::Relation,
+                        id: "rel-agent-context-source".into(),
+                        reason: "Relation was reached from the selected node neighborhood.".into(),
+                    }],
+                    follow_up: vec![
+                        ContextPackGraphFollowUpV1 {
+                            tool: ContextPackGraphFollowUpToolV1::ReadNode,
+                            handle_type: ContextPackGraphHandleTypeV1::Node,
+                            arguments: ContextPackGraphFollowUpArgumentsV1::ReadNode(
+                                ContextPackGraphReadNodeArgumentsV1 {
+                                    node_id: "node-agent-context".into(),
+                                },
+                            ),
+                            reason: "Inspect the concept node connected to this evidence.".into(),
+                        },
+                        ContextPackGraphFollowUpV1 {
+                            tool: ContextPackGraphFollowUpToolV1::ReadPageEvidence,
+                            handle_type: ContextPackGraphHandleTypeV1::PageEvidence,
+                            arguments: ContextPackGraphFollowUpArgumentsV1::ReadPageEvidence(
+                                ContextPackGraphReadPageEvidenceArgumentsV1 {
+                                    source_id: "src_agent_graph".into(),
+                                    page: 1,
+                                },
+                            ),
+                            reason: "Verify the page-level cited evidence.".into(),
+                        },
+                    ],
+                    unavailable_reason: None,
+                }),
+            }],
+            findings: Vec::new(),
+            warnings: Vec::new(),
+            retrieval_trace: ContextPackRetrievalTraceV1 {
+                strategy: "sqlite-graphqlite-fts5-hybrid".into(),
+                chunks_considered: 1,
+                chunks_selected: 1,
+                budget_requested: 4000,
+                budget_used: 1200,
+                evidence_type_trace: ContextPackEvidenceTypeTraceV1 {
+                    considered: BTreeMap::from([("relationship".into(), 1)]),
+                    selected: BTreeMap::from([("relationship".into(), 1)]),
+                },
+            },
+            suggested_next_reads: vec![ContextPackSuggestedNextReadV0 {
+                source_id: "src_agent_graph".into(),
+                page: 2,
+                reason: "Review the adjacent source page.".into(),
+            }],
+        };
+
+        let json = serde_json::to_string(&pack).unwrap();
+        assert!(json.contains("\"graphTrail\""));
+        assert!(json.contains("\"tool\":\"read_node\""));
+        assert!(json.contains("\"handleType\":\"page_evidence\""));
+        assert!(!json.contains("/tmp/"));
+        assert!(!json.contains("docs/private"));
+        assert!(!json.contains("\"suggestedNextReads\":[{\"nodeId\""));
+
+        let decoded: ContextPackV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, pack);
+        let graph_trail = decoded.selected_evidence[0]
+            .graph_trail
+            .as_ref()
+            .expect("graph trail");
+        assert_eq!(
+            graph_trail.direct[0].record_type,
+            ContextPackGraphRecordKindV1::Node
+        );
+        assert_eq!(
+            graph_trail.follow_up[0].tool,
+            ContextPackGraphFollowUpToolV1::ReadNode
+        );
+        assert_eq!(
+            graph_trail.follow_up[1].handle_type,
+            ContextPackGraphHandleTypeV1::PageEvidence
+        );
     }
 
     #[test]
