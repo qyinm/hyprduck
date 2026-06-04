@@ -1137,6 +1137,11 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .expect("v1 selected evidence")
         .iter()
         .all(|evidence| evidence.get("graphTrail").is_none()));
+    assert!(context_pack_payload["contextPack"]["warnings"]
+        .as_array()
+        .expect("context pack warnings")
+        .iter()
+        .any(|warning| warning["type"] == "graph_trail_unavailable"));
     assert!(context_pack_payload["contextPack"]["retrievalTrace"]
         .get("evidenceTypeTrace")
         .is_some());
@@ -1186,6 +1191,11 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
                 && evidence["evidenceRef"] == evidence_ref
                 && evidence.get("graphTrail").is_none())
     );
+    assert!(followup_context_pack_payload["contextPack"]["warnings"]
+        .as_array()
+        .expect("follow-up context pack warnings")
+        .iter()
+        .any(|warning| warning["type"] == "graph_trail_unavailable"));
 
     drop(stdin);
     let status = child.wait().expect("server exit");

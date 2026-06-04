@@ -14,9 +14,10 @@ use hyprduck_engine_types::{
     ContextPackGraphReadPageEvidenceArgumentsV1, ContextPackGraphReadSourceArgumentsV1,
     ContextPackGraphReadWikiPageArgumentsV1, ContextPackGraphRecordKindV1,
     ContextPackGraphRecordV1, ContextPackGraphTrailV1, ContextPackSourceMetadataV0, ContextPackV1,
-    EvidenceRef, GraphSnapshotSourceRecord, ImportJobRecord, KnowledgeProject,
-    ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData,
-    SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus, WikiPage,
+    ContextPackWarningSeverity, ContextPackWarningV0, EvidenceRef, GraphSnapshotSourceRecord,
+    ImportJobRecord, KnowledgeProject, ReadNodeResponseData, ReadPageEvidenceResponseData,
+    ReadSourceResponseData, SourceArtifactManifest, SourceFormat, SourceRecord, SourceStatus,
+    WikiPage,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -466,6 +467,18 @@ impl KnowledgeStore {
         );
         context_pack.retrieval_trace.strategy = "sqlite-graphqlite-fts5-hybrid".into();
         attach_context_pack_graph_trails(&graph, workspace_id, &mut context_pack)?;
+        if !context_pack.selected_evidence.is_empty()
+            && context_pack
+                .selected_evidence
+                .iter()
+                .all(|evidence| evidence.graph_trail.is_none())
+        {
+            context_pack
+                .warnings
+                .push(graph_trail_unavailable_warning(
+                    "Graph trail unavailable for the selected evidence; citation evidence remains available.",
+                ));
+        }
         Ok(context_pack)
     }
 
@@ -1311,6 +1324,15 @@ fn graphlite_string_array_prop(props: &BTreeMap<String, String>, key: &str) -> R
         return Ok(Vec::new());
     }
     serde_json::from_str(value).with_context(|| format!("failed decoding GraphQLite {key}"))
+}
+
+fn graph_trail_unavailable_warning(message: &str) -> ContextPackWarningV0 {
+    ContextPackWarningV0 {
+        warning_type: "graph_trail_unavailable".into(),
+        severity: ContextPackWarningSeverity::Low,
+        message: message.into(),
+        page_refs: Vec::new(),
+    }
 }
 
 fn graph_trail_node_status_is_visible(kind: &str, status: &str) -> bool {
