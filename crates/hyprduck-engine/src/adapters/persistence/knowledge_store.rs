@@ -591,20 +591,149 @@ struct GraphTrailRelationLink {
     target: GraphTrailNode,
 }
 
+#[derive(Debug)]
+struct GraphTrailIndex {
+    nodes_by_evidence: BTreeMap<String, Vec<GraphTrailNode>>,
+    relation_links_by_evidence: BTreeMap<String, Vec<GraphTrailRelationLink>>,
+    relation_links_by_node: BTreeMap<String, Vec<GraphTrailRelationLink>>,
+    eligible_evidence_ids: BTreeSet<String>,
+    eligible_source_ids: BTreeSet<String>,
+}
+
+impl GraphTrailIndex {
+    fn load(graph: &Graph, workspace_id: &str) -> Result<Self> {
+        let (eligible_evidence_ids, eligible_source_ids) =
+            load_graph_trail_eligible_refs(graph, workspace_id)?;
+        let mut index = Self {
+            nodes_by_evidence: BTreeMap::new(),
+            relation_links_by_evidence: BTreeMap::new(),
+            relation_links_by_node: BTreeMap::new(),
+            eligible_evidence_ids,
+            eligible_source_ids,
+        };
+
+        for node in load_graph_trail_nodes(graph, workspace_id)? {
+            if !index.node_is_eligible(&node) {
+                continue;
+            }
+            for evidence_id in node
+                .evidence_ids
+                .iter()
+                .filter(|evidence_id| index.eligible_evidence_ids.contains(*evidence_id))
+            {
+                index
+                    .nodes_by_evidence
+                    .entry(evidence_id.clone())
+                    .or_default()
+                    .push(node.clone());
+            }
+        }
+
+        for link in load_graph_trail_relation_links(graph, workspace_id)? {
+            if !index.relation_is_eligible(&link.relation) {
+                continue;
+            }
+            for evidence_id in link
+                .relation
+                .evidence_ids
+                .iter()
+                .filter(|evidence_id| index.eligible_evidence_ids.contains(*evidence_id))
+            {
+                index
+                    .relation_links_by_evidence
+                    .entry(evidence_id.clone())
+                    .or_default()
+                    .push(link.clone());
+            }
+            index
+                .relation_links_by_node
+                .entry(link.source.node_id.clone())
+                .or_default()
+                .push(link.clone());
+            index
+                .relation_links_by_node
+                .entry(link.target.node_id.clone())
+                .or_default()
+                .push(link);
+        }
+
+        sort_and_limit_graph_trail_map(&mut index.nodes_by_evidence, |node| node.node_id.as_str());
+        sort_and_limit_graph_trail_map(&mut index.relation_links_by_evidence, |link| {
+            link.relation.relation_id.as_str()
+        });
+        sort_and_limit_graph_trail_map(&mut index.relation_links_by_node, |link| {
+            link.relation.relation_id.as_str()
+        });
+
+        Ok(index)
+    }
+
+    fn nodes_for_evidence(&self, evidence_id: &str) -> &[GraphTrailNode] {
+        self.nodes_by_evidence
+            .get(evidence_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn relation_links_for_evidence(&self, evidence_id: &str) -> &[GraphTrailRelationLink] {
+        self.relation_links_by_evidence
+            .get(evidence_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn relation_links_for_node(&self, node_id: &str) -> &[GraphTrailRelationLink] {
+        self.relation_links_by_node
+            .get(node_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn node_is_eligible(&self, node: &GraphTrailNode) -> bool {
+        self.refs_are_eligible(&node.evidence_ids, &node.source_ids)
+    }
+
+    fn relation_is_eligible(&self, relation: &GraphTrailRelation) -> bool {
+        self.refs_are_eligible(&relation.evidence_ids, &relation.source_ids)
+    }
+
+    fn refs_are_eligible(&self, evidence_ids: &[String], source_ids: &[String]) -> bool {
+        if !evidence_ids.is_empty() {
+            return evidence_ids
+                .iter()
+                .any(|evidence_id| self.eligible_evidence_ids.contains(evidence_id));
+        }
+        source_ids
+            .iter()
+            .any(|source_id| self.eligible_source_ids.contains(source_id))
+    }
+}
+
+fn sort_and_limit_graph_trail_map<T, F>(records: &mut BTreeMap<String, Vec<T>>, key: F)
+where
+    F: Fn(&T) -> &str,
+{
+    for values in records.values_mut() {
+        values.sort_by(|left, right| key(left).cmp(key(right)));
+        values.dedup_by(|left, right| key(left) == key(right));
+        values.truncate(GRAPH_TRAIL_DIRECT_LIMIT.max(GRAPH_TRAIL_ADJACENT_LIMIT));
+    }
+}
+
 fn attach_context_pack_graph_trails(
     graph: &Graph,
     workspace_id: &str,
     context_pack: &mut ContextPackV1,
 ) -> Result<()> {
+    let graph_trail_index = GraphTrailIndex::load(graph, workspace_id)?;
     for evidence in &mut context_pack.selected_evidence {
-        evidence.graph_trail = build_context_pack_graph_trail(graph, workspace_id, evidence)?;
+        evidence.graph_trail = build_context_pack_graph_trail(&graph_trail_index, evidence)?;
     }
     Ok(())
 }
 
 fn build_context_pack_graph_trail(
-    graph: &Graph,
-    workspace_id: &str,
+    graph_trail_index: &GraphTrailIndex,
     evidence: &ContextPackEvidenceV1,
 ) -> Result<Option<ContextPackGraphTrailV1>> {
     let mut direct = Vec::new();
@@ -614,12 +743,8 @@ fn build_context_pack_graph_trail(
     let mut adjacent_keys = BTreeSet::new();
     let mut follow_up_keys = BTreeSet::new();
 
-    let direct_nodes =
-        load_graph_trail_nodes_for_evidence(graph, workspace_id, &evidence.evidence_ref)?
-            .into_iter()
-            .filter(|node| graph_trail_node_is_eligible(graph, workspace_id, node).unwrap_or(false))
-            .collect::<Vec<_>>();
-    for node in &direct_nodes {
+    let direct_nodes = graph_trail_index.nodes_for_evidence(&evidence.evidence_ref);
+    for node in direct_nodes {
         push_graph_record(
             &mut direct,
             &mut direct_keys,
@@ -635,14 +760,8 @@ fn build_context_pack_graph_trail(
 
     let mut direct_relation_ids = BTreeSet::new();
     let direct_relation_links =
-        load_graph_trail_relations_for_evidence(graph, workspace_id, &evidence.evidence_ref)?
-            .into_iter()
-            .filter(|link| {
-                graph_trail_relation_is_eligible(graph, workspace_id, &link.relation)
-                    .unwrap_or(false)
-            })
-            .collect::<Vec<_>>();
-    for link in &direct_relation_links {
+        graph_trail_index.relation_links_for_evidence(&evidence.evidence_ref);
+    for link in direct_relation_links {
         direct_relation_ids.insert(link.relation.relation_id.clone());
         push_graph_record(
             &mut direct,
@@ -656,26 +775,22 @@ fn build_context_pack_graph_trail(
             ),
         );
         push_adjacent_node_from_relation_endpoint(
-            graph,
-            workspace_id,
+            graph_trail_index,
             &link.source,
             &mut adjacent,
             &mut adjacent_keys,
         );
         push_adjacent_node_from_relation_endpoint(
-            graph,
-            workspace_id,
+            graph_trail_index,
             &link.target,
             &mut adjacent,
             &mut adjacent_keys,
         );
     }
 
-    for node in &direct_nodes {
-        for link in load_graph_trail_relation_links_for_node(graph, workspace_id, &node.node_id)? {
-            if direct_relation_ids.contains(&link.relation.relation_id)
-                || !graph_trail_relation_is_eligible(graph, workspace_id, &link.relation)?
-            {
+    for node in direct_nodes {
+        for link in graph_trail_index.relation_links_for_node(&node.node_id) {
+            if direct_relation_ids.contains(&link.relation.relation_id) {
                 continue;
             }
             push_graph_record(
@@ -695,8 +810,7 @@ fn build_context_pack_graph_trail(
                 &link.source
             };
             push_adjacent_node_from_relation_endpoint(
-                graph,
-                workspace_id,
+                graph_trail_index,
                 neighbor,
                 &mut adjacent,
                 &mut adjacent_keys,
@@ -754,13 +868,12 @@ fn build_context_pack_graph_trail(
 }
 
 fn push_adjacent_node_from_relation_endpoint(
-    graph: &Graph,
-    workspace_id: &str,
+    graph_trail_index: &GraphTrailIndex,
     node: &GraphTrailNode,
     adjacent: &mut Vec<ContextPackGraphRecordV1>,
     adjacent_keys: &mut BTreeSet<String>,
 ) {
-    if !graph_trail_node_is_eligible(graph, workspace_id, node).unwrap_or(false) {
+    if !graph_trail_index.node_is_eligible(node) {
         return;
     }
     push_graph_record(
@@ -882,11 +995,7 @@ fn push_context_pack_follow_up(
     }
 }
 
-fn load_graph_trail_nodes_for_evidence(
-    graph: &Graph,
-    workspace_id: &str,
-    evidence_id: &str,
-) -> Result<Vec<GraphTrailNode>> {
+fn load_graph_trail_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<GraphTrailNode>> {
     let rows = graph
         .connection()
         .cypher_builder(
@@ -908,9 +1017,6 @@ fn load_graph_trail_nodes_for_evidence(
             continue;
         }
         let evidence_ids = row_string_array(row, "evidence_ids_json")?;
-        if !evidence_ids.iter().any(|value| value == evidence_id) {
-            continue;
-        }
         nodes.push(GraphTrailNode {
             node_id: row_string(row, "node_id")?,
             kind: row_string(row, "kind")?,
@@ -921,119 +1027,36 @@ fn load_graph_trail_nodes_for_evidence(
         });
     }
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
-    nodes.truncate(GRAPH_TRAIL_DIRECT_LIMIT);
     Ok(nodes)
-}
-
-fn load_graph_trail_relations_for_evidence(
-    graph: &Graph,
-    workspace_id: &str,
-    evidence_id: &str,
-) -> Result<Vec<GraphTrailRelationLink>> {
-    let mut links = load_graph_trail_relation_links(
-        graph,
-        workspace_id,
-        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
-         RETURN source.id AS source_node_id,
-                source.kind AS source_kind,
-                source.label AS source_label,
-                source.aliases_json AS source_aliases_json,
-                source.evidence_ids_json AS source_evidence_ids_json,
-                source.source_ids_json AS source_source_ids_json,
-                target.id AS target_node_id,
-                target.kind AS target_kind,
-                target.label AS target_label,
-                target.aliases_json AS target_aliases_json,
-                target.evidence_ids_json AS target_evidence_ids_json,
-                target.source_ids_json AS target_source_ids_json,
-                r.relation_id AS relation_id,
-                r.label AS relation_label,
-                r.evidence_ids_json AS relation_evidence_ids_json,
-                r.source_ids_json AS relation_source_ids_json,
-                r.status AS relation_status",
-        None,
-    )?;
-    links.retain(|link| {
-        link.relation
-            .evidence_ids
-            .iter()
-            .any(|value| value == evidence_id)
-    });
-    links.truncate(GRAPH_TRAIL_DIRECT_LIMIT);
-    Ok(links)
-}
-
-fn load_graph_trail_relation_links_for_node(
-    graph: &Graph,
-    workspace_id: &str,
-    node_id: &str,
-) -> Result<Vec<GraphTrailRelationLink>> {
-    let mut links = load_graph_trail_relation_links(
-        graph,
-        workspace_id,
-        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
-         RETURN source.id AS source_node_id,
-                source.kind AS source_kind,
-                source.label AS source_label,
-                source.aliases_json AS source_aliases_json,
-                source.evidence_ids_json AS source_evidence_ids_json,
-                source.source_ids_json AS source_source_ids_json,
-                target.id AS target_node_id,
-                target.kind AS target_kind,
-                target.label AS target_label,
-                target.aliases_json AS target_aliases_json,
-                target.evidence_ids_json AS target_evidence_ids_json,
-                target.source_ids_json AS target_source_ids_json,
-                r.relation_id AS relation_id,
-                r.label AS relation_label,
-                r.evidence_ids_json AS relation_evidence_ids_json,
-                r.source_ids_json AS relation_source_ids_json,
-                r.status AS relation_status",
-        Some(node_id),
-    )?;
-    links.extend(load_graph_trail_relation_links(
-        graph,
-        workspace_id,
-        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {id: $node_id, workspace_id: $workspace_id})
-         RETURN source.id AS source_node_id,
-                source.kind AS source_kind,
-                source.label AS source_label,
-                source.aliases_json AS source_aliases_json,
-                source.evidence_ids_json AS source_evidence_ids_json,
-                source.source_ids_json AS source_source_ids_json,
-                target.id AS target_node_id,
-                target.kind AS target_kind,
-                target.label AS target_label,
-                target.aliases_json AS target_aliases_json,
-                target.evidence_ids_json AS target_evidence_ids_json,
-                target.source_ids_json AS target_source_ids_json,
-                r.relation_id AS relation_id,
-                r.label AS relation_label,
-                r.evidence_ids_json AS relation_evidence_ids_json,
-                r.source_ids_json AS relation_source_ids_json,
-                r.status AS relation_status",
-        Some(node_id),
-    )?);
-    links.sort_by(|left, right| left.relation.relation_id.cmp(&right.relation.relation_id));
-    links.dedup_by(|left, right| left.relation.relation_id == right.relation.relation_id);
-    links.truncate(GRAPH_TRAIL_ADJACENT_LIMIT);
-    Ok(links)
 }
 
 fn load_graph_trail_relation_links(
     graph: &Graph,
     workspace_id: &str,
-    cypher: &str,
-    node_id: Option<&str>,
 ) -> Result<Vec<GraphTrailRelationLink>> {
-    let mut builder = graph
+    let rows = graph
         .connection()
-        .cypher_builder(cypher)
-        .param("workspace_id", workspace_id);
-    if let Some(node_id) = node_id {
-        builder = builder.param("node_id", node_id);
-    }
-    let rows = builder
+        .cypher_builder(
+            "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+             RETURN source.id AS source_node_id,
+                    source.kind AS source_kind,
+                    source.label AS source_label,
+                    source.aliases_json AS source_aliases_json,
+                    source.evidence_ids_json AS source_evidence_ids_json,
+                    source.source_ids_json AS source_source_ids_json,
+                    target.id AS target_node_id,
+                    target.kind AS target_kind,
+                    target.label AS target_label,
+                    target.aliases_json AS target_aliases_json,
+                    target.evidence_ids_json AS target_evidence_ids_json,
+                    target.source_ids_json AS target_source_ids_json,
+                    r.relation_id AS relation_id,
+                    r.label AS relation_label,
+                    r.evidence_ids_json AS relation_evidence_ids_json,
+                    r.source_ids_json AS relation_source_ids_json,
+                    r.status AS relation_status",
+        )
+        .param("workspace_id", workspace_id)
         .run()
         .context("failed querying GraphQLite graph trail relations")?;
     let mut links = Vec::new();
@@ -1055,6 +1078,56 @@ fn load_graph_trail_relation_links(
     Ok(links)
 }
 
+fn load_graph_trail_eligible_refs(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut evidence_statement = sqlite
+        .prepare(
+            "SELECT e.evidence_id
+             FROM evidence_items e
+             JOIN sources s
+               ON s.workspace_id = e.workspace_id
+              AND s.source_id = e.source_id
+             WHERE e.workspace_id = ?1
+               AND e.status = 'active'
+               AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
+        )
+        .context("failed preparing graph trail eligible evidence query")?;
+    let mut evidence_rows = evidence_statement
+        .query([workspace_id])
+        .context("failed querying graph trail eligible evidence refs")?;
+    let mut eligible_evidence_ids = BTreeSet::new();
+    while let Some(row) = evidence_rows
+        .next()
+        .context("failed reading graph trail eligible evidence row")?
+    {
+        eligible_evidence_ids.insert(row.get(0).context("read graph trail evidence id")?);
+    }
+
+    let mut source_statement = sqlite
+        .prepare(
+            "SELECT source_id
+             FROM sources
+             WHERE workspace_id = ?1
+               AND status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
+        )
+        .context("failed preparing graph trail eligible source query")?;
+    let mut source_rows = source_statement
+        .query([workspace_id])
+        .context("failed querying graph trail eligible source refs")?;
+    let mut eligible_source_ids = BTreeSet::new();
+    while let Some(row) = source_rows
+        .next()
+        .context("failed reading graph trail eligible source row")?
+    {
+        eligible_source_ids.insert(row.get(0).context("read graph trail source id")?);
+    }
+
+    Ok((eligible_evidence_ids, eligible_source_ids))
+}
+
 fn graph_trail_node_from_relation_row(
     row: &graphqlite::Row,
     prefix: &str,
@@ -1067,55 +1140,6 @@ fn graph_trail_node_from_relation_row(
         evidence_ids: row_string_array(row, &format!("{prefix}_evidence_ids_json"))?,
         source_ids: row_string_array(row, &format!("{prefix}_source_ids_json"))?,
     })
-}
-
-fn graph_trail_node_is_eligible(
-    graph: &Graph,
-    workspace_id: &str,
-    node: &GraphTrailNode,
-) -> Result<bool> {
-    graph_record_refs_are_eligible(graph, workspace_id, &node.evidence_ids, &node.source_ids)
-}
-
-fn graph_trail_relation_is_eligible(
-    graph: &Graph,
-    workspace_id: &str,
-    relation: &GraphTrailRelation,
-) -> Result<bool> {
-    graph_record_refs_are_eligible(
-        graph,
-        workspace_id,
-        &relation.evidence_ids,
-        &relation.source_ids,
-    )
-}
-
-fn graph_record_refs_are_eligible(
-    graph: &Graph,
-    workspace_id: &str,
-    evidence_ids: &[String],
-    source_ids: &[String],
-) -> Result<bool> {
-    if !evidence_ids.is_empty() {
-        for evidence_id in evidence_ids {
-            let Some(evidence_row) =
-                load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
-            else {
-                continue;
-            };
-            if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some()
-            {
-                return Ok(true);
-            }
-        }
-        return Ok(false);
-    }
-    for source_id in source_ids {
-        if load_context_pack_source_row(graph, workspace_id, source_id)?.is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {

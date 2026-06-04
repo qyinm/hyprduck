@@ -298,32 +298,88 @@ fn load_node_relations_from_db(
     workspace_id: &str,
     node_id: &str,
 ) -> Result<Vec<BrainRelationRecord>> {
-    let mut relations = load_graph_canvas_relations(graph, workspace_id)?
-        .into_iter()
-        .filter(|relation| relation.source_node_id == node_id || relation.target_node_id == node_id)
-        .filter(|relation| {
-            relation_evidence_refs_are_eligible(graph, workspace_id, &relation.evidence_ids)
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
+    let mut relations = load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_node_id,
+                target.id AS target_node_id,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at",
+    )?;
+    relations.extend(load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {id: $node_id, workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_node_id,
+                target.id AS target_node_id,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at",
+    )?);
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    relations.dedup_by(|left, right| left.relation_id == right.relation_id);
     Ok(relations)
 }
 
-fn relation_evidence_refs_are_eligible(
+fn load_node_relation_rows_from_db(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+    cypher: &str,
+) -> Result<Vec<BrainRelationRecord>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(cypher)
+        .param("workspace_id", workspace_id)
+        .param("node_id", node_id)
+        .run()
+        .context("failed querying GraphQLite node relations")?;
+    let mut relations = Vec::new();
+    for row in &rows {
+        let relation = graph_canvas_relation_from_row(row)?;
+        let source_ids =
+            row_string_array(row, "source_ids_json").context("read node relation source refs")?;
+        if relation_refs_are_eligible(graph, workspace_id, &relation.evidence_ids, &source_ids)? {
+            relations.push(relation);
+        }
+    }
+    Ok(relations)
+}
+
+fn relation_refs_are_eligible(
     graph: &Graph,
     workspace_id: &str,
     evidence_ids: &[String],
+    source_ids: &[String],
 ) -> Result<bool> {
-    if evidence_ids.is_empty() {
+    if !evidence_ids.is_empty() {
+        for evidence_id in evidence_ids {
+            let Some(evidence_row) =
+                load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
+            else {
+                continue;
+            };
+            if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some()
+            {
+                return Ok(true);
+            }
+        }
         return Ok(false);
     }
-    for evidence_id in evidence_ids {
-        let Some(evidence_row) = load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
-        else {
-            continue;
-        };
-        if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some() {
+    for source_id in source_ids {
+        if load_context_pack_source_row(graph, workspace_id, source_id)?.is_some() {
             return Ok(true);
         }
     }
@@ -726,32 +782,32 @@ fn load_graph_canvas_relations(
         .context("failed querying GraphQLite graph canvas relations")?;
     let mut relations = rows
         .iter()
-        .map(|row| {
-            Ok(BrainRelationRecord {
-                relation_id: row_string(row, "relation_id")
-                    .context("read graph canvas relation id")?,
-                kind: parse_brain_relation_kind(
-                    &row_string(row, "kind").context("read graph canvas relation kind")?,
-                ),
-                source_node_id: row_string(row, "source_node_id")
-                    .context("read graph canvas relation source node")?,
-                target_node_id: row_string(row, "target_node_id")
-                    .context("read graph canvas relation target node")?,
-                label: row_string(row, "label").context("read graph canvas relation label")?,
-                evidence_ids: row_string_array(row, "evidence_ids_json")
-                    .context("read graph canvas relation evidence refs")?,
-                confidence: parse_optional_f32(
-                    &row_string(row, "confidence")
-                        .context("read graph canvas relation confidence")?,
-                ),
-                updated_at: row_i64(row, "updated_at")
-                    .context("read graph canvas relation updated at")?
-                    .max(0) as u64,
-            })
-        })
+        .map(graph_canvas_relation_from_row)
         .collect::<Result<Vec<_>>>()?;
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     Ok(relations)
+}
+
+fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelationRecord> {
+    Ok(BrainRelationRecord {
+        relation_id: row_string(row, "relation_id").context("read graph canvas relation id")?,
+        kind: parse_brain_relation_kind(
+            &row_string(row, "kind").context("read graph canvas relation kind")?,
+        ),
+        source_node_id: row_string(row, "source_node_id")
+            .context("read graph canvas relation source node")?,
+        target_node_id: row_string(row, "target_node_id")
+            .context("read graph canvas relation target node")?,
+        label: row_string(row, "label").context("read graph canvas relation label")?,
+        evidence_ids: row_string_array(row, "evidence_ids_json")
+            .context("read graph canvas relation evidence refs")?,
+        confidence: parse_optional_f32(
+            &row_string(row, "confidence").context("read graph canvas relation confidence")?,
+        ),
+        updated_at: row_i64(row, "updated_at")
+            .context("read graph canvas relation updated at")?
+            .max(0) as u64,
+    })
 }
 
 fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
