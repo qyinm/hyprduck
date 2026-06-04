@@ -77,8 +77,30 @@ class DisabledAgentTerminalBackend extends AgentTerminalBackend {
   }
 }
 
-function createDefaultAgentTerminalBackend() {
-  return new DisabledAgentTerminalBackend();
+function createDefaultAgentTerminalBackend(options = {}) {
+  const ptyProbe = tryCreatePtyBackend(options);
+  if (ptyProbe.backend) {
+    return ptyProbe.backend;
+  }
+  return new DisabledAgentTerminalBackend({
+    reason:
+      ptyProbe.reason ??
+      "PTY backend is unavailable; use the external Ghostty fallback.",
+  });
+}
+
+function tryCreatePtyBackend(options = {}) {
+  try {
+    const {
+      tryCreatePtyAgentTerminalBackend,
+    } = require("./agent-terminal-pty.cjs");
+    return tryCreatePtyAgentTerminalBackend(options);
+  } catch (error) {
+    return {
+      backend: null,
+      reason: `PTY backend unavailable: ${error.message}`,
+    };
+  }
 }
 
 function assertAgentTerminalBackend(candidate) {

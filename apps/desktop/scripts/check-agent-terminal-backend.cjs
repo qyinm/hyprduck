@@ -14,7 +14,7 @@ const {
 function checkDefaultBackend() {
   const backend = assertAgentTerminalBackend(createDefaultAgentTerminalBackend());
   const status = backend.snapshotStatus();
-  if (status.backend !== "disabled" || status.fallback !== "external_ghostty") {
+  if (status.backend === "disabled" && status.fallback !== "external_ghostty") {
     throw new Error(`unexpected default backend status: ${JSON.stringify(status)}`);
   }
   return status;
@@ -47,6 +47,14 @@ async function main() {
   const defaultStatus = checkDefaultBackend();
   const ghosttyProbe = await checkOptionalGhosttyModule();
   const ptyProbe = checkPtyBackend();
+  if (ptyProbe.available && defaultStatus.backend !== "node_pty") {
+    throw new Error(
+      `default backend should use PTY when available: ${JSON.stringify({
+        defaultStatus,
+        ptyProbe,
+      })}`,
+    );
+  }
   console.log(
     JSON.stringify(
       {

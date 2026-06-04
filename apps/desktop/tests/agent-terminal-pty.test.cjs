@@ -5,6 +5,9 @@ const {
   createPtyAgentTerminalBackend,
   isPackagedAppResource,
 } = require("../main/agent-terminal-pty.cjs");
+const {
+  createDefaultAgentTerminalBackend,
+} = require("../main/agent-terminal-backend.cjs");
 
 test("pty backend spawns the detected agent command and forwards lifecycle events", async () => {
   const fakePty = createFakePty();
@@ -89,6 +92,16 @@ test("pty backend replays fast startup output to late subscribers", async () => 
 
   assert.equal(events.length, 1);
   assert.equal(events[0].data, "boot");
+});
+
+test("default agent terminal backend uses PTY when it is available", () => {
+  const backend = createDefaultAgentTerminalBackend({
+    pty: createFakePty(),
+    cwd: "/tmp",
+    env: { PATH: "/bin", HOME: "/tmp" },
+  });
+
+  assert.equal(backend.snapshotStatus().backend, "node_pty");
 });
 
 test("packaged app resources are not mutated at runtime", () => {
