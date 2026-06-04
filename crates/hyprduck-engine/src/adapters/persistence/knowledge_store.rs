@@ -665,6 +665,7 @@ impl GraphTrailIndex {
             }
         }
 
+        sort_and_limit_graph_trail_map(&mut index.nodes_by_evidence, |node| node.node_id.as_str());
         let direct_node_ids = index
             .nodes_by_evidence
             .values()
@@ -682,7 +683,6 @@ impl GraphTrailIndex {
             }
         }
 
-        sort_and_limit_graph_trail_map(&mut index.nodes_by_evidence, |node| node.node_id.as_str());
         sort_and_limit_graph_trail_map(&mut index.relation_links_by_evidence, |link| {
             link.relation.relation_id.as_str()
         });
