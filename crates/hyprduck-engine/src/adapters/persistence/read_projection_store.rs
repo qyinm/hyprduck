@@ -273,10 +273,7 @@ pub(super) fn read_node_from_db(
     node_id: &str,
 ) -> Result<Option<ReadNodeResponseData>> {
     let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let Some(node) = load_graph_canvas_nodes(&graph, workspace_id)?
-        .into_iter()
-        .find(|node| node.node_id == node_id)
-    else {
+    let Some(node) = load_graph_canvas_node_by_id(&graph, workspace_id, node_id)? else {
         return Ok(None);
     };
     let evidence_ids = node.evidence_ids.clone();
@@ -774,33 +771,60 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
         .context("failed querying GraphQLite graph canvas nodes")?;
     let mut nodes = rows
         .iter()
-        .map(|row| {
-            Ok(BrainNodeRecord {
-                node_id: row_string(row, "node_id").context("read graph canvas node id")?,
-                kind: parse_brain_node_kind(
-                    &row_string(row, "kind").context("read graph canvas node kind")?,
-                ),
-                label: row_string(row, "label").context("read graph canvas node label")?,
-                scope: parse_brain_scope(
-                    &row_string(row, "scope").context("read graph canvas node scope")?,
-                ),
-                aliases: row_string_array(row, "aliases_json")
-                    .context("read graph canvas node aliases")?,
-                evidence_ids: row_string_array(row, "evidence_ids_json")
-                    .context("read graph canvas node evidence refs")?,
-                source_ids: row_string_array(row, "source_ids_json")
-                    .context("read graph canvas node source refs")?,
-                confidence: parse_optional_f32(
-                    &row_string(row, "confidence").context("read graph canvas node confidence")?,
-                ),
-                updated_at: row_i64(row, "updated_at")
-                    .context("read graph canvas node updated at")?
-                    .max(0) as u64,
-            })
-        })
+        .map(graph_canvas_node_from_row)
         .collect::<Result<Vec<_>>>()?;
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     Ok(nodes)
+}
+
+fn load_graph_canvas_node_by_id(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Option<BrainNodeRecord>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {id: $node_id, workspace_id: $workspace_id})
+             RETURN n.id AS node_id,
+                    n.kind AS kind,
+                    n.label AS label,
+                    n.scope AS scope,
+                    n.aliases_json AS aliases_json,
+                    n.evidence_ids_json AS evidence_ids_json,
+                    n.source_ids_json AS source_ids_json,
+                    n.confidence AS confidence,
+                    n.updated_at AS updated_at",
+        )
+        .param("workspace_id", workspace_id)
+        .param("node_id", node_id)
+        .run()
+        .context("failed querying GraphQLite graph canvas node")?;
+    rows.get(0).map(graph_canvas_node_from_row).transpose()
+}
+
+fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> {
+    Ok(BrainNodeRecord {
+        node_id: row_string(row, "node_id").context("read graph canvas node id")?,
+        kind: parse_brain_node_kind(
+            &row_string(row, "kind").context("read graph canvas node kind")?,
+        ),
+        label: row_string(row, "label").context("read graph canvas node label")?,
+        scope: parse_brain_scope(
+            &row_string(row, "scope").context("read graph canvas node scope")?,
+        ),
+        aliases: row_string_array(row, "aliases_json").context("read graph canvas node aliases")?,
+        evidence_ids: row_string_array(row, "evidence_ids_json")
+            .context("read graph canvas node evidence refs")?,
+        source_ids: row_string_array(row, "source_ids_json")
+            .context("read graph canvas node source refs")?,
+        confidence: parse_optional_f32(
+            &row_string(row, "confidence").context("read graph canvas node confidence")?,
+        ),
+        updated_at: row_i64(row, "updated_at")
+            .context("read graph canvas node updated at")?
+            .max(0) as u64,
+    })
 }
 
 fn load_graph_canvas_relations(

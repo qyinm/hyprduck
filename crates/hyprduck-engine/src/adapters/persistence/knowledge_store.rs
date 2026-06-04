@@ -578,6 +578,7 @@ impl KnowledgeStore {
 const GRAPH_TRAIL_DIRECT_LIMIT: usize = 8;
 const GRAPH_TRAIL_ADJACENT_LIMIT: usize = 8;
 const GRAPH_TRAIL_FOLLOW_UP_LIMIT: usize = 8;
+const GRAPH_TRAIL_QUERY_OVERFETCH_MULTIPLIER: usize = 4;
 
 #[derive(Debug, Clone)]
 struct GraphTrailNode {
@@ -1044,6 +1045,7 @@ fn load_graph_trail_nodes_for_evidence(
         "node_id",
         "evidence_ids_json",
         &graph_trail_json_ref_like_pattern(evidence_id),
+        graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
     let mut nodes = Vec::new();
     for node_id in node_ids {
@@ -1066,6 +1068,7 @@ fn load_graph_trail_relation_links_for_evidence(
         "edge_id",
         "evidence_ids_json",
         &graph_trail_json_ref_like_pattern(evidence_id),
+        graph_trail_query_limit(GRAPH_TRAIL_DIRECT_LIMIT),
     )?;
     load_graph_trail_relation_links_for_edge_ids(graph, workspace_id, edge_ids)
 }
@@ -1080,10 +1083,19 @@ fn load_graph_trail_relation_links_for_node(
     };
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
-        .prepare("SELECT rowid FROM edges WHERE source_id = ?1 OR target_id = ?1")
+        .prepare(
+            "SELECT rowid
+             FROM edges
+             WHERE source_id = ?1 OR target_id = ?1
+             ORDER BY rowid ASC
+             LIMIT ?2",
+        )
         .context("failed preparing GraphQLite node edge query")?;
     let mut rows = statement
-        .query([internal_node_id])
+        .query((
+            internal_node_id,
+            graph_trail_query_limit(GRAPH_TRAIL_ADJACENT_LIMIT) as i64,
+        ))
         .context("failed querying GraphQLite node edges")?;
     let mut edge_ids = BTreeSet::new();
     while let Some(row) = rows
@@ -1145,12 +1157,17 @@ fn graph_trail_json_ref_like_pattern(ref_id: &str) -> String {
     format!("%\"{ref_id}\"%")
 }
 
+fn graph_trail_query_limit(limit: usize) -> usize {
+    limit.saturating_mul(GRAPH_TRAIL_QUERY_OVERFETCH_MULTIPLIER)
+}
+
 fn graphqlite_ids_with_text_property_like(
     graph: &Graph,
     table: &str,
     id_column: &str,
     key: &str,
     pattern: &str,
+    limit: usize,
 ) -> Result<BTreeSet<i64>> {
     let Some(key_id) = graphqlite_text_property_key_id(graph, key)? else {
         return Ok(BTreeSet::new());
@@ -1158,11 +1175,15 @@ fn graphqlite_ids_with_text_property_like(
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
         .prepare(&format!(
-            "SELECT {id_column} FROM {table} WHERE key_id = ?1 AND value LIKE ?2"
+            "SELECT {id_column}
+             FROM {table}
+             WHERE key_id = ?1 AND value LIKE ?2
+             ORDER BY {id_column} ASC
+             LIMIT ?3"
         ))
         .with_context(|| format!("failed preparing GraphQLite {table} lookup"))?;
     let mut rows = statement
-        .query((key_id, pattern))
+        .query((key_id, pattern, limit as i64))
         .with_context(|| format!("failed querying GraphQLite {table} lookup"))?;
     let mut ids = BTreeSet::new();
     while let Some(row) = rows
