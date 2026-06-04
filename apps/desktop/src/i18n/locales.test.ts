@@ -11,13 +11,20 @@ import {
 } from "./locales";
 
 describe("desktop i18n locales", () => {
-  test("supports English, Korean, and Japanese with English as fallback", () => {
+  test("supports configured UI locales with English as fallback", () => {
     expect(DEFAULT_LOCALE).toBe("en");
-    expect(LOCALE_OPTIONS.map((option) => option.id)).toEqual(["en", "ko", "ja"]);
-    expect(isLocale("en")).toBe(true);
-    expect(isLocale("ko")).toBe(true);
-    expect(isLocale("ja")).toBe(true);
-    expect(isLocale("fr")).toBe(false);
+    expect(LOCALE_OPTIONS.map((option) => option.id)).toEqual([
+      "en",
+      "ko",
+      "ja",
+      "es",
+      "fr",
+      "de",
+    ]);
+    for (const locale of ["en", "ko", "ja", "es", "fr", "de"]) {
+      expect(isLocale(locale)).toBe(true);
+    }
+    expect(isLocale("it")).toBe(false);
   });
 
   test("every locale has the same translation keys", () => {
@@ -31,7 +38,10 @@ describe("desktop i18n locales", () => {
   test("falls back to English for missing key values", () => {
     expect(translate("ko", "nav.knowledge")).toBe("지식");
     expect(translate("ja", "settings.general.title")).toBe("一般");
-    expect(translate("fr", "nav.settings")).toBe("Settings");
+    expect(translate("es", "settings.general.title")).toBe("General");
+    expect(translate("fr", "nav.settings")).toBe("Paramètres");
+    expect(translate("de", "settings.general.title")).toBe("Allgemein");
+    expect(translate("it", "nav.settings")).toBe("Settings");
   });
 
   test("translation key type includes operational desktop copy", () => {
