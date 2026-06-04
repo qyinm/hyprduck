@@ -861,6 +861,40 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
             "id": 35,
             "method": "tools/call",
             "params": {
+                "name": "search_documents",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP graph patch",
+                    "limit": 5
+                }
+            }
+        }),
+    );
+    let graph_patch_search_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_patch_search_tool["result"]["isError"], false,
+        "{graph_patch_search_tool:#?}"
+    );
+    let text = graph_patch_search_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph patch search text");
+    let graph_patch_search: Value = serde_json::from_str(text).expect("graph patch search payload");
+    assert!(graph_patch_search["results"]
+        .as_array()
+        .expect("graph patch search results")
+        .iter()
+        .any(|result| result["id"] == "wiki-mcp-agent-patch"
+            || result["id"] == "evidence-mcp"
+            || result["id"] == "source-mcp"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 36,
+            "method": "tools/call",
+            "params": {
                 "name": "get_context_pack",
                 "arguments": {
                     "workspaceId": "default",
