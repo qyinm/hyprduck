@@ -245,9 +245,9 @@ export function translate(
   replacements: Record<string, string | number> = {},
 ): string {
   const normalizedLocale = isLocale(locale) ? locale : DEFAULT_LOCALE;
-  const template = TRANSLATIONS[normalizedLocale][key] ?? TRANSLATIONS.en[key];
-  return Object.entries(replacements).reduce(
-    (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+  const template: string = TRANSLATIONS[normalizedLocale][key] ?? TRANSLATIONS.en[key];
+  return Object.entries(replacements).reduce<string>(
+    (result, [name, value]) => result.split(`{${name}}`).join(String(value)),
     template,
   );
 }

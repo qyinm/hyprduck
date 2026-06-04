@@ -52,3 +52,9 @@ describe("desktop i18n locales", () => {
     ]);
   });
 });
+
+test("provider exports the existing settings storage key", async () => {
+  const provider = await import("./I18nProvider");
+
+  expect(provider.UI_LANGUAGE_STORAGE_KEY).toBe("hyprduck.uiLanguage");
+});
