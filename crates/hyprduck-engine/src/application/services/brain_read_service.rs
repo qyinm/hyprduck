@@ -369,15 +369,22 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .find(|node| node.node_id == request.node_id)
         .cloned()
         .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
+    let node = sanitize_read_node_fallback_node(node)
+        .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
     let evidence_ids = node.evidence_ids.iter().collect::<BTreeSet<_>>();
-    let evidence = reader
+    let mut evidence = reader
         .snapshot
         .evidence
         .iter()
         .filter(|evidence| evidence_ids.contains(&evidence.id))
         .take(READ_NODE_FALLBACK_EVIDENCE_LIMIT)
         .cloned()
-        .collect();
+        .collect::<Vec<_>>();
+    for evidence in &mut evidence {
+        redact_optional_agent_path(&mut evidence.source_path);
+        redact_optional_agent_path(&mut evidence.markdown_path);
+        redact_optional_agent_path(&mut evidence.image_path);
+    }
     let relations = reader
         .snapshot
         .relations
@@ -401,6 +408,17 @@ fn read_node_fallback_relation_is_agent_safe(relation: &BrainRelationRecord) -> 
         && read_node_fallback_text_is_safe(&relation.label)
         && read_node_fallback_text_is_safe(&relation.source_node_id)
         && read_node_fallback_text_is_safe(&relation.target_node_id)
+}
+
+fn sanitize_read_node_fallback_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
+    if !read_node_fallback_text_is_safe(&node.node_id)
+        || !read_node_fallback_text_is_safe(&node.label)
+    {
+        return None;
+    }
+    node.aliases
+        .retain(|alias| read_node_fallback_text_is_safe(alias));
+    Some(node)
 }
 
 fn read_node_fallback_text_is_safe(value: &str) -> bool {

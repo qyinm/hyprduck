@@ -279,6 +279,9 @@ pub(super) fn read_node_from_db(
     let Some(node) = load_graph_canvas_node_by_id(&graph, workspace_id, node_id)? else {
         return Ok(None);
     };
+    let Some(node) = sanitize_read_node_agent_node(node) else {
+        return Ok(None);
+    };
     let evidence_ids = node.evidence_ids.clone();
     let source_ids = node.source_ids.clone();
     let limited_evidence_ids = evidence_ids
@@ -371,6 +374,15 @@ fn read_node_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
         && read_node_agent_text_is_safe(&relation.label)
         && read_node_agent_text_is_safe(&relation.source_node_id)
         && read_node_agent_text_is_safe(&relation.target_node_id)
+}
+
+fn sanitize_read_node_agent_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
+    if !read_node_agent_text_is_safe(&node.node_id) || !read_node_agent_text_is_safe(&node.label) {
+        return None;
+    }
+    node.aliases
+        .retain(|alias| read_node_agent_text_is_safe(alias));
+    Some(node)
 }
 
 fn read_node_agent_text_is_safe(value: &str) -> bool {
