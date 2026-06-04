@@ -16,6 +16,7 @@ const previewSource = readFileSync(
   "utf8",
 );
 const settingsSource = readFileSync(new URL("../src/SettingsPanel.tsx", import.meta.url), "utf8");
+const localesSource = readFileSync(new URL("../src/i18n/locales.ts", import.meta.url), "utf8");
 const previewApiSource = readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8");
 const cliShimSource = readFileSync(new URL("../main/cli-shim.cjs", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -69,14 +70,19 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
 });
 
 test("settings page hides debug readiness internals", () => {
-  expect(settingsSource).toMatch(/AI model/);
-  expect(settingsSource).toMatch(/Connections/);
-  expect(settingsSource).toMatch(/UI language/);
-  expect(settingsSource).toMatch(/English/);
-  expect(settingsSource).toMatch(/한국어/);
-  expect(settingsSource).toMatch(/日本語/);
+  expect(settingsSource).toMatch(/settings\.ai\.title/);
+  expect(settingsSource).toMatch(/settings\.ai\.connections/);
+  expect(localesSource).toMatch(/AI model/);
+  expect(localesSource).toMatch(/Connections/);
+  expect(settingsSource).toMatch(/settings\.general\.uiLanguage/);
+  expect(settingsSource).toMatch(/localeOptions\.map/);
+  expect(localesSource).toMatch(/English/);
+  expect(localesSource).toMatch(/한국어/);
+  expect(localesSource).toMatch(/日本語/);
+  expect(localesSource).toMatch(/settings\.ai\.localModelCaution\.title/);
+  expect(localesSource).toMatch(/settings\.ai\.hostedQuality\.body/);
   expect(settingsSource).toMatch(/onRefreshReadiness/);
-  expect(settingsSource).toMatch(/Refresh/);
+  expect(localesSource).toMatch(/Refresh/);
   expect(settingsSource).toMatch(/export type SettingsTab = "general" \| "ai"/);
   expect(appSource).toMatch(/label: "General"/);
   expect(settingsSource).not.toMatch(/<Label htmlFor="prompt-template-select">/);
@@ -99,7 +105,7 @@ test("Knowledge empty state focuses first users on importing source files", () =
 });
 
 test("launch copy stays agent-ready without unsupported provider claims", () => {
-  const buyerFacingCopy = [appSource, graphSource, settingsSource].join("\n");
+  const buyerFacingCopy = [appSource, graphSource, settingsSource, localesSource].join("\n");
   const publicModelGuidance = modelTaskMatrixSource;
 
   expect(buyerFacingCopy).toMatch(/Local model caution/);
