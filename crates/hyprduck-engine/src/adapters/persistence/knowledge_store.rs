@@ -47,7 +47,7 @@ use super::read_projection_store::{
     read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof, search_brain_from_db,
     RelationalEvidenceProof,
 };
-use super::row_decode::{non_empty_string, row_string, row_string_array};
+use super::row_decode::non_empty_string;
 use super::schema_store::{
     count_rows_for_workspace, ensure_schema, schema_version, validate_graphqlite_gate,
     GraphqliteGateReport, KnowledgeStoreHealth, KnowledgeStoreStateSummary, KNOWLEDGE_DB_FILE_NAME,
@@ -574,6 +574,7 @@ struct GraphTrailNode {
     aliases: Vec<String>,
     evidence_ids: Vec<String>,
     source_ids: Vec<String>,
+    status: String,
 }
 
 #[derive(Debug, Clone)]
@@ -601,9 +602,18 @@ struct GraphTrailIndex {
 }
 
 impl GraphTrailIndex {
-    fn load(graph: &Graph, workspace_id: &str) -> Result<Self> {
-        let (eligible_evidence_ids, eligible_source_ids) =
-            load_graph_trail_eligible_refs(graph, workspace_id)?;
+    fn load(
+        graph: &Graph,
+        workspace_id: &str,
+        selected_evidence_ids: &BTreeSet<String>,
+        selected_source_ids: &BTreeSet<String>,
+    ) -> Result<Self> {
+        let (eligible_evidence_ids, eligible_source_ids) = load_graph_trail_eligible_refs(
+            graph,
+            workspace_id,
+            selected_evidence_ids,
+            selected_source_ids,
+        )?;
         let mut index = Self {
             nodes_by_evidence: BTreeMap::new(),
             relation_links_by_evidence: BTreeMap::new(),
@@ -612,49 +622,44 @@ impl GraphTrailIndex {
             eligible_source_ids,
         };
 
-        for node in load_graph_trail_nodes(graph, workspace_id)? {
-            if !index.node_is_eligible(&node) {
-                continue;
+        for evidence_id in &index.eligible_evidence_ids {
+            for node in load_graph_trail_nodes_for_evidence(graph, workspace_id, evidence_id)? {
+                if index.node_is_eligible(&node) {
+                    index
+                        .nodes_by_evidence
+                        .entry(evidence_id.clone())
+                        .or_default()
+                        .push(node);
+                }
             }
-            for evidence_id in node
-                .evidence_ids
-                .iter()
-                .filter(|evidence_id| index.eligible_evidence_ids.contains(*evidence_id))
+            for link in
+                load_graph_trail_relation_links_for_evidence(graph, workspace_id, evidence_id)?
             {
-                index
-                    .nodes_by_evidence
-                    .entry(evidence_id.clone())
-                    .or_default()
-                    .push(node.clone());
+                if index.relation_is_eligible(&link.relation) {
+                    index
+                        .relation_links_by_evidence
+                        .entry(evidence_id.clone())
+                        .or_default()
+                        .push(link);
+                }
             }
         }
 
-        for link in load_graph_trail_relation_links(graph, workspace_id)? {
-            if !index.relation_is_eligible(&link.relation) {
-                continue;
+        let direct_node_ids = index
+            .nodes_by_evidence
+            .values()
+            .flat_map(|nodes| nodes.iter().map(|node| node.node_id.clone()))
+            .collect::<BTreeSet<_>>();
+        for node_id in direct_node_ids {
+            for link in load_graph_trail_relation_links_for_node(graph, workspace_id, &node_id)? {
+                if index.relation_is_eligible(&link.relation) {
+                    index
+                        .relation_links_by_node
+                        .entry(node_id.clone())
+                        .or_default()
+                        .push(link);
+                }
             }
-            for evidence_id in link
-                .relation
-                .evidence_ids
-                .iter()
-                .filter(|evidence_id| index.eligible_evidence_ids.contains(*evidence_id))
-            {
-                index
-                    .relation_links_by_evidence
-                    .entry(evidence_id.clone())
-                    .or_default()
-                    .push(link.clone());
-            }
-            index
-                .relation_links_by_node
-                .entry(link.source.node_id.clone())
-                .or_default()
-                .push(link.clone());
-            index
-                .relation_links_by_node
-                .entry(link.target.node_id.clone())
-                .or_default()
-                .push(link);
         }
 
         sort_and_limit_graph_trail_map(&mut index.nodes_by_evidence, |node| node.node_id.as_str());
@@ -690,11 +695,16 @@ impl GraphTrailIndex {
     }
 
     fn node_is_eligible(&self, node: &GraphTrailNode) -> bool {
-        self.refs_are_eligible(&node.evidence_ids, &node.source_ids)
+        graph_trail_node_status_is_visible(&node.kind, &node.status)
+            && graph_trail_agent_text_is_safe(&node.node_id)
+            && graph_trail_agent_text_is_safe(&node.label)
+            && self.refs_are_eligible(&node.evidence_ids, &node.source_ids)
     }
 
     fn relation_is_eligible(&self, relation: &GraphTrailRelation) -> bool {
-        self.refs_are_eligible(&relation.evidence_ids, &relation.source_ids)
+        graph_trail_agent_text_is_safe(&relation.relation_id)
+            && graph_trail_agent_text_is_safe(&relation.label)
+            && self.refs_are_eligible(&relation.evidence_ids, &relation.source_ids)
     }
 
     fn refs_are_eligible(&self, evidence_ids: &[String], source_ids: &[String]) -> bool {
@@ -725,7 +735,22 @@ fn attach_context_pack_graph_trails(
     workspace_id: &str,
     context_pack: &mut ContextPackV1,
 ) -> Result<()> {
-    let graph_trail_index = GraphTrailIndex::load(graph, workspace_id)?;
+    let selected_evidence_ids = context_pack
+        .selected_evidence
+        .iter()
+        .map(|evidence| evidence.evidence_ref.clone())
+        .collect::<BTreeSet<_>>();
+    let selected_source_ids = context_pack
+        .selected_evidence
+        .iter()
+        .map(|evidence| evidence.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    let graph_trail_index = GraphTrailIndex::load(
+        graph,
+        workspace_id,
+        &selected_evidence_ids,
+        &selected_source_ids,
+    )?;
     for evidence in &mut context_pack.selected_evidence {
         evidence.graph_trail = build_context_pack_graph_trail(&graph_trail_index, evidence)?;
     }
@@ -995,85 +1020,83 @@ fn push_context_pack_follow_up(
     }
 }
 
-fn load_graph_trail_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<GraphTrailNode>> {
-    let rows = graph
-        .connection()
-        .cypher_builder(
-            "MATCH (n {workspace_id: $workspace_id})
-             RETURN n.id AS node_id,
-                    n.kind AS kind,
-                    n.label AS label,
-                    n.aliases_json AS aliases_json,
-                    n.evidence_ids_json AS evidence_ids_json,
-                    n.source_ids_json AS source_ids_json,
-                    n.status AS status",
-        )
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed querying GraphQLite graph trail nodes")?;
+fn load_graph_trail_nodes_for_evidence(
+    graph: &Graph,
+    workspace_id: &str,
+    evidence_id: &str,
+) -> Result<Vec<GraphTrailNode>> {
+    let node_ids = graphqlite_ids_with_text_property_like(
+        graph,
+        "node_props_text",
+        "node_id",
+        "evidence_ids_json",
+        &graph_trail_json_ref_like_pattern(evidence_id),
+    )?;
     let mut nodes = Vec::new();
-    for row in &rows {
-        if !graph_record_status_is_active(&row_string(row, "status")?) {
-            continue;
+    for node_id in node_ids {
+        if let Some(node) = load_graph_trail_node_by_internal_id(graph, workspace_id, node_id)? {
+            nodes.push(node);
         }
-        let evidence_ids = row_string_array(row, "evidence_ids_json")?;
-        nodes.push(GraphTrailNode {
-            node_id: row_string(row, "node_id")?,
-            kind: row_string(row, "kind")?,
-            label: row_string(row, "label")?,
-            aliases: row_string_array(row, "aliases_json")?,
-            evidence_ids,
-            source_ids: row_string_array(row, "source_ids_json")?,
-        });
     }
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     Ok(nodes)
 }
 
-fn load_graph_trail_relation_links(
+fn load_graph_trail_relation_links_for_evidence(
     graph: &Graph,
     workspace_id: &str,
+    evidence_id: &str,
 ) -> Result<Vec<GraphTrailRelationLink>> {
-    let rows = graph
-        .connection()
-        .cypher_builder(
-            "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
-             RETURN source.id AS source_node_id,
-                    source.kind AS source_kind,
-                    source.label AS source_label,
-                    source.aliases_json AS source_aliases_json,
-                    source.evidence_ids_json AS source_evidence_ids_json,
-                    source.source_ids_json AS source_source_ids_json,
-                    target.id AS target_node_id,
-                    target.kind AS target_kind,
-                    target.label AS target_label,
-                    target.aliases_json AS target_aliases_json,
-                    target.evidence_ids_json AS target_evidence_ids_json,
-                    target.source_ids_json AS target_source_ids_json,
-                    r.relation_id AS relation_id,
-                    r.label AS relation_label,
-                    r.evidence_ids_json AS relation_evidence_ids_json,
-                    r.source_ids_json AS relation_source_ids_json,
-                    r.status AS relation_status",
-        )
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed querying GraphQLite graph trail relations")?;
+    let edge_ids = graphqlite_ids_with_text_property_like(
+        graph,
+        "edge_props_text",
+        "edge_id",
+        "evidence_ids_json",
+        &graph_trail_json_ref_like_pattern(evidence_id),
+    )?;
+    load_graph_trail_relation_links_for_edge_ids(graph, workspace_id, edge_ids)
+}
+
+fn load_graph_trail_relation_links_for_node(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Vec<GraphTrailRelationLink>> {
+    let Some(internal_node_id) = graphqlite_internal_node_id(graph, node_id)? else {
+        return Ok(Vec::new());
+    };
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT rowid FROM edges WHERE source_id = ?1 OR target_id = ?1")
+        .context("failed preparing GraphQLite node edge query")?;
+    let mut rows = statement
+        .query([internal_node_id])
+        .context("failed querying GraphQLite node edges")?;
+    let mut edge_ids = BTreeSet::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading GraphQLite node edge row")?
+    {
+        edge_ids.insert(row.get(0).context("read GraphQLite edge id")?);
+    }
+    let mut links = load_graph_trail_relation_links_for_edge_ids(graph, workspace_id, edge_ids)?;
+    links.sort_by(|left, right| left.relation.relation_id.cmp(&right.relation.relation_id));
+    links.dedup_by(|left, right| left.relation.relation_id == right.relation.relation_id);
+    links.truncate(GRAPH_TRAIL_ADJACENT_LIMIT);
+    Ok(links)
+}
+
+fn load_graph_trail_relation_links_for_edge_ids(
+    graph: &Graph,
+    workspace_id: &str,
+    edge_ids: BTreeSet<i64>,
+) -> Result<Vec<GraphTrailRelationLink>> {
     let mut links = Vec::new();
-    for row in &rows {
-        if !graph_record_status_is_active(&row_string(row, "relation_status")?) {
-            continue;
+    for edge_id in edge_ids {
+        if let Some(link) = load_graph_trail_relation_link_by_edge_id(graph, workspace_id, edge_id)?
+        {
+            links.push(link);
         }
-        links.push(GraphTrailRelationLink {
-            relation: GraphTrailRelation {
-                relation_id: row_string(row, "relation_id")?,
-                label: row_string(row, "relation_label")?,
-                evidence_ids: row_string_array(row, "relation_evidence_ids_json")?,
-                source_ids: row_string_array(row, "relation_source_ids_json")?,
-            },
-            source: graph_trail_node_from_relation_row(row, "source")?,
-            target: graph_trail_node_from_relation_row(row, "target")?,
-        });
     }
     Ok(links)
 }
@@ -1081,65 +1104,242 @@ fn load_graph_trail_relation_links(
 fn load_graph_trail_eligible_refs(
     graph: &Graph,
     workspace_id: &str,
+    selected_evidence_ids: &BTreeSet<String>,
+    selected_source_ids: &BTreeSet<String>,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
-    let sqlite = graph.connection().sqlite_connection();
-    let mut evidence_statement = sqlite
-        .prepare(
-            "SELECT e.evidence_id
-             FROM evidence_items e
-             JOIN sources s
-               ON s.workspace_id = e.workspace_id
-              AND s.source_id = e.source_id
-             WHERE e.workspace_id = ?1
-               AND e.status = 'active'
-               AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
-        )
-        .context("failed preparing graph trail eligible evidence query")?;
-    let mut evidence_rows = evidence_statement
-        .query([workspace_id])
-        .context("failed querying graph trail eligible evidence refs")?;
     let mut eligible_evidence_ids = BTreeSet::new();
-    while let Some(row) = evidence_rows
-        .next()
-        .context("failed reading graph trail eligible evidence row")?
-    {
-        eligible_evidence_ids.insert(row.get(0).context("read graph trail evidence id")?);
+    for evidence_id in selected_evidence_ids {
+        let Some(evidence_row) = load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
+        else {
+            continue;
+        };
+        if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some() {
+            eligible_evidence_ids.insert(evidence_id.clone());
+        }
     }
 
-    let mut source_statement = sqlite
-        .prepare(
-            "SELECT source_id
-             FROM sources
-             WHERE workspace_id = ?1
-               AND status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')",
-        )
-        .context("failed preparing graph trail eligible source query")?;
-    let mut source_rows = source_statement
-        .query([workspace_id])
-        .context("failed querying graph trail eligible source refs")?;
     let mut eligible_source_ids = BTreeSet::new();
-    while let Some(row) = source_rows
-        .next()
-        .context("failed reading graph trail eligible source row")?
-    {
-        eligible_source_ids.insert(row.get(0).context("read graph trail source id")?);
+    for source_id in selected_source_ids {
+        if load_context_pack_source_row(graph, workspace_id, source_id)?.is_some() {
+            eligible_source_ids.insert(source_id.clone());
+        }
     }
 
     Ok((eligible_evidence_ids, eligible_source_ids))
 }
 
-fn graph_trail_node_from_relation_row(
-    row: &graphqlite::Row,
-    prefix: &str,
-) -> Result<GraphTrailNode> {
-    Ok(GraphTrailNode {
-        node_id: row_string(row, &format!("{prefix}_node_id"))?,
-        kind: row_string(row, &format!("{prefix}_kind"))?,
-        label: row_string(row, &format!("{prefix}_label"))?,
-        aliases: row_string_array(row, &format!("{prefix}_aliases_json"))?,
-        evidence_ids: row_string_array(row, &format!("{prefix}_evidence_ids_json"))?,
-        source_ids: row_string_array(row, &format!("{prefix}_source_ids_json"))?,
-    })
+fn graph_trail_json_ref_like_pattern(ref_id: &str) -> String {
+    format!("%\"{ref_id}\"%")
+}
+
+fn graphqlite_ids_with_text_property_like(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    key: &str,
+    pattern: &str,
+) -> Result<BTreeSet<i64>> {
+    let Some(key_id) = graphqlite_text_property_key_id(graph, key)? else {
+        return Ok(BTreeSet::new());
+    };
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(&format!(
+            "SELECT {id_column} FROM {table} WHERE key_id = ?1 AND value LIKE ?2"
+        ))
+        .with_context(|| format!("failed preparing GraphQLite {table} lookup"))?;
+    let mut rows = statement
+        .query((key_id, pattern))
+        .with_context(|| format!("failed querying GraphQLite {table} lookup"))?;
+    let mut ids = BTreeSet::new();
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("failed reading GraphQLite {table} lookup row"))?
+    {
+        ids.insert(row.get(0).context("read GraphQLite property owner id")?);
+    }
+    Ok(ids)
+}
+
+fn graphqlite_internal_node_id(graph: &Graph, node_id: &str) -> Result<Option<i64>> {
+    let Some(key_id) = graphqlite_text_property_key_id(graph, "id")? else {
+        return Ok(None);
+    };
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT node_id FROM node_props_text WHERE key_id = ?1 AND value = ?2")
+        .context("failed preparing GraphQLite node id lookup")?;
+    let mut rows = statement
+        .query((key_id, node_id))
+        .context("failed querying GraphQLite node id lookup")?;
+    Ok(rows
+        .next()
+        .context("failed reading GraphQLite node id lookup row")?
+        .map(|row| row.get(0).context("read GraphQLite internal node id"))
+        .transpose()?)
+}
+
+fn graphqlite_text_property_key_id(graph: &Graph, key: &str) -> Result<Option<i64>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT id FROM property_keys WHERE key = ?1")
+        .context("failed preparing GraphQLite property key lookup")?;
+    let mut rows = statement
+        .query([key])
+        .context("failed querying GraphQLite property key lookup")?;
+    Ok(rows
+        .next()
+        .context("failed reading GraphQLite property key lookup row")?
+        .map(|row| row.get(0).context("read GraphQLite property key id"))
+        .transpose()?)
+}
+
+fn load_graph_trail_relation_link_by_edge_id(
+    graph: &Graph,
+    workspace_id: &str,
+    edge_id: i64,
+) -> Result<Option<GraphTrailRelationLink>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT source_id, target_id FROM edges WHERE rowid = ?1")
+        .context("failed preparing GraphQLite edge endpoint query")?;
+    let mut rows = statement
+        .query([edge_id])
+        .context("failed querying GraphQLite edge endpoint")?;
+    let Some(row) = rows
+        .next()
+        .context("failed reading GraphQLite edge endpoint row")?
+    else {
+        return Ok(None);
+    };
+    let source_id = row.get(0).context("read GraphQLite edge source id")?;
+    let target_id = row.get(1).context("read GraphQLite edge target id")?;
+    let Some(source) = load_graph_trail_node_by_internal_id(graph, workspace_id, source_id)? else {
+        return Ok(None);
+    };
+    let Some(target) = load_graph_trail_node_by_internal_id(graph, workspace_id, target_id)? else {
+        return Ok(None);
+    };
+    let props = graphqlite_edge_text_properties(graph, edge_id)?;
+    if !graph_record_status_is_active(graphlite_prop(&props, "status")) {
+        return Ok(None);
+    }
+    Ok(Some(GraphTrailRelationLink {
+        relation: GraphTrailRelation {
+            relation_id: graphlite_prop(&props, "relation_id").into(),
+            label: graphlite_prop(&props, "label").into(),
+            evidence_ids: graphlite_string_array_prop(&props, "evidence_ids_json")?,
+            source_ids: graphlite_string_array_prop(&props, "source_ids_json")?,
+        },
+        source,
+        target,
+    }))
+}
+
+fn load_graph_trail_node_by_internal_id(
+    graph: &Graph,
+    workspace_id: &str,
+    internal_node_id: i64,
+) -> Result<Option<GraphTrailNode>> {
+    let props = graphqlite_node_text_properties(graph, internal_node_id)?;
+    if graphlite_prop(&props, "workspace_id") != workspace_id {
+        return Ok(None);
+    }
+    Ok(Some(GraphTrailNode {
+        node_id: graphlite_prop(&props, "id").into(),
+        kind: graphlite_prop(&props, "kind").into(),
+        label: graphlite_prop(&props, "label").into(),
+        aliases: graphlite_string_array_prop(&props, "aliases_json")?,
+        evidence_ids: graphlite_string_array_prop(&props, "evidence_ids_json")?,
+        source_ids: graphlite_string_array_prop(&props, "source_ids_json")?,
+        status: graphlite_prop(&props, "status").into(),
+    }))
+}
+
+fn graphqlite_node_text_properties(
+    graph: &Graph,
+    node_id: i64,
+) -> Result<BTreeMap<String, String>> {
+    graphqlite_text_properties(graph, "node_props_text", "node_id", node_id)
+}
+
+fn graphqlite_edge_text_properties(
+    graph: &Graph,
+    edge_id: i64,
+) -> Result<BTreeMap<String, String>> {
+    graphqlite_text_properties(graph, "edge_props_text", "edge_id", edge_id)
+}
+
+fn graphqlite_text_properties(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    id: i64,
+) -> Result<BTreeMap<String, String>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(&format!(
+            "SELECT k.key, p.value
+             FROM {table} p
+             JOIN property_keys k ON k.id = p.key_id
+             WHERE p.{id_column} = ?1"
+        ))
+        .with_context(|| format!("failed preparing GraphQLite {table} properties query"))?;
+    let mut rows = statement
+        .query([id])
+        .with_context(|| format!("failed querying GraphQLite {table} properties"))?;
+    let mut props = BTreeMap::new();
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("failed reading GraphQLite {table} property row"))?
+    {
+        props.insert(
+            row.get(0).context("read GraphQLite property key")?,
+            row.get(1).context("read GraphQLite property value")?,
+        );
+    }
+    Ok(props)
+}
+
+fn graphlite_prop<'a>(props: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    props.get(key).map(String::as_str).unwrap_or_default()
+}
+
+fn graphlite_string_array_prop(props: &BTreeMap<String, String>, key: &str) -> Result<Vec<String>> {
+    let value = graphlite_prop(props, key);
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(value).with_context(|| format!("failed decoding GraphQLite {key}"))
+}
+
+fn graph_trail_node_status_is_visible(kind: &str, status: &str) -> bool {
+    graph_record_status_is_active(status) || (kind == "claim" && status == "supported")
+}
+
+fn graph_trail_agent_text_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let normalized = value.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if lower.starts_with("~/")
+        || lower.contains("docs/private")
+        || lower.contains("docs%2fprivate")
+        || lower.contains("docs%5cprivate")
+        || lower.contains("file://")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+    {
+        return false;
+    }
+    let path = Path::new(&normalized);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {

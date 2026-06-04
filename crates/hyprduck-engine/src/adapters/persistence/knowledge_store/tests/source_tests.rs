@@ -45,6 +45,17 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 confidence: None,
                 updated_at: 10,
             },
+            BrainNodeRecord {
+                node_id: "docs/private/unsafe-node".into(),
+                kind: BrainNodeKind::Concept,
+                label: "docs/private/roadmap.md".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
         ],
         relations: vec![
             BrainRelationRecord {
@@ -73,6 +84,16 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_node_id: "wiki-alpha".into(),
                 target_node_id: "entity-alpha".into(),
                 label: "links".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "docs/private/rel".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-a".into(),
+                target_node_id: "docs/private/unsafe-node".into(),
+                label: "docs/private/relation.md".into(),
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
@@ -131,7 +152,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
             topic_refs: vec!["Alpha".into()],
             source_refs: vec!["source-a".into()],
             evidence_refs: vec!["evidence-a".into()],
-            status: "active".into(),
+            status: "supported".into(),
             updated_at: 10,
         }],
         extractions: vec![StructuredExtractionArtifact {
@@ -176,8 +197,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert_eq!(
         report,
         KnowledgeGraphPersistReport {
-            node_count: 6,
-            relation_count: 3,
+            node_count: 7,
+            relation_count: 4,
         }
     );
     assert_eq!(
@@ -193,8 +214,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         KnowledgeStoreStateSummary {
             evidence_item_count: 2,
             wiki_page_count: 1,
-            graph_node_count: 6,
-            graph_relation_count: 3,
+            graph_node_count: 7,
+            graph_relation_count: 4,
         }
     );
     assert_graph_node_metadata(&store, "node-a");
@@ -258,6 +279,14 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(graph_trail.direct.iter().any(|record| {
         record.record_type == ContextPackGraphRecordKindV1::WikiPage && record.id == "wiki-alpha"
     }));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Claim && record.id == "claim-alpha"
+    }));
+    assert!(graph_trail
+        .direct
+        .iter()
+        .chain(graph_trail.adjacent.iter())
+        .all(|record| !record.id.contains("docs/private")));
     assert!(graph_trail.adjacent.iter().any(|record| {
         record.record_type == ContextPackGraphRecordKindV1::Node && record.id == "node-b"
     }));
@@ -684,8 +713,8 @@ fn assert_graph_checkpoint_metadata(store: &KnowledgeStore, workspace_id: &str) 
     assert_eq!(row.3, "event-a");
     assert_eq!(row.4, GRAPHQLITE_SCHEMA_VERSION);
     assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
-    assert_eq!(row.6, 6);
-    assert_eq!(row.7, 3);
+    assert_eq!(row.6, 7);
+    assert_eq!(row.7, 4);
     assert_eq!(row.8, 2);
     assert_eq!(row.9.len(), 64);
     assert_eq!(row.10, "hyprduck.sqlite:graphqlite");

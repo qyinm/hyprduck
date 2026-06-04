@@ -9,6 +9,7 @@ use hyprduck_engine_types::{
     SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::context_pack_store::{
@@ -24,6 +25,12 @@ use super::search_store::{
     db_float_score, db_match_score, db_search_terms, evidence_graph_neighbor_counts,
     fts_phrase_query, EvidenceQueryIntent, HybridRetrievalHit,
 };
+
+#[derive(Debug)]
+struct NodeRelationRow {
+    relation: BrainRelationRecord,
+    source_ids: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -298,7 +305,7 @@ fn load_node_relations_from_db(
     workspace_id: &str,
     node_id: &str,
 ) -> Result<Vec<BrainRelationRecord>> {
-    let mut relations = load_node_relation_rows_from_db(
+    let mut relation_rows = load_node_relation_rows_from_db(
         graph,
         workspace_id,
         node_id,
@@ -313,7 +320,7 @@ fn load_node_relations_from_db(
                 r.confidence AS confidence,
                 r.updated_at AS updated_at",
     )?;
-    relations.extend(load_node_relation_rows_from_db(
+    relation_rows.extend(load_node_relation_rows_from_db(
         graph,
         workspace_id,
         node_id,
@@ -328,6 +335,20 @@ fn load_node_relations_from_db(
                 r.confidence AS confidence,
                 r.updated_at AS updated_at",
     )?);
+    let (eligible_evidence_ids, eligible_source_ids) =
+        load_node_relation_eligible_refs(graph, workspace_id, &relation_rows)?;
+    let mut relations = relation_rows
+        .into_iter()
+        .filter(|row| {
+            relation_refs_are_eligible(
+                &eligible_evidence_ids,
+                &eligible_source_ids,
+                &row.relation.evidence_ids,
+                &row.source_ids,
+            )
+        })
+        .map(|row| row.relation)
+        .collect::<Vec<_>>();
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     relations.dedup_by(|left, right| left.relation_id == right.relation_id);
     Ok(relations)
@@ -338,7 +359,7 @@ fn load_node_relation_rows_from_db(
     workspace_id: &str,
     node_id: &str,
     cypher: &str,
-) -> Result<Vec<BrainRelationRecord>> {
+) -> Result<Vec<NodeRelationRow>> {
     let rows = graph
         .connection()
         .cypher_builder(cypher)
@@ -348,42 +369,64 @@ fn load_node_relation_rows_from_db(
         .context("failed querying GraphQLite node relations")?;
     let mut relations = Vec::new();
     for row in &rows {
-        let relation = graph_canvas_relation_from_row(row)?;
-        let source_ids =
-            row_string_array(row, "source_ids_json").context("read node relation source refs")?;
-        if relation_refs_are_eligible(graph, workspace_id, &relation.evidence_ids, &source_ids)? {
-            relations.push(relation);
-        }
+        relations.push(NodeRelationRow {
+            relation: graph_canvas_relation_from_row(row)?,
+            source_ids: row_string_array(row, "source_ids_json")
+                .context("read node relation source refs")?,
+        });
     }
     Ok(relations)
 }
 
-fn relation_refs_are_eligible(
+fn load_node_relation_eligible_refs(
     graph: &Graph,
     workspace_id: &str,
+    relation_rows: &[NodeRelationRow],
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let evidence_ids = relation_rows
+        .iter()
+        .flat_map(|row| row.relation.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let source_ids = relation_rows
+        .iter()
+        .flat_map(|row| row.source_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+
+    let mut eligible_evidence_ids = BTreeSet::new();
+    for evidence_id in evidence_ids {
+        let Some(evidence_row) = load_context_pack_evidence_row(graph, workspace_id, &evidence_id)?
+        else {
+            continue;
+        };
+        if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some() {
+            eligible_evidence_ids.insert(evidence_id);
+        }
+    }
+
+    let mut eligible_source_ids = BTreeSet::new();
+    for source_id in source_ids {
+        if load_context_pack_source_row(graph, workspace_id, &source_id)?.is_some() {
+            eligible_source_ids.insert(source_id);
+        }
+    }
+
+    Ok((eligible_evidence_ids, eligible_source_ids))
+}
+
+fn relation_refs_are_eligible(
+    eligible_evidence_ids: &BTreeSet<String>,
+    eligible_source_ids: &BTreeSet<String>,
     evidence_ids: &[String],
     source_ids: &[String],
-) -> Result<bool> {
+) -> bool {
     if !evidence_ids.is_empty() {
-        for evidence_id in evidence_ids {
-            let Some(evidence_row) =
-                load_context_pack_evidence_row(graph, workspace_id, evidence_id)?
-            else {
-                continue;
-            };
-            if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some()
-            {
-                return Ok(true);
-            }
-        }
-        return Ok(false);
+        return evidence_ids
+            .iter()
+            .any(|evidence_id| eligible_evidence_ids.contains(evidence_id));
     }
-    for source_id in source_ids {
-        if load_context_pack_source_row(graph, workspace_id, source_id)?.is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    source_ids
+        .iter()
+        .any(|source_id| eligible_source_ids.contains(source_id))
 }
 
 #[allow(dead_code)]
