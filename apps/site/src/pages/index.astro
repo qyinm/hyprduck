@@ -8,34 +8,40 @@ const assetPath = (path: string) => `${baseUrl.replace(/\/$/, '')}/${path.replac
 const workflow = [
   {
     step: '01',
-    title: 'Import a real document',
-    body: 'Start with a PDF, DOCX, or DOC file. HyprDuck keeps the primary flow file-first, without screen recording or accessibility permission friction.',
+    title: 'Add Docs',
+    body: 'Bring in PDFs and Word files from approved local roots. Import stays file-first and does not depend on screen recording or accessibility permissions.',
     tag: 'pdf / docx / doc',
   },
   {
     step: '02',
-    title: 'Render pages into evidence',
-    body: 'Each page becomes an inspectable image snapshot before AI processing, so the markdown can keep a visible link back to the source page.',
-    tag: 'page images',
+    title: 'Connect Agent',
+    body: 'Expose the local knowledge surface through MCP so agents can request context without receiving arbitrary filesystem access.',
+    tag: 'mcp',
   },
   {
     step: '03',
-    title: 'Run the selected provider',
-    body: 'Use local mode or a hosted provider depending on your privacy, speed, and cost needs. Provider settings stay shared across parsing flows.',
-    tag: 'local / openrouter',
+    title: 'Ask With Citations',
+    body: 'Queries return context packs grounded in source IDs, page refs, spans, and evidence IDs the agent can cite or retry against.',
+    tag: 'context pack',
   },
   {
     step: '04',
-    title: 'Save agent-ready markdown',
-    body: 'HyprDuck writes markdown and linked image assets under Application Support, ready for agents, wikis, notes, and local knowledge workflows.',
-    tag: '~/Library/Application Support/HyprDuck',
+    title: 'Verify Evidence',
+    body: 'Use the graph and inspector to review document, source, concept, and citation relationships before reusing the answer.',
+    tag: 'graph / evidence',
+  },
+  {
+    step: '05',
+    title: 'Reuse',
+    body: 'Save corrected, cited local knowledge back into the workflow so future agents can reuse the same evidence trail.',
+    tag: 'save-back',
   },
 ];
 
 const capabilities = [
-  ['Local by default', 'Document import and page rendering happen in the desktop app before any provider call.'],
-  ['Provider flexible', 'OpenRouter hosted models and local Ollama models share the same parsing workflow.'],
-  ['Evidence-linked output', 'Generated markdown references the page images on disk instead of hiding the source.'],
+  ['Local paths stay private', 'Agent-facing output redacts local paths by default while keeping durable source handles available for recovery and retry.'],
+  ['Citation-ready is explicit', 'Citation readiness is tracked separately from graph and wiki readiness, so agents know what evidence is safe to cite.'],
+  ['Mutations stay narrow', 'Import, proposal, correction, commit, and save-back flows are purpose-built instead of generic filesystem tools.'],
 ];
 
 const providers = [
@@ -64,10 +70,10 @@ const providers = [
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
           <a href="#workflow">Workflow</a>
+          <a href="#evidence">Evidence</a>
           <a href="#providers">Providers</a>
-          <a href="#output">Output</a>
         </nav>
-        <a class="pill pill-primary nav-cta" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">
+        <a class="pill pill-primary nav-cta gloss-dark" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">
           <img src={assetPath('github.webp')} alt="" class="github-icon" />
           View GitHub
         </a>
@@ -79,21 +85,37 @@ const providers = [
         <div class="reading-container hero-copy">
           <div class="status-line">
             <span class="status-dot"></span>
-            Local document parsing for agent-ready knowledge.
+            Private document evidence for agents.
           </div>
-          <h1>Turn documents into agent-ready markdown.</h1>
+          <h1>HyprDuck turns local docs into cited agent context.</h1>
           <p>
-            HyprDuck imports PDFs and Word files, renders every page into images, runs your chosen AI provider, and saves linked markdown that stays inspectable on your machine.
+            Import private documents, inspect the source graph, and hand agents context packs they can cite, verify, and reuse without losing the evidence trail.
           </p>
           <div class="hero-actions">
-            <a class="pill pill-primary" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">Download desktop</a>
-            <a class="pill pill-secondary" href="#workflow">See workflow</a>
+            <div class="download-group">
+              <a class="pill pill-primary download-cta gloss-dark" href="https://github.com/qyinm/hyprduck/releases/latest" target="_blank" rel="noopener">
+                <svg class="apple-icon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M17.05 12.22c-.03-2.28 1.87-3.39 1.96-3.44c-1.08-1.57-2.74-1.79-3.32-1.81c-1.4-.15-2.76.84-3.47.84c-.72 0-1.81-.82-2.98-.79c-1.51.02-2.93.9-3.7 2.28c-1.6 2.77-.41 6.84 1.13 9.08c.77 1.1 1.66 2.33 2.83 2.29c1.15-.05 1.58-.73 2.96-.73c1.37 0 1.76.73 2.97.7c1.23-.02 2.01-1.1 2.74-2.21c.89-1.26 1.25-2.51 1.26-2.57c-.03-.01-2.39-.92-2.42-3.64ZM14.78 5.5c.61-.77 1.03-1.81.91-2.86c-.88.04-1.98.61-2.61 1.36c-.56.66-1.06 1.75-.92 2.78c.99.08 1.99-.51 2.62-1.28Z" />
+                </svg>
+                Download for macOS
+              </a>
+            </div>
+            <a class="pill pill-secondary workflow-cta" href="#workflow">See workflow</a>
           </div>
           <div class="hero-meta" aria-label="Product metadata">
             <span class="tag-pill">macOS</span>
-            <span class="tag-pill">local first</span>
+            <span class="tag-pill">MCP-ready</span>
             <span class="tag-pill">PDF / DOCX / DOC</span>
+            <span class="tag-pill">Ollama / OpenRouter</span>
           </div>
+          <ol class="hero-flow" aria-label="HyprDuck first-run workflow">
+            {workflow.map((item) => (
+              <li>
+                <span>{item.step}</span>
+                {item.title}
+              </li>
+            ))}
+          </ol>
         </div>
 
         <div class="container hero-product">
@@ -131,32 +153,42 @@ const providers = [
                   <button class="composer-attach" type="button" aria-label="Attach files">
                     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
                   </button>
-                  <input class="composer-input" placeholder="Ask this knowledge graph..." value="" />
-                  <select class="composer-select">
-                    <option>Ask only</option>
-                    <option>Add to context</option>
-                  </select>
-                  <button class="composer-send" type="submit" aria-label="Ask" disabled>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+                  <input class="composer-input" placeholder="Open Agent Terminal..." value="" />
+                  <button class="composer-send" type="submit" aria-label="Open agent terminal">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
                   </button>
                 </form>
               </div>
               <aside class="inspector-rail">
                 <div class="inspector-header">
-                  <h3 class="inspector-heading">Right inspector</h3>
-                  <p class="inspector-desc">Selection detail, source provenance, and evidence stay visible without leaving the graph.</p>
+                  <h3 class="inspector-heading">Evidence inspector</h3>
+                  <p class="inspector-desc">Selection detail, source provenance, and citation readiness stay visible without leaving the graph.</p>
                 </div>
                 <div class="inspector-body">
                   <div class="inspector-section">
                     <div class="inspector-tags">
                       <span class="inspector-tag">concept</span>
-                      <span class="inspector-tag">72% draft confidence</span>
+                      <span class="inspector-tag ready">citationReady</span>
                     </div>
                     <h4 class="inspector-node-name">Q3 Revenue</h4>
                     <p class="inspector-node-desc">Board report revenue figures for Q3 extracted from financial summary table on page 3.</p>
+                    <div class="evidence-list" aria-label="Evidence references">
+                      <div class="evidence-row">
+                        <span>sourceId</span>
+                        <strong>src_board_report</strong>
+                      </div>
+                      <div class="evidence-row">
+                        <span>pageRef</span>
+                        <strong>p.3 / table region</strong>
+                      </div>
+                      <div class="evidence-row">
+                        <span>localPath</span>
+                        <strong>redacted</strong>
+                      </div>
+                    </div>
                     <div class="inspector-aliases">
                       <span class="inspector-alias">Latest import</span>
-                      <span class="inspector-alias">Q3 performance</span>
+                      <span class="inspector-alias">Evidence ID ev_042</span>
                     </div>
                   </div>
                 </div>
@@ -169,8 +201,8 @@ const providers = [
       <section id="workflow" class="workflow-section">
         <div class="reading-container section-heading">
           <span class="tag-pill">workflow</span>
-          <h2>Import first. Evidence always visible.</h2>
-          <p>HyprDuck keeps the landing page and product surface centered on the same path: file in, page evidence, provider run, linked markdown out.</p>
+          <h2>The first run is a working evidence loop.</h2>
+          <p>HyprDuck keeps the public promise narrow: add docs, connect an agent, ask with citations, verify the evidence, then reuse the result.</p>
         </div>
         <div class="container workflow-grid">
           {workflow.map((item) => (
@@ -184,13 +216,37 @@ const providers = [
         </div>
       </section>
 
+      <section id="evidence" class="evidence-section">
+        <div class="container evidence-grid">
+          <div class="evidence-copy">
+            <span class="tag-pill">evidence</span>
+            <h2>Context packs carry the proof, not just the prose.</h2>
+            <p>
+              Source IDs, page refs, parse warnings, provider route, content hashes, and evidence refs travel with the answer so agents can verify where a claim came from.
+            </p>
+          </div>
+          <div class="evidence-artifact" aria-label="Context pack artifact preview">
+            <div class="artifact-top">
+              <span>context-pack.json</span>
+              <strong>citationReady: true</strong>
+            </div>
+            <div class="artifact-lines">
+              <code>"sourceId": "src_board_report"</code>
+              <code>"pageRef": "page:3#table-region"</code>
+              <code>"providerRoute": "ollama/local"</code>
+              <code>"localPathDisclosure": "redacted"</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="providers" class="provider-section">
         <div class="container provider-grid">
           <div class="provider-copy">
             <span class="tag-pill">providers</span>
-            <h2>Use local mode or bring your preferred AI provider.</h2>
+            <h2>Choose local by default, hosted when it fits.</h2>
             <p>
-              HyprDuck treats AI settings as shared parsing infrastructure. Local operation stays visible, while hosted providers remain available when they fit the job.
+              HyprDuck treats provider choice as parsing infrastructure. Ollama works without an API key; OpenRouter covers hosted model routing when the job calls for it.
             </p>
           </div>
           <div class="provider-card">
@@ -215,7 +271,6 @@ const providers = [
                       <h3>{provider.name}</h3>
                       <div class="provider-badges">
                         <span>{provider.mode}</span>
-                        {provider.comingSoon && <span class="coming-soon">Coming soon</span>}
                       </div>
                     </div>
                     <p>{provider.description}</p>
@@ -229,9 +284,9 @@ const providers = [
 
       <section id="output" class="output-section">
         <div class="reading-container section-heading">
-          <span class="tag-pill">output</span>
-          <h2>Markdown that agents can inspect.</h2>
-          <p>Every result should be movable, readable, and grounded in source artifacts on disk.</p>
+          <span class="tag-pill">security</span>
+          <h2>Agent workflows stay scoped and auditable.</h2>
+          <p>HyprDuck is built for private document reuse, so agent access is explicit, evidence-aware, and limited to the workflow being requested.</p>
         </div>
         <div class="container capability-grid">
           {capabilities.map(([title, body]) => (
@@ -250,6 +305,7 @@ const providers = [
         <div class="footer-links">
           <a href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">GitHub</a>
           <a href="#workflow">Workflow</a>
+          <a href="#evidence">Evidence</a>
           <a href="#output">Output</a>
         </div>
       </div>
@@ -304,6 +360,24 @@ const providers = [
     flex: 0 0 auto;
   }
 
+  .gloss-dark {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.04) 42%, rgba(0, 0, 0, 0.22)),
+      #222;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.42),
+      0 1px 2px rgba(0, 0, 0, 0.35),
+      0 10px 28px rgba(0, 0, 0, 0.16);
+  }
+
+  .gloss-dark:hover {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.06) 42%, rgba(0, 0, 0, 0.2)),
+      #2a2a2a;
+  }
+
   .github-icon {
     width: 18px;
     height: 18px;
@@ -344,8 +418,8 @@ const providers = [
 
   .hero h1 {
     margin: 28px auto 0;
-    max-width: 720px;
-    font-size: clamp(2.25rem, 6vw, 4.75rem);
+    max-width: 860px;
+    font-size: 72px;
     line-height: 1.02;
     overflow-wrap: break-word;
   }
@@ -365,6 +439,115 @@ const providers = [
     flex-wrap: wrap;
     gap: 12px;
     margin-top: 28px;
+  }
+
+  .hero-actions {
+    align-items: center;
+  }
+
+  .hero-actions .pill {
+    height: 40px;
+    min-height: 40px;
+    padding: 0 18px;
+    font-size: 14px;
+  }
+
+  .download-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .download-cta {
+    position: relative;
+    padding-left: 16px;
+  }
+
+  .workflow-cta {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.72);
+    background:
+      radial-gradient(circle at 24% 0%, rgba(255, 255, 255, 0.98), transparent 34%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.58) 52%, rgba(245, 245, 245, 0.78)),
+      rgba(255, 255, 255, 0.62);
+    color: var(--color-ink);
+    backdrop-filter: blur(18px) saturate(1.3);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.46),
+      0 1px 2px rgba(0, 0, 0, 0.12),
+      0 12px 30px rgba(15, 23, 42, 0.11);
+  }
+
+  .workflow-cta::before {
+    content: "";
+    position: absolute;
+    inset: 1px 8px auto;
+    height: 45%;
+    border-radius: var(--radius-full);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0));
+    pointer-events: none;
+  }
+
+  .workflow-cta {
+    isolation: isolate;
+  }
+
+  .workflow-cta:hover {
+    background:
+      radial-gradient(circle at 24% 0%, rgba(255, 255, 255, 1), transparent 36%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.68) 52%, rgba(248, 248, 248, 0.86)),
+      rgba(255, 255, 255, 0.7);
+  }
+
+  .apple-icon {
+    flex: 0 0 auto;
+  }
+
+  .hero-flow {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 1px;
+    max-width: 920px;
+    margin: 34px auto 0;
+    padding: 1px;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-lg);
+    background: var(--color-hairline);
+    list-style: none;
+    overflow: hidden;
+  }
+
+  .hero-flow li {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 10px 12px;
+    background: var(--color-canvas);
+    color: var(--color-charcoal);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .hero-flow li:first-child {
+    border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
+  }
+
+  .hero-flow li:last-child {
+    border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0;
+  }
+
+  .hero-flow span {
+    color: var(--color-mute);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
   }
 
   .hero-product {
@@ -503,14 +686,14 @@ const providers = [
     z-index: 10;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     width: min(420px, calc(100% - 40px));
-    height: 48px;
-    padding: 0 8px 0 4px;
+    height: 52px;
+    padding: 0 8px 0 8px;
     border: 1px solid var(--color-hairline);
-    border-radius: 28px;
+    border-radius: var(--radius-full);
     background: var(--color-canvas);
-    box-shadow: 0 8px 32px rgba(15, 23, 42, 0.1);
+    box-shadow: 0 14px 48px rgba(15, 23, 42, 0.12);
     backdrop-filter: blur(8px);
   }
 
@@ -521,8 +704,8 @@ const providers = [
     width: 36px;
     height: 36px;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-soft);
+    border-radius: var(--radius-full);
+    background: var(--color-canvas);
     color: var(--color-body);
     flex-shrink: 0;
     cursor: default;
@@ -534,7 +717,8 @@ const providers = [
     border: none;
     background: transparent;
     padding: 0 4px;
-    font-size: 14px;
+    font-size: 15px;
+    font-weight: 500;
     color: var(--color-ink);
     outline: none;
     font-family: inherit;
@@ -544,20 +728,6 @@ const providers = [
     color: var(--color-mute);
   }
 
-  .composer-select {
-    height: 32px;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-soft);
-    padding: 0 8px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--color-ink);
-    outline: none;
-    cursor: default;
-    flex-shrink: 0;
-  }
-
   .composer-send {
     display: inline-flex;
     align-items: center;
@@ -565,15 +735,11 @@ const providers = [
     width: 36px;
     height: 36px;
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-full);
     background: var(--color-ink);
     color: var(--color-canvas);
     flex-shrink: 0;
     cursor: default;
-  }
-
-  .composer-send:disabled {
-    opacity: 0.35;
   }
 
   .inspector-rail {
@@ -627,11 +793,17 @@ const providers = [
     background: var(--color-surface-soft);
   }
 
+  .inspector-tag.ready {
+    border-color: rgba(39, 201, 63, 0.34);
+    background: rgba(39, 201, 63, 0.08);
+    color: #166534;
+  }
+
   .inspector-node-name {
     font-size: 18px;
     font-weight: 700;
     line-height: 1.2;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
   }
 
   .inspector-node-desc {
@@ -646,6 +818,40 @@ const providers = [
     gap: 6px;
   }
 
+  .evidence-list {
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .evidence-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 34px;
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .evidence-row + .evidence-row {
+    border-top: 1px solid var(--color-hairline);
+  }
+
+  .evidence-row span {
+    color: var(--color-body);
+    font-family: var(--font-mono);
+  }
+
+  .evidence-row strong {
+    min-width: 0;
+    color: var(--color-ink);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
   .inspector-alias {
     border-radius: var(--radius-full);
     background: var(--color-surface-soft);
@@ -656,6 +862,7 @@ const providers = [
 
   .workflow-section,
   .provider-section,
+  .evidence-section,
   .output-section {
     padding: 88px 0;
     border-top: 1px solid var(--color-hairline);
@@ -668,7 +875,7 @@ const providers = [
   .section-heading h2,
   .provider-copy h2 {
     margin-top: 18px;
-    font-size: clamp(2rem, 4vw, 3rem);
+    font-size: 44px;
     line-height: 1.12;
   }
 
@@ -680,13 +887,13 @@ const providers = [
 
   .workflow-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 16px;
     margin-top: 40px;
   }
 
   .workflow-card {
-    padding: 24px;
+    padding: 20px;
   }
 
   .workflow-step {
@@ -698,7 +905,7 @@ const providers = [
 
   .workflow-card h3 {
     margin-top: 18px;
-    font-size: 20px;
+    font-size: 18px;
     line-height: 1.35;
   }
 
@@ -706,6 +913,76 @@ const providers = [
     margin-top: 12px;
     font-size: 14px;
     line-height: 1.55;
+  }
+
+  .evidence-section {
+    background: linear-gradient(180deg, var(--color-canvas), var(--color-surface-soft));
+  }
+
+  .evidence-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 500px);
+    align-items: center;
+    gap: 56px;
+  }
+
+  .evidence-copy h2 {
+    margin-top: 18px;
+    max-width: 680px;
+    font-size: 44px;
+    line-height: 1.12;
+  }
+
+  .evidence-copy p {
+    margin-top: 16px;
+    max-width: 620px;
+    font-size: 16px;
+  }
+
+  .evidence-artifact {
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-lg);
+    background: var(--color-canvas);
+    overflow: hidden;
+  }
+
+  .artifact-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 54px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--color-hairline);
+    font-size: 13px;
+  }
+
+  .artifact-top span {
+    color: var(--color-body);
+    font-family: var(--font-mono);
+  }
+
+  .artifact-top strong {
+    color: #166534;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .artifact-lines {
+    display: grid;
+    gap: 1px;
+    padding: 18px;
+  }
+
+  .artifact-lines code {
+    display: block;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-soft);
+    padding: 12px 14px;
+    color: var(--color-charcoal);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    overflow-wrap: anywhere;
   }
 
   .provider-section {
@@ -810,12 +1087,6 @@ const providers = [
     font-size: 11px;
   }
 
-  .coming-soon {
-    background: rgba(255, 255, 255, 0.06) !important;
-    border: 1px solid rgba(168, 85, 247, 0.4);
-    color: #c084fc !important;
-  }
-
   .provider-info p {
     margin-top: 5px;
     font-size: 13px;
@@ -894,6 +1165,10 @@ const providers = [
       grid-template-columns: 1fr;
     }
 
+    .evidence-grid {
+      grid-template-columns: 1fr;
+    }
+
     .workflow-grid,
     .capability-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -911,8 +1186,8 @@ const providers = [
     }
 
     .hero h1 {
-      max-width: 280px;
-      font-size: 30px;
+      max-width: 320px;
+      font-size: 34px;
       line-height: 1.08;
     }
 
@@ -939,6 +1214,12 @@ const providers = [
 
     .hero-actions {
       flex-direction: column;
+      align-items: center;
+    }
+
+    .hero-flow {
+      grid-template-columns: 1fr;
+      width: min(100%, 320px);
     }
 
     .hero-actions .pill {
@@ -949,14 +1230,19 @@ const providers = [
       width: calc(100% - 24px);
     }
 
-    .graph-column .composer-attach,
-    .graph-column .composer-select {
+    .graph-column .composer-attach {
       display: none;
     }
 
     .workflow-grid,
     .capability-grid {
       grid-template-columns: 1fr;
+    }
+
+    .section-heading h2,
+    .provider-copy h2,
+    .evidence-copy h2 {
+      font-size: 32px;
     }
 
     .footer-inner {
