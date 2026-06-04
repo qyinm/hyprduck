@@ -9,7 +9,8 @@ use hyprduck_engine_types::{
     SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use super::context_pack_store::{
     db_parse_confidence, evidence_snippet_from_ids, load_context_pack_evidence_row,
@@ -18,15 +19,21 @@ use super::context_pack_store::{
     load_wiki_page_for_source, source_record_from_context_row,
 };
 use super::graph_snapshot_store::KnowledgeGraphPersistReport;
-use super::row_decode::{
-    non_empty_string, object_i64, object_optional_f32, object_string, object_string_array, row_i64,
-    row_string, row_string_array,
-};
+use super::row_decode::{non_empty_string, row_i64, row_string, row_string_array};
 use super::search_store::{
     append_graph_neighbor_hits, append_source_page_fts_hits, append_wiki_fts_hits, db_best_snippet,
     db_float_score, db_match_score, db_search_terms, evidence_graph_neighbor_counts,
     fts_phrase_query, EvidenceQueryIntent, HybridRetrievalHit,
 };
+
+#[derive(Debug)]
+struct NodeRelationRow {
+    relation: BrainRelationRecord,
+    source_ids: Vec<String>,
+}
+
+const READ_NODE_RELATION_LIMIT: usize = 64;
+const READ_NODE_EVIDENCE_LIMIT: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -269,52 +276,269 @@ pub(super) fn read_node_from_db(
     node_id: &str,
 ) -> Result<Option<ReadNodeResponseData>> {
     let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let node_value = graph
-        .get_all_nodes(None)
-        .context("failed reading GraphQLite nodes")?
-        .into_iter()
-        .find(|node| {
-            let graphqlite::Value::Object(properties) = node else {
-                return false;
-            };
-            matches!(properties.get("id"), Some(graphqlite::Value::String(id)) if id == node_id)
-        });
-    let Some(graphqlite::Value::Object(properties)) = node_value else {
+    let Some(node) = load_graph_canvas_node_by_id(&graph, workspace_id, node_id)? else {
         return Ok(None);
     };
-    let row_workspace_id = object_string(&properties, "workspace_id");
-    if row_workspace_id != workspace_id {
+    let Some(node) = sanitize_read_node_agent_node(node) else {
         return Ok(None);
-    }
-    let evidence_ids = object_string_array(&properties, "evidence_ids_json");
-    let source_ids = object_string_array(&properties, "source_ids_json");
-    let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &evidence_ids)?;
+    };
+    let evidence_ids = node.evidence_ids.clone();
+    let source_ids = node.source_ids.clone();
+    let limited_evidence_ids = evidence_ids
+        .iter()
+        .take(READ_NODE_EVIDENCE_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut evidence = load_evidence_refs_by_ids(&graph, workspace_id, &limited_evidence_ids)?;
     if evidence.is_empty() {
         for source_id in &source_ids {
+            if evidence.len() >= READ_NODE_EVIDENCE_LIMIT {
+                break;
+            }
+            let remaining = READ_NODE_EVIDENCE_LIMIT - evidence.len();
             evidence.extend(load_evidence_refs_for_source(
                 &graph,
                 workspace_id,
                 source_id,
-                None,
+                Some(remaining as i64),
             )?);
         }
     }
-    let node = BrainNodeRecord {
-        node_id: node_id.into(),
-        kind: parse_brain_node_kind(&object_string(&properties, "kind")),
-        label: object_string(&properties, "label"),
-        scope: parse_brain_scope(&object_string(&properties, "scope")),
-        aliases: object_string_array(&properties, "aliases_json"),
-        evidence_ids,
-        source_ids,
-        confidence: object_optional_f32(&properties, "confidence"),
-        updated_at: object_i64(&properties, "updated_at").max(0) as u64,
-    };
+    evidence.truncate(READ_NODE_EVIDENCE_LIMIT);
+    let relations = load_node_relations_from_db(&graph, workspace_id, node_id)?;
     Ok(Some(ReadNodeResponseData {
         node,
         evidence,
-        relations: Vec::new(),
+        relations,
     }))
+}
+
+fn load_node_relations_from_db(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Vec<BrainRelationRecord>> {
+    let mut relation_rows = load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_node_id,
+                target.id AS target_node_id,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at",
+    )?;
+    relation_rows.extend(load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {id: $node_id, workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_node_id,
+                target.id AS target_node_id,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at",
+    )?);
+    let (eligible_evidence_ids, eligible_source_ids) =
+        load_node_relation_eligible_refs(graph, workspace_id, &relation_rows)?;
+    let mut relations = relation_rows
+        .into_iter()
+        .filter(|row| read_node_relation_is_agent_safe(&row.relation))
+        .filter(|row| {
+            relation_refs_are_eligible(
+                &eligible_evidence_ids,
+                &eligible_source_ids,
+                &row.relation.evidence_ids,
+                &row.source_ids,
+            )
+        })
+        .map(|row| row.relation)
+        .collect::<Vec<_>>();
+    relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    relations.dedup_by(|left, right| left.relation_id == right.relation_id);
+    relations.truncate(READ_NODE_RELATION_LIMIT);
+    Ok(relations)
+}
+
+fn read_node_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
+    read_node_agent_text_is_safe(&relation.relation_id)
+        && read_node_agent_text_is_safe(&relation.label)
+        && read_node_agent_text_is_safe(&relation.source_node_id)
+        && read_node_agent_text_is_safe(&relation.target_node_id)
+}
+
+fn sanitize_read_node_agent_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
+    if !read_node_agent_text_is_safe(&node.node_id) || !read_node_agent_text_is_safe(&node.label) {
+        return None;
+    }
+    node.aliases
+        .retain(|alias| read_node_agent_text_is_safe(alias));
+    Some(node)
+}
+
+fn read_node_agent_text_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let normalized = value.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if read_node_text_has_home_path(&lower)
+        || read_node_text_has_windows_absolute_path(&normalized)
+        || read_node_text_has_unix_absolute_path(&normalized)
+        || read_node_text_has_forbidden_path_marker(&lower)
+    {
+        return false;
+    }
+    let path = Path::new(&normalized);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
+}
+
+fn read_node_text_has_home_path(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    bytes
+        .windows(2)
+        .enumerate()
+        .any(|(index, window)| window == b"~/" && read_node_path_token_starts_at(bytes, index))
+}
+
+fn read_node_text_has_windows_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    read_node_text_has_unc_path(normalized)
+        || bytes.windows(3).enumerate().any(|(index, window)| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && window[2] == b'/'
+                && read_node_path_token_starts_at(bytes, index)
+        })
+}
+
+fn read_node_text_has_unc_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window == b"//"
+            && read_node_path_token_starts_at(bytes, index)
+            && index
+                .checked_sub(1)
+                .map(|prev| bytes[prev] != b':')
+                .unwrap_or(true)
+    })
+}
+
+fn read_node_text_has_unix_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window[0] == b'/' && window[1] != b'/' && read_node_path_token_starts_at(bytes, index)
+    })
+}
+
+fn read_node_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || bytes[index - 1].is_ascii_whitespace()
+        || matches!(
+            bytes[index - 1],
+            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
+        )
+}
+
+fn read_node_text_has_forbidden_path_marker(lower: &str) -> bool {
+    lower.contains("docs/private")
+        || lower.contains("docs%2fprivate")
+        || lower.contains("docs%5cprivate")
+        || lower.contains("file://")
+        || lower.contains("../")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+}
+
+fn load_node_relation_rows_from_db(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+    cypher: &str,
+) -> Result<Vec<NodeRelationRow>> {
+    let cypher =
+        format!("{cypher}\n ORDER BY r.relation_id ASC\n LIMIT {READ_NODE_RELATION_LIMIT}");
+    let rows = graph
+        .connection()
+        .cypher_builder(&cypher)
+        .param("workspace_id", workspace_id)
+        .param("node_id", node_id)
+        .run()
+        .context("failed querying GraphQLite node relations")?;
+    let mut relations = Vec::new();
+    for row in &rows {
+        relations.push(NodeRelationRow {
+            relation: graph_canvas_relation_from_row(row)?,
+            source_ids: row_string_array(row, "source_ids_json")
+                .context("read node relation source refs")?,
+        });
+    }
+    Ok(relations)
+}
+
+fn load_node_relation_eligible_refs(
+    graph: &Graph,
+    workspace_id: &str,
+    relation_rows: &[NodeRelationRow],
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let evidence_ids = relation_rows
+        .iter()
+        .flat_map(|row| row.relation.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let source_ids = relation_rows
+        .iter()
+        .flat_map(|row| row.source_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+
+    let mut eligible_evidence_ids = BTreeSet::new();
+    for evidence_id in evidence_ids {
+        let Some(evidence_row) = load_context_pack_evidence_row(graph, workspace_id, &evidence_id)?
+        else {
+            continue;
+        };
+        if load_context_pack_source_row(graph, workspace_id, &evidence_row.source_id)?.is_some() {
+            eligible_evidence_ids.insert(evidence_id);
+        }
+    }
+
+    let mut eligible_source_ids = BTreeSet::new();
+    for source_id in source_ids {
+        if load_context_pack_source_row(graph, workspace_id, &source_id)?.is_some() {
+            eligible_source_ids.insert(source_id);
+        }
+    }
+
+    Ok((eligible_evidence_ids, eligible_source_ids))
+}
+
+fn relation_refs_are_eligible(
+    eligible_evidence_ids: &BTreeSet<String>,
+    eligible_source_ids: &BTreeSet<String>,
+    evidence_ids: &[String],
+    source_ids: &[String],
+) -> bool {
+    if !evidence_ids.is_empty() {
+        return evidence_ids
+            .iter()
+            .any(|evidence_id| eligible_evidence_ids.contains(evidence_id));
+    }
+    source_ids
+        .iter()
+        .any(|source_id| eligible_source_ids.contains(source_id))
 }
 
 #[allow(dead_code)]
@@ -662,33 +886,60 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
         .context("failed querying GraphQLite graph canvas nodes")?;
     let mut nodes = rows
         .iter()
-        .map(|row| {
-            Ok(BrainNodeRecord {
-                node_id: row_string(row, "node_id").context("read graph canvas node id")?,
-                kind: parse_brain_node_kind(
-                    &row_string(row, "kind").context("read graph canvas node kind")?,
-                ),
-                label: row_string(row, "label").context("read graph canvas node label")?,
-                scope: parse_brain_scope(
-                    &row_string(row, "scope").context("read graph canvas node scope")?,
-                ),
-                aliases: row_string_array(row, "aliases_json")
-                    .context("read graph canvas node aliases")?,
-                evidence_ids: row_string_array(row, "evidence_ids_json")
-                    .context("read graph canvas node evidence refs")?,
-                source_ids: row_string_array(row, "source_ids_json")
-                    .context("read graph canvas node source refs")?,
-                confidence: parse_optional_f32(
-                    &row_string(row, "confidence").context("read graph canvas node confidence")?,
-                ),
-                updated_at: row_i64(row, "updated_at")
-                    .context("read graph canvas node updated at")?
-                    .max(0) as u64,
-            })
-        })
+        .map(graph_canvas_node_from_row)
         .collect::<Result<Vec<_>>>()?;
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     Ok(nodes)
+}
+
+fn load_graph_canvas_node_by_id(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Option<BrainNodeRecord>> {
+    let rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {id: $node_id, workspace_id: $workspace_id})
+             RETURN n.id AS node_id,
+                    n.kind AS kind,
+                    n.label AS label,
+                    n.scope AS scope,
+                    n.aliases_json AS aliases_json,
+                    n.evidence_ids_json AS evidence_ids_json,
+                    n.source_ids_json AS source_ids_json,
+                    n.confidence AS confidence,
+                    n.updated_at AS updated_at",
+        )
+        .param("workspace_id", workspace_id)
+        .param("node_id", node_id)
+        .run()
+        .context("failed querying GraphQLite graph canvas node")?;
+    rows.get(0).map(graph_canvas_node_from_row).transpose()
+}
+
+fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> {
+    Ok(BrainNodeRecord {
+        node_id: row_string(row, "node_id").context("read graph canvas node id")?,
+        kind: parse_brain_node_kind(
+            &row_string(row, "kind").context("read graph canvas node kind")?,
+        ),
+        label: row_string(row, "label").context("read graph canvas node label")?,
+        scope: parse_brain_scope(
+            &row_string(row, "scope").context("read graph canvas node scope")?,
+        ),
+        aliases: row_string_array(row, "aliases_json").context("read graph canvas node aliases")?,
+        evidence_ids: row_string_array(row, "evidence_ids_json")
+            .context("read graph canvas node evidence refs")?,
+        source_ids: row_string_array(row, "source_ids_json")
+            .context("read graph canvas node source refs")?,
+        confidence: parse_optional_f32(
+            &row_string(row, "confidence").context("read graph canvas node confidence")?,
+        ),
+        updated_at: row_i64(row, "updated_at")
+            .context("read graph canvas node updated at")?
+            .max(0) as u64,
+    })
 }
 
 fn load_graph_canvas_relations(
@@ -713,32 +964,32 @@ fn load_graph_canvas_relations(
         .context("failed querying GraphQLite graph canvas relations")?;
     let mut relations = rows
         .iter()
-        .map(|row| {
-            Ok(BrainRelationRecord {
-                relation_id: row_string(row, "relation_id")
-                    .context("read graph canvas relation id")?,
-                kind: parse_brain_relation_kind(
-                    &row_string(row, "kind").context("read graph canvas relation kind")?,
-                ),
-                source_node_id: row_string(row, "source_node_id")
-                    .context("read graph canvas relation source node")?,
-                target_node_id: row_string(row, "target_node_id")
-                    .context("read graph canvas relation target node")?,
-                label: row_string(row, "label").context("read graph canvas relation label")?,
-                evidence_ids: row_string_array(row, "evidence_ids_json")
-                    .context("read graph canvas relation evidence refs")?,
-                confidence: parse_optional_f32(
-                    &row_string(row, "confidence")
-                        .context("read graph canvas relation confidence")?,
-                ),
-                updated_at: row_i64(row, "updated_at")
-                    .context("read graph canvas relation updated at")?
-                    .max(0) as u64,
-            })
-        })
+        .map(graph_canvas_relation_from_row)
         .collect::<Result<Vec<_>>>()?;
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     Ok(relations)
+}
+
+fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelationRecord> {
+    Ok(BrainRelationRecord {
+        relation_id: row_string(row, "relation_id").context("read graph canvas relation id")?,
+        kind: parse_brain_relation_kind(
+            &row_string(row, "kind").context("read graph canvas relation kind")?,
+        ),
+        source_node_id: row_string(row, "source_node_id")
+            .context("read graph canvas relation source node")?,
+        target_node_id: row_string(row, "target_node_id")
+            .context("read graph canvas relation target node")?,
+        label: row_string(row, "label").context("read graph canvas relation label")?,
+        evidence_ids: row_string_array(row, "evidence_ids_json")
+            .context("read graph canvas relation evidence refs")?,
+        confidence: parse_optional_f32(
+            &row_string(row, "confidence").context("read graph canvas relation confidence")?,
+        ),
+        updated_at: row_i64(row, "updated_at")
+            .context("read graph canvas relation updated at")?
+            .max(0) as u64,
+    })
 }
 
 fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {

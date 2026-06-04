@@ -60,6 +60,7 @@ pub(super) fn persist_graph_snapshot_in_transaction(
                 )
             })?;
     }
+    persist_graph_evidence_record_index_in_transaction(graph, &snapshot.workspace_id)?;
 
     mark_import_jobs_graph_ready_in_transaction(graph, snapshot)?;
 
@@ -147,6 +148,95 @@ fn persist_graph_checkpoint_metadata_in_transaction(
             ),
         )
         .context("failed storing graph checkpoint metadata")?;
+    Ok(())
+}
+
+fn persist_graph_evidence_record_index_in_transaction(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "DELETE FROM graph_evidence_record_index WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .context("failed clearing graph evidence record index")?;
+    persist_graph_evidence_record_index_for_table(
+        graph,
+        workspace_id,
+        "node",
+        "node_props_text",
+        "node_id",
+    )?;
+    persist_graph_evidence_record_index_for_table(
+        graph,
+        workspace_id,
+        "edge",
+        "edge_props_text",
+        "edge_id",
+    )?;
+    Ok(())
+}
+
+fn persist_graph_evidence_record_index_for_table(
+    graph: &Graph,
+    workspace_id: &str,
+    record_kind: &str,
+    table: &str,
+    id_column: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut query = sqlite
+        .prepare(&format!(
+            "SELECT evidence.{id_column}, evidence.value
+             FROM {table} evidence
+             JOIN {table} workspace ON workspace.{id_column} = evidence.{id_column}
+             JOIN property_keys evidence_key ON evidence_key.id = evidence.key_id
+             JOIN property_keys workspace_key ON workspace_key.id = workspace.key_id
+             WHERE evidence_key.key = 'evidence_ids_json'
+               AND workspace_key.key = 'workspace_id'
+               AND workspace.value = ?1
+             ORDER BY evidence.{id_column} ASC"
+        ))
+        .with_context(|| format!("failed preparing graph {record_kind} evidence index query"))?;
+    let mut insert = sqlite
+        .prepare(
+            "INSERT OR IGNORE INTO graph_evidence_record_index (
+                workspace_id,
+                evidence_id,
+                record_kind,
+                record_internal_id
+            ) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .context("failed preparing graph evidence record index insert")?;
+    let mut rows = query
+        .query([workspace_id])
+        .with_context(|| format!("failed querying graph {record_kind} evidence index rows"))?;
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("failed reading graph {record_kind} evidence index row"))?
+    {
+        let record_internal_id = row
+            .get::<_, i64>(0)
+            .context("read graph evidence record internal id")?;
+        let evidence_ids_json: String = row.get(1).context("read graph evidence refs")?;
+        let Ok(evidence_ids) = serde_json::from_str::<Vec<String>>(&evidence_ids_json) else {
+            continue;
+        };
+        for evidence_id in evidence_ids {
+            insert
+                .execute((
+                    workspace_id,
+                    evidence_id.as_str(),
+                    record_kind,
+                    record_internal_id,
+                ))
+                .with_context(|| {
+                    format!("failed indexing graph {record_kind} evidence ref {evidence_id}")
+                })?;
+        }
+    }
     Ok(())
 }
 

@@ -41,7 +41,13 @@ pub(crate) fn handle_get_context_pack(
                 context_pack_v1.pack_id.clone(),
                 context_pack_v1.generated_at.clone(),
             )
-            .unwrap_or(context_pack_v1)
+            .unwrap_or_else(|_| {
+                let mut degraded_pack = context_pack_v1;
+                degraded_pack.warnings.push(graph_trail_unavailable_warning(
+                    "Graph trail projection failed; citation evidence remains available.",
+                ));
+                degraded_pack
+            })
     } else {
         context_pack_v1
     };
@@ -75,6 +81,15 @@ pub(crate) fn persist_context_pack_v1(
     fs::write(&latest_path, json)
         .with_context(|| format!("failed writing {}", latest_path.display()))?;
     Ok(latest_path.display().to_string())
+}
+
+fn graph_trail_unavailable_warning(message: &str) -> hyprduck_engine_types::ContextPackWarningV0 {
+    hyprduck_engine_types::ContextPackWarningV0 {
+        warning_type: "graph_trail_unavailable".into(),
+        severity: hyprduck_engine_types::ContextPackWarningSeverity::Low,
+        message: message.into(),
+        page_refs: Vec::new(),
+    }
 }
 
 pub(crate) fn handle_read_context_pack(

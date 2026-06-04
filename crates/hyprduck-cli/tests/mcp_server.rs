@@ -854,6 +854,119 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         .iter()
         .any(|node| node["nodeId"] == "concept-mcp-agent-patch"));
 
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 35,
+            "method": "tools/call",
+            "params": {
+                "name": "search_documents",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP graph patch",
+                    "limit": 5
+                }
+            }
+        }),
+    );
+    let graph_patch_search_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_patch_search_tool["result"]["isError"], false,
+        "{graph_patch_search_tool:#?}"
+    );
+    let text = graph_patch_search_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph patch search text");
+    let graph_patch_search: Value = serde_json::from_str(text).expect("graph patch search payload");
+    assert!(graph_patch_search["results"]
+        .as_array()
+        .expect("graph patch search results")
+        .iter()
+        .any(|result| result["id"] == "wiki-mcp-agent-patch"
+            || result["id"] == "evidence-mcp"
+            || result["id"] == "source-mcp"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 36,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "query": "MCP source evidence",
+                    "budget": 4000
+                }
+            }
+        }),
+    );
+    let graph_trail_context_pack_tool = read_message(&mut reader);
+    assert_eq!(
+        graph_trail_context_pack_tool["result"]["isError"], false,
+        "{graph_trail_context_pack_tool:#?}"
+    );
+    let text = graph_trail_context_pack_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("graph trail context pack text");
+    assert!(!text.contains(root_dir_arg.as_str()));
+    assert!(!text.contains("provider-graph-candidates"));
+    assert!(!text.contains("provider-graph-source-raw-merged"));
+    assert!(!text.contains("docs/private"));
+    assert!(!text.contains("../"));
+    let graph_trail_payload: Value =
+        serde_json::from_str(text).expect("graph trail context pack payload");
+    assert_eq!(
+        graph_trail_payload["contextPack"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        graph_trail_payload["contextPackV1"]["schemaVersion"],
+        "hyprduck.context_pack.v1"
+    );
+    assert_eq!(
+        graph_trail_payload["contextPackV0"]["schemaVersion"],
+        "hyprduck.context_pack.v0"
+    );
+    assert!(graph_trail_payload["contextPackV0"]["selectedEvidence"]
+        .as_array()
+        .expect("v0 selected evidence")
+        .iter()
+        .all(|evidence| evidence.get("graphTrail").is_none()));
+    let selected_evidence = graph_trail_payload["contextPackV1"]["selectedEvidence"]
+        .as_array()
+        .expect("v1 selected evidence");
+    let graph_linked_evidence = selected_evidence
+        .iter()
+        .find(|evidence| evidence.get("graphTrail").is_some())
+        .expect("graph-linked evidence");
+    let graph_trail = graph_linked_evidence
+        .get("graphTrail")
+        .expect("graph trail");
+    assert!(graph_trail["direct"]
+        .as_array()
+        .expect("direct graph records")
+        .iter()
+        .any(|record| record["id"] == "concept-mcp-agent-patch"));
+    let follow_up = graph_trail["followUp"]
+        .as_array()
+        .expect("graph follow-up handles");
+    assert!(follow_up.iter().any(|handle| {
+        handle["tool"] == "read_node"
+            && handle["handleType"] == "node"
+            && handle["arguments"]["nodeId"] == "concept-mcp-agent-patch"
+    }));
+    assert!(follow_up.iter().any(|handle| {
+        handle["tool"] == "read_page_evidence"
+            && handle["handleType"] == "page_evidence"
+            && handle["arguments"]["sourceId"] == "source-mcp"
+            && handle["arguments"]["page"] == 1
+    }));
+
     drop(stdin);
     let status = child.wait().expect("server exit");
     assert!(status.success());
@@ -1049,6 +1162,20 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .find(|evidence| evidence["sourceId"] == source_id)
         .expect("context pack should include imported source evidence");
     assert!(imported_evidence.get("evidenceType").is_some());
+    assert!(
+        imported_evidence.get("graphTrail").is_none(),
+        "skipped graph generation should not block selected evidence or invent graph trail data: {imported_evidence:#?}"
+    );
+    assert!(context_pack_payload["contextPackV1"]["selectedEvidence"]
+        .as_array()
+        .expect("v1 selected evidence")
+        .iter()
+        .all(|evidence| evidence.get("graphTrail").is_none()));
+    assert!(context_pack_payload["contextPack"]["warnings"]
+        .as_array()
+        .expect("context pack warnings")
+        .iter()
+        .any(|warning| warning["type"] == "graph_trail_unavailable"));
     assert!(context_pack_payload["contextPack"]["retrievalTrace"]
         .get("evidenceTypeTrace")
         .is_some());
@@ -1095,8 +1222,14 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
             .expect("follow-up selected evidence")
             .iter()
             .any(|evidence| evidence["sourceId"] == source_id
-                && evidence["evidenceRef"] == evidence_ref)
+                && evidence["evidenceRef"] == evidence_ref
+                && evidence.get("graphTrail").is_none())
     );
+    assert!(followup_context_pack_payload["contextPack"]["warnings"]
+        .as_array()
+        .expect("follow-up context pack warnings")
+        .iter()
+        .any(|warning| warning["type"] == "graph_trail_unavailable"));
 
     drop(stdin);
     let status = child.wait().expect("server exit");

@@ -45,6 +45,55 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 confidence: None,
                 updated_at: 10,
             },
+            BrainNodeRecord {
+                node_id: "docs/private/unsafe-node".into(),
+                kind: BrainNodeKind::Concept,
+                label: "docs/private/roadmap.md".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
+            BrainNodeRecord {
+                node_id: "node-windows-path".into(),
+                kind: BrainNodeKind::Concept,
+                label: "C:\\Users\\alice\\Secret.pdf".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
+            BrainNodeRecord {
+                node_id: "node-embedded-path".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Project at /Users/alice/private/source.pdf".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
+            BrainNodeRecord {
+                node_id: "wiki-unsafe-alias".into(),
+                kind: BrainNodeKind::WikiPage,
+                label: "Unsafe Alias Wiki".into(),
+                scope: BrainScope::Project,
+                aliases: vec![
+                    "wiki/DOCS/PRIVATE/roadmap.md".into(),
+                    "wiki/~/secret.md".into(),
+                    "wiki/C:/Users/alice/Secret.pdf".into(),
+                    "wiki//server/share.md".into(),
+                ],
+                evidence_ids: vec!["evidence-a".into()],
+                source_ids: vec!["source-a".into()],
+                confidence: None,
+                updated_at: 10,
+            },
         ],
         relations: vec![
             BrainRelationRecord {
@@ -73,6 +122,36 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_node_id: "wiki-alpha".into(),
                 target_node_id: "entity-alpha".into(),
                 label: "links".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "docs/private/rel".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-a".into(),
+                target_node_id: "docs/private/unsafe-node".into(),
+                label: "docs/private/relation.md".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-embedded-path".into(),
+                kind: BrainRelationKind::Supports,
+                source_node_id: "node-a".into(),
+                target_node_id: "claim-alpha".into(),
+                label: "See C:\\Users\\alice\\Secret.pdf".into(),
+                evidence_ids: vec!["evidence-a".into()],
+                confidence: Some(0.8),
+                updated_at: 10,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-safe-to-unsafe".into(),
+                kind: BrainRelationKind::Mentions,
+                source_node_id: "node-a".into(),
+                target_node_id: "node-embedded-path".into(),
+                label: "mentions".into(),
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
@@ -131,7 +210,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
             topic_refs: vec!["Alpha".into()],
             source_refs: vec!["source-a".into()],
             evidence_refs: vec!["evidence-a".into()],
-            status: "active".into(),
+            status: "supported".into(),
             updated_at: 10,
         }],
         extractions: vec![StructuredExtractionArtifact {
@@ -176,8 +255,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert_eq!(
         report,
         KnowledgeGraphPersistReport {
-            node_count: 6,
-            relation_count: 3,
+            node_count: 10,
+            relation_count: 6,
         }
     );
     assert_eq!(
@@ -193,8 +272,8 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         KnowledgeStoreStateSummary {
             evidence_item_count: 2,
             wiki_page_count: 1,
-            graph_node_count: 6,
-            graph_relation_count: 3,
+            graph_node_count: 10,
+            graph_relation_count: 6,
         }
     );
     assert_graph_node_metadata(&store, "node-a");
@@ -239,8 +318,95 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .selected_evidence
         .iter()
         .any(|evidence| evidence.evidence_ref == "evidence-a"));
+    let alpha_evidence = context_pack
+        .selected_evidence
+        .iter()
+        .find(|evidence| evidence.evidence_ref == "evidence-a")
+        .expect("alpha selected evidence");
+    let graph_trail = alpha_evidence
+        .graph_trail
+        .as_ref()
+        .expect("graph trail for alpha evidence");
+    assert!(graph_trail
+        .direct
+        .iter()
+        .any(|record| record.record_type == ContextPackGraphRecordKindV1::Node));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Relation && record.id == "rel-a"
+    }));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::WikiPage && record.id == "wiki-alpha"
+    }));
+    assert!(graph_trail.direct.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Claim && record.id == "claim-alpha"
+    }));
+    assert!(graph_trail
+        .direct
+        .iter()
+        .chain(graph_trail.adjacent.iter())
+        .all(|record| !record.id.contains("docs/private")));
+    assert!(graph_trail
+        .direct
+        .iter()
+        .chain(graph_trail.adjacent.iter())
+        .all(|record| record.id != "node-windows-path"));
+    assert!(graph_trail
+        .direct
+        .iter()
+        .chain(graph_trail.adjacent.iter())
+        .all(|record| record.id != "node-embedded-path" && record.id != "rel-embedded-path"));
+    assert!(graph_trail.adjacent.iter().any(|record| {
+        record.record_type == ContextPackGraphRecordKindV1::Node && record.id == "node-b"
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadNode
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::Node
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadNode(arguments)
+                    if arguments.node_id != "node-embedded-path"
+                        && arguments.node_id != "node-windows-path"
+                        && !arguments.node_id.contains("docs/private")
+            )
+    }));
+    assert!(graph_trail.follow_up.iter().all(|follow_up| {
+        !matches!(
+            &follow_up.arguments,
+            ContextPackGraphFollowUpArgumentsV1::ReadNode(arguments)
+                if arguments.node_id == "node-embedded-path"
+                    || arguments.node_id == "node-windows-path"
+                    || arguments.node_id.contains("docs/private")
+        )
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadPageEvidence
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::PageEvidence
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadPageEvidence(arguments)
+                    if arguments.source_id == "source-a" && arguments.page == 1
+            )
+    }));
+    assert!(graph_trail.follow_up.iter().any(|follow_up| {
+        follow_up.tool == ContextPackGraphFollowUpToolV1::ReadWikiPage
+            && follow_up.handle_type == ContextPackGraphHandleTypeV1::WikiPage
+            && matches!(
+                &follow_up.arguments,
+                ContextPackGraphFollowUpArgumentsV1::ReadWikiPage(arguments)
+                    if arguments.path == "wiki/alpha"
+            )
+    }));
     let context_pack_json = serde_json::to_string(&context_pack).expect("serialize context pack");
     assert!(!context_pack_json.contains("/Users/hyprduck/private"));
+    assert!(!context_pack_json.contains("docs/private"));
+    assert!(!context_pack_json.contains("DOCS/PRIVATE"));
+    assert!(!context_pack_json.contains("/Users/alice"));
+    assert!(!context_pack_json.contains("C:\\Users"));
+    assert!(!context_pack_json.contains("wiki/~/"));
+    assert!(!context_pack_json.contains("wiki/C:/"));
+    assert!(!context_pack_json.contains("wiki//server"));
+    assert!(!context_pack_json.contains("../"));
+    assert!(context_pack_json.contains("rel-safe-to-unsafe"));
     assert!(context_pack
         .retrieval_trace
         .evidence_type_trace
@@ -300,9 +466,31 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .expect("read wiki page from DB")
         .expect("wiki page");
     assert_eq!(wiki_page.page_id, "wiki-alpha");
-    let _ = store
+    let node_response = store
         .read_node_from_db("workspace-default", "node-a")
-        .expect("read node from DB");
+        .expect("read node from DB")
+        .expect("node response");
+    assert_eq!(node_response.node.node_id, "node-a");
+    assert!(node_response
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-a"));
+    assert!(node_response
+        .relations
+        .iter()
+        .all(|relation| !relation.evidence_ids.is_empty()));
+    assert!(node_response.relations.iter().all(|relation| {
+        relation.relation_id != "docs/private/rel"
+            && relation.relation_id != "rel-embedded-path"
+            && !relation.source_node_id.contains("docs/private")
+            && !relation.target_node_id.contains("docs/private")
+    }));
+    let node_response_json =
+        serde_json::to_string(&node_response).expect("serialize node response");
+    assert!(!node_response_json.contains("/Users/hyprduck/private"));
+    assert!(!node_response_json.contains("docs/private"));
+    assert!(!node_response_json.contains("/Users/alice"));
+    assert!(!node_response_json.contains("C:\\Users"));
     let (graph_nodes, graph_relations, graph_wiki_pages) = store
         .read_graph_canvas_projection_from_db("workspace-default")
         .expect("read graph canvas projection")
@@ -323,6 +511,25 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(filtered_hits
         .iter()
         .all(|hit| hit.evidence_id != "evidence-b"));
+    let filtered_context_pack = store
+        .assemble_context_pack_v1_from_db(
+            "workspace-default",
+            "Alpha",
+            5,
+            "ctx_db_alpha_filtered".into(),
+            "2026-05-29T09:54:26Z".into(),
+        )
+        .expect("assemble filtered DB context pack v1");
+    let filtered_alpha_trail = filtered_context_pack
+        .selected_evidence
+        .iter()
+        .find(|evidence| evidence.evidence_ref == "evidence-a")
+        .and_then(|evidence| evidence.graph_trail.as_ref())
+        .expect("filtered alpha graph trail");
+    assert!(!filtered_alpha_trail
+        .adjacent
+        .iter()
+        .any(|record| record.id == "node-b"));
     let wiki_hits = store
         .hybrid_retrieve("workspace-default", "source evidence", 5)
         .expect("wiki hybrid retrieve");
@@ -601,8 +808,8 @@ fn assert_graph_checkpoint_metadata(store: &KnowledgeStore, workspace_id: &str) 
     assert_eq!(row.3, "event-a");
     assert_eq!(row.4, GRAPHQLITE_SCHEMA_VERSION);
     assert_eq!(row.5, env!("CARGO_PKG_VERSION"));
-    assert_eq!(row.6, 6);
-    assert_eq!(row.7, 3);
+    assert_eq!(row.6, 10);
+    assert_eq!(row.7, 6);
     assert_eq!(row.8, 2);
     assert_eq!(row.9.len(), 64);
     assert_eq!(row.10, "hyprduck.sqlite:graphqlite");

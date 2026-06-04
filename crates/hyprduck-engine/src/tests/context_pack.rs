@@ -910,6 +910,68 @@ fn context_pack_source_metadata_skips_symlink_escape() {
     assert!(!metadata.contains_key("src-symlink"));
 }
 
+fn graph_trail_context_pack_fixture() -> hyprduck_engine_types::ContextPackV1 {
+    hyprduck_engine_types::ContextPackV1 {
+        schema_version: hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
+        pack_id: "ctx_test_pack".into(),
+        workspace_id: DEFAULT_WORKSPACE_ID.into(),
+        query: "agent reuse".into(),
+        generated_at: "2026-05-18T09:00:00Z".into(),
+        source_set: vec![hyprduck_engine_types::ContextPackSourceV0 {
+            source_id: "src-context".into(),
+            original_filename: "source.md".into(),
+            content_hash: "fnv64:source".into(),
+            page_count: 1,
+            ingestion_status: "ingested".into(),
+            staleness: hyprduck_engine_types::ContextPackStaleness::Current,
+            provider_route: "local_demo".into(),
+            local_only: true,
+        }],
+        selected_evidence: vec![hyprduck_engine_types::ContextPackEvidenceV1 {
+            evidence_ref: "ev-context-p1".into(),
+            source_id: "src-context".into(),
+            page: 1,
+            region: Some("page:Page 1".into()),
+            span: Some("page".into()),
+            quoted_text: "Graph trails point agents to cited follow-up reads.".into(),
+            parse_confidence: hyprduck_engine_types::ContextPackParseConfidence::High,
+            selection_reason: "Selected from graph-aware retrieval.".into(),
+            content_hash: "fnv64:source".into(),
+            evidence_type: hyprduck_engine_types::EvidenceType::Relationship,
+            graph_trail: Some(hyprduck_engine_types::ContextPackGraphTrailV1 {
+                direct: vec![hyprduck_engine_types::ContextPackGraphRecordV1 {
+                    record_type: hyprduck_engine_types::ContextPackGraphRecordKindV1::Node,
+                    id: "node-context".into(),
+                    reason: "Evidence directly supports this graph node.".into(),
+                }],
+                adjacent: vec![],
+                follow_up: vec![hyprduck_engine_types::ContextPackGraphFollowUpV1 {
+                    tool: hyprduck_engine_types::ContextPackGraphFollowUpToolV1::ReadNode,
+                    handle_type: hyprduck_engine_types::ContextPackGraphHandleTypeV1::Node,
+                    arguments: hyprduck_engine_types::ContextPackGraphFollowUpArgumentsV1::ReadNode(
+                        hyprduck_engine_types::ContextPackGraphReadNodeArgumentsV1 {
+                            node_id: "node-context".into(),
+                        },
+                    ),
+                    reason: "Inspect the related graph node.".into(),
+                }],
+                unavailable_reason: None,
+            }),
+        }],
+        findings: vec![],
+        warnings: vec![],
+        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV1 {
+            strategy: "test".into(),
+            chunks_considered: 1,
+            chunks_selected: 1,
+            budget_requested: 4000,
+            budget_used: 100,
+            evidence_type_trace: hyprduck_engine_types::ContextPackEvidenceTypeTraceV1::default(),
+        },
+        suggested_next_reads: vec![],
+    }
+}
+
 #[test]
 fn context_pack_v1_persistence_writes_latest_and_history_files() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -917,26 +979,7 @@ fn context_pack_v1_persistence_writes_latest_and_history_files() {
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().to_string_lossy().into_owned()),
     };
-    let context_pack = hyprduck_engine_types::ContextPackV1 {
-        schema_version: hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
-        pack_id: "ctx_test_pack".into(),
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        query: "agent reuse".into(),
-        generated_at: "2026-05-18T09:00:00Z".into(),
-        source_set: vec![],
-        selected_evidence: vec![],
-        findings: vec![],
-        warnings: vec![],
-        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV1 {
-            strategy: "test".into(),
-            chunks_considered: 0,
-            chunks_selected: 0,
-            budget_requested: 4000,
-            budget_used: 0,
-            evidence_type_trace: hyprduck_engine_types::ContextPackEvidenceTypeTraceV1::default(),
-        },
-        suggested_next_reads: vec![],
-    };
+    let context_pack = graph_trail_context_pack_fixture();
 
     let path = persist_context_pack_v1(&scope, &context_pack).expect("persist context pack");
     assert!(path.ends_with("default/context_pack.json"));
@@ -952,6 +995,7 @@ fn context_pack_v1_persistence_writes_latest_and_history_files() {
         hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION
     );
     assert_eq!(decoded.pack_id, "ctx_test_pack");
+    assert!(decoded.selected_evidence[0].graph_trail.is_some());
 }
 
 #[test]
@@ -961,26 +1005,7 @@ fn read_context_pack_reads_latest_and_history_without_path_escape() {
         workspace_id: DEFAULT_WORKSPACE_ID.into(),
         root_dir: Some(temp.path().to_string_lossy().into_owned()),
     };
-    let context_pack = hyprduck_engine_types::ContextPackV1 {
-        schema_version: hyprduck_engine_types::CONTEXT_PACK_V1_SCHEMA_VERSION.into(),
-        pack_id: "ctx_test_pack".into(),
-        workspace_id: DEFAULT_WORKSPACE_ID.into(),
-        query: "agent reuse".into(),
-        generated_at: "2026-05-18T09:00:00Z".into(),
-        source_set: vec![],
-        selected_evidence: vec![],
-        findings: vec![],
-        warnings: vec![],
-        retrieval_trace: hyprduck_engine_types::ContextPackRetrievalTraceV1 {
-            strategy: "test".into(),
-            chunks_considered: 0,
-            chunks_selected: 0,
-            budget_requested: 4000,
-            budget_used: 0,
-            evidence_type_trace: hyprduck_engine_types::ContextPackEvidenceTypeTraceV1::default(),
-        },
-        suggested_next_reads: vec![],
-    };
+    let context_pack = graph_trail_context_pack_fixture();
     persist_context_pack_v1(&scope, &context_pack).expect("persist context pack");
 
     let latest = handle_read_context_pack(ReadContextPackRequest {
@@ -989,6 +1014,12 @@ fn read_context_pack_reads_latest_and_history_without_path_escape() {
     })
     .expect("latest context pack");
     assert_eq!(latest.context_pack.pack_id, "ctx_test_pack");
+    let latest_json = serde_json::to_string(&latest.context_pack).expect("latest v0 json");
+    assert!(!latest_json.contains("graphTrail"));
+    assert_eq!(
+        latest.context_pack.selected_evidence[0].evidence_ref,
+        "ev-context-p1"
+    );
 
     let history = handle_read_context_pack(ReadContextPackRequest {
         scope: scope.clone(),

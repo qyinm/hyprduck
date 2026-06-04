@@ -96,7 +96,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
 | `read_page_evidence` | `sourceId` | Read source evidence refs, optionally narrowed by 1-based `page`. |
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
-| `read_node` | `nodeId` | Read a graph node with evidence and adjacent relations. |
+| `read_node` | `nodeId` | Read a graph node with up to 32 evidence refs and 64 adjacent relations. |
 | `read_recent_events` | none | Read append-only document context event history. |
 | `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
@@ -147,6 +147,33 @@ were considered and selected. Legacy Evidence Index v0 artifacts are still read
 and converted to `text` evidence. Unsupported Evidence Index schema versions are
 reported as `evidence_index_schema_mismatch` warnings instead of being treated
 as unreadable files.
+
+## Graph Trail Read Context
+
+When GraphQLite graph context is available, `get_context_pack` may add
+`selectedEvidence[].graphTrail` to Context Pack v1. This is retrieval and
+inspection context for agents, not a graph export and not final-answer control.
+`contextPackV0` remains a source/page/evidence compatibility projection and does
+not include graph trail fields.
+
+`graphTrail.direct` lists graph records directly supported by the selected
+evidence. `graphTrail.adjacent` lists bounded neighboring records that can help
+inspection but should not be treated as cited answer support by themselves.
+Agents should continue to cite `sourceId`, `page`, and `evidenceRef` for answer
+claims.
+
+Use `graphTrail.followUp` for targeted reads. Each handle includes:
+
+- `tool`: one of the existing read tools, such as `read_node`, `read_source`,
+  `read_page_evidence`, or `read_wiki_page`.
+- `handleType`: the stable handle category.
+- `arguments`: the exact safe arguments to pass to that tool.
+- `reason`: why the follow-up is relevant.
+
+Graph-specific handles live in `graphTrail.followUp`; `suggestedNextReads`
+stays source/page-centric for older clients. If graph materialization is not
+ready, citation-backed Context Pack and page evidence reads remain usable and
+graph trail data may be absent.
 
 ## Materialized Snapshot Read Path
 

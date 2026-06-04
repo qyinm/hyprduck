@@ -85,6 +85,10 @@ The first successful proof must record:
 - `get_context_pack` returns `contextPack.schemaVersion` as
   `hyprduck.context_pack.v1`, includes `selectedEvidence[].evidenceType`, and
   includes `retrievalTrace.evidenceTypeTrace`;
+- when graph context exists, `contextPackV1.selectedEvidence[].graphTrail`
+  includes read-only follow-up handles with `tool`, `handleType`, `arguments`,
+  and `reason`; `contextPackV0` stays present and does not require graph trail
+  fields;
 - `contextPackV0` remains present for compatibility with older agent clients;
 - second query reuses the same source set or performs a follow-up evidence read;
 - failure class, if any.
