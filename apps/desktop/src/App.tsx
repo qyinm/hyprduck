@@ -378,11 +378,11 @@ export function App() {
     const latestProgress = snapshot.progressLog[0] ?? null;
     if (latestProgress?.phase === "failed") {
       return {
-        filePath: selectedFile?.path ?? "Selected file",
+        filePath: selectedFile?.path ?? t("workspace.import.selectedFile"),
         format: selectedFile?.format ?? "document",
         status: "failed",
         progressPercent: 100,
-        message: "Import failed",
+        message: t("workspace.import.failed"),
         failureMessage: latestProgress.message,
         failedPageCount: snapshot.lastResult?.failedCount ?? 0,
       };
@@ -390,17 +390,17 @@ export function App() {
 
     if (snapshot.lastResult && snapshot.lastResult.failedCount > 0) {
       return {
-        filePath: selectedFile?.path ?? snapshot.lastResult.savedOutputPath ?? "Imported source",
+        filePath: selectedFile?.path ?? snapshot.lastResult.savedOutputPath ?? t("workspace.import.importedSource"),
         format: selectedFile?.format ?? "document",
         status: "partial",
         progressPercent: 100,
-        message: "Partial import",
+        message: t("workspace.import.partial"),
         failedPageCount: snapshot.lastResult.failedCount,
       };
     }
 
     return null;
-  }, [selectedFile, snapshot.activeJob, snapshot.lastResult, snapshot.progressLog]);
+  }, [selectedFile, snapshot.activeJob, snapshot.lastResult, snapshot.progressLog, t]);
   const [workspaceUiState, dispatchWorkspaceUi] = useReducer(
     workspaceUiStateReducer,
     null,

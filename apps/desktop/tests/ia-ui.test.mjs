@@ -96,10 +96,12 @@ test("settings page hides debug readiness internals", () => {
 });
 
 test("Knowledge empty state focuses first users on importing source files", () => {
-  expect(graphSource).toMatch(/Add private docs/);
-  expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
-  expect(graphSource).toMatch(/Choose files/);
-  expect(graphSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
+  expect(graphSource).toMatch(/workspace\.empty\.title/);
+  expect(graphSource).toMatch(/workspace\.empty\.body/);
+  expect(graphSource).toMatch(/workspace\.empty\.chooseFiles/);
+  expect(localesSource).toMatch(/Add private docs/);
+  expect(localesSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
+  expect(localesSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
@@ -124,8 +126,8 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
 
 test("Knowledge workspace keeps the graph canvas and removes onboarding checklist chrome", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/aria-label="Open Agent Terminal"/);
-  expect(graphSource).toMatch(/placeholder="Open Agent Terminal\.\.\."/);
+  expect(graphSource).toMatch(/workspace\.prompt\.openTerminal/);
+  expect(graphSource).toMatch(/workspace\.prompt\.placeholder/);
   expect(graphSource).not.toMatch(/FirstRunActivationStrip/);
   expect(graphSource).not.toMatch(/aria-label="First-run activation"/);
   expect(graphSource).not.toMatch(/Register the local MCP server/);
@@ -138,13 +140,13 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/Document/);
   expect(graphSource).toMatch(/File/);
-  expect(graphSource).toMatch(/aria-label="Open file"/);
-  expect(graphSource).toMatch(/aria-label="Open extracted text"/);
-  expect(graphSource).toMatch(/aria-label="Reveal in Finder"/);
+  expect(graphSource).toMatch(/workspace\.inspector\.openFile/);
+  expect(graphSource).toMatch(/workspace\.inspector\.openExtractedText/);
+  expect(graphSource).toMatch(/workspace\.inspector\.revealInFinder/);
   expect(graphSource).toMatch(/ExternalLink/);
   expect(graphSource).toMatch(/FileText/);
   expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/Review suggestions/);
+  expect(graphSource).toMatch(/workspace\.inspector\.reviewSuggestions/);
   expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
   expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
   expect(graphSource).toMatch(/customerVisibleDescription/);
@@ -157,18 +159,19 @@ test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
   expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/AgentTerminal/);
   expect(graphSource).toMatch(/GraphAnswerWindow/);
-  expect(graphSource).toMatch(/aria-label="Attach files"/);
+  expect(graphSource).toMatch(/workspace\.prompt\.attachFiles/);
   expect(graphSource).toMatch(/onFocus=\{openTerminal\}/);
   expect(graphSource).toMatch(/onOpenAgentTerminal\(\);/);
   expect(graphSource).toMatch(/onCreateSession=\{onCreateAgentTerminalSession\}/);
   expect(agentTerminalSource).toMatch(/aria-label="Minimize Agent Terminal"/);
-  expect(graphSource).toMatch(/aria-label="Resize Agent Terminal"/);
-  expect(graphSource).toMatch(/aria-label="Restore Agent Terminal"/);
+  expect(graphSource).toMatch(/workspace\.terminal\.resize/);
+  expect(graphSource).toMatch(/workspace\.terminal\.restore/);
   expect(graphSource).not.toMatch(/onAskProject/);
   expect(graphSource).not.toMatch(/answer_workspace_project/);
   expect(graphSource).toMatch(/bottom-24/);
-  expect(graphSource).toMatch(/Close answer/);
-  expect(graphSource).toMatch(/Answering\.\.\./);
+  expect(localesSource).toMatch(/Open Agent Terminal/);
+  expect(localesSource).toMatch(/Close answer/);
+  expect(localesSource).toMatch(/Answering\.\.\./);
   expect(graphSource).toMatch(/CompactEvidenceRow/);
   expect(graphSource).not.toMatch(/Ask or add files to this knowledge base/);
   expect(graphSource).not.toMatch(/name="attachment-intent"/);

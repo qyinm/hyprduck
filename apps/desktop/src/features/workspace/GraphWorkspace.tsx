@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentTerminal } from "@/features/agent-terminal/AgentTerminal";
+import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import {
   ArrowUp,
@@ -105,6 +106,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     onWriteAgentTerminalSession,
     onRetryFailedPages,
   } = props;
+  const { t } = useI18n();
   const projectNodes = project?.nodes ?? [];
   const nodeById = Object.fromEntries(projectNodes.map((node) => [node.id, node]));
   const selectedEdge =
@@ -160,14 +162,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     : "border-border/80";
   const answerBadgeLabel =
     answer?.status === "stale"
-      ? "Stale"
+      ? t("workspace.answer.stale")
       : answer?.status === "low_confidence"
-      ? "Low confidence"
+      ? t("workspace.answer.lowConfidence")
       : answer?.status === "grounded"
-      ? "Grounded"
+      ? t("workspace.answer.grounded")
       : answer?.status === "blocked"
-      ? "Blocked"
-      : "Preview";
+      ? t("workspace.answer.blocked")
+      : t("workspace.answer.preview");
   const selectedSourcePath =
     selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
   const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
@@ -194,15 +196,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             <Share2 size={20} />
           </div>
           <h2 className="text-xl font-semibold text-foreground">
-            Add private docs
+            {t("workspace.empty.title")}
           </h2>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Drop PDF, DOCX, or DOC files here. HyprDuck will prepare
-            source-backed evidence that coding agents can reuse with citations.
+            {t("workspace.empty.body")}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             <Button onClick={onOpenImport} type="button">
-              Choose files
+              {t("workspace.empty.chooseFiles")}
             </Button>
           </div>
         </div>
@@ -218,12 +219,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     }
 
     if (request.kind === "rename" && !(request.value ?? "").trim()) {
-      setCorrectionError("Rename needs a non-empty canonical name.");
+      setCorrectionError(t("workspace.corrections.renameRequired"));
       return;
     }
 
     if (request.kind === "merge" && !request.targetNodeId) {
-      setCorrectionError("Pick a target concept before applying merge.");
+      setCorrectionError(t("workspace.corrections.mergeRequired"));
       return;
     }
 
@@ -291,6 +292,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               answerBadgeLabel={answerBadgeLabel}
               answerError={answerError}
               answerPending={answerPending}
+              copy={{
+                answering: t("workspace.answer.answering"),
+                close: t("workspace.answer.close"),
+              }}
               onClose={() => dispatch({ type: "close_answer_dock" })}
               onOpenArtifact={onOpenArtifact}
               question={uiState.answerInput.trim()}
@@ -314,6 +319,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             agentTerminalOpen={agentTerminalOpen}
             answerError={uiState.answerDockOpen ? null : answerError}
             answerPending={answerPending}
+            copy={{
+              answering: t("workspace.answer.answering"),
+              attachFiles: t("workspace.prompt.attachFiles"),
+              openTerminal: t("workspace.prompt.openTerminal"),
+              placeholder: t("workspace.prompt.placeholder"),
+              resizeTerminal: t("workspace.terminal.resize"),
+              restoreTerminal: t("workspace.terminal.restore"),
+            }}
             inputValue={uiState.answerInput}
             onAttachFiles={onOpenImport}
             onOpenAgentTerminal={() => setAgentTerminalOpen(true)}
@@ -328,7 +341,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
         {uiState.inspectorOpen && (
           <aside
-            aria-label="Selection details"
+            aria-label={t("workspace.inspector.label")}
             className="flex min-h-0 flex-col border-l border-border bg-background pt-14"
             style={{ width: "clamp(18rem, 28vw, 24rem)" }}
           >
@@ -336,18 +349,25 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
                 <section className="space-y-2 border-b border-border/70 pb-3">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline">Connection</Badge>
+                    <Badge variant="outline">{t("workspace.inspector.connection")}</Badge>
                     <Badge variant="secondary">
                       {selectedEdge.edge.confidence === null
-                        ? "Evidence-backed"
-                        : `${Math.round(selectedEdge.edge.confidence * 100)}% confidence`}
+                        ? t("workspace.inspector.evidenceBacked")
+                        : t("workspace.inspector.confidence", {
+                            percent: Math.round(selectedEdge.edge.confidence * 100),
+                          })}
                     </Badge>
                   </div>
                   <div>
                     <h4 className="text-base font-semibold leading-6 tracking-tight">
-                      {nodeById[selectedEdge.edge.sourceNodeId]?.label ?? selectedEdge.edge.sourceNodeId}
-                      {" connects to "}
-                      {nodeById[selectedEdge.edge.targetNodeId]?.label ?? selectedEdge.edge.targetNodeId}
+                      {t("workspace.inspector.connectsTo", {
+                        source:
+                          nodeById[selectedEdge.edge.sourceNodeId]?.label ??
+                          selectedEdge.edge.sourceNodeId,
+                        target:
+                          nodeById[selectedEdge.edge.targetNodeId]?.label ??
+                          selectedEdge.edge.targetNodeId,
+                      })}
                     </h4>
                     <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
                       {selectedEdge.explanation}
@@ -387,8 +407,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                     <Badge variant="outline">{workspaceSelectionKindLabel(selectedNode.node.kind)}</Badge>
                     <Badge variant="secondary">
                       {selectedNode.node.confidence === null
-                        ? "Evidence-backed"
-                        : `${Math.round(selectedNode.node.confidence * 100)}% confidence`}
+                        ? t("workspace.inspector.evidenceBacked")
+                        : t("workspace.inspector.confidence", {
+                            percent: Math.round(selectedNode.node.confidence * 100),
+                          })}
                     </Badge>
                   </div>
                   <div>
@@ -426,42 +448,42 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           </span>
                         ) : null}
                         <Button
-                          aria-label="Open file"
+                          aria-label={t("workspace.inspector.openFile")}
                           className="size-7 rounded-full"
                           disabled={!selectedSourcePath}
                           onClick={() =>
                             void handleOpenArtifact(selectedSourcePath, false)
                           }
                           size="icon"
-                          title="Open file"
+                          title={t("workspace.inspector.openFile")}
                           type="button"
                           variant="ghost"
                         >
                           <ExternalLink size={14} />
                         </Button>
                         <Button
-                          aria-label="Open extracted text"
+                          aria-label={t("workspace.inspector.openExtractedText")}
                           className="size-7 rounded-full"
                           disabled={!selectedMarkdownPath}
                           onClick={() =>
                             void handleOpenArtifact(selectedMarkdownPath, false)
                           }
                           size="icon"
-                          title="Open extracted text"
+                          title={t("workspace.inspector.openExtractedText")}
                           type="button"
                           variant="ghost"
                         >
                           <FileText size={14} />
                         </Button>
                         <Button
-                          aria-label="Reveal in Finder"
+                          aria-label={t("workspace.inspector.revealInFinder")}
                           className="size-7 rounded-full"
                           disabled={!selectedSourcePath}
                           onClick={() =>
                             void handleOpenArtifact(selectedSourcePath, true)
                           }
                           size="icon"
-                          title="Reveal in Finder"
+                          title={t("workspace.inspector.revealInFinder")}
                           type="button"
                           variant="ghost"
                         >
@@ -524,7 +546,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                       type="button"
                       variant="ghost"
                     >
-                      <span>Review suggestions</span>
+                      <span>{t("workspace.inspector.reviewSuggestions")}</span>
                       <span className="text-muted-foreground">
                         {selectedNode.actions.length}
                       </span>
@@ -768,6 +790,10 @@ interface GraphAnswerWindowProps {
   answerBadgeLabel: string;
   answerError: string | null;
   answerPending: boolean;
+  copy: {
+    answering: string;
+    close: string;
+  };
   onClose: () => void;
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
   question: string;
@@ -779,6 +805,7 @@ function GraphAnswerWindow(props: GraphAnswerWindowProps) {
     answerBadgeLabel,
     answerError,
     answerPending,
+    copy,
     onClose,
     onOpenArtifact,
     question,
@@ -806,7 +833,7 @@ function GraphAnswerWindow(props: GraphAnswerWindowProps) {
           ) : null}
         </div>
         <Button
-          aria-label="Close answer"
+          aria-label={copy.close}
           className="size-8 shrink-0"
           onClick={onClose}
           size="icon"
@@ -821,7 +848,7 @@ function GraphAnswerWindow(props: GraphAnswerWindowProps) {
         {answerPending ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle size={15} className="animate-spin" />
-            <span>Answering...</span>
+            <span>{copy.answering}</span>
           </div>
         ) : answerError ? (
           <p className="text-sm leading-6 text-destructive">{answerError}</p>
@@ -1050,6 +1077,14 @@ interface GraphPromptComposerProps {
   agentTerminalOpen: boolean;
   answerError: string | null;
   answerPending: boolean;
+  copy: {
+    answering: string;
+    attachFiles: string;
+    openTerminal: string;
+    placeholder: string;
+    resizeTerminal: string;
+    restoreTerminal: string;
+  };
   inputValue: string;
   onAttachFiles: () => void;
   onOpenAgentTerminal: () => void;
@@ -1069,6 +1104,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
     agentTerminalOpen,
     answerError,
     answerPending,
+    copy,
     inputValue,
     onAttachFiles,
     onOpenAgentTerminal,
@@ -1190,7 +1226,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
       }}
     >
       <Button
-        aria-label="Attach files"
+        aria-label={copy.attachFiles}
         className={cn(
           "h-14 rounded-full border-border/80 bg-background/95 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur transition-[width,opacity] duration-200",
           agentTerminalOpen && !terminalMinimized
@@ -1236,7 +1272,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
               </span>
             </div>
             <Button
-              aria-label="Restore Agent Terminal"
+              aria-label={copy.restoreTerminal}
               className="mb-0.5 size-9 rounded-full"
               onClick={openTerminal}
               size="icon"
@@ -1247,7 +1283,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
           </>
         ) : showTerminalContent ? (
           <button
-            aria-label="Resize Agent Terminal"
+            aria-label={copy.resizeTerminal}
             className="absolute right-1 top-1 z-40 size-5 cursor-nesw-resize rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
             onPointerDown={beginTerminalResize}
             type="button"
@@ -1257,7 +1293,7 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
         ) : (
           <>
             <input
-              aria-label="Open Agent Terminal"
+              aria-label={copy.openTerminal}
               className={cn(
                 "h-10 min-w-0 flex-1 bg-transparent px-2 text-base outline-none",
                 agentTerminalOpen
@@ -1266,16 +1302,16 @@ function GraphPromptComposer(props: GraphPromptComposerProps) {
               )}
               onChange={(event) => onInputChange(event.target.value)}
               onFocus={openTerminal}
-              placeholder="Open Agent Terminal..."
+              placeholder={copy.placeholder}
               value={inputValue}
             />
             {answerPending ? (
               <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-                Answering...
+                {copy.answering}
               </span>
             ) : null}
             <Button
-              aria-label="Open Agent Terminal"
+              aria-label={copy.openTerminal}
               className={cn(
                 "mb-0.5 size-9 rounded-full",
                 agentTerminalOpen
