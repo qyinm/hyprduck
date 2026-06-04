@@ -237,6 +237,7 @@ function startAutoUpdateChecks() {
     repo: "qyinm/hyprduck",
     updateInterval: "10 minutes",
     logger: {
+      log: console.error,
       debug: console.error,
       info: console.error,
       warn: console.error,
