@@ -312,7 +312,7 @@ export function App() {
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
   const settingsOpen = activePanel === "settings";
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [startupError, setStartupError] = useState<string | null>(null);
   const previewWorkspaceProject = useMemo(

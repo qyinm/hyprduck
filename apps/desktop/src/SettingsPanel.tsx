@@ -13,6 +13,13 @@ import { cn } from "@/lib/utils";
 
 export type SettingsTab = "general" | "ai";
 
+const UI_LANGUAGE_STORAGE_KEY = "hyprduck.uiLanguage";
+const UI_LANGUAGE_OPTIONS = [
+  { id: "en", label: "English" },
+  { id: "ko", label: "한국어" },
+  { id: "ja", label: "日本語" },
+] as const;
+
 interface ProviderState {
   apiKey: string;
   baseUrl: string;
@@ -87,13 +94,13 @@ export function SettingsPanel(props: {
   const {
     config,
     validation,
-    readiness,
     onSave,
     onRefreshReadiness,
     onLoadProviderModels,
     tab,
   } = props;
   const [promptTemplate, setPromptTemplate] = useState("General");
+  const [uiLanguage, setUiLanguage] = useState("en");
   const [selectedModel, setSelectedModel] = useState("");
   const [activeProvider, setActiveProvider] = useState("open_router");
   const [providerStates, setProviderStates] = useState<
@@ -101,6 +108,21 @@ export function SettingsPanel(props: {
   >(new Map());
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const lastSavedSettingsSignature = useRef<string | null>(null);
+
+  useEffect(() => {
+    const storedLanguage = window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY);
+    if (
+      storedLanguage &&
+      UI_LANGUAGE_OPTIONS.some((option) => option.id === storedLanguage)
+    ) {
+      setUiLanguage(storedLanguage);
+    }
+  }, []);
+
+  const handleUiLanguageChange = (language: string) => {
+    setUiLanguage(language);
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, language);
+  };
 
   useEffect(() => {
     if (config) {
@@ -233,21 +255,18 @@ export function SettingsPanel(props: {
     <div className="space-y-8">
       {tab === "general" && (
         <section>
-          <h2 className="text-base font-semibold mb-1">General</h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            Configure prompt templates and output behavior.
-          </p>
-          <div className="space-y-2">
-            <Label htmlFor="prompt-template-select">Prompt template</Label>
+          <h2 className="text-base font-semibold mb-4">General</h2>
+          <div className="max-w-sm space-y-2">
+            <Label htmlFor="ui-language-select">UI language</Label>
             <select
-              id="prompt-template-select"
+              id="ui-language-select"
               className="h-9 w-full rounded-md border border-input bg-background px-3"
-              value={promptTemplate}
-              onChange={(e) => setPromptTemplate(e.target.value)}
+              value={uiLanguage}
+              onChange={(e) => handleUiLanguageChange(e.target.value)}
             >
-              {(config.prompt_template_options ?? ["General"]).map((option) => (
-                <option key={option} value={option}>
-                  {option}
+              {UI_LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -257,55 +276,6 @@ export function SettingsPanel(props: {
 
       {tab === "ai" && (
         <section className="space-y-8">
-          <div>
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold mb-1">Runtime readiness</h2>
-                <p className="text-sm text-muted-foreground">
-                  Local parser and provider checks for document processing.
-                </p>
-              </div>
-              <Button
-                onClick={() => void onRefreshReadiness()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Refresh
-              </Button>
-            </div>
-            <div className="grid gap-2">
-              {(readiness?.checks ?? []).map((check) => (
-                <div
-                  className="rounded-lg border border-border bg-secondary/50 p-3 text-xs leading-5"
-                  key={check.id}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium text-foreground">{check.label}</span>
-                    <span
-                      className={cn(
-                        "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                        check.ready
-                          ? "border-border text-foreground"
-                          : check.required
-                            ? "border-destructive/30 text-destructive"
-                            : "border-border text-muted-foreground",
-                      )}
-                    >
-                      {check.ready ? "Ready" : check.required ? "Issue" : "Optional"}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-muted-foreground">{check.message}</p>
-                </div>
-              ))}
-              {!readiness && (
-                <div className="rounded-lg border border-border bg-secondary/50 p-3 text-sm text-muted-foreground">
-                  Runtime status is loading.
-                </div>
-              )}
-            </div>
-          </div>
-
           {validation && validation.issues.length > 0 && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs leading-5 text-destructive">
               {validation.issues.map((issue) => (
@@ -315,11 +285,23 @@ export function SettingsPanel(props: {
           )}
 
           <div>
-            <h2 className="text-base font-semibold mb-1">AI provider</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              Select the provider and model for parsing, extraction, merge
-              verification, and grounded answer workflows.
-            </p>
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold mb-1">AI model</h2>
+                <p className="text-sm text-muted-foreground">
+                  Choose how HyprDuck extracts document evidence.
+                </p>
+              </div>
+              <Button
+                className="h-8 shrink-0 px-3 text-xs"
+                onClick={() => void onRefreshReadiness()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Refresh
+              </Button>
+            </div>
             <div className="grid gap-4 grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="active-provider">Provider</Label>
@@ -368,7 +350,7 @@ export function SettingsPanel(props: {
           </div>
 
           <div>
-            <h2 className="text-base font-semibold mb-4">Provider API keys</h2>
+            <h2 className="text-base font-semibold mb-4">Connections</h2>
             <div className="space-y-2">
               {config.provider_options.map((opt) => {
                 const state =

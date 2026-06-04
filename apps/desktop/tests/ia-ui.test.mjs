@@ -68,6 +68,25 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
   expect(graphSource).not.toMatch(/teal|gradient/);
 });
 
+test("settings page hides debug readiness internals", () => {
+  expect(settingsSource).toMatch(/AI model/);
+  expect(settingsSource).toMatch(/Connections/);
+  expect(settingsSource).toMatch(/UI language/);
+  expect(settingsSource).toMatch(/English/);
+  expect(settingsSource).toMatch(/한국어/);
+  expect(settingsSource).toMatch(/日本語/);
+  expect(settingsSource).toMatch(/onRefreshReadiness/);
+  expect(settingsSource).toMatch(/Refresh/);
+  expect(settingsSource).toMatch(/export type SettingsTab = "general" \| "ai"/);
+  expect(appSource).toMatch(/label: "General"/);
+  expect(settingsSource).not.toMatch(/<Label htmlFor="prompt-template-select">/);
+  expect(settingsSource).not.toMatch(/Configure prompt templates and output behavior/);
+  expect(settingsSource).not.toMatch(/Document processing/);
+  expect(settingsSource).not.toMatch(/Runtime readiness/);
+  expect(settingsSource).not.toMatch(/\(readiness\?\.checks \?\? \[\]\)\.map/);
+  expect(settingsSource).not.toMatch(/check\.message/);
+});
+
 test("Knowledge empty state focuses first users on importing source files", () => {
   expect(graphSource).toMatch(/Add private docs/);
   expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
