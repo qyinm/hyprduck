@@ -9,16 +9,10 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 
 export type SettingsTab = "general" | "ai";
-
-const UI_LANGUAGE_STORAGE_KEY = "hyprduck.uiLanguage";
-const UI_LANGUAGE_OPTIONS = [
-  { id: "en", label: "English" },
-  { id: "ko", label: "한국어" },
-  { id: "ja", label: "日本語" },
-] as const;
 
 interface ProviderState {
   apiKey: string;
@@ -27,7 +21,11 @@ interface ProviderState {
   showAdvanced: boolean;
 }
 
-function modelTaskGuidance(providerId: string, modelId: string) {
+function modelTaskGuidance(
+  providerId: string,
+  modelId: string,
+  t: ReturnType<typeof useI18n>["t"],
+) {
   const model = modelId.toLowerCase();
 
   if (providerId === "ollama") {
@@ -38,22 +36,22 @@ function modelTaskGuidance(providerId: string, modelId: string) {
     ) {
       return {
         tone: "warning",
-        title: "Local model caution",
-        body: "This keeps data local, but small or OCR-only models can miss tables, conflicts, and evidence links. Run the golden corpus before relying on agent-ready outputs.",
+        title: t("settings.ai.localModelCaution.title"),
+        body: t("settings.ai.localModelCaution.body"),
       };
     }
 
     return {
       tone: "local",
-      title: "Local-first path",
-      body: "Good for private parsing and retrieval checks. Keep generated merge output disabled until the golden corpus is clean.",
+      title: t("settings.ai.localFirst.title"),
+      body: t("settings.ai.localFirst.body"),
     };
   }
 
   return {
     tone: "hosted",
-    title: "Hosted quality path",
-    body: "Recommended for high-recall page parsing, structured extraction, and merge verification when privacy policy allows hosted inference.",
+    title: t("settings.ai.hostedQuality.title"),
+    body: t("settings.ai.hostedQuality.body"),
   };
 }
 
@@ -99,8 +97,8 @@ export function SettingsPanel(props: {
     onLoadProviderModels,
     tab,
   } = props;
+  const { locale, localeOptions, setLocale, t } = useI18n();
   const [promptTemplate, setPromptTemplate] = useState("General");
-  const [uiLanguage, setUiLanguage] = useState("en");
   const [selectedModel, setSelectedModel] = useState("");
   const [activeProvider, setActiveProvider] = useState("open_router");
   const [providerStates, setProviderStates] = useState<
@@ -108,21 +106,6 @@ export function SettingsPanel(props: {
   >(new Map());
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const lastSavedSettingsSignature = useRef<string | null>(null);
-
-  useEffect(() => {
-    const storedLanguage = window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY);
-    if (
-      storedLanguage &&
-      UI_LANGUAGE_OPTIONS.some((option) => option.id === storedLanguage)
-    ) {
-      setUiLanguage(storedLanguage);
-    }
-  }, []);
-
-  const handleUiLanguageChange = (language: string) => {
-    setUiLanguage(language);
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, language);
-  };
 
   useEffect(() => {
     if (config) {
@@ -241,30 +224,36 @@ export function SettingsPanel(props: {
   if (!config) {
     return (
       <div>
-        <h2 className="text-base font-semibold mb-1">Settings</h2>
+        <h2 className="text-base font-semibold mb-1">
+          {t("settings.loading.title")}
+        </h2>
         <p className="text-sm text-muted-foreground">
-          Loading engine configuration...
+          {t("settings.loading.body")}
         </p>
       </div>
     );
   }
 
-  const modelGuidance = modelTaskGuidance(activeProvider, selectedModel);
+  const modelGuidance = modelTaskGuidance(activeProvider, selectedModel, t);
 
   return (
     <div className="space-y-8">
       {tab === "general" && (
         <section>
-          <h2 className="text-base font-semibold mb-4">General</h2>
+          <h2 className="text-base font-semibold mb-4">
+            {t("settings.general.title")}
+          </h2>
           <div className="max-w-sm space-y-2">
-            <Label htmlFor="ui-language-select">UI language</Label>
+            <Label htmlFor="ui-language-select">
+              {t("settings.general.uiLanguage")}
+            </Label>
             <select
               id="ui-language-select"
               className="h-9 w-full rounded-md border border-input bg-background px-3"
-              value={uiLanguage}
-              onChange={(e) => handleUiLanguageChange(e.target.value)}
+              value={locale}
+              onChange={(e) => setLocale(e.target.value as typeof locale)}
             >
-              {UI_LANGUAGE_OPTIONS.map((option) => (
+              {localeOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
                 </option>
@@ -287,9 +276,11 @@ export function SettingsPanel(props: {
           <div>
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-base font-semibold mb-1">AI model</h2>
+                <h2 className="text-base font-semibold mb-1">
+                  {t("settings.ai.title")}
+                </h2>
                 <p className="text-sm text-muted-foreground">
-                  Choose how HyprDuck extracts document evidence.
+                  {t("settings.ai.body")}
                 </p>
               </div>
               <Button
@@ -299,12 +290,14 @@ export function SettingsPanel(props: {
                 type="button"
                 variant="outline"
               >
-                Refresh
+                {t("settings.ai.refresh")}
               </Button>
             </div>
             <div className="grid gap-4 grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="active-provider">Provider</Label>
+                <Label htmlFor="active-provider">
+                  {t("settings.ai.provider")}
+                </Label>
                 <select
                   id="active-provider"
                   className="h-9 w-full rounded-md border border-input bg-background px-3"
@@ -319,7 +312,9 @@ export function SettingsPanel(props: {
                 </select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="active-model">Model</Label>
+                <Label htmlFor="active-model">
+                  {t("settings.ai.model")}
+                </Label>
                 <select
                   id="active-model"
                   className="h-9 w-full rounded-md border border-input bg-background px-3"
@@ -350,7 +345,9 @@ export function SettingsPanel(props: {
           </div>
 
           <div>
-            <h2 className="text-base font-semibold mb-4">Connections</h2>
+            <h2 className="text-base font-semibold mb-4">
+              {t("settings.ai.connections")}
+            </h2>
             <div className="space-y-2">
               {config.provider_options.map((opt) => {
                 const state =
@@ -377,7 +374,7 @@ export function SettingsPanel(props: {
                         </span>
                         {activeProvider === opt.id && (
                           <span className="rounded-full border border-border bg-secondary px-1.5 py-0 text-[10px] font-medium leading-none text-foreground">
-                            Active
+                            {t("settings.ai.active")}
                           </span>
                         )}
                       </div>
@@ -397,7 +394,7 @@ export function SettingsPanel(props: {
                       <div className="border-t px-3 py-2">
                         <div className="flex items-center gap-3">
                           <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
-                            API Key
+                            {t("settings.ai.apiKey")}
                           </Label>
                           <Input
                             autoComplete="off"
@@ -405,7 +402,9 @@ export function SettingsPanel(props: {
                               updateApiKey(opt.id, e.target.value)
                             }
                             placeholder={
-                              opt.requires_api_key ? "Required" : "Optional"
+                              opt.requires_api_key
+                                ? t("settings.ai.required")
+                                : t("settings.ai.optional")
                             }
                             type="password"
                             value={state.apiKey}
@@ -424,12 +423,12 @@ export function SettingsPanel(props: {
                               ) : (
                                 <ChevronRight size={12} />
                               )}
-                              Advanced
+                              {t("settings.ai.advanced")}
                             </button>
                             {state.showAdvanced && (
                               <div className="flex items-center gap-2 mt-1.5">
                                 <Label className="text-xs whitespace-nowrap leading-none text-muted-foreground shrink-0">
-                                  Base URL
+                                  {t("settings.ai.baseUrl")}
                                 </Label>
                                 <Input
                                   autoComplete="off"
@@ -441,7 +440,7 @@ export function SettingsPanel(props: {
                                       ? "http://localhost:11434"
                                       : opt.id === "open_router"
                                         ? "https://openrouter.ai/v1"
-                                        : "Optional"
+                                        : t("settings.ai.optional")
                                   }
                                   type="text"
                                   value={state.baseUrl}

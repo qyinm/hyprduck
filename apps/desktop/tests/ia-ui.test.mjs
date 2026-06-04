@@ -16,6 +16,7 @@ const previewSource = readFileSync(
   "utf8",
 );
 const settingsSource = readFileSync(new URL("../src/SettingsPanel.tsx", import.meta.url), "utf8");
+const localesSource = readFileSync(new URL("../src/i18n/locales.ts", import.meta.url), "utf8");
 const previewApiSource = readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8");
 const cliShimSource = readFileSync(new URL("../main/cli-shim.cjs", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -32,7 +33,9 @@ test("desktop IA is the committed source of truth for the Knowledge workspace", 
 
 test("app shell exposes only Knowledge and Settings as primary destinations", () => {
   expect(appSource).toMatch(/type ActivePanel = "knowledge" \| "settings"/);
-  expect(appSource).toMatch(/label: "Knowledge"/);
+  expect(appSource).toMatch(/labelKey: "nav\.knowledge"/);
+  expect(appSource).toMatch(/t\("nav\.settings"\)/);
+  expect(localesSource).toMatch(/"nav\.knowledge": "Knowledge"/);
   expect(appSource).not.toMatch(/label: "Import"/);
   expect(appSource).not.toMatch(/label: "Graph"/);
   expect(appSource).not.toMatch(/History/);
@@ -69,16 +72,21 @@ test("desktop visual tokens follow DESIGN.md restraint", () => {
 });
 
 test("settings page hides debug readiness internals", () => {
-  expect(settingsSource).toMatch(/AI model/);
-  expect(settingsSource).toMatch(/Connections/);
-  expect(settingsSource).toMatch(/UI language/);
-  expect(settingsSource).toMatch(/English/);
-  expect(settingsSource).toMatch(/한국어/);
-  expect(settingsSource).toMatch(/日本語/);
+  expect(settingsSource).toMatch(/settings\.ai\.title/);
+  expect(settingsSource).toMatch(/settings\.ai\.connections/);
+  expect(localesSource).toMatch(/AI model/);
+  expect(localesSource).toMatch(/Connections/);
+  expect(settingsSource).toMatch(/settings\.general\.uiLanguage/);
+  expect(settingsSource).toMatch(/localeOptions\.map/);
+  expect(localesSource).toMatch(/English/);
+  expect(localesSource).toMatch(/한국어/);
+  expect(localesSource).toMatch(/日本語/);
+  expect(localesSource).toMatch(/settings\.ai\.localModelCaution\.title/);
+  expect(localesSource).toMatch(/settings\.ai\.hostedQuality\.body/);
   expect(settingsSource).toMatch(/onRefreshReadiness/);
-  expect(settingsSource).toMatch(/Refresh/);
+  expect(localesSource).toMatch(/Refresh/);
   expect(settingsSource).toMatch(/export type SettingsTab = "general" \| "ai"/);
-  expect(appSource).toMatch(/label: "General"/);
+  expect(appSource).toMatch(/labelKey: "nav\.general"/);
   expect(settingsSource).not.toMatch(/<Label htmlFor="prompt-template-select">/);
   expect(settingsSource).not.toMatch(/Configure prompt templates and output behavior/);
   expect(settingsSource).not.toMatch(/Document processing/);
@@ -88,10 +96,12 @@ test("settings page hides debug readiness internals", () => {
 });
 
 test("Knowledge empty state focuses first users on importing source files", () => {
-  expect(graphSource).toMatch(/Add private docs/);
-  expect(graphSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
-  expect(graphSource).toMatch(/Choose files/);
-  expect(graphSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
+  expect(graphSource).toMatch(/workspace\.empty\.title/);
+  expect(graphSource).toMatch(/workspace\.empty\.body/);
+  expect(graphSource).toMatch(/workspace\.empty\.chooseFiles/);
+  expect(localesSource).toMatch(/Add private docs/);
+  expect(localesSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
+  expect(localesSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
@@ -99,7 +109,7 @@ test("Knowledge empty state focuses first users on importing source files", () =
 });
 
 test("launch copy stays agent-ready without unsupported provider claims", () => {
-  const buyerFacingCopy = [appSource, graphSource, settingsSource].join("\n");
+  const buyerFacingCopy = [appSource, graphSource, settingsSource, localesSource].join("\n");
   const publicModelGuidance = modelTaskMatrixSource;
 
   expect(buyerFacingCopy).toMatch(/Local model caution/);
@@ -116,8 +126,8 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
 
 test("Knowledge workspace keeps the graph canvas and removes onboarding checklist chrome", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/aria-label="Open Agent Terminal"/);
-  expect(graphSource).toMatch(/placeholder="Open Agent Terminal\.\.\."/);
+  expect(graphSource).toMatch(/workspace\.prompt\.openTerminal/);
+  expect(graphSource).toMatch(/workspace\.prompt\.placeholder/);
   expect(graphSource).not.toMatch(/FirstRunActivationStrip/);
   expect(graphSource).not.toMatch(/aria-label="First-run activation"/);
   expect(graphSource).not.toMatch(/Register the local MCP server/);
@@ -130,13 +140,13 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/Document/);
   expect(graphSource).toMatch(/File/);
-  expect(graphSource).toMatch(/aria-label="Open file"/);
-  expect(graphSource).toMatch(/aria-label="Open extracted text"/);
-  expect(graphSource).toMatch(/aria-label="Reveal in Finder"/);
+  expect(graphSource).toMatch(/workspace\.inspector\.openFile/);
+  expect(graphSource).toMatch(/workspace\.inspector\.openExtractedText/);
+  expect(graphSource).toMatch(/workspace\.inspector\.revealInFinder/);
   expect(graphSource).toMatch(/ExternalLink/);
   expect(graphSource).toMatch(/FileText/);
   expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/Review suggestions/);
+  expect(graphSource).toMatch(/workspace\.inspector\.reviewSuggestions/);
   expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
   expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
   expect(graphSource).toMatch(/customerVisibleDescription/);
@@ -149,18 +159,19 @@ test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
   expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/AgentTerminal/);
   expect(graphSource).toMatch(/GraphAnswerWindow/);
-  expect(graphSource).toMatch(/aria-label="Attach files"/);
+  expect(graphSource).toMatch(/workspace\.prompt\.attachFiles/);
   expect(graphSource).toMatch(/onFocus=\{openTerminal\}/);
   expect(graphSource).toMatch(/onOpenAgentTerminal\(\);/);
   expect(graphSource).toMatch(/onCreateSession=\{onCreateAgentTerminalSession\}/);
   expect(agentTerminalSource).toMatch(/aria-label="Minimize Agent Terminal"/);
-  expect(graphSource).toMatch(/aria-label="Resize Agent Terminal"/);
-  expect(graphSource).toMatch(/aria-label="Restore Agent Terminal"/);
+  expect(graphSource).toMatch(/workspace\.terminal\.resize/);
+  expect(graphSource).toMatch(/workspace\.terminal\.restore/);
   expect(graphSource).not.toMatch(/onAskProject/);
   expect(graphSource).not.toMatch(/answer_workspace_project/);
   expect(graphSource).toMatch(/bottom-24/);
-  expect(graphSource).toMatch(/Close answer/);
-  expect(graphSource).toMatch(/Answering\.\.\./);
+  expect(localesSource).toMatch(/Open Agent Terminal/);
+  expect(localesSource).toMatch(/Close answer/);
+  expect(localesSource).toMatch(/Answering\.\.\./);
   expect(graphSource).toMatch(/CompactEvidenceRow/);
   expect(graphSource).not.toMatch(/Ask or add files to this knowledge base/);
   expect(graphSource).not.toMatch(/name="attachment-intent"/);
@@ -246,13 +257,15 @@ test("workspace snapshot refresh exposes loading fallback and error states", () 
   expect(appTypesSource).toMatch(/type WorkspaceLoadStatus =\s*\|\s*"idle"\s*\|\s*"loading"\s*\|\s*"ready"\s*\|\s*"fallback"\s*\|\s*"error"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
-  expect(appSource).toMatch(/workspaceLoadStateFromResult\(result\)/);
-  expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad\)/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(result, t\)/);
+  expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad, t\)/);
   expect(appSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/status: "error"/);
   expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
-  expect(appSource).toMatch(/Refreshing latest workspace snapshot/);
-  expect(appSource).toMatch(/Could not refresh the workspace snapshot/);
+  expect(appSource).toMatch(/workspace\.status\.refreshingTitle/);
+  expect(appSource).toMatch(/workspace\.status\.errorTitle/);
+  expect(localesSource).toMatch(/Refreshing latest workspace snapshot/);
+  expect(localesSource).toMatch(/Could not refresh the workspace snapshot/);
 });
 
 test("partial import failures expose failed-page retry affordance", () => {

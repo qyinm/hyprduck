@@ -45,6 +45,7 @@ apps/desktop/src-tauri/binaries/hyprduck-engine-*
 apps/desktop/dist/
 apps/desktop/resources/binaries/
 .gstack/
+.worktrees/
 .vercel
 .env.release.local
 .env.local.release
