@@ -255,7 +255,7 @@
     "safeWikiPath": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^wiki/(?!.*(^|/)\\.\\.(/|$))(?!.*docs/private).+\\S.*$"
+      "pattern": "^wiki/(?!.*(^|/)\\.\\.(/|$))(?!.*[dD][oO][cC][sS]/[pP][rR][iI][vV][aA][tT][eE])(?!.*%2[eEfF])(?!.*%5[cC])(?!.*\\\\).+\\S.*$"
     },
     "graphRecordType": {
       "type": "string",

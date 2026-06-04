@@ -1347,13 +1347,8 @@ fn graph_trail_agent_text_is_safe(value: &str) -> bool {
     let normalized = value.replace('\\', "/");
     let lower = normalized.to_ascii_lowercase();
     if lower.starts_with("~/")
-        || lower.contains("docs/private")
-        || lower.contains("docs%2fprivate")
-        || lower.contains("docs%5cprivate")
-        || lower.contains("file://")
-        || lower.contains("%2e")
-        || lower.contains("%2f")
-        || lower.contains("%5c")
+        || graph_trail_text_has_windows_absolute_path(&normalized)
+        || graph_trail_text_has_forbidden_path_marker(&lower)
     {
         return false;
     }
@@ -1362,6 +1357,22 @@ fn graph_trail_agent_text_is_safe(value: &str) -> bool {
         && path
             .components()
             .all(|component| !matches!(component, Component::ParentDir))
+}
+
+fn graph_trail_text_has_windows_absolute_path(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    normalized.starts_with("//")
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+fn graph_trail_text_has_forbidden_path_marker(lower: &str) -> bool {
+    lower.contains("docs/private")
+        || lower.contains("docs%2fprivate")
+        || lower.contains("docs%5cprivate")
+        || lower.contains("file://")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
 }
 
 fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {
@@ -1378,10 +1389,12 @@ fn graph_record_status_is_active(status: &str) -> bool {
 }
 
 fn is_safe_agent_wiki_path(path: &str) -> bool {
-    if !path.starts_with("wiki/") || path.contains("docs/private") {
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if !lower.starts_with("wiki/") || graph_trail_text_has_forbidden_path_marker(&lower) {
         return false;
     }
-    let path = Path::new(path);
+    let path = Path::new(&normalized);
     !path.is_absolute()
         && path
             .components()
