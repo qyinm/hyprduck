@@ -1128,6 +1128,15 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
         .find(|evidence| evidence["sourceId"] == source_id)
         .expect("context pack should include imported source evidence");
     assert!(imported_evidence.get("evidenceType").is_some());
+    assert!(
+        imported_evidence.get("graphTrail").is_none(),
+        "skipped graph generation should not block selected evidence or invent graph trail data: {imported_evidence:#?}"
+    );
+    assert!(context_pack_payload["contextPackV1"]["selectedEvidence"]
+        .as_array()
+        .expect("v1 selected evidence")
+        .iter()
+        .all(|evidence| evidence.get("graphTrail").is_none()));
     assert!(context_pack_payload["contextPack"]["retrievalTrace"]
         .get("evidenceTypeTrace")
         .is_some());
@@ -1174,7 +1183,8 @@ fn mcp_server_import_source_imports_allowlisted_markdown() {
             .expect("follow-up selected evidence")
             .iter()
             .any(|evidence| evidence["sourceId"] == source_id
-                && evidence["evidenceRef"] == evidence_ref)
+                && evidence["evidenceRef"] == evidence_ref
+                && evidence.get("graphTrail").is_none())
     );
 
     drop(stdin);
