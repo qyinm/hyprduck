@@ -182,7 +182,9 @@ pub(crate) use search_context::{
     best_snippet, context_pack_warnings, evidence_snippet, match_score, normalize_search_token,
     search_terms, search_token_frequencies, trim_context_pack_to_budget,
 };
-use source_index::{chunk_source_markdown, read_workspace_source_chunks, upsert_source_chunks};
+use source_index::{
+    chunk_source_markdown, read_workspace_source_chunks, remove_source_chunks, upsert_source_chunks,
+};
 
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const PROJECT_SNAPSHOT_BATCH_SIZE: usize = 200;

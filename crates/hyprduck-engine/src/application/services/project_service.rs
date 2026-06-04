@@ -453,6 +453,10 @@ fn handle_delete_workspace_source_node(
     let deleted_row = store
         .delete_workspace_source(workspace_id, &source_id)?
         .ok_or_else(|| anyhow!("source {source_id} was not found in workspace {workspace_id}"))?;
+    let workspace_root = workspace_root_from_summary(&deleted_row.summary)
+        .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
+    remove_source_chunks(&workspace_root, &source_id)?;
+    remove_deleted_workspace_source_artifacts(&workspace_root, &deleted_row)?;
     store.append_workspace_correction(&WorkspaceCorrection {
         id: Uuid::now_v7().to_string(),
         workspace_id: workspace_id.to_string(),
@@ -476,6 +480,43 @@ fn handle_delete_workspace_source_node(
         .load_workspace_project(workspace_id)?
         .unwrap_or_else(|| empty_workspace_project(workspace_id));
     Ok(ApplyCorrectionResponseData { project })
+}
+
+fn remove_deleted_workspace_source_artifacts(
+    workspace_root: &Path,
+    row: &StoredSourceRow,
+) -> Result<()> {
+    let source_id = &row.summary.source_id;
+    let source_dir = Path::new(&row.summary.source_path).parent();
+    let artifact_dir = Path::new(&row.summary.markdown_path).parent();
+    let manifest_dir = Path::new(&row.manifest_path).parent();
+    let mut dirs = Vec::<PathBuf>::new();
+    for dir in [source_dir, artifact_dir, manifest_dir]
+        .into_iter()
+        .flatten()
+    {
+        let dir = dir.to_path_buf();
+        if is_managed_source_artifact_dir(workspace_root, source_id, &dir) && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+
+    for dir in dirs {
+        if dir.exists() {
+            fs::remove_dir_all(&dir).with_context(|| {
+                format!(
+                    "failed removing source artifact directory {}",
+                    dir.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn is_managed_source_artifact_dir(workspace_root: &Path, source_id: &str, dir: &Path) -> bool {
+    dir == workspace_root.join("sources").join(source_id)
+        || dir == workspace_root.join("artifacts").join(source_id)
 }
 
 pub(crate) fn empty_workspace_project(workspace_id: &str) -> KnowledgeProject {

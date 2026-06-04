@@ -635,6 +635,37 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
         .load_projects_for_workspace(DEFAULT_WORKSPACE_ID)
         .expect("load workspace rows");
     let workspace_root = workspace_root_for_rows(&rows).expect("workspace root");
+    let source_b_dir = PathBuf::from(&manifest_b.source_path)
+        .parent()
+        .expect("source b dir")
+        .to_path_buf();
+    let artifact_b_dir = PathBuf::from(&manifest_b.artifact_root);
+    fs::create_dir_all(&source_b_dir).expect("create source b dir");
+    fs::create_dir_all(&artifact_b_dir).expect("create artifact b dir");
+    fs::write(&manifest_b.source_path, b"source b pdf").expect("write source b copy");
+    fs::write(
+        artifact_b_dir.join("provider-graph-materialization.json"),
+        b"{}",
+    )
+    .expect("write source b artifact");
+    upsert_source_chunks(
+        &workspace_root,
+        &manifest_a,
+        &chunk_source_markdown(
+            &manifest_a,
+            "# Source A\n\n## Page 1\n\nActive source chunks stay searchable.\n",
+        ),
+    )
+    .expect("write source a chunks");
+    upsert_source_chunks(
+        &workspace_root,
+        &manifest_b,
+        &chunk_source_markdown(
+            &manifest_b,
+            "# Source B\n\n## Page 1\n\nDeleted source chunks should be removed.\n",
+        ),
+    )
+    .expect("write source b chunks");
     let mut provider_snapshot =
         read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
             .expect("read base snapshot");
@@ -813,6 +844,22 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
         !node.source_ids.contains(&manifest_b.source_id)
             && node.node_id != format!("source:{}", manifest_b.source_id)
     }));
+    assert!(
+        !source_b_dir.exists(),
+        "source document copy directory should be removed"
+    );
+    assert!(
+        !artifact_b_dir.exists(),
+        "source artifact directory should be removed"
+    );
+    let chunks_after_delete =
+        read_workspace_source_chunks(&workspace_root).expect("read chunks after delete");
+    assert!(chunks_after_delete
+        .iter()
+        .any(|chunk| chunk.source_id == manifest_a.source_id));
+    assert!(chunks_after_delete
+        .iter()
+        .all(|chunk| chunk.source_id != manifest_b.source_id));
 }
 
 #[test]

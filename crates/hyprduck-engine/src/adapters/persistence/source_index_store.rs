@@ -130,6 +130,34 @@ pub fn upsert_source_chunks(
     write_source_index_manifest(workspace_root, &existing)
 }
 
+pub fn remove_source_chunks(workspace_root: &Path, source_id: &str) -> Result<()> {
+    let path = workspace_root.join(SOURCE_CHUNKS_PATH);
+    let mut existing = read_source_chunks(&path)?;
+    let original_len = existing.len();
+    existing.retain(|chunk| chunk.source_id != source_id);
+    if existing.len() == original_len && !path.exists() {
+        return Ok(());
+    }
+
+    let encoded = existing
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed encoding source chunks")?
+        .join("\n");
+    let contents = if encoded.is_empty() {
+        String::new()
+    } else {
+        format!("{encoded}\n")
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating {}", parent.display()))?;
+    }
+    write_file_atomic(&path, contents.as_bytes())?;
+    write_source_index_manifest(workspace_root, &existing)
+}
+
 pub fn read_source_chunks(path: &Path) -> Result<Vec<SourceChunk>> {
     if !path.exists() {
         return Ok(Vec::new());
