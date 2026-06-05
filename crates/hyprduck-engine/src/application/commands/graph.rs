@@ -112,6 +112,9 @@ pub(crate) fn handle_apply_graph_patch(
                     ),
                     confidence: existing.and_then(|record| record.confidence),
                     updated_at: now,
+                    valid_from: existing.map(|record| record.valid_from).unwrap_or(0),
+                    valid_to: existing.and_then(|record| record.valid_to),
+                    superseded_by: existing.and_then(|record| record.superseded_by.clone()),
                 }
             })
             .collect(),
@@ -137,6 +140,9 @@ pub(crate) fn handle_apply_graph_patch(
                     ),
                     confidence: existing.and_then(|record| record.confidence),
                     updated_at: now,
+                    valid_from: existing.map(|record| record.valid_from).unwrap_or(0),
+                    valid_to: existing.and_then(|record| record.valid_to),
+                    superseded_by: existing.and_then(|record| record.superseded_by.clone()),
                 }
             })
             .collect(),

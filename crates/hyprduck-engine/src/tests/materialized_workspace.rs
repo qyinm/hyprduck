@@ -194,6 +194,9 @@ fn agent_graph_patch_rejects_relations_to_out_of_scope_existing_nodes() {
         source_ids: vec!["source-other".into()],
         confidence: Some(0.9),
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write out-of-scope node");
     let mut patch = agent_graph_patch();
@@ -237,6 +240,9 @@ fn agent_graph_patch_preserves_existing_record_refs_when_updating_in_scope_node(
         source_ids: vec!["source-agent".into(), "source-other".into()],
         confidence: Some(0.9),
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write existing node");
 
@@ -302,6 +308,9 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         source_ids: vec!["source-alpha".into()],
         confidence: Some(0.9),
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot).expect("write materialized graph");
     let mut db_snapshot = snapshot.clone();
@@ -315,6 +324,9 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         source_ids: Vec::new(),
         confidence: Some(0.8),
         updated_at: 11,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     db_snapshot.relations.push(BrainRelationRecord {
         relation_id: "rel-alpha-beta".into(),
@@ -325,6 +337,9 @@ fn read_graph_snapshot_includes_materialization_report_counts() {
         evidence_ids: Vec::new(),
         confidence: Some(0.7),
         updated_at: 11,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
         .expect("open knowledge store");
@@ -532,6 +547,9 @@ fn workspace_delete_materialized_node_without_source_rows_returns_empty_project(
         source_ids: Vec::new(),
         confidence: None,
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     write_materialized_brain_repo(&workspace_root, &snapshot)
         .expect("write materialized-only graph");
@@ -691,6 +709,9 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
         source_ids: vec![manifest_a.source_id.clone()],
         confidence: Some(0.91),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     provider_snapshot.relations.push(BrainRelationRecord {
         relation_id: "edge-provider-source-a".into(),
@@ -701,6 +722,9 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
         evidence_ids: vec!["ev-provider-source-a".into()],
         confidence: Some(0.91),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     provider_snapshot.claims.push(ClaimRecord {
         claim_id: "claim-provider-source-a".into(),
@@ -901,6 +925,9 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let concept_x = BrainNodeRecord {
         node_id: "concept-x".into(),
@@ -912,6 +939,9 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let concept_y = BrainNodeRecord {
         node_id: "concept-y".into(),
@@ -923,6 +953,9 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let edge_x = BrainRelationRecord {
         relation_id: "edge-source-x".into(),
@@ -933,6 +966,9 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         evidence_ids: vec![evidence.id.clone()],
         confidence: Some(1.0),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let edge_y = BrainRelationRecord {
         relation_id: "edge-source-y".into(),
@@ -943,6 +979,9 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         evidence_ids: vec![evidence.id.clone()],
         confidence: Some(1.0),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let old_provider_evidence = EvidenceRef {
         id: "ev-provider-old".into(),
@@ -1128,6 +1167,9 @@ fn full_workspace_rebuild_replay_supersedes_old_source_sets() {
         source_ids: vec![source_a.source_id.clone()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let stale_a_concept = BrainNodeRecord {
         node_id: "concept-stale-a".into(),
@@ -1139,6 +1181,9 @@ fn full_workspace_rebuild_replay_supersedes_old_source_sets() {
         source_ids: vec![source_a.source_id.clone()],
         confidence: Some(0.8),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let old_event = provider_test_event(ProviderTestEventInput {
         event_id: "evt-full-old",
@@ -1216,6 +1261,9 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let concept = BrainNodeRecord {
         node_id: "concept-source-a".into(),
@@ -1227,6 +1275,9 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let edge = BrainRelationRecord {
         relation_id: "edge-source-a-concept".into(),
@@ -1237,6 +1288,9 @@ fn partial_linking_failure_state_keeps_source_graph_with_explicit_report() {
         evidence_ids: vec![evidence.id.clone()],
         confidence: Some(1.0),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let source_event = provider_test_event(ProviderTestEventInput {
         event_id: "evt-provider-source-a",
@@ -1364,6 +1418,9 @@ fn provider_overlay_drops_null_source_evidence_after_source_deletion() {
         source_ids: vec![deleted_source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let deleted_claim = ClaimRecord {
         claim_id: "claim-deleted-source".into(),
@@ -1472,6 +1529,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         source_ids: vec![active_source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let mut stale_payload_active_node = active_node.clone();
     stale_payload_active_node.label = "Stale payload active concept".into();
@@ -1486,6 +1546,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         source_ids: vec![active_source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let deleted_node = BrainNodeRecord {
         node_id: "concept-deleted".into(),
@@ -1497,6 +1560,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         source_ids: vec![deleted_source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let cross_source_refs = vec![
         active_source.source_id.clone(),
@@ -1544,6 +1610,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         evidence_ids: vec![active_evidence.id.clone(), deleted_evidence.id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let current_relation_collision = BrainRelationRecord {
         relation_id: "relation-collision".into(),
@@ -1554,6 +1623,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         evidence_ids: vec![active_evidence.id.clone()],
         confidence: Some(0.8),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let mut stale_payload_relation_collision = current_relation_collision.clone();
     stale_payload_relation_collision.label = "stale workspace relation".into();
@@ -1569,6 +1641,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         evidence_ids: vec![active_evidence.id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let stale_active_only_relation = BrainRelationRecord {
         relation_id: "relation-active-only-stale".into(),
@@ -1579,6 +1654,9 @@ fn workspace_linking_artifacts_drop_after_source_deletion_breaks_cross_source_re
         evidence_ids: vec![active_evidence.id.clone()],
         confidence: Some(0.9),
         updated_at: 100,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let current_claim_collision = ClaimRecord {
         claim_id: "claim-collision".into(),
@@ -2080,6 +2158,9 @@ fn workspace_linking_legacy_top_level_refs_do_not_delete_current_records() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let node_b = BrainNodeRecord {
         node_id: "concept-b".into(),
@@ -2091,6 +2172,9 @@ fn workspace_linking_legacy_top_level_refs_do_not_delete_current_records() {
         source_ids: vec![source.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let relation = BrainRelationRecord {
         relation_id: "relation-stale".into(),
@@ -2101,6 +2185,9 @@ fn workspace_linking_legacy_top_level_refs_do_not_delete_current_records() {
         evidence_ids: vec![evidence.id.clone()],
         confidence: Some(0.9),
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let claim = ClaimRecord {
         claim_id: "claim-stale".into(),
@@ -2254,6 +2341,9 @@ fn valid_workspace_linking_records_carry_forward_previous_origins() {
         source_ids: vec![source_a.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let node_b = BrainNodeRecord {
         node_id: "concept-b".into(),
@@ -2265,6 +2355,9 @@ fn valid_workspace_linking_records_carry_forward_previous_origins() {
         source_ids: vec![source_b.source_id.clone()],
         confidence: Some(0.9),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let relation = BrainRelationRecord {
         relation_id: "relation-valid-linking".into(),
@@ -2275,6 +2368,9 @@ fn valid_workspace_linking_records_carry_forward_previous_origins() {
         evidence_ids: vec![evidence_a.id.clone(), evidence_b.id.clone()],
         confidence: Some(0.9),
         updated_at: 10,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     };
     let claim = ClaimRecord {
         claim_id: "claim-valid-linking".into(),

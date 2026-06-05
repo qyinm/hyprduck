@@ -151,6 +151,9 @@ fn relation_dedupe_remaps_to_canonical_endpoints() {
             evidence_ids: vec![format!("ev-source-alpha-{}", index + 2)],
             confidence: Some(0.8),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
 
@@ -232,6 +235,9 @@ fn source_of_relations_are_stripped_from_raw_and_accounted() {
         evidence_ids: vec!["ev-source-alpha-0".into()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     let stripped = strip_source_of_relations(&mut raw);
 
@@ -273,6 +279,9 @@ fn merged_raw_snapshot_has_no_source_of_but_canonical_does() {
         evidence_ids: vec!["ev-source-alpha-0".into()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     let stripped = strip_source_of_relations(&mut chunk_snapshot);
 
@@ -550,6 +559,9 @@ fn raw_relations_are_capped_before_materialization() {
             )],
             confidence: Some(0.5),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
 

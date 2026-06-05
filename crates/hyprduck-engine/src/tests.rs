@@ -1142,6 +1142,9 @@ fn context_pack_excludes_ui_graph_state_and_raw_candidate_paths() {
             source_ids: vec!["source-alpha".into()],
             confidence: Some(0.9),
             updated_at: 1,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
         }],
         sources: vec![SourceRecord {
             source_id: "source-alpha".into(),

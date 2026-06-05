@@ -78,6 +78,9 @@ pub(crate) fn build_brain_repo_snapshot(
                 source_ids,
                 confidence: detail.node.confidence,
                 updated_at: generated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             };
             if let Some(existing) = existing_node_by_id.get(node.node_id.as_str()) {
                 if brain_node_record_content_matches(existing, &node) {
@@ -184,6 +187,9 @@ pub(crate) fn build_brain_repo_snapshot(
                 evidence_ids,
                 confidence: edge.confidence,
                 updated_at: generated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             };
             if let Some(existing) = existing_relation_by_id.get(relation.relation_id.as_str()) {
                 if brain_relation_record_content_matches(existing, &relation) {

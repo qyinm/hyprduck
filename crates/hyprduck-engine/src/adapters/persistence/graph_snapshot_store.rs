@@ -443,6 +443,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: vec![source.source_id.clone()],
                 confidence: None,
                 updated_at: source.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for wiki_page in &snapshot.wiki_pages {
@@ -458,6 +461,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: wiki_page.source_refs.clone(),
                 confidence: None,
                 updated_at: wiki_page.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for entity in &snapshot.entities {
@@ -473,6 +479,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: entity.source_refs.clone(),
                 confidence: None,
                 updated_at: entity.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for claim in &snapshot.claims {
@@ -488,6 +497,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: claim.source_refs.clone(),
                 confidence: None,
                 updated_at: claim.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
 

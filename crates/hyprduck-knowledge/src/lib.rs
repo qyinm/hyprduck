@@ -546,6 +546,12 @@ pub struct BrainNodeRecord {
     #[serde(default)]
     pub confidence: Option<f32>,
     pub updated_at: u64,
+    #[serde(default)]
+    pub valid_from: u64,
+    #[serde(default)]
+    pub valid_to: Option<u64>,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -562,6 +568,12 @@ pub struct BrainRelationRecord {
     #[serde(default)]
     pub confidence: Option<f32>,
     pub updated_at: u64,
+    #[serde(default)]
+    pub valid_from: u64,
+    #[serde(default)]
+    pub valid_to: Option<u64>,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1009,6 +1021,82 @@ mod tests {
 
         assert!(event.payload_value().is_err());
         assert!(event.payload_as::<TestBrainEventPayload>().is_err());
+    }
+
+    #[test]
+    fn graph_records_default_lifecycle_for_legacy_json() {
+        let node_json = serde_json::json!({
+            "nodeId": "concept-agent-context",
+            "kind": "concept",
+            "label": "Agent Context",
+            "scope": "project",
+            "updatedAt": 42
+        });
+        let relation_json = serde_json::json!({
+            "relationId": "rel-source-agent-context",
+            "kind": "source_of",
+            "sourceNodeId": "source:source-1",
+            "targetNodeId": "concept-agent-context",
+            "updatedAt": 43
+        });
+
+        let node: BrainNodeRecord = serde_json::from_value(node_json).expect("decode legacy node");
+        let relation: BrainRelationRecord =
+            serde_json::from_value(relation_json).expect("decode legacy relation");
+
+        assert_eq!(node.valid_from, 0);
+        assert_eq!(node.valid_to, None);
+        assert_eq!(node.superseded_by, None);
+        assert_eq!(relation.valid_from, 0);
+        assert_eq!(relation.valid_to, None);
+        assert_eq!(relation.superseded_by, None);
+    }
+
+    #[test]
+    fn graph_record_lifecycle_fields_round_trip() {
+        let node_json = serde_json::json!({
+            "nodeId": "concept-agent-context",
+            "kind": "concept",
+            "label": "Agent Context",
+            "scope": "project",
+            "aliases": [],
+            "evidenceIds": ["ev-source-1-p1"],
+            "sourceIds": ["source-1"],
+            "confidence": 0.9,
+            "updatedAt": 42,
+            "validFrom": 10,
+            "validTo": 20,
+            "supersededBy": "evt-graph-2"
+        });
+        let relation_json = serde_json::json!({
+            "relationId": "rel-source-agent-context",
+            "kind": "source_of",
+            "sourceNodeId": "source:source-1",
+            "targetNodeId": "concept-agent-context",
+            "label": "source_of",
+            "evidenceIds": ["ev-source-1-p1"],
+            "confidence": 1.0,
+            "updatedAt": 43,
+            "validFrom": 11,
+            "validTo": 21,
+            "supersededBy": "evt-graph-3"
+        });
+
+        let node: BrainNodeRecord =
+            serde_json::from_value(node_json.clone()).expect("decode lifecycle node");
+        let relation: BrainRelationRecord =
+            serde_json::from_value(relation_json.clone()).expect("decode lifecycle relation");
+        let encoded_node = serde_json::to_value(&node).expect("encode lifecycle node");
+        let encoded_relation = serde_json::to_value(&relation).expect("encode lifecycle relation");
+
+        assert_eq!(encoded_node["validFrom"], 10);
+        assert_eq!(encoded_node["validTo"], 20);
+        assert_eq!(encoded_node["supersededBy"], "evt-graph-2");
+        assert_eq!(encoded_relation["validFrom"], 11);
+        assert_eq!(encoded_relation["validTo"], 21);
+        assert_eq!(encoded_relation["supersededBy"], "evt-graph-3");
+        assert_eq!(encoded_node["nodeId"], node_json["nodeId"]);
+        assert_eq!(encoded_relation["relationId"], relation_json["relationId"]);
     }
 
     #[test]

@@ -133,6 +133,9 @@ pub(super) fn test_baseline(source_id: &str, evidence_count: usize) -> BrainRepo
         source_ids: vec![source_id.into()],
         confidence: Some(1.0),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     snapshot
 }
@@ -151,6 +154,9 @@ pub(super) fn candidate_node(
         source_ids: vec!["source-alpha".into()],
         confidence: Some(0.8),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     }
 }
 pub(super) fn source_raw_snapshot(source_id: &str, evidence_count: usize) -> BrainRepoSnapshot {
@@ -171,6 +177,9 @@ pub(super) fn candidate_relation(
         evidence_ids: vec![evidence_id.into()],
         confidence: Some(0.7),
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     }
 }
 pub(super) fn synthetic_candidate_chunk_snapshot(

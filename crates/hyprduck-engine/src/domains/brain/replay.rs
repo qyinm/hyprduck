@@ -355,6 +355,9 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(1.0),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         };
         let concept_x = provider_test_concept("concept-x", &source, &evidence, 200);
         let concept_y = provider_test_concept("concept-y", &source, &evidence, 100);
@@ -453,6 +456,9 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(1.0),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         };
         let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
@@ -582,6 +588,9 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(0.9),
             updated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         }
     }
 

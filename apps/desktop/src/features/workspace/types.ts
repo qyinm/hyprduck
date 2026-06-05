@@ -235,6 +235,9 @@ export interface MaterializedGraphNodeRecord {
   sourceIds: string[];
   confidence?: number | null;
   updatedAt: number;
+  validFrom?: number;
+  validTo?: number | null;
+  supersededBy?: string | null;
 }
 
 export interface MaterializedGraphRelationRecord {
@@ -246,6 +249,9 @@ export interface MaterializedGraphRelationRecord {
   evidenceIds: string[];
   confidence?: number | null;
   updatedAt: number;
+  validFrom?: number;
+  validTo?: number | null;
+  supersededBy?: string | null;
 }
 
 export interface MaterializedWikiPage {

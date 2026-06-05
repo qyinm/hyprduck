@@ -372,6 +372,9 @@ fn ensure_source_local_source_node(
             source_ids: vec![source_id.to_string()],
             confidence: Some(1.0),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
 }
@@ -499,6 +502,9 @@ fn ensure_source_local_node_edges(
             evidence_ids,
             confidence: Some(1.0),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
         existing_targets.insert(node.node_id.clone());
     }
@@ -659,6 +665,9 @@ fn ensure_provider_rebuild_source_nodes(
                 source_ids: vec![source.source_id.clone()],
                 confidence: Some(1.0),
                 updated_at: generated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
         }
         node_ids.insert(node_id);

@@ -939,6 +939,9 @@ fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> 
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas node updated at")?
             .max(0) as u64,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     })
 }
 
@@ -989,6 +992,9 @@ fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelation
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas relation updated at")?
             .max(0) as u64,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     })
 }
 
