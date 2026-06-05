@@ -295,6 +295,13 @@ result metadata when possible. Current categories are `path_policy`,
 `persistence`, and `unknown`. `write_commit_all` also returns per-item
 `errorCategory` values so agents can safely retry or surface partial failures.
 
+Hook automation installers may also read the HyprDuck-specific
+`hyprduckAutomationPolicy` annotation from `tools/list`. It classifies whether a
+known HyprDuck tool is eligible for automatic execution under the current
+destructive-action boundary. Hooks must treat unknown tools and destructive
+removal or overwrite actions as approval-required instead of inventing their own
+allowlist.
+
 ## Security Notes
 
 - MCP is a controlled read/write agent workflow surface, not a read-only API.

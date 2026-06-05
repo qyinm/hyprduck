@@ -2,6 +2,7 @@ mod app;
 mod benchmark;
 mod cli;
 mod eval;
+mod hooks;
 mod mcp;
 mod metrics;
 mod tui;
@@ -39,6 +40,7 @@ fn main() -> Result<()> {
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Serve) => run_serve(),
         Some(Commands::Mcp { command }) => run_mcp(command),
+        Some(Commands::Hooks { command }) => hooks::run_hooks_command(command),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Demo { command }) => run_demo(command),
         Some(Commands::Brain { command }) => run_brain(command),

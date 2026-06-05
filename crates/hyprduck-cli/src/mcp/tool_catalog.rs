@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
 
 use super::args::{PROPOSAL_ID_PATTERN, WRITE_CONTENT_TYPES};
+use super::automation_policy::{
+    policy_for_mcp_tool, AutomationDecision, ToolAutomationPolicy,
+};
 use super::supports_local_path_disclosure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,11 +407,14 @@ fn tool_definition(
         );
     }
 
+    let automation_policy = policy_for_mcp_tool(name);
+
     let mut annotations = json!({
         "readOnlyHint": read_only,
-        "destructiveHint": false,
+        "destructiveHint": automation_policy.destructive,
         "idempotentHint": read_only,
-        "openWorldHint": false
+        "openWorldHint": false,
+        "hyprduckAutomationPolicy": automation_policy_metadata(automation_policy)
     });
     if let Some(policy) = mutating_tool_policy(name) {
         annotations["hyprduckMutationPolicy"] = json!({
@@ -430,6 +436,16 @@ fn tool_definition(
             "additionalProperties": false
         },
         "annotations": annotations
+    })
+}
+
+fn automation_policy_metadata(policy: ToolAutomationPolicy) -> Value {
+    json!({
+        "automatic": policy.decision == AutomationDecision::Automatic,
+        "requiresApproval": policy.decision == AutomationDecision::RequiresApproval,
+        "destructive": policy.destructive,
+        "approvalBoundary": "destructive_hyprduck_removal_or_overwrite",
+        "reason": policy.reason
     })
 }
 

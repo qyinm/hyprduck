@@ -38,6 +38,27 @@ impl Cli {
                     _ => return Err(anyhow!("unknown mcp subcommand: {subcommand}")),
                 }
             }
+            Some("hooks") => {
+                let subcommand = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: hyprduck hooks <install|status|run> codex"))?;
+                let target = args
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: hyprduck hooks {subcommand} codex"))?;
+                match (subcommand.as_str(), target.as_str()) {
+                    ("install", "codex") => Some(Commands::Hooks {
+                        command: HooksCommand::InstallCodex,
+                    }),
+                    ("status", "codex") => Some(Commands::Hooks {
+                        command: HooksCommand::StatusCodex,
+                    }),
+                    ("run", "codex") => Some(Commands::Hooks {
+                        command: HooksCommand::RunCodex,
+                    }),
+                    (_, "codex") => return Err(anyhow!("unknown hooks subcommand: {subcommand}")),
+                    (_, _) => return Err(anyhow!("unknown hooks target: {target}")),
+                }
+            }
             Some(command @ ("parse" | "ingest")) => {
                 let input = args
                     .next()
@@ -454,6 +475,7 @@ pub enum Commands {
     Doctor,
     Serve,
     Mcp { command: McpCommand },
+    Hooks { command: HooksCommand },
     Parse { input: String },
     Demo { command: DemoCommand },
     Engines { command: EnginesCommand },
@@ -466,6 +488,13 @@ pub enum McpCommand {
     Serve,
     InstallClaudeCode,
     InstallCodex,
+}
+
+#[derive(Debug)]
+pub enum HooksCommand {
+    InstallCodex,
+    StatusCodex,
+    RunCodex,
 }
 
 #[derive(Debug)]
