@@ -211,9 +211,13 @@ pub(super) fn tool_definitions() -> Vec<Value> {
         ),
         tool_definition(
             "read_graph_history",
-            "List prior materialized graph states with timestamps, source run IDs, and storage locations.",
+            "List prior materialized graph states, or inspect opt-in lifecycle history for a graph node, relation, or wiki page.",
             json!({
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum graph state count." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum graph state or record version count." },
+                "recordKind": { "type": "string", "enum": ["node", "relation", "wiki_page"], "description": "Optional record history kind. Use with recordId for node/relation/wiki_page, or omit with wikiPath." },
+                "recordId": { "type": "string", "description": "Logical graph node ID, relation ID, or wiki page ID for lifecycle history." },
+                "wikiPath": { "type": "string", "description": "Wiki page path for lifecycle history, such as wiki/index.md." },
+                "includeDiff": { "type": "boolean", "description": "Include stored wiki revision diff JSON when reading wiki page history. Defaults to false." },
             }),
             Vec::new(),
             true,

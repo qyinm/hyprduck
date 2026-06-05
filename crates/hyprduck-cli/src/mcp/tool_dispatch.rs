@@ -1,11 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use hyprduck_engine_client::EngineClient;
 use hyprduck_engine_types::{
-    ApplyGraphPatchRequest, GetBrainHealthRequest, GetContextPackRequest, ReadContextPackRequest,
-    ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest, ReadPageEvidenceRequest,
-    ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest, SearchBrainRequest,
-    WriteCommitAllRequest, WriteCommitRequest, WriteListRequest, WriteProposeRequest,
-    WriteRejectRequest,
+    ApplyGraphPatchRequest, GetBrainHealthRequest, GetContextPackRequest, GraphHistoryRecordKind,
+    ReadContextPackRequest, ReadGraphHistoryRequest, ReadGraphSnapshotRequest, ReadNodeRequest,
+    ReadPageEvidenceRequest, ReadRecentEventsRequest, ReadSourceRequest, ReadWikiPageRequest,
+    SearchBrainRequest, WriteCommitAllRequest, WriteCommitRequest, WriteListRequest,
+    WriteProposeRequest, WriteRejectRequest,
 };
 use serde_json::{json, Map, Value};
 
@@ -171,9 +171,17 @@ pub(in crate::mcp) fn call_tool(
         }
         "read_graph_history" => {
             let limit = optional_usize(arguments, "limit")?;
-            serde_json::to_value(
-                client.read_graph_history(ReadGraphHistoryRequest { scope, limit })?,
-            )?
+            let record_kind = optional_string(arguments, "recordKind")?
+                .map(|record_kind| graph_history_record_kind(&record_kind))
+                .transpose()?;
+            serde_json::to_value(client.read_graph_history(ReadGraphHistoryRequest {
+                scope,
+                limit,
+                record_kind,
+                record_id: optional_string(arguments, "recordId")?,
+                wiki_path: optional_string(arguments, "wikiPath")?,
+                include_diff: optional_bool(arguments, "includeDiff")?.unwrap_or(false),
+            })?)?
         }
         "read_graph_snapshot" => {
             serde_json::to_value(client.read_graph_snapshot(ReadGraphSnapshotRequest {
@@ -256,6 +264,17 @@ pub(in crate::mcp) fn call_tool(
             current: after,
         }),
     })
+}
+
+fn graph_history_record_kind(value: &str) -> Result<GraphHistoryRecordKind> {
+    match value {
+        "node" => Ok(GraphHistoryRecordKind::Node),
+        "relation" => Ok(GraphHistoryRecordKind::Relation),
+        "wiki_page" => Ok(GraphHistoryRecordKind::WikiPage),
+        _ => Err(anyhow!(
+            "argument recordKind must be one of node, relation, wiki_page"
+        )),
+    }
 }
 
 pub(in crate::mcp) fn local_path_disclosure_for_tool(

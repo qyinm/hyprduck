@@ -70,6 +70,24 @@ fn tool_definitions_expose_agent_session_write_tools_as_mutating_tools() {
         true
     );
     assert_eq!(
+        tool_by_name("read_graph_history")["inputSchema"]["properties"]["recordKind"]["enum"],
+        json!(["node", "relation", "wiki_page"])
+    );
+    assert!(
+        tool_by_name("read_graph_history")["inputSchema"]["properties"]
+            .get("recordId")
+            .is_some()
+    );
+    assert!(
+        tool_by_name("read_graph_history")["inputSchema"]["properties"]
+            .get("wikiPath")
+            .is_some()
+    );
+    assert_eq!(
+        tool_by_name("read_graph_history")["inputSchema"]["properties"]["includeDiff"]["type"],
+        json!("boolean")
+    );
+    assert_eq!(
         tool_by_name("import_cancel")["inputSchema"]["required"],
         json!(["jobId"])
     );
