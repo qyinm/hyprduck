@@ -1,5 +1,3 @@
-use serde_json::{json, Value};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutomationDecision {
     Automatic,
@@ -56,17 +54,6 @@ pub(crate) fn policy_for_mcp_tool(tool_name: &str) -> ToolAutomationPolicy {
             reason: "unknown HyprDuck action is not eligible for automatic execution",
         },
     }
-}
-
-pub(crate) fn automation_metadata_for_tool(tool_name: &str) -> Value {
-    let policy = policy_for_mcp_tool(tool_name);
-    json!({
-        "automatic": policy.decision == AutomationDecision::Automatic,
-        "requiresApproval": policy.decision == AutomationDecision::RequiresApproval,
-        "destructive": policy.destructive,
-        "approvalBoundary": "destructive_hyprduck_removal_or_overwrite",
-        "reason": policy.reason
-    })
 }
 
 pub(crate) fn normalize_hyprduck_tool_name(tool_name: &str) -> Option<String> {
