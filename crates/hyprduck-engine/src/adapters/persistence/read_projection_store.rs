@@ -879,7 +879,10 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
                     n.evidence_ids_json AS evidence_ids_json,
                     n.source_ids_json AS source_ids_json,
                     n.confidence AS confidence,
-                    n.updated_at AS updated_at",
+                    n.updated_at AS updated_at,
+                    n.valid_from AS valid_from,
+                    n.valid_to AS valid_to,
+                    n.superseded_by AS superseded_by",
         )
         .param("workspace_id", workspace_id)
         .run()
@@ -909,7 +912,10 @@ fn load_graph_canvas_node_by_id(
                     n.evidence_ids_json AS evidence_ids_json,
                     n.source_ids_json AS source_ids_json,
                     n.confidence AS confidence,
-                    n.updated_at AS updated_at",
+                    n.updated_at AS updated_at,
+                    n.valid_from AS valid_from,
+                    n.valid_to AS valid_to,
+                    n.superseded_by AS superseded_by",
         )
         .param("workspace_id", workspace_id)
         .param("node_id", node_id)
@@ -939,9 +945,13 @@ fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> 
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas node updated at")?
             .max(0) as u64,
-        valid_from: 0,
-        valid_to: None,
-        superseded_by: None,
+        valid_from: row_i64(row, "valid_from")
+            .context("read graph canvas node valid from")?
+            .max(0) as u64,
+        valid_to: positive_i64_as_u64(row_i64(row, "valid_to")?),
+        superseded_by: non_empty_string(
+            row_string(row, "superseded_by").context("read graph canvas node superseded by")?,
+        ),
     })
 }
 
@@ -960,7 +970,10 @@ fn load_graph_canvas_relations(
                     r.label AS label,
                     r.evidence_ids_json AS evidence_ids_json,
                     r.confidence AS confidence,
-                    r.updated_at AS updated_at",
+                    r.updated_at AS updated_at,
+                    r.valid_from AS valid_from,
+                    r.valid_to AS valid_to,
+                    r.superseded_by AS superseded_by",
         )
         .param("workspace_id", workspace_id)
         .run()
@@ -992,10 +1005,18 @@ fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelation
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas relation updated at")?
             .max(0) as u64,
-        valid_from: 0,
-        valid_to: None,
-        superseded_by: None,
+        valid_from: row_i64(row, "valid_from")
+            .context("read graph canvas relation valid from")?
+            .max(0) as u64,
+        valid_to: positive_i64_as_u64(row_i64(row, "valid_to")?),
+        superseded_by: non_empty_string(
+            row_string(row, "superseded_by").context("read graph canvas relation superseded by")?,
+        ),
     })
+}
+
+fn positive_i64_as_u64(value: i64) -> Option<u64> {
+    (value > 0).then_some(value as u64)
 }
 
 fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {

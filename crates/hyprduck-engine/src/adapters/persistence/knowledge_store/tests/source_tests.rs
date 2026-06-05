@@ -33,7 +33,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: Some(0.9),
                 updated_at: 10,
-                valid_from: 0,
+                valid_from: 7,
                 valid_to: None,
                 superseded_by: None,
             },
@@ -123,7 +123,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
-                valid_from: 0,
+                valid_from: 8,
                 valid_to: None,
                 superseded_by: None,
             },
@@ -313,6 +313,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         }
     );
     assert_graph_node_metadata(&store, "node-a");
+    assert_graph_lifecycle_metadata(&store);
     assert_graph_wiki_page_node(&store, "wiki-alpha");
     assert_wiki_relational_content(&store, "wiki-alpha");
     assert_source_page_fts_content(&store);
@@ -531,13 +532,19 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .read_graph_canvas_projection_from_db("workspace-default")
         .expect("read graph canvas projection")
         .expect("graph canvas projection");
-    assert!(graph_nodes.iter().any(|node| node.node_id == "node-a"));
+    assert!(graph_nodes.iter().any(|node| node.node_id == "node-a"
+        && node.valid_from == 7
+        && node.valid_to.is_none()
+        && node.superseded_by.is_none()));
     assert!(graph_nodes
         .iter()
         .any(|node| node.node_id == "source:source-a"));
     assert!(graph_relations
         .iter()
-        .any(|relation| relation.relation_id == "rel-a"));
+        .any(|relation| relation.relation_id == "rel-a"
+            && relation.valid_from == 8
+            && relation.valid_to.is_none()
+            && relation.superseded_by.is_none()));
     assert_eq!(graph_wiki_pages.len(), 1);
     assert_eq!(graph_wiki_pages[0].page_id, "wiki-alpha");
     update_evidence_status(&store, "evidence-b", "failed");
@@ -911,6 +918,59 @@ fn assert_graph_node_metadata(store: &KnowledgeStore, node_id: &str) {
     assert_eq!(row.get::<f64>("confidence").expect("confidence"), 0.9);
     assert_eq!(row.get::<String>("status").expect("status"), "active");
     assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
+}
+
+fn assert_graph_lifecycle_metadata(store: &KnowledgeStore) {
+    let graph = Graph::open(&store.path).expect("open graph");
+    let node_rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {id: 'node-a'})
+                 RETURN n.valid_from AS valid_from,
+                        n.valid_to AS valid_to,
+                        n.superseded_by AS superseded_by",
+        )
+        .run()
+        .expect("query graph node lifecycle metadata");
+    let node_row = node_rows.get(0).expect("graph node lifecycle row");
+    assert_eq!(node_row.get::<i64>("valid_from").expect("valid from"), 7);
+    assert_eq!(node_row.get::<i64>("valid_to").expect("valid to"), 0);
+    assert_eq!(
+        node_row
+            .get::<String>("superseded_by")
+            .expect("superseded by"),
+        ""
+    );
+
+    let relation_rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (a {id: 'node-a'})-[r:RELATED_TO]->(b {id: 'node-b'})
+                 RETURN r.valid_from AS valid_from,
+                        r.valid_to AS valid_to,
+                        r.superseded_by AS superseded_by",
+        )
+        .run()
+        .expect("query graph relation lifecycle metadata");
+    let relation_row = relation_rows.get(0).expect("graph relation lifecycle row");
+    assert_eq!(
+        relation_row
+            .get::<i64>("valid_from")
+            .expect("relation valid from"),
+        8
+    );
+    assert_eq!(
+        relation_row
+            .get::<i64>("valid_to")
+            .expect("relation valid to"),
+        0
+    );
+    assert_eq!(
+        relation_row
+            .get::<String>("superseded_by")
+            .expect("relation superseded by"),
+        ""
+    );
 }
 
 fn assert_graph_wiki_page_node(store: &KnowledgeStore, node_id: &str) {

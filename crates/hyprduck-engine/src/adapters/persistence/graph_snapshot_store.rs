@@ -1249,6 +1249,18 @@ fn node_graph_properties(
             "updated_at".into(),
             PropertyValue::Integer(node.updated_at as i64),
         ),
+        (
+            "valid_from".into(),
+            PropertyValue::Integer(node.valid_from as i64),
+        ),
+        (
+            "valid_to".into(),
+            PropertyValue::Integer(node.valid_to.unwrap_or_default() as i64),
+        ),
+        (
+            "superseded_by".into(),
+            PropertyValue::Text(node.superseded_by.clone().unwrap_or_default()),
+        ),
     ]
 }
 
@@ -1315,6 +1327,18 @@ fn relation_graph_properties(
         (
             "updated_at".into(),
             PropertyValue::Integer(relation.updated_at as i64),
+        ),
+        (
+            "valid_from".into(),
+            PropertyValue::Integer(relation.valid_from as i64),
+        ),
+        (
+            "valid_to".into(),
+            PropertyValue::Integer(relation.valid_to.unwrap_or_default() as i64),
+        ),
+        (
+            "superseded_by".into(),
+            PropertyValue::Text(relation.superseded_by.clone().unwrap_or_default()),
         ),
     ]
 }
