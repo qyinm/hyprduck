@@ -2,14 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hyprduck.local/schemas/graph-snapshot-read.schema.json",
   "title": "Graph Snapshot Read Contract",
-  "description": "Materialized graph/wiki snapshot returned to UI, MCP, and agent read paths. events/brain_events.jsonl remains the source of truth; this contract describes the current read model reconstructed from append-only events.",
+  "description": "Live materialized graph/wiki snapshot returned to UI, MCP, and agent read paths. events/brain_events.jsonl remains the source of truth, while GraphQLite stores versioned graph records and relational SQLite stores wiki revisions; this contract describes only the current live projection.",
   "x-sourceOfTruth": "events/brain_events.jsonl",
   "x-latestReadableSnapshotPath": "state/latest-readable-snapshot.json",
   "x-resolutionOrder": [
     "Use state/latest-readable-snapshot.json only when it points to a completed graph_materialized event for the requested workspace.",
     "If the marker is absent or unresolved, fall back to the latest completed graph_materialized event in events/brain_events.jsonl.",
-    "Always load graph/wiki content from the current materialized files listed by materializedPaths."
+    "Always load graph/wiki content from the current live projection represented by materializedPaths."
   ],
+  "x-liveProjection": "Exclude graph records and wiki revisions with validTo set; use read_graph_history recordHistory for explicit lifecycle inspection.",
   "x-materializedReadModels": [
     "graph/nodes.json",
     "graph/edges.json",
@@ -44,7 +45,7 @@
     "sourceIngestId": {
       "type": "string",
       "minLength": 1,
-      "description": "Ingest run, source event, or replay selector that produced the snapshot."
+      "description": "Ingest run, source event, or materialization handle that produced the snapshot."
     },
     "workspaceId": {
       "type": "string",

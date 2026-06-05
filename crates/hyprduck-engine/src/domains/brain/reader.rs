@@ -92,7 +92,12 @@ impl BrainReader {
                 });
             }
         }
-        for node in &self.snapshot.nodes {
+        for node in self
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| graph_node_is_live(node))
+        {
             let haystack = format!("{} {} {}", node.node_id, node.label, node.aliases.join(" "));
             if let Some(score) = match_score(&terms, &haystack) {
                 results.push(BrainSearchResult {
@@ -149,7 +154,12 @@ impl BrainReader {
                 });
             }
         }
-        for relation in &self.snapshot.relations {
+        for relation in self
+            .snapshot
+            .relations
+            .iter()
+            .filter(|relation| graph_relation_is_live(relation))
+        {
             let haystack = format!(
                 "{} {:?} {} {} {} {}",
                 relation.relation_id,
@@ -371,7 +381,7 @@ impl BrainReader {
                 .snapshot
                 .nodes
                 .iter()
-                .find(|node| node.node_id == selected_node_id)
+                .find(|node| node.node_id == selected_node_id && graph_node_is_live(node))
             {
                 selected_bias_node_ids.insert(node.node_id.clone());
                 selected_bias_evidence_ids.extend(node.evidence_ids.iter().cloned());
@@ -399,7 +409,12 @@ impl BrainReader {
                 evidence_ids.insert(evidence.id.clone());
             }
         }
-        for node in &self.snapshot.nodes {
+        for node in self
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| graph_node_is_live(node))
+        {
             if node_ids.contains(&node.node_id)
                 || node
                     .source_ids
@@ -453,7 +468,12 @@ impl BrainReader {
                 evidence_ids.extend(claim.evidence_refs.iter().cloned());
             }
         }
-        for relation in &self.snapshot.relations {
+        for relation in self
+            .snapshot
+            .relations
+            .iter()
+            .filter(|relation| graph_relation_is_live(relation))
+        {
             if relation_ids.contains(&relation.relation_id)
                 || node_ids.contains(&relation.source_node_id)
                 || node_ids.contains(&relation.target_node_id)
@@ -468,7 +488,12 @@ impl BrainReader {
                 evidence_ids.extend(relation.evidence_ids.iter().cloned());
             }
         }
-        for node in &self.snapshot.nodes {
+        for node in self
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| graph_node_is_live(node))
+        {
             if node_ids.contains(&node.node_id) {
                 source_ids.extend(node.source_ids.iter().cloned());
                 evidence_ids.extend(node.evidence_ids.iter().cloned());
@@ -493,6 +518,7 @@ impl BrainReader {
             .snapshot
             .nodes
             .iter()
+            .filter(|node| graph_node_is_live(node))
             .filter(|node| node_ids.contains(&node.node_id))
             .cloned()
             .collect::<Vec<_>>();
@@ -504,6 +530,7 @@ impl BrainReader {
             .snapshot
             .relations
             .iter()
+            .filter(|relation| graph_relation_is_live(relation))
             .filter(|relation| {
                 relation_ids.contains(&relation.relation_id)
                     || selected_node_ids.contains(&relation.source_node_id)
@@ -659,6 +686,14 @@ fn context_pack_graph_fact_limit(budget: usize) -> usize {
     } else {
         DEFAULT_CONTEXT_PACK_GRAPH_FACT_LIMIT
     }
+}
+
+fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
+    node.valid_to.is_none()
+}
+
+fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
+    relation.valid_to.is_none()
 }
 
 fn cap_context_pack_records(

@@ -98,7 +98,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
 | `read_node` | `nodeId` | Read a graph node with up to 32 evidence refs and 64 adjacent relations. |
 | `read_recent_events` | none | Read append-only document context event history. |
-| `read_graph_history` | none | List prior materialized graph/wiki states for audit and debugging. |
+| `read_graph_history` | none | List prior materialized graph/wiki states, or pass optional lifecycle selectors for one graph node, relation, or wiki page. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |
 | `graph_patch_apply` | `graphPatch` | Auto-apply an agent-generated `hyprduck.graph_patch.v1` graph/wiki patch after validating source IDs, evidence refs, relation endpoints, claim refs, and wiki refs. |
@@ -204,6 +204,35 @@ materialized files above. The wire contract is defined in
 `sourceOfTruthPath`, `latestReadableSnapshotPath`, and `materializedPaths` so UI,
 MCP, and agent consumers can audit exactly which files were loaded.
 
+Graph nodes and relations may retain lifecycle metadata for audit and replay.
+MCP and desktop graph reads expose the live projection: records with `validTo`
+set are excluded from current graph snapshots, node reads, search, and graph
+trail retrieval. See `docs/graph-event-history.md` for the replay contract.
+
+## Lifecycle History Read Path
+
+`read_graph_history` has two modes:
+
+- Without record selectors, it returns the compatible `states` list for prior
+  completed graph/wiki materializations.
+- With record selectors, it also returns `recordHistory` for one logical graph
+  record or wiki page.
+
+Selector arguments are optional and additive:
+
+- `recordKind: "node"` with `recordId`: inspect versions for one logical node.
+- `recordKind: "relation"` with `recordId`: inspect versions for one logical relation.
+- `recordKind: "wiki_page"` with `recordId`: inspect revisions for one wiki page ID.
+- `wikiPath`: inspect revisions for one wiki page path, such as `wiki/index.md`.
+- `includeDiff: true`: include stored wiki revision diff JSON when available.
+
+`recordHistory.versions[]` includes logical IDs, version IDs, creating event
+IDs, lifecycle fields, evidence refs, source refs, graph refs, and redacted
+storage labels. It is an inspection surface, not a rollback API: responses do
+not include raw local paths, rollback targets, or replay selectors. Default
+Context Pack, wiki, node, graph snapshot, and graph trail reads continue to use
+only the live projection.
+
 ## Example Calls
 
 ```json
@@ -216,8 +245,10 @@ MCP, and agent consumers can audit exactly which files were loaded.
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"graph_patch_apply","arguments":{"workspaceId":"default","agentId":"codex","graphPatch":{"schemaVersion":"hyprduck.graph_patch.v1","sourceIds":["source-example"],"evidenceRefs":["ev-source-example-p1-0001"],"nodes":[{"nodeId":"concept-agent-context","kind":"concept","label":"Agent context","sourceIds":["source-example"],"evidenceIds":["ev-source-example-p1-0001"]}],"relations":[{"relationId":"rel-source-agent-context","kind":"mentions","sourceNodeId":"source:source-example","targetNodeId":"concept-agent-context","label":"mentions","evidenceIds":["ev-source-example-p1-0001"]}]}}}}
-{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
-{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"read_graph_history","arguments":{"workspaceId":"default","recordKind":"node","recordId":"concept-agent-context","limit":5}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"read_graph_history","arguments":{"workspaceId":"default","wikiPath":"wiki/index.md","includeDiff":true,"limit":5}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
 
 `import_source` returns before parsing and graph/wiki materialization finish.

@@ -407,6 +407,10 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                     root_dir,
                 },
                 limit,
+                record_kind: None,
+                record_id: None,
+                wiki_path: None,
+                include_diff: false,
             },
         }),
         "inspect-state" | "state" => {
@@ -430,6 +434,10 @@ fn parse_brain_command(subcommand: String, args: Vec<String>) -> Result<BrainCom
                         root_dir,
                     },
                     limit,
+                    record_kind: None,
+                    record_id: None,
+                    wiki_path: None,
+                    include_diff: false,
                 },
                 selector,
             })

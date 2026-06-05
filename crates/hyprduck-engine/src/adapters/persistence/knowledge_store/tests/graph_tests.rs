@@ -57,6 +57,84 @@ fn graph_snapshot_marks_citation_ready_import_job_graph_ready_after_commit() {
 }
 
 #[test]
+fn graph_snapshot_versions_logical_records_and_keeps_live_relation_endpoints() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+
+    let mut first_snapshot = single_event_snapshot("event-a", "source-a", "evidence-a", "Alpha");
+    first_snapshot.nodes.push(target_node("Target", 10));
+    first_snapshot.relations = vec![shared_relation(10)];
+    store
+        .persist_graph_snapshot(&first_snapshot)
+        .expect("persist first graph snapshot");
+
+    let mut second_snapshot =
+        single_event_snapshot("event-b", "source-a", "evidence-a", "Alpha v2");
+    second_snapshot.generated_at = 20;
+    second_snapshot.sources[0].updated_at = 20;
+    second_snapshot.nodes[0].updated_at = 20;
+    second_snapshot.nodes[0].valid_from = 20;
+    second_snapshot.nodes.push(target_node("Target v2", 20));
+    second_snapshot.relations = vec![shared_relation(20)];
+    store
+        .persist_graph_snapshot(&second_snapshot)
+        .expect("persist second graph snapshot");
+
+    assert_eq!(
+        logical_node_version_count(&store, "node-source-a"),
+        2,
+        "each graph snapshot event should create a durable node version"
+    );
+    assert_eq!(
+        live_logical_node_version_count(&store, "node-source-a"),
+        1,
+        "only one node version should remain live"
+    );
+    assert_eq!(live_logical_node_label(&store, "node-source-a"), "Alpha v2");
+    assert_eq!(
+        logical_relation_version_count(&store, "rel-shared"),
+        2,
+        "relation versions should be preserved when endpoint versions change"
+    );
+    assert_eq!(live_logical_relation_version_count(&store, "rel-shared"), 1);
+
+    let (nodes, relations, _) = store
+        .read_graph_canvas_projection_from_db("workspace-default")
+        .expect("read graph canvas projection")
+        .expect("graph canvas projection");
+    let projected_node = nodes
+        .iter()
+        .find(|node| node.node_id == "node-source-a")
+        .expect("project latest logical node");
+    assert_eq!(projected_node.label, "Alpha v2");
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.node_id == "node-source-a")
+            .count(),
+        1
+    );
+    let projected_relation = relations
+        .iter()
+        .find(|relation| relation.relation_id == "rel-shared")
+        .expect("project latest logical relation");
+    assert_eq!(projected_relation.source_node_id, "node-source-a");
+    assert_eq!(projected_relation.target_node_id, "node-target");
+
+    let read_node = store
+        .read_node_from_db("workspace-default", "node-source-a")
+        .expect("read logical node")
+        .expect("node response");
+    assert_eq!(read_node.node.label, "Alpha v2");
+    assert!(read_node.relations.iter().any(|relation| {
+        relation.relation_id == "rel-shared"
+            && relation.source_node_id == "node-source-a"
+            && relation.target_node_id == "node-target"
+    }));
+}
+
+#[test]
 fn import_job_graph_pending_state_round_trips_for_source_retry() {
     let temp = tempfile::tempdir().expect("temp dir");
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
@@ -212,6 +290,145 @@ fn evidence_item_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64
     Ok(count)
 }
 
+fn target_node(label: &str, timestamp: u64) -> BrainNodeRecord {
+    BrainNodeRecord {
+        node_id: "node-target".into(),
+        kind: BrainNodeKind::Concept,
+        label: label.into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: vec!["evidence-a".into()],
+        source_ids: vec!["source-a".into()],
+        confidence: Some(0.8),
+        updated_at: timestamp,
+        valid_from: timestamp,
+        valid_to: None,
+        superseded_by: None,
+    }
+}
+
+fn shared_relation(timestamp: u64) -> BrainRelationRecord {
+    BrainRelationRecord {
+        relation_id: "rel-shared".into(),
+        kind: BrainRelationKind::RelatedTo,
+        source_node_id: "node-source-a".into(),
+        target_node_id: "node-target".into(),
+        label: "relates".into(),
+        evidence_ids: vec!["evidence-a".into()],
+        confidence: Some(0.8),
+        updated_at: timestamp,
+        valid_from: timestamp,
+        valid_to: None,
+        superseded_by: None,
+    }
+}
+
+fn logical_node_version_count(store: &KnowledgeStore, logical_id: &str) -> i64 {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT COUNT(*)
+             FROM node_props_text logical
+             JOIN property_keys logical_key ON logical_key.id = logical.key_id
+             WHERE logical_key.key = 'logical_id'
+               AND logical.value = ?1",
+            [logical_id],
+            |row| row.get(0),
+        )
+        .expect("count logical node versions")
+}
+
+fn live_logical_node_version_count(store: &KnowledgeStore, logical_id: &str) -> i64 {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT COUNT(*)
+             FROM node_props_text logical
+             JOIN property_keys logical_key ON logical_key.id = logical.key_id
+             LEFT JOIN property_keys valid_to_key ON valid_to_key.key = 'valid_to'
+             LEFT JOIN node_props_int valid_to
+               ON valid_to.node_id = logical.node_id
+              AND valid_to.key_id = valid_to_key.id
+             WHERE logical_key.key = 'logical_id'
+               AND logical.value = ?1
+               AND COALESCE(valid_to.value, 0) <= 0",
+            [logical_id],
+            |row| row.get(0),
+        )
+        .expect("count live logical node versions")
+}
+
+fn live_logical_node_label(store: &KnowledgeStore, logical_id: &str) -> String {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT label.value
+             FROM node_props_text logical
+             JOIN property_keys logical_key ON logical_key.id = logical.key_id
+             JOIN property_keys label_key ON label_key.key = 'label'
+             JOIN node_props_text label
+               ON label.node_id = logical.node_id
+              AND label.key_id = label_key.id
+             LEFT JOIN property_keys valid_to_key ON valid_to_key.key = 'valid_to'
+             LEFT JOIN node_props_int valid_to
+               ON valid_to.node_id = logical.node_id
+              AND valid_to.key_id = valid_to_key.id
+             WHERE logical_key.key = 'logical_id'
+               AND logical.value = ?1
+               AND COALESCE(valid_to.value, 0) <= 0
+             ORDER BY logical.node_id DESC
+             LIMIT 1",
+            [logical_id],
+            |row| row.get(0),
+        )
+        .expect("read live logical node label")
+}
+
+fn logical_relation_version_count(store: &KnowledgeStore, logical_id: &str) -> i64 {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT COUNT(*)
+             FROM edge_props_text relation
+             JOIN property_keys relation_key ON relation_key.id = relation.key_id
+             WHERE relation_key.key = 'relation_id'
+               AND relation.value = ?1",
+            [logical_id],
+            |row| row.get(0),
+        )
+        .expect("count logical relation versions")
+}
+
+fn live_logical_relation_version_count(store: &KnowledgeStore, logical_id: &str) -> i64 {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .query_row(
+            "SELECT COUNT(*)
+             FROM edge_props_text relation
+             JOIN property_keys relation_key ON relation_key.id = relation.key_id
+             LEFT JOIN property_keys valid_to_key ON valid_to_key.key = 'valid_to'
+             LEFT JOIN edge_props_int valid_to
+               ON valid_to.edge_id = relation.edge_id
+              AND valid_to.key_id = valid_to_key.id
+             WHERE relation_key.key = 'relation_id'
+               AND relation.value = ?1
+               AND COALESCE(valid_to.value, 0) <= 0",
+            [logical_id],
+            |row| row.get(0),
+        )
+        .expect("count live logical relation versions")
+}
+
 fn single_event_snapshot(
     event_id: &str,
     source_id: &str,
@@ -245,6 +462,9 @@ fn single_event_snapshot(
             source_ids: vec![source_id.into()],
             confidence: Some(0.9),
             updated_at: 10,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         }],
         relations: Vec::new(),
         evidence: vec![EvidenceRef {

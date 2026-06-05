@@ -33,6 +33,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: Some(0.9),
                 updated_at: 10,
+                valid_from: 7,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "node-b".into(),
@@ -44,6 +47,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: None,
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "docs/private/unsafe-node".into(),
@@ -55,6 +61,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: None,
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "node-windows-path".into(),
@@ -66,6 +75,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: None,
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "node-embedded-path".into(),
@@ -77,6 +89,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: None,
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "wiki-unsafe-alias".into(),
@@ -93,6 +108,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 source_ids: vec!["source-a".into()],
                 confidence: None,
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
         ],
         relations: vec![
@@ -105,6 +123,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 8,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainRelationRecord {
                 relation_id: "rel-cites".into(),
@@ -115,6 +136,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainRelationRecord {
                 relation_id: "rel-links".into(),
@@ -125,6 +149,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainRelationRecord {
                 relation_id: "docs/private/rel".into(),
@@ -135,6 +162,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainRelationRecord {
                 relation_id: "rel-embedded-path".into(),
@@ -145,6 +175,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainRelationRecord {
                 relation_id: "rel-safe-to-unsafe".into(),
@@ -155,6 +188,9 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
                 evidence_ids: vec!["evidence-a".into()],
                 confidence: Some(0.8),
                 updated_at: 10,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
         ],
         evidence: vec![
@@ -277,6 +313,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         }
     );
     assert_graph_node_metadata(&store, "node-a");
+    assert_graph_lifecycle_metadata(&store);
     assert_graph_wiki_page_node(&store, "wiki-alpha");
     assert_wiki_relational_content(&store, "wiki-alpha");
     assert_source_page_fts_content(&store);
@@ -495,13 +532,19 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .read_graph_canvas_projection_from_db("workspace-default")
         .expect("read graph canvas projection")
         .expect("graph canvas projection");
-    assert!(graph_nodes.iter().any(|node| node.node_id == "node-a"));
+    assert!(graph_nodes.iter().any(|node| node.node_id == "node-a"
+        && node.valid_from == 7
+        && node.valid_to.is_none()
+        && node.superseded_by.is_none()));
     assert!(graph_nodes
         .iter()
         .any(|node| node.node_id == "source:source-a"));
     assert!(graph_relations
         .iter()
-        .any(|relation| relation.relation_id == "rel-a"));
+        .any(|relation| relation.relation_id == "rel-a"
+            && relation.valid_from == 8
+            && relation.valid_to.is_none()
+            && relation.superseded_by.is_none()));
     assert_eq!(graph_wiki_pages.len(), 1);
     assert_eq!(graph_wiki_pages[0].page_id, "wiki-alpha");
     update_evidence_status(&store, "evidence-b", "failed");
@@ -673,6 +716,9 @@ fn graph_snapshot_rejects_missing_relational_evidence_refs() {
             source_ids: Vec::new(),
             confidence: None,
             updated_at: 10,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         }],
         relations: Vec::new(),
         evidence: Vec::new(),
@@ -747,6 +793,390 @@ fn wiki_content_rejects_missing_evidence_before_durable_rows_commit() {
         wiki_revision_count(&store, "workspace-default").expect("wiki revision count"),
         0
     );
+}
+
+#[test]
+fn graph_read_projections_exclude_invalidated_records() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let source = SourceRecord {
+        source_id: "source-a".into(),
+        workspace_id: "workspace-default".into(),
+        original_path: "/tmp/source-a.pdf".into(),
+        source_path: "/tmp/source-a.pdf".into(),
+        markdown_path: "/tmp/source-a.md".into(),
+        format: SourceFormat::pdf(),
+        status: SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 10,
+    };
+    let live_evidence = EvidenceRef {
+        id: "evidence-live".into(),
+        page_label: "p1".into(),
+        page_index: Some(0),
+        snippet: "Live graph evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let stale_evidence = EvidenceRef {
+        id: "evidence-stale".into(),
+        page_label: "p1".into(),
+        page_index: Some(0),
+        snippet: "Stale graph evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: "workspace-default".into(),
+        generated_at: 30,
+        sources: vec![source],
+        nodes: vec![
+            BrainNodeRecord {
+                node_id: "node-live".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Live node".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.9),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainNodeRecord {
+                node_id: "node-neighbor".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Live neighbor".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.9),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainNodeRecord {
+                node_id: "node-stale".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Stale node".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: Some(20),
+                superseded_by: Some("event-new".into()),
+            },
+        ],
+        relations: vec![
+            BrainRelationRecord {
+                relation_id: "rel-live".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-neighbor".into(),
+                label: "live relation".into(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                confidence: Some(0.8),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-stale".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-stale".into(),
+                label: "stale relation".into(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: Some(20),
+                superseded_by: Some("event-new".into()),
+            },
+            BrainRelationRecord {
+                relation_id: "rel-live-to-stale-node".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-stale".into(),
+                label: "live relation to stale node".into(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+        ],
+        evidence: vec![live_evidence, stale_evidence],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: vec![test_brain_event(
+            "event-new",
+            "workspace-default",
+            &["evidence-live", "evidence-stale"],
+        )],
+    };
+
+    let report = store
+        .persist_graph_snapshot(&snapshot)
+        .expect("persist graph snapshot");
+    assert_eq!(
+        report,
+        KnowledgeGraphPersistReport {
+            node_count: 3,
+            relation_count: 1,
+        }
+    );
+    assert_eq!(
+        store
+            .graph_snapshot_counts("workspace-default")
+            .expect("graph counts"),
+        report
+    );
+
+    let (nodes, relations, _) = store
+        .read_graph_canvas_projection_from_db("workspace-default")
+        .expect("read graph canvas")
+        .expect("graph canvas");
+    assert!(nodes.iter().any(|node| node.node_id == "node-live"));
+    assert!(!nodes.iter().any(|node| node.node_id == "node-stale"));
+    assert!(relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live"));
+    assert!(!relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-stale"));
+    assert!(!relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live-to-stale-node"));
+
+    assert!(store
+        .read_node_from_db("workspace-default", "node-stale")
+        .expect("read stale node")
+        .is_none());
+    let live_node = store
+        .read_node_from_db("workspace-default", "node-live")
+        .expect("read live node")
+        .expect("live node");
+    assert!(live_node
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live"));
+    assert!(live_node.relations.iter().all(|relation| {
+        relation.relation_id != "rel-stale" && relation.relation_id != "rel-live-to-stale-node"
+    }));
+
+    let graph_results = store
+        .search_brain_from_db("workspace-default", "stale", 10)
+        .expect("search graph");
+    assert!(graph_results.iter().all(|result| {
+        !(matches!(
+            result.kind,
+            hyprduck_engine_types::BrainSearchResultKind::Node
+                | hyprduck_engine_types::BrainSearchResultKind::Relation
+        ) && result.id.contains("stale"))
+    }));
+}
+
+#[test]
+fn wiki_materialization_appends_revisions_and_fts_searches_current_revision() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+
+    let first_snapshot = wiki_revision_snapshot(
+        "event-a",
+        "evidence-a",
+        "ObsoleteWikiUniqueToken",
+        "Old wiki body",
+        10,
+    );
+    store
+        .persist_graph_snapshot(&first_snapshot)
+        .expect("persist first wiki snapshot");
+
+    let second_snapshot = wiki_revision_snapshot(
+        "event-b",
+        "evidence-b",
+        "CurrentWikiUniqueToken",
+        "New wiki body",
+        20,
+    );
+    store
+        .persist_graph_snapshot(&second_snapshot)
+        .expect("persist second wiki snapshot");
+
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    let current_page = sqlite
+        .query_row(
+            "SELECT revision, body, current_revision_event_id, valid_to
+             FROM wiki_pages
+             WHERE workspace_id = 'workspace-default'
+               AND wiki_page_id = 'wiki-alpha'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .expect("current wiki page row");
+    assert_eq!(current_page.0, 2);
+    assert!(current_page.1.contains("CurrentWikiUniqueToken"));
+    assert_eq!(current_page.2, "event-b");
+    assert_eq!(current_page.3, 0);
+
+    let revision_rows = sqlite
+        .prepare(
+            "SELECT revision,
+                    body,
+                    predecessor_revision,
+                    superseded_by_event_id,
+                    valid_to,
+                    version_id,
+                    created_by_event_id
+             FROM wiki_revisions
+             WHERE wiki_page_id = 'wiki-alpha'
+             ORDER BY revision ASC",
+        )
+        .expect("prepare wiki revision rows")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .expect("query wiki revision rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect wiki revision rows");
+    assert_eq!(revision_rows.len(), 2);
+    assert!(revision_rows[0].1.contains("ObsoleteWikiUniqueToken"));
+    assert_eq!(revision_rows[0].2, None);
+    assert_eq!(revision_rows[0].3, "event-b");
+    assert_eq!(revision_rows[0].4, 20);
+    assert!(!revision_rows[0].5.is_empty());
+    assert_eq!(revision_rows[0].6, "event-a");
+    assert!(revision_rows[1].1.contains("CurrentWikiUniqueToken"));
+    assert_eq!(revision_rows[1].2, Some(1));
+    assert_eq!(revision_rows[1].3, "");
+    assert_eq!(revision_rows[1].4, 0);
+    assert!(!revision_rows[1].5.is_empty());
+    assert_eq!(revision_rows[1].6, "event-b");
+
+    let obsolete_raw_fts_count = sqlite
+        .query_row(
+            "SELECT count(*) FROM wiki_fts WHERE wiki_fts MATCH 'ObsoleteWikiUniqueToken'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("old wiki fts row remains for history");
+    assert_eq!(obsolete_raw_fts_count, 1);
+
+    let obsolete_hits = store
+        .hybrid_retrieve("workspace-default", "ObsoleteWikiUniqueToken", 5)
+        .expect("retrieve obsolete wiki token");
+    assert!(obsolete_hits
+        .iter()
+        .all(|hit| hit.source_id != "wiki-alpha"));
+
+    let current_hits = store
+        .hybrid_retrieve("workspace-default", "CurrentWikiUniqueToken", 5)
+        .expect("retrieve current wiki token");
+    assert!(current_hits.iter().any(|hit| {
+        hit.source_id == "wiki-alpha"
+            && hit.evidence_id == "evidence-b"
+            && hit.evidence_type == "wiki_evidence"
+    }));
+}
+
+fn wiki_revision_snapshot(
+    event_id: &str,
+    evidence_id: &str,
+    wiki_token: &str,
+    wiki_body: &str,
+    timestamp: u64,
+) -> BrainRepoSnapshot {
+    BrainRepoSnapshot {
+        workspace_id: "workspace-default".into(),
+        generated_at: timestamp,
+        sources: vec![SourceRecord {
+            source_id: "source-a".into(),
+            workspace_id: "workspace-default".into(),
+            original_path: "/tmp/source-a.pdf".into(),
+            source_path: "/tmp/source-a.pdf".into(),
+            markdown_path: "/tmp/source-a.md".into(),
+            format: SourceFormat::pdf(),
+            status: SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: timestamp,
+        }],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![EvidenceRef {
+            id: evidence_id.into(),
+            page_label: "p1".into(),
+            page_index: Some(0),
+            snippet: format!("{evidence_id} source evidence."),
+            source_path: Some("/tmp/source-a.pdf".into()),
+            source_id: Some("source-a".into()),
+            markdown_path: Some("/tmp/source-a.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        }],
+        memories: Vec::new(),
+        wiki_pages: vec![WikiPage {
+            page_id: "wiki-alpha".into(),
+            workspace_id: "workspace-default".into(),
+            path: "wiki/alpha".into(),
+            title: "Alpha Wiki".into(),
+            body: format!("# Overview\n{wiki_body}\n\n## Evidence\n{wiki_token}"),
+            node_refs: vec!["node-alpha".into()],
+            source_refs: vec!["source-a".into()],
+            evidence_refs: vec![evidence_id.into()],
+            updated_at: timestamp,
+        }],
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: vec![test_brain_event(
+            event_id,
+            "workspace-default",
+            &[evidence_id],
+        )],
+    }
 }
 
 fn graph_checkpoint_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
@@ -848,7 +1278,7 @@ fn assert_graph_node_metadata(store: &KnowledgeStore, node_id: &str) {
     let rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (n {id: $node_id})
+            "MATCH (n {logical_id: $node_id})
                  RETURN n.evidence_ids_json AS evidence_ids_json,
                         n.source_ids_json AS source_ids_json,
                         n.producer_run_id AS producer_run_id,
@@ -874,12 +1304,72 @@ fn assert_graph_node_metadata(store: &KnowledgeStore, node_id: &str) {
     assert_eq!(row.get::<i64>("updated_at").expect("updated at"), 10);
 }
 
+fn assert_graph_lifecycle_metadata(store: &KnowledgeStore) {
+    let graph = Graph::open(&store.path).expect("open graph");
+    let node_rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (n {logical_id: 'node-a'})
+                 RETURN n.valid_from AS valid_from,
+                        n.valid_to AS valid_to,
+                        n.superseded_by AS superseded_by",
+        )
+        .run()
+        .expect("query graph node lifecycle metadata");
+    let node_row = node_rows.get(0).expect("graph node lifecycle row");
+    assert_eq!(node_row.get::<i64>("valid_from").expect("valid from"), 7);
+    assert_eq!(node_row.get::<i64>("valid_to").expect("valid to"), 0);
+    assert_eq!(
+        node_row
+            .get::<String>("superseded_by")
+            .expect("superseded by"),
+        ""
+    );
+
+    let relation_rows = graph
+        .connection()
+        .cypher_builder(
+            "MATCH (a)-[r]->(b)
+                 RETURN r.relation_id AS relation_id,
+                        r.valid_from AS valid_from,
+                        r.valid_to AS valid_to,
+                        r.superseded_by AS superseded_by",
+        )
+        .run()
+        .expect("query graph relation lifecycle metadata");
+    let relation_row = relation_rows
+        .iter()
+        .find(|row| {
+            row.get::<String>("relation_id")
+                .is_ok_and(|relation_id| relation_id == "rel-a")
+        })
+        .expect("graph relation lifecycle row");
+    assert_eq!(
+        relation_row
+            .get::<i64>("valid_from")
+            .expect("relation valid from"),
+        8
+    );
+    assert_eq!(
+        relation_row
+            .get::<i64>("valid_to")
+            .expect("relation valid to"),
+        0
+    );
+    assert_eq!(
+        relation_row
+            .get::<String>("superseded_by")
+            .expect("relation superseded by"),
+        ""
+    );
+}
+
 fn assert_graph_wiki_page_node(store: &KnowledgeStore, node_id: &str) {
     let graph = Graph::open(&store.path).expect("open graph");
     let rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (n:WikiPage {id: $node_id})
+            "MATCH (n:WikiPage {logical_id: $node_id})
                  RETURN n.kind AS kind,
                         n.label AS label,
                         n.aliases_json AS aliases_json,
@@ -909,8 +1399,11 @@ fn assert_graph_edge_metadata(
     let rows = graph
         .connection()
         .cypher_builder(&format!(
-            "MATCH (a {{id: $source_node_id}})-[r:{relation_type}]->(b {{id: $target_node_id}})
-                 RETURN r.evidence_ids_json AS evidence_ids_json,
+            "MATCH (a)-[r]->(b)
+                 RETURN r.source_logical_id AS source_node_id,
+                        r.target_logical_id AS target_node_id,
+                        r.kind AS kind,
+                        r.evidence_ids_json AS evidence_ids_json,
                         r.source_ids_json AS source_ids_json,
                         r.producer_run_id AS producer_run_id,
                         r.producer_run_ids_json AS producer_run_ids_json,
@@ -918,11 +1411,21 @@ fn assert_graph_edge_metadata(
                         r.status AS status,
                         r.updated_at AS updated_at"
         ))
-        .param("source_node_id", source_node_id)
-        .param("target_node_id", target_node_id)
         .run()
         .expect("query graph edge metadata");
-    let row = rows.get(0).expect("graph edge metadata row");
+    let row = rows
+        .iter()
+        .find(|row| {
+            row.get::<String>("source_node_id")
+                .is_ok_and(|source| source == source_node_id)
+                && row
+                    .get::<String>("target_node_id")
+                    .is_ok_and(|target| target == target_node_id)
+                && row
+                    .get::<String>("kind")
+                    .is_ok_and(|kind| kind == relation_type.to_ascii_lowercase())
+        })
+        .expect("graph edge metadata row");
     assert_string_array(row, "evidence_ids_json", &["evidence-a"]);
     assert_string_array(row, "source_ids_json", &["source-a"]);
     assert_eq!(

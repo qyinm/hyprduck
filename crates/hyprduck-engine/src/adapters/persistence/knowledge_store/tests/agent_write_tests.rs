@@ -406,6 +406,9 @@ fn single_event_snapshot(
             source_ids: vec![source_id.into()],
             confidence: Some(0.9),
             updated_at: 10,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         }],
         relations: Vec::new(),
         evidence: vec![EvidenceRef {

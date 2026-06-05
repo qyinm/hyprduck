@@ -240,6 +240,9 @@ pub(super) fn compact_source_graph_snapshot(
             source_ids: vec![source_id.to_string()],
             confidence: node.confidence,
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
 
@@ -327,6 +330,9 @@ pub(super) fn compact_source_graph_snapshot(
                 .collect(),
             confidence: relation.confidence,
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
     let retained_semantic_relation_count = canonical.relations.len();
@@ -359,6 +365,9 @@ pub(super) fn compact_source_graph_snapshot(
                 .collect(),
             confidence: Some(1.0),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
 

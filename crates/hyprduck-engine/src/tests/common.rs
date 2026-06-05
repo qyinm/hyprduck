@@ -323,6 +323,9 @@ pub(super) fn synthetic_context_pack_snapshot(record_count: usize) -> BrainRepoS
             source_ids: vec![source.source_id.clone()],
             confidence: Some(0.9),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
         snapshot.claims.push(ClaimRecord {
             claim_id: format!("claim-alpha-{index:03}"),
@@ -343,6 +346,9 @@ pub(super) fn synthetic_context_pack_snapshot(record_count: usize) -> BrainRepoS
             evidence_ids: vec![evidence_id],
             confidence: Some(0.7),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         });
     }
     snapshot

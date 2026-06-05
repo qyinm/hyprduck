@@ -51,6 +51,9 @@ fn workspace_linking_event_is_relation_only() {
             source_ids: vec!["source-alpha".into()],
             confidence: Some(0.9),
             updated_at: 42,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
         BrainNodeRecord {
             node_id: "concept-beta".into(),
@@ -62,6 +65,9 @@ fn workspace_linking_event_is_relation_only() {
             source_ids: vec!["source-beta".into()],
             confidence: Some(0.9),
             updated_at: 42,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
     ];
     snapshot.relations = vec![BrainRelationRecord {
@@ -73,6 +79,9 @@ fn workspace_linking_event_is_relation_only() {
         evidence_ids: vec!["ev-alpha".into(), "ev-beta".into()],
         confidence: Some(0.8),
         updated_at: 42,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     }];
 
     let event = workspace_linking_materialized_event(

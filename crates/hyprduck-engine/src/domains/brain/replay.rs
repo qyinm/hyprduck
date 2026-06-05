@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::*;
 
 pub(crate) fn handle_reconstruct_brain(
@@ -247,19 +249,136 @@ fn apply_materialized_graph_payload(
     payload: MaterializedGraphPayload,
     event: &BrainEvent,
 ) {
-    snapshot.generated_at = payload
+    let materialized_version = payload
         .generated_at
         .or(event.causality.materialized_version)
         .unwrap_or(event.created_at);
+    snapshot.generated_at = materialized_version;
     snapshot.sources = payload.sources;
-    snapshot.nodes = payload.nodes;
-    snapshot.relations = payload.relations;
+    merge_replayed_nodes(snapshot, payload.nodes, event, materialized_version);
+    merge_replayed_relations(snapshot, payload.relations, event, materialized_version);
     snapshot.evidence = payload.evidence;
     snapshot.memories = payload.memories;
     snapshot.wiki_pages = payload.wiki_pages;
     snapshot.entities = payload.entities;
     snapshot.claims = payload.claims;
     snapshot.extractions = payload.extractions;
+}
+
+fn merge_replayed_nodes(
+    snapshot: &mut BrainRepoSnapshot,
+    incoming_nodes: Vec<BrainNodeRecord>,
+    event: &BrainEvent,
+    materialized_version: u64,
+) {
+    let incoming_ids = incoming_nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut merged = Vec::new();
+    for mut existing in std::mem::take(&mut snapshot.nodes) {
+        if existing.valid_to.is_some() {
+            merged.push(existing);
+            continue;
+        }
+        if !incoming_ids.contains(&existing.node_id)
+            && should_invalidate_missing_node(&existing, event)
+        {
+            invalidate_node(&mut existing, event, materialized_version);
+        }
+        merged.push(existing);
+    }
+    for mut incoming in incoming_nodes {
+        if incoming.valid_from == 0 {
+            incoming.valid_from = materialized_version;
+        }
+        incoming.valid_to = None;
+        incoming.superseded_by = None;
+        if let Some(live_index) = merged.iter().position(|existing| {
+            existing.node_id == incoming.node_id && existing.valid_to.is_none()
+        }) {
+            if brain_node_record_content_matches(&merged[live_index], &incoming) {
+                continue;
+            }
+            invalidate_node(&mut merged[live_index], event, materialized_version);
+        }
+        merged.push(incoming);
+    }
+    snapshot.nodes = merged;
+}
+
+fn merge_replayed_relations(
+    snapshot: &mut BrainRepoSnapshot,
+    incoming_relations: Vec<BrainRelationRecord>,
+    event: &BrainEvent,
+    materialized_version: u64,
+) {
+    let incoming_ids = incoming_relations
+        .iter()
+        .map(|relation| relation.relation_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut merged = Vec::new();
+    for mut existing in std::mem::take(&mut snapshot.relations) {
+        if existing.valid_to.is_some() {
+            merged.push(existing);
+            continue;
+        }
+        if !incoming_ids.contains(&existing.relation_id)
+            && should_invalidate_missing_relation(&existing, event)
+        {
+            invalidate_relation(&mut existing, event, materialized_version);
+        }
+        merged.push(existing);
+    }
+    for mut incoming in incoming_relations {
+        if incoming.valid_from == 0 {
+            incoming.valid_from = materialized_version;
+        }
+        incoming.valid_to = None;
+        incoming.superseded_by = None;
+        if let Some(live_index) = merged.iter().position(|existing| {
+            existing.relation_id == incoming.relation_id && existing.valid_to.is_none()
+        }) {
+            if brain_relation_record_content_matches(&merged[live_index], &incoming) {
+                continue;
+            }
+            invalidate_relation(&mut merged[live_index], event, materialized_version);
+        }
+        merged.push(incoming);
+    }
+    snapshot.relations = merged;
+}
+
+fn should_invalidate_missing_node(node: &BrainNodeRecord, event: &BrainEvent) -> bool {
+    match event.operation_type.as_deref() {
+        Some("source_graph_build" | "workspace_linking") => {
+            event.target_node_ids.contains(&node.node_id)
+        }
+        _ => true,
+    }
+}
+
+fn should_invalidate_missing_relation(relation: &BrainRelationRecord, event: &BrainEvent) -> bool {
+    match event.operation_type.as_deref() {
+        Some("source_graph_build" | "workspace_linking") => {
+            event.target_edge_ids.contains(&relation.relation_id)
+        }
+        _ => true,
+    }
+}
+
+fn invalidate_node(node: &mut BrainNodeRecord, event: &BrainEvent, materialized_version: u64) {
+    node.valid_to = Some(materialized_version);
+    node.superseded_by = Some(event.event_id.clone());
+}
+
+fn invalidate_relation(
+    relation: &mut BrainRelationRecord,
+    event: &BrainEvent,
+    materialized_version: u64,
+) {
+    relation.valid_to = Some(materialized_version);
+    relation.superseded_by = Some(event.event_id.clone());
 }
 
 fn upsert_replayed_memory(snapshot: &mut BrainRepoSnapshot, memory: MemoryRecord) {
@@ -355,6 +474,9 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(1.0),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         };
         let concept_x = provider_test_concept("concept-x", &source, &evidence, 200);
         let concept_y = provider_test_concept("concept-y", &source, &evidence, 100);
@@ -408,11 +530,13 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.node_id == "concept-x"));
-        assert!(!replay
+        assert!(replay
             .snapshot
             .nodes
             .iter()
-            .any(|node| node.node_id == "concept-y"));
+            .any(|node| node.node_id == "concept-y"
+                && node.valid_to == Some(200)
+                && node.superseded_by.as_deref() == Some("evt-provider-new")));
     }
 
     #[test]
@@ -453,6 +577,9 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(1.0),
             updated_at: 1,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         };
         let base_event = test_graph_event(TestGraphEventInput {
             workspace_id,
@@ -508,6 +635,134 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.node_id == "concept-skipped"));
+    }
+
+    #[test]
+    fn reconstruct_soft_invalidates_changed_graph_records() {
+        let workspace_id = "default";
+        let source = replay_test_source("source-a");
+        let evidence = replay_test_evidence(&source);
+        let source_node = replay_test_source_node(&source, &evidence);
+        let old_concept = provider_test_concept("concept-changing", &source, &evidence, 100);
+        let old_relation = replay_test_relation(&source_node, &old_concept, &evidence, 100);
+        let old_event = test_graph_event(TestGraphEventInput {
+            workspace_id,
+            event_id: "evt-old",
+            operation_type: "graph_materialized",
+            generated_at: 100,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node.clone(), old_concept],
+            relations: std::slice::from_ref(&old_relation),
+            evidence: std::slice::from_ref(&evidence),
+        });
+        let mut changed_concept =
+            provider_test_concept("concept-changing", &source, &evidence, 200);
+        changed_concept.label = "Changed concept".into();
+        let mut changed_relation =
+            replay_test_relation(&source_node, &changed_concept, &evidence, 200);
+        changed_relation.label = "changed relation".into();
+        let new_event = test_graph_event(TestGraphEventInput {
+            workspace_id,
+            event_id: "evt-new",
+            operation_type: "graph_materialized",
+            generated_at: 200,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node, changed_concept],
+            relations: std::slice::from_ref(&changed_relation),
+            evidence: std::slice::from_ref(&evidence),
+        });
+
+        let replay = reconstruct_brain_snapshot_from_events(
+            workspace_id,
+            &[old_event, new_event],
+            None,
+            None,
+            None,
+        )
+        .expect("reconstruct changed graph records");
+
+        let concept_versions = replay
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.node_id == "concept-changing")
+            .collect::<Vec<_>>();
+        let relation_versions = replay
+            .snapshot
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_id == "rel-source-changing")
+            .collect::<Vec<_>>();
+        assert_eq!(concept_versions.len(), 2);
+        assert_eq!(relation_versions.len(), 2);
+        assert!(concept_versions.iter().any(|node| {
+            node.valid_to == Some(200) && node.superseded_by.as_deref() == Some("evt-new")
+        }));
+        assert!(concept_versions
+            .iter()
+            .any(|node| node.valid_to.is_none() && node.label == "Changed concept"));
+        assert!(relation_versions.iter().any(|relation| {
+            relation.valid_to == Some(200) && relation.superseded_by.as_deref() == Some("evt-new")
+        }));
+        assert!(relation_versions
+            .iter()
+            .any(|relation| relation.valid_to.is_none() && relation.label == "changed relation"));
+    }
+
+    #[test]
+    fn reconstruct_soft_invalidates_omitted_records_for_full_graph_payload() {
+        let workspace_id = "default";
+        let source = replay_test_source("source-a");
+        let evidence = replay_test_evidence(&source);
+        let source_node = replay_test_source_node(&source, &evidence);
+        let omitted_concept = provider_test_concept("concept-omitted", &source, &evidence, 100);
+        let omitted_relation = replay_test_relation(&source_node, &omitted_concept, &evidence, 100);
+        let old_event = test_graph_event(TestGraphEventInput {
+            workspace_id,
+            event_id: "evt-old",
+            operation_type: "graph_materialized",
+            generated_at: 100,
+            sources: std::slice::from_ref(&source),
+            nodes: &[source_node.clone(), omitted_concept],
+            relations: std::slice::from_ref(&omitted_relation),
+            evidence: std::slice::from_ref(&evidence),
+        });
+        let new_event = test_graph_event(TestGraphEventInput {
+            workspace_id,
+            event_id: "evt-new",
+            operation_type: "graph_materialized",
+            generated_at: 200,
+            sources: std::slice::from_ref(&source),
+            nodes: std::slice::from_ref(&source_node),
+            relations: &[],
+            evidence: std::slice::from_ref(&evidence),
+        });
+
+        let replay = reconstruct_brain_snapshot_from_events(
+            workspace_id,
+            &[old_event, new_event],
+            None,
+            None,
+            None,
+        )
+        .expect("reconstruct omitted graph records");
+
+        let omitted_node = replay
+            .snapshot
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "concept-omitted")
+            .expect("omitted node retained as history");
+        let omitted_edge = replay
+            .snapshot
+            .relations
+            .iter()
+            .find(|relation| relation.relation_id == "rel-source-omitted")
+            .expect("omitted relation retained as history");
+        assert_eq!(omitted_node.valid_to, Some(200));
+        assert_eq!(omitted_node.superseded_by.as_deref(), Some("evt-new"));
+        assert_eq!(omitted_edge.valid_to, Some(200));
+        assert_eq!(omitted_edge.superseded_by.as_deref(), Some("evt-new"));
     }
 
     #[test]
@@ -582,6 +837,81 @@ mod tests {
             source_ids: vec![source.source_id.clone()],
             confidence: Some(0.9),
             updated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        }
+    }
+
+    fn replay_test_source(source_id: &str) -> SourceRecord {
+        SourceRecord {
+            source_id: source_id.into(),
+            workspace_id: "default".into(),
+            original_path: format!("/tmp/{source_id}.pdf"),
+            source_path: format!("/tmp/{source_id}.pdf"),
+            markdown_path: format!("/tmp/{source_id}.md"),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 1,
+        }
+    }
+
+    fn replay_test_evidence(source: &SourceRecord) -> EvidenceRef {
+        EvidenceRef {
+            id: format!("ev-{}", source.source_id),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: format!("{} evidence.", source.source_id),
+            source_path: Some(source.source_path.clone()),
+            source_id: Some(source.source_id.clone()),
+            markdown_path: Some(source.markdown_path.clone()),
+            image_path: None,
+            provenance: Some("test".into()),
+        }
+    }
+
+    fn replay_test_source_node(source: &SourceRecord, evidence: &EvidenceRef) -> BrainNodeRecord {
+        BrainNodeRecord {
+            node_id: format!("source:{}", source.source_id),
+            kind: BrainNodeKind::Source,
+            label: format!("{}.pdf", source.source_id),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec![evidence.id.clone()],
+            source_ids: vec![source.source_id.clone()],
+            confidence: Some(1.0),
+            updated_at: source.updated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        }
+    }
+
+    fn replay_test_relation(
+        source_node: &BrainNodeRecord,
+        target_node: &BrainNodeRecord,
+        evidence: &EvidenceRef,
+        updated_at: u64,
+    ) -> BrainRelationRecord {
+        BrainRelationRecord {
+            relation_id: format!(
+                "rel-source-{}",
+                target_node.node_id.trim_start_matches("concept-")
+            ),
+            kind: BrainRelationKind::SourceOf,
+            source_node_id: source_node.node_id.clone(),
+            target_node_id: target_node.node_id.clone(),
+            label: "source_of".into(),
+            evidence_ids: vec![evidence.id.clone()],
+            confidence: Some(1.0),
+            updated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         }
     }
 

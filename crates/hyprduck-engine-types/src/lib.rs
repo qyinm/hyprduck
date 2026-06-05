@@ -991,6 +991,14 @@ pub struct ReadGraphHistoryRequest {
     pub scope: BrainReadScope,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub record_kind: Option<GraphHistoryRecordKind>,
+    #[serde(default)]
+    pub record_id: Option<String>,
+    #[serde(default)]
+    pub wiki_path: Option<String>,
+    #[serde(default)]
+    pub include_diff: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1018,6 +1026,67 @@ pub struct GraphHistoryEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ReadGraphHistoryResponseData {
     pub states: Vec<GraphHistoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_history: Option<GraphRecordHistoryResponse>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphHistoryRecordKind {
+    Node,
+    Relation,
+    WikiPage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRecordHistoryResponse {
+    pub query: GraphRecordHistoryQuery,
+    pub versions: Vec<GraphRecordHistoryVersion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRecordHistoryQuery {
+    pub record_kind: GraphHistoryRecordKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiki_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRecordHistoryVersion {
+    pub record_kind: GraphHistoryRecordKind,
+    pub logical_id: String,
+    pub version_id: String,
+    pub created_by_event_id: String,
+    pub valid_from: u64,
+    pub valid_to: Option<u64>,
+    pub superseded_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predecessor_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub node_refs: Vec<String>,
+    #[serde(default)]
+    pub relation_refs: Vec<String>,
+    #[serde(default)]
+    pub storage_locations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2878,6 +2947,10 @@ mod tests {
             EngineRequest::ReadGraphHistory(ReadGraphHistoryRequest {
                 scope: scope.clone(),
                 limit: Some(3),
+                record_kind: Some(GraphHistoryRecordKind::WikiPage),
+                record_id: None,
+                wiki_path: Some("wiki/index.md".into()),
+                include_diff: true,
             }),
             EngineRequest::ReadGraphSnapshot(ReadGraphSnapshotRequest {
                 scope: scope.clone(),
@@ -3008,6 +3081,34 @@ mod tests {
                     memory_count: 0,
                     wiki_page_count: 0,
                 }],
+                record_history: Some(GraphRecordHistoryResponse {
+                    query: GraphRecordHistoryQuery {
+                        record_kind: GraphHistoryRecordKind::Node,
+                        record_id: Some("concept-agent-context".into()),
+                        wiki_path: None,
+                    },
+                    versions: vec![GraphRecordHistoryVersion {
+                        record_kind: GraphHistoryRecordKind::Node,
+                        logical_id: "concept-agent-context".into(),
+                        version_id: "graph-node-version:default:concept-agent-context:event-a"
+                            .into(),
+                        created_by_event_id: "event-a".into(),
+                        valid_from: 10,
+                        valid_to: None,
+                        superseded_by: None,
+                        revision: None,
+                        predecessor_revision: None,
+                        title: Some("Agent context".into()),
+                        source_node_id: None,
+                        target_node_id: None,
+                        evidence_refs: vec!["ev-1".into()],
+                        source_refs: vec!["source-123".into()],
+                        node_refs: Vec::new(),
+                        relation_refs: Vec::new(),
+                        storage_locations: vec!["hyprduck.sqlite:graphqlite".into()],
+                        diff_json: None,
+                    }],
+                }),
             },
         );
 
@@ -3015,6 +3116,7 @@ mod tests {
 
         assert!(!json.contains("rollbackTarget"));
         assert!(!json.contains("replaySelector"));
+        assert!(!json.contains("replay://"));
     }
 
     #[test]

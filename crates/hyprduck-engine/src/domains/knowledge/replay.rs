@@ -45,7 +45,7 @@ pub(crate) fn replay_materialized_graph_overlay_events(
     previous_origins: &MaterializedRecordOrigins,
     protected_current_records: &ProtectedMaterializedRecordKeys,
 ) -> Result<MaterializedRecordOrigins> {
-    let mut events = latest_replayable_materialized_graph_events(replayable_events);
+    let mut events = replayable_events.to_vec();
     events.sort_by(|left, right| {
         left.causality
             .materialized_version
@@ -63,6 +63,10 @@ pub(crate) fn replay_materialized_graph_overlay_events(
         schema_version: BRAIN_EVENT_SCHEMA_VERSION,
         ..Default::default()
     };
+    let latest_event_ids = latest_replayable_materialized_graph_events(replayable_events)
+        .into_iter()
+        .map(|event| event.event_id)
+        .collect::<BTreeSet<_>>();
     clear_replayable_provider_overlay_records(
         snapshot,
         replayable_events,
@@ -83,6 +87,7 @@ pub(crate) fn replay_materialized_graph_overlay_events(
                 materialized_graph,
                 &event,
                 &mut origins,
+                latest_event_ids.contains(&event.event_id),
             );
         }
     }
@@ -263,6 +268,7 @@ fn apply_filtered_materialized_graph_overlay(
     materialized_graph: MaterializedGraphPayload,
     event: &BrainEvent,
     origins: &mut MaterializedRecordOrigins,
+    replay_non_graph_artifacts: bool,
 ) {
     let valid_source_ids = snapshot
         .sources
@@ -317,6 +323,7 @@ fn apply_filtered_materialized_graph_overlay(
             &valid_evidence_ids,
             &source_labels,
             &evidence_by_source,
+            event,
         );
     }
     let valid_node_ids = snapshot
@@ -348,19 +355,21 @@ fn apply_filtered_materialized_graph_overlay(
         &replay_context,
         origins,
     );
-    merge_filtered_claims(
-        snapshot,
-        materialized_graph.claims,
-        &replay_context,
-        origins,
-    );
-    merge_filtered_memories(
-        snapshot,
-        materialized_graph.memories,
-        &replay_context,
-        origins,
-    );
-    if !require_cross_source_artifacts {
+    if replay_non_graph_artifacts {
+        merge_filtered_claims(
+            snapshot,
+            materialized_graph.claims,
+            &replay_context,
+            origins,
+        );
+        merge_filtered_memories(
+            snapshot,
+            materialized_graph.memories,
+            &replay_context,
+            origins,
+        );
+    }
+    if replay_non_graph_artifacts && !require_cross_source_artifacts {
         merge_filtered_entities(
             snapshot,
             materialized_graph.entities,
@@ -369,12 +378,14 @@ fn apply_filtered_materialized_graph_overlay(
         );
         merge_filtered_extractions(snapshot, materialized_graph.extractions, &valid_source_ids);
     }
-    merge_filtered_wiki_pages(
-        snapshot,
-        materialized_graph.wiki_pages,
-        &replay_context,
-        origins,
-    );
+    if replay_non_graph_artifacts {
+        merge_filtered_wiki_pages(
+            snapshot,
+            materialized_graph.wiki_pages,
+            &replay_context,
+            origins,
+        );
+    }
     snapshot.generated_at = snapshot.generated_at.max(
         materialized_graph
             .generated_at
@@ -413,13 +424,22 @@ fn merge_filtered_nodes(
     valid_evidence_ids: &BTreeSet<String>,
     source_labels: &BTreeMap<String, String>,
     evidence_by_source: &BTreeMap<String, Vec<String>>,
+    event: &BrainEvent,
 ) {
-    let mut by_id = snapshot
-        .nodes
+    let materialized_version = event_materialized_version(event);
+    let scoped_source_ids = event_source_scope(event);
+    let incoming_ids = nodes
         .iter()
-        .cloned()
-        .map(|node| (node.node_id.clone(), node))
-        .collect::<BTreeMap<_, _>>();
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    for existing in &mut snapshot.nodes {
+        if existing.valid_to.is_some() || incoming_ids.contains(&existing.node_id) {
+            continue;
+        }
+        if should_invalidate_missing_overlay_node(existing, event, &scoped_source_ids) {
+            invalidate_overlay_node(existing, event, materialized_version);
+        }
+    }
     for mut node in nodes {
         node.source_ids
             .retain(|source_id| valid_source_ids.contains(source_id));
@@ -448,9 +468,23 @@ fn merge_filtered_nodes(
         }
         node.scope = BrainScope::Project;
         normalize_materialized_node_label(&mut node);
-        by_id.insert(node.node_id.clone(), node);
+        if node.valid_from == 0 {
+            node.valid_from = materialized_version;
+        }
+        node.valid_to = None;
+        node.superseded_by = None;
+        if let Some(live_index) = snapshot
+            .nodes
+            .iter()
+            .position(|existing| existing.node_id == node.node_id && existing.valid_to.is_none())
+        {
+            if brain_node_record_content_matches(&snapshot.nodes[live_index], &node) {
+                continue;
+            }
+            invalidate_overlay_node(&mut snapshot.nodes[live_index], event, materialized_version);
+        }
+        snapshot.nodes.push(node);
     }
-    snapshot.nodes = by_id.into_values().collect();
 }
 
 fn normalize_materialized_node_label(node: &mut BrainNodeRecord) {
@@ -511,12 +545,21 @@ fn merge_filtered_relations(
     replay_context: &MaterializedOverlayReplayContext<'_>,
     origins: &mut MaterializedRecordOrigins,
 ) {
-    let mut by_id = snapshot
-        .relations
+    let materialized_version = event_materialized_version(replay_context.event);
+    let scoped_source_ids = event_source_scope(replay_context.event);
+    let incoming_ids = relations
         .iter()
-        .cloned()
-        .map(|relation| (relation.relation_id.clone(), relation))
-        .collect::<BTreeMap<_, _>>();
+        .map(|relation| relation.relation_id.clone())
+        .collect::<BTreeSet<_>>();
+    for existing in &mut snapshot.relations {
+        if existing.valid_to.is_some() || incoming_ids.contains(&existing.relation_id) {
+            continue;
+        }
+        if should_invalidate_missing_overlay_relation(existing, replay_context, &scoped_source_ids)
+        {
+            invalidate_overlay_relation(existing, replay_context.event, materialized_version);
+        }
+    }
     for mut relation in relations {
         if !replay_context
             .valid_node_ids
@@ -541,17 +584,116 @@ fn merge_filtered_relations(
         {
             continue;
         }
-        if replay_context.require_cross_source && by_id.contains_key(&relation.relation_id) {
+        if replay_context.require_cross_source
+            && snapshot.relations.iter().any(|existing| {
+                existing.relation_id == relation.relation_id && existing.valid_to.is_none()
+            })
+        {
             continue;
         }
         let relation_id = relation.relation_id.clone();
-        by_id.insert(relation_id.clone(), relation);
+        if relation.valid_from == 0 {
+            relation.valid_from = materialized_version;
+        }
+        relation.valid_to = None;
+        relation.superseded_by = None;
+        if let Some(live_index) = snapshot.relations.iter().position(|existing| {
+            existing.relation_id == relation.relation_id && existing.valid_to.is_none()
+        }) {
+            if brain_relation_record_content_matches(&snapshot.relations[live_index], &relation) {
+                origins.relations.insert(
+                    relation_id,
+                    MaterializedRecordOrigin::from_event(replay_context.event),
+                );
+                continue;
+            }
+            invalidate_overlay_relation(
+                &mut snapshot.relations[live_index],
+                replay_context.event,
+                materialized_version,
+            );
+        }
+        snapshot.relations.push(relation);
         origins.relations.insert(
             relation_id,
             MaterializedRecordOrigin::from_event(replay_context.event),
         );
     }
-    snapshot.relations = by_id.into_values().collect();
+}
+
+fn event_materialized_version(event: &BrainEvent) -> u64 {
+    event
+        .causality
+        .materialized_version
+        .unwrap_or(event.created_at)
+}
+
+fn event_source_scope(event: &BrainEvent) -> BTreeSet<String> {
+    let mut source_ids = if event.causality.caused_by_source_ids.is_empty() {
+        event.source_refs.clone()
+    } else {
+        event.causality.caused_by_source_ids.clone()
+    };
+    source_ids.sort();
+    source_ids.dedup();
+    source_ids.into_iter().collect()
+}
+
+fn should_invalidate_missing_overlay_node(
+    node: &BrainNodeRecord,
+    event: &BrainEvent,
+    scoped_source_ids: &BTreeSet<String>,
+) -> bool {
+    match event.operation_type.as_deref() {
+        Some("full_workspace_rebuild") => true,
+        Some("source_graph_build") => {
+            !scoped_source_ids.is_empty()
+                && node
+                    .source_ids
+                    .iter()
+                    .any(|source_id| scoped_source_ids.contains(source_id))
+        }
+        Some("workspace_linking") => event.target_node_ids.contains(&node.node_id),
+        _ => false,
+    }
+}
+
+fn should_invalidate_missing_overlay_relation(
+    relation: &BrainRelationRecord,
+    replay_context: &MaterializedOverlayReplayContext<'_>,
+    scoped_source_ids: &BTreeSet<String>,
+) -> bool {
+    match replay_context.event.operation_type.as_deref() {
+        Some("full_workspace_rebuild") => true,
+        Some("source_graph_build") => {
+            !scoped_source_ids.is_empty()
+                && relation.evidence_ids.iter().any(|evidence_id| {
+                    replay_context
+                        .evidence_source_ids
+                        .get(evidence_id)
+                        .is_some_and(|source_id| scoped_source_ids.contains(source_id))
+                })
+        }
+        Some("workspace_linking") => replay_context
+            .event
+            .target_edge_ids
+            .contains(&relation.relation_id),
+        _ => false,
+    }
+}
+
+fn invalidate_overlay_node(node: &mut BrainNodeRecord, event: &BrainEvent, version: u64) {
+    node.valid_to = Some(version);
+    node.superseded_by = Some(event.event_id.clone());
+}
+
+fn invalidate_overlay_relation(
+    relation: &mut BrainRelationRecord,
+    event: &BrainEvent,
+    version: u64,
+) {
+    relation.valid_to = Some(version);
+    relation.superseded_by = Some(event.event_id.clone());
 }
 
 fn merge_filtered_claims(

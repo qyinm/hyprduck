@@ -322,17 +322,74 @@ fn load_node_relations_from_db(
         graph,
         workspace_id,
         node_id,
-        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+        "MATCH (source {logical_id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
          RETURN r.relation_id AS relation_id,
                 r.kind AS kind,
-                source.id AS source_node_id,
-                target.id AS target_node_id,
+                source.id AS source_physical_node_id,
+                source.logical_id AS source_logical_node_id,
+                target.id AS target_physical_node_id,
+                target.logical_id AS target_logical_node_id,
+                r.source_logical_id AS relation_source_logical_id,
+                r.target_logical_id AS relation_target_logical_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
                 r.label AS label,
                 r.evidence_ids_json AS evidence_ids_json,
                 r.source_ids_json AS source_ids_json,
                 r.confidence AS confidence,
-                r.updated_at AS updated_at",
+                r.updated_at AS updated_at,
+                r.valid_from AS valid_from,
+                r.valid_to AS valid_to,
+                r.superseded_by AS superseded_by",
     )?;
+    relation_rows.extend(load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {workspace_id: $workspace_id})-[r]->(target {logical_id: $node_id, workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_physical_node_id,
+                source.logical_id AS source_logical_node_id,
+                target.id AS target_physical_node_id,
+                target.logical_id AS target_logical_node_id,
+                r.source_logical_id AS relation_source_logical_id,
+                r.target_logical_id AS relation_target_logical_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at,
+                r.valid_from AS valid_from,
+                r.valid_to AS valid_to,
+                r.superseded_by AS superseded_by",
+    )?);
+    relation_rows.extend(load_node_relation_rows_from_db(
+        graph,
+        workspace_id,
+        node_id,
+        "MATCH (source {id: $node_id, workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
+         RETURN r.relation_id AS relation_id,
+                r.kind AS kind,
+                source.id AS source_physical_node_id,
+                source.logical_id AS source_logical_node_id,
+                target.id AS target_physical_node_id,
+                target.logical_id AS target_logical_node_id,
+                r.source_logical_id AS relation_source_logical_id,
+                r.target_logical_id AS relation_target_logical_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
+                r.label AS label,
+                r.evidence_ids_json AS evidence_ids_json,
+                r.source_ids_json AS source_ids_json,
+                r.confidence AS confidence,
+                r.updated_at AS updated_at,
+                r.valid_from AS valid_from,
+                r.valid_to AS valid_to,
+                r.superseded_by AS superseded_by",
+    )?);
     relation_rows.extend(load_node_relation_rows_from_db(
         graph,
         workspace_id,
@@ -340,13 +397,22 @@ fn load_node_relations_from_db(
         "MATCH (source {workspace_id: $workspace_id})-[r]->(target {id: $node_id, workspace_id: $workspace_id})
          RETURN r.relation_id AS relation_id,
                 r.kind AS kind,
-                source.id AS source_node_id,
-                target.id AS target_node_id,
+                source.id AS source_physical_node_id,
+                source.logical_id AS source_logical_node_id,
+                target.id AS target_physical_node_id,
+                target.logical_id AS target_logical_node_id,
+                r.source_logical_id AS relation_source_logical_id,
+                r.target_logical_id AS relation_target_logical_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
                 r.label AS label,
                 r.evidence_ids_json AS evidence_ids_json,
                 r.source_ids_json AS source_ids_json,
                 r.confidence AS confidence,
-                r.updated_at AS updated_at",
+                r.updated_at AS updated_at,
+                r.valid_from AS valid_from,
+                r.valid_to AS valid_to,
+                r.superseded_by AS superseded_by",
     )?);
     let (eligible_evidence_ids, eligible_source_ids) =
         load_node_relation_eligible_refs(graph, workspace_id, &relation_rows)?;
@@ -481,8 +547,17 @@ fn load_node_relation_rows_from_db(
         .context("failed querying GraphQLite node relations")?;
     let mut relations = Vec::new();
     for row in &rows {
+        if !row_live_by_valid_to(row, "source_valid_to")?
+            || !row_live_by_valid_to(row, "target_valid_to")?
+        {
+            continue;
+        }
+        let relation = graph_canvas_relation_from_row(row)?;
+        if !graph_relation_is_live(&relation) {
+            continue;
+        }
         relations.push(NodeRelationRow {
-            relation: graph_canvas_relation_from_row(row)?,
+            relation,
             source_ids: row_string_array(row, "source_ids_json")
                 .context("read node relation source refs")?,
         });
@@ -840,26 +915,8 @@ pub(super) fn graph_snapshot_counts(
     workspace_id: &str,
 ) -> Result<KnowledgeGraphPersistReport> {
     let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let node_count = graph
-        .connection()
-        .cypher_builder("MATCH (n {workspace_id: $workspace_id}) RETURN count(n) AS count")
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed counting GraphQLite nodes")?
-        .get(0)
-        .and_then(|row| row.get::<i64>("count").ok())
-        .unwrap_or_default() as usize;
-    let relation_count = graph
-        .connection()
-        .cypher_builder(
-            "MATCH (n {workspace_id: $workspace_id})-[r]->(m {workspace_id: $workspace_id}) RETURN count(r) AS count",
-        )
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed counting GraphQLite relations")?
-        .get(0)
-        .and_then(|row| row.get::<i64>("count").ok())
-        .unwrap_or_default() as usize;
+    let node_count = load_graph_canvas_nodes(&graph, workspace_id)?.len();
+    let relation_count = load_graph_canvas_relations(&graph, workspace_id)?.len();
     Ok(KnowledgeGraphPersistReport {
         node_count,
         relation_count,
@@ -871,7 +928,8 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
         .connection()
         .cypher_builder(
             "MATCH (n {workspace_id: $workspace_id})
-             RETURN n.id AS node_id,
+             RETURN n.id AS physical_node_id,
+                    n.logical_id AS logical_node_id,
                     n.kind AS kind,
                     n.label AS label,
                     n.scope AS scope,
@@ -879,7 +937,10 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
                     n.evidence_ids_json AS evidence_ids_json,
                     n.source_ids_json AS source_ids_json,
                     n.confidence AS confidence,
-                    n.updated_at AS updated_at",
+                    n.updated_at AS updated_at,
+                    n.valid_from AS valid_from,
+                    n.valid_to AS valid_to,
+                    n.superseded_by AS superseded_by",
         )
         .param("workspace_id", workspace_id)
         .run()
@@ -888,6 +949,7 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
         .iter()
         .map(graph_canvas_node_from_row)
         .collect::<Result<Vec<_>>>()?;
+    nodes.retain(graph_node_is_live);
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     Ok(nodes)
 }
@@ -897,30 +959,18 @@ fn load_graph_canvas_node_by_id(
     workspace_id: &str,
     node_id: &str,
 ) -> Result<Option<BrainNodeRecord>> {
-    let rows = graph
-        .connection()
-        .cypher_builder(
-            "MATCH (n {id: $node_id, workspace_id: $workspace_id})
-             RETURN n.id AS node_id,
-                    n.kind AS kind,
-                    n.label AS label,
-                    n.scope AS scope,
-                    n.aliases_json AS aliases_json,
-                    n.evidence_ids_json AS evidence_ids_json,
-                    n.source_ids_json AS source_ids_json,
-                    n.confidence AS confidence,
-                    n.updated_at AS updated_at",
-        )
-        .param("workspace_id", workspace_id)
-        .param("node_id", node_id)
-        .run()
-        .context("failed querying GraphQLite graph canvas node")?;
-    rows.get(0).map(graph_canvas_node_from_row).transpose()
+    Ok(load_graph_canvas_nodes(graph, workspace_id)?
+        .into_iter()
+        .find(|node| node.node_id == node_id))
 }
 
 fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> {
+    let logical_node_id =
+        row_string(row, "logical_node_id").context("read graph canvas node logical id")?;
+    let physical_node_id =
+        row_string(row, "physical_node_id").context("read graph canvas node physical id")?;
     Ok(BrainNodeRecord {
-        node_id: row_string(row, "node_id").context("read graph canvas node id")?,
+        node_id: public_graph_id(&logical_node_id, &physical_node_id).into(),
         kind: parse_brain_node_kind(
             &row_string(row, "kind").context("read graph canvas node kind")?,
         ),
@@ -939,6 +989,13 @@ fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> 
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas node updated at")?
             .max(0) as u64,
+        valid_from: row_i64(row, "valid_from")
+            .context("read graph canvas node valid from")?
+            .max(0) as u64,
+        valid_to: positive_i64_as_u64(row_i64(row, "valid_to")?),
+        superseded_by: non_empty_string(
+            row_string(row, "superseded_by").context("read graph canvas node superseded by")?,
+        ),
     })
 }
 
@@ -952,34 +1009,69 @@ fn load_graph_canvas_relations(
             "MATCH (source {workspace_id: $workspace_id})-[r]->(target {workspace_id: $workspace_id})
              RETURN r.relation_id AS relation_id,
                     r.kind AS kind,
-                    source.id AS source_node_id,
-                    target.id AS target_node_id,
+                    source.id AS source_physical_node_id,
+                    source.logical_id AS source_logical_node_id,
+                    target.id AS target_physical_node_id,
+                    target.logical_id AS target_logical_node_id,
+                    r.source_logical_id AS relation_source_logical_id,
+                    r.target_logical_id AS relation_target_logical_id,
+                    source.valid_to AS source_valid_to,
+                    target.valid_to AS target_valid_to,
                     r.label AS label,
                     r.evidence_ids_json AS evidence_ids_json,
                     r.confidence AS confidence,
-                    r.updated_at AS updated_at",
+                    r.updated_at AS updated_at,
+                    r.valid_from AS valid_from,
+                    r.valid_to AS valid_to,
+                    r.superseded_by AS superseded_by",
         )
         .param("workspace_id", workspace_id)
         .run()
         .context("failed querying GraphQLite graph canvas relations")?;
-    let mut relations = rows
-        .iter()
-        .map(graph_canvas_relation_from_row)
-        .collect::<Result<Vec<_>>>()?;
+    let mut relations = Vec::new();
+    for row in &rows {
+        if !row_live_by_valid_to(row, "source_valid_to")?
+            || !row_live_by_valid_to(row, "target_valid_to")?
+        {
+            continue;
+        }
+        let relation = graph_canvas_relation_from_row(row)?;
+        if graph_relation_is_live(&relation) {
+            relations.push(relation);
+        }
+    }
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     Ok(relations)
 }
 
 fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelationRecord> {
+    let source_relation_logical_id = row_string(row, "relation_source_logical_id")
+        .context("read graph canvas relation stored source")?;
+    let source_logical_node_id =
+        row_string(row, "source_logical_node_id").context("read graph canvas source logical id")?;
+    let source_physical_node_id = row_string(row, "source_physical_node_id")
+        .context("read graph canvas source physical id")?;
+    let target_relation_logical_id = row_string(row, "relation_target_logical_id")
+        .context("read graph canvas relation stored target")?;
+    let target_logical_node_id =
+        row_string(row, "target_logical_node_id").context("read graph canvas target logical id")?;
+    let target_physical_node_id = row_string(row, "target_physical_node_id")
+        .context("read graph canvas target physical id")?;
     Ok(BrainRelationRecord {
         relation_id: row_string(row, "relation_id").context("read graph canvas relation id")?,
         kind: parse_brain_relation_kind(
             &row_string(row, "kind").context("read graph canvas relation kind")?,
         ),
-        source_node_id: row_string(row, "source_node_id")
-            .context("read graph canvas relation source node")?,
-        target_node_id: row_string(row, "target_node_id")
-            .context("read graph canvas relation target node")?,
+        source_node_id: public_graph_id(
+            public_graph_id(&source_relation_logical_id, &source_logical_node_id),
+            &source_physical_node_id,
+        )
+        .into(),
+        target_node_id: public_graph_id(
+            public_graph_id(&target_relation_logical_id, &target_logical_node_id),
+            &target_physical_node_id,
+        )
+        .into(),
         label: row_string(row, "label").context("read graph canvas relation label")?,
         evidence_ids: row_string_array(row, "evidence_ids_json")
             .context("read graph canvas relation evidence refs")?,
@@ -989,7 +1081,38 @@ fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelation
         updated_at: row_i64(row, "updated_at")
             .context("read graph canvas relation updated at")?
             .max(0) as u64,
+        valid_from: row_i64(row, "valid_from")
+            .context("read graph canvas relation valid from")?
+            .max(0) as u64,
+        valid_to: positive_i64_as_u64(row_i64(row, "valid_to")?),
+        superseded_by: non_empty_string(
+            row_string(row, "superseded_by").context("read graph canvas relation superseded by")?,
+        ),
     })
+}
+
+fn public_graph_id<'a>(preferred: &'a str, fallback: &'a str) -> &'a str {
+    if preferred.trim().is_empty() {
+        fallback
+    } else {
+        preferred
+    }
+}
+
+fn positive_i64_as_u64(value: i64) -> Option<u64> {
+    (value > 0).then_some(value as u64)
+}
+
+fn row_live_by_valid_to(row: &graphqlite::Row, column: &str) -> Result<bool> {
+    Ok(row_i64(row, column).with_context(|| format!("read {column}"))? <= 0)
+}
+
+fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
+    node.valid_to.is_none()
+}
+
+fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
+    relation.valid_to.is_none()
 }
 
 fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
@@ -1005,6 +1128,7 @@ fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec
              FROM wiki_pages
              WHERE workspace_id = ?1
                AND approval_status IN ('materialized', 'approved')
+               AND valid_to <= 0
              ORDER BY path ASC, wiki_page_id ASC",
         )
         .context("failed preparing graph canvas wiki page query")?;

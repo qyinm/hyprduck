@@ -574,6 +574,9 @@ mod tests {
                 source_ids: vec!["source-b".into()],
                 confidence: None,
                 updated_at: 1,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             }],
             relations: vec![BrainRelationRecord {
                 relation_id: "rel-b".into(),
@@ -584,6 +587,9 @@ mod tests {
                 evidence_ids: vec!["ev-b".into()],
                 confidence: None,
                 updated_at: 1,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             }],
             evidence: vec![EvidenceRef {
                 id: "ev-b".into(),

@@ -446,6 +446,9 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
             source_ids: vec!["source-alpha".into()],
             confidence: Some(0.9),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
         BrainNodeRecord {
             node_id: "concept-beta".into(),
@@ -457,6 +460,9 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
             source_ids: vec!["source-beta".into()],
             confidence: Some(0.9),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
         BrainNodeRecord {
             node_id: "concept-shared".into(),
@@ -468,6 +474,9 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
             source_ids: vec!["source-alpha".into(), "source-beta".into()],
             confidence: Some(0.9),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
     ];
     let raw = serde_json::json!({
@@ -710,6 +719,9 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
             source_ids: vec!["source-alpha".into()],
             confidence: Some(0.9),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
         BrainNodeRecord {
             node_id: "concept-beta".into(),
@@ -721,6 +733,9 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
             source_ids: vec!["source-beta".into()],
             confidence: Some(0.9),
             updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
         },
     ];
     let edges = (0..30)
@@ -977,6 +992,9 @@ fn workspace_linking_prompt_uses_canonical_graph_only() {
                 source_ids: vec![import_manifest.source_id.clone()],
                 confidence: Some(0.9),
                 updated_at: 1,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
             BrainNodeRecord {
                 node_id: "concept:source-active:canonical-beta".into(),
@@ -988,6 +1006,9 @@ fn workspace_linking_prompt_uses_canonical_graph_only() {
                 source_ids: vec![active_manifest.source_id.clone()],
                 confidence: Some(0.9),
                 updated_at: 1,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             },
         ],
         relations: Vec::new(),

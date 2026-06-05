@@ -490,6 +490,122 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
         &mut stdin,
         json!({
             "jsonrpc": "2.0",
+            "id": 211,
+            "method": "tools/call",
+            "params": {
+                "name": "read_graph_history",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "recordKind": "node",
+                    "recordId": "node-mcp-readable",
+                    "limit": 1
+                }
+            }
+        }),
+    );
+    let node_history_tool = read_message(&mut reader);
+    assert_eq!(
+        node_history_tool["result"]["isError"], false,
+        "{node_history_tool:#?}"
+    );
+    let node_history_text = node_history_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("node history text");
+    let node_history_payload: Value =
+        serde_json::from_str(node_history_text).expect("node history payload");
+    assert_eq!(
+        node_history_payload["recordHistory"]["query"]["recordKind"],
+        "node"
+    );
+    assert_eq!(
+        node_history_payload["recordHistory"]["versions"][0]["logicalId"],
+        "node-mcp-readable"
+    );
+    assert_eq!(
+        node_history_payload["recordHistory"]["versions"][0]["storageLocations"][0],
+        "hyprduck.sqlite:graphqlite"
+    );
+    assert!(!node_history_text.contains(root_dir_arg.as_str()));
+    assert!(!node_history_text.contains("rollbackTarget"));
+    assert!(!node_history_text.contains("replaySelector"));
+    assert!(!node_history_payload["recordHistory"]
+        .to_string()
+        .contains("replay://"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 212,
+            "method": "tools/call",
+            "params": {
+                "name": "read_graph_history",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "wikiPath": "wiki/index.md",
+                    "includeDiff": true,
+                    "limit": 1
+                }
+            }
+        }),
+    );
+    let wiki_history_tool = read_message(&mut reader);
+    assert_eq!(
+        wiki_history_tool["result"]["isError"], false,
+        "{wiki_history_tool:#?}"
+    );
+    let wiki_history_text = wiki_history_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("wiki history text");
+    let wiki_history_payload: Value =
+        serde_json::from_str(wiki_history_text).expect("wiki history payload");
+    assert_eq!(
+        wiki_history_payload["recordHistory"]["query"]["recordKind"],
+        "wiki_page"
+    );
+    assert_eq!(
+        wiki_history_payload["recordHistory"]["versions"][0]["logicalId"],
+        "wiki-mcp-readable"
+    );
+    assert_eq!(
+        wiki_history_payload["recordHistory"]["versions"][0]["storageLocations"][0],
+        "hyprduck.sqlite:wiki_revisions"
+    );
+    assert_eq!(
+        wiki_history_payload["recordHistory"]["versions"][0]["diffJson"],
+        "{}"
+    );
+    assert!(!wiki_history_text.contains(root_dir_arg.as_str()));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 213,
+            "method": "tools/call",
+            "params": {
+                "name": "read_graph_history",
+                "arguments": {
+                    "workspaceId": "default",
+                    "rootDir": root_dir_arg.clone(),
+                    "recordKind": "node"
+                }
+            }
+        }),
+    );
+    let invalid_history_tool = read_message(&mut reader);
+    assert_eq!(invalid_history_tool["result"]["isError"], true);
+    assert!(invalid_history_tool["result"]["content"][0]["text"]
+        .as_str()
+        .expect("invalid history text")
+        .contains("recordId"));
+
+    write_message(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
             "id": 22,
             "method": "resources/read",
             "params": {

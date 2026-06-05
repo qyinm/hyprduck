@@ -224,24 +224,50 @@ pub(super) fn clear_replayable_provider_overlay_records(
         .flat_map(|node| node.evidence_ids.iter().cloned())
         .collect::<BTreeSet<_>>();
 
-    snapshot.nodes.retain(|node| {
-        node.kind == BrainNodeKind::Source
+    let node_invalidation_events =
+        target_invalidation_events_by_id(replayable_events, |event| event.target_node_ids.iter());
+    for node in &mut snapshot.nodes {
+        if node.kind == BrainNodeKind::Source
             || protected_current_records.nodes.contains(&node.node_id)
             || !target_node_ids.contains(&node.node_id)
-    });
+            || node.valid_to.is_some()
+        {
+            continue;
+        }
+        if let Some((event_id, materialized_version)) = node_invalidation_events.get(&node.node_id)
+        {
+            node.valid_to = Some(*materialized_version);
+            node.superseded_by = Some(event_id.clone());
+        }
+    }
+    let relation_invalidation_events =
+        target_invalidation_events_by_id(replayable_events, |event| event.target_edge_ids.iter());
     snapshot.relations.retain(|relation| {
-        !target_edge_ids.contains(&relation.relation_id)
-            && !provider_overlay_refs
-                .relation_ids
-                .contains(&relation.relation_id)
-            && !record_has_workspace_linking_origin(
-                &previous_origins.relations,
-                &relation.relation_id,
-            )
+        !record_has_workspace_linking_origin(&previous_origins.relations, &relation.relation_id)
             || protected_current_records
                 .relations
                 .contains(&relation.relation_id)
     });
+    for relation in &mut snapshot.relations {
+        let is_replayable_overlay = target_edge_ids.contains(&relation.relation_id)
+            || provider_overlay_refs
+                .relation_ids
+                .contains(&relation.relation_id);
+        if !is_replayable_overlay
+            || protected_current_records
+                .relations
+                .contains(&relation.relation_id)
+            || relation.valid_to.is_some()
+        {
+            continue;
+        }
+        if let Some((event_id, materialized_version)) =
+            relation_invalidation_events.get(&relation.relation_id)
+        {
+            relation.valid_to = Some(*materialized_version);
+            relation.superseded_by = Some(event_id.clone());
+        }
+    }
     snapshot.claims.retain(|claim| {
         !target_claim_ids.contains(&claim.claim_id)
             && !provider_overlay_refs.claim_ids.contains(&claim.claim_id)
@@ -256,10 +282,22 @@ pub(super) fn clear_replayable_provider_overlay_records(
                 .memories
                 .contains(&memory.memory_id)
     });
+    let graph_record_evidence_ids = snapshot
+        .nodes
+        .iter()
+        .flat_map(|node| node.evidence_ids.iter().cloned())
+        .chain(
+            snapshot
+                .relations
+                .iter()
+                .flat_map(|relation| relation.evidence_ids.iter().cloned()),
+        )
+        .collect::<BTreeSet<_>>();
     snapshot.evidence.retain(|evidence| {
         protected_current_records.evidence.contains(&evidence.id)
             || !provider_overlay_refs.evidence_ids.contains(&evidence.id)
             || deterministic_source_evidence_ids.contains(&evidence.id)
+            || graph_record_evidence_ids.contains(&evidence.id)
     });
     snapshot
         .entities
@@ -285,6 +323,34 @@ pub(super) fn clear_replayable_provider_overlay_records(
             .extraction_artifact_ids
             .contains(&extraction.artifact_id)
     });
+}
+
+fn target_invalidation_events_by_id<'a, I>(
+    replayable_events: &'a [BrainEvent],
+    target_ids: impl Fn(&'a BrainEvent) -> I,
+) -> BTreeMap<String, (String, u64)>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut by_id = BTreeMap::<String, (String, u64)>::new();
+    for event in replayable_events {
+        if event.operation_type.as_deref() == Some("workspace_linking") {
+            continue;
+        }
+        let materialized_version = event
+            .causality
+            .materialized_version
+            .unwrap_or(event.created_at);
+        for target_id in target_ids(event) {
+            let entry = by_id
+                .entry(target_id.clone())
+                .or_insert_with(|| (event.event_id.clone(), materialized_version));
+            if materialized_version >= entry.1 {
+                *entry = (event.event_id.clone(), materialized_version);
+            }
+        }
+    }
+    by_id
 }
 
 #[derive(Debug, Default)]

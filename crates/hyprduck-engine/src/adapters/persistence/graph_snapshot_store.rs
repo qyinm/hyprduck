@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::policy::redact_path_for_agent;
 
-pub(crate) const GRAPHQLITE_SCHEMA_VERSION: i64 = 1;
+pub(crate) const GRAPHQLITE_SCHEMA_VERSION: i64 = 2;
+#[allow(dead_code)]
+pub(super) const GRAPH_VERSION_LEGACY_EVENT_ID: &str = "legacy-graphqlite-current";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct KnowledgeGraphPersistReport {
@@ -26,32 +28,83 @@ pub(super) fn persist_graph_snapshot_in_transaction(
     validate_snapshot_evidence_refs(snapshot)?;
     persist_wiki_pages_snapshot_in_transaction(graph, snapshot)?;
     persist_brain_events_snapshot_in_transaction(graph, snapshot)?;
-    graph
-        .connection()
-        .cypher_builder("MATCH (n {workspace_id: $workspace_id}) DETACH DELETE n")
-        .param("workspace_id", snapshot.workspace_id.as_str())
-        .run()
-        .context("failed clearing GraphQLite workspace graph")?;
 
+    let created_by_event_id = graph_snapshot_created_by_event_id(snapshot);
     let graph_nodes = current_graph_nodes(snapshot);
+    let current_node_logical_ids = graph_nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut node_version_ids_by_logical_id = BTreeMap::new();
     for node in &graph_nodes {
         let metadata = node_graph_metadata(snapshot, node);
+        let identity = graph_node_version_identity(
+            &snapshot.workspace_id,
+            &node.node_id,
+            &created_by_event_id,
+        );
         graph
             .upsert_node(
-                &node.node_id,
-                node_graph_properties(&snapshot.workspace_id, node, &metadata),
+                &identity.version_id,
+                node_graph_properties(&snapshot.workspace_id, node, &metadata, &identity),
                 brain_node_label(node.kind),
             )
             .with_context(|| format!("failed upserting GraphQLite node {}", node.node_id))?;
+        invalidate_live_graph_node_versions(
+            graph,
+            &snapshot.workspace_id,
+            &identity.logical_id,
+            Some(&identity.version_id),
+            graph_record_invalidation_time(snapshot, node.valid_from, node.valid_to),
+            &identity.created_by_event_id,
+        )?;
+        node_version_ids_by_logical_id.insert(identity.logical_id, identity.version_id);
     }
+    invalidate_live_graph_node_versions_not_in(
+        graph,
+        &snapshot.workspace_id,
+        &current_node_logical_ids,
+        snapshot.generated_at as i64,
+        &created_by_event_id,
+    )?;
+
+    let current_relation_logical_ids = snapshot
+        .relations
+        .iter()
+        .map(|relation| relation.relation_id.clone())
+        .collect::<BTreeSet<_>>();
     for relation in &snapshot.relations {
         let metadata = relation_graph_metadata(snapshot, relation);
+        let identity = graph_relation_version_identity(
+            &snapshot.workspace_id,
+            &relation.relation_id,
+            &created_by_event_id,
+        );
+        let Some(source_version_id) = graph_endpoint_version_id(
+            graph,
+            &snapshot.workspace_id,
+            &node_version_ids_by_logical_id,
+            &relation.source_node_id,
+        )?
+        else {
+            continue;
+        };
+        let Some(target_version_id) = graph_endpoint_version_id(
+            graph,
+            &snapshot.workspace_id,
+            &node_version_ids_by_logical_id,
+            &relation.target_node_id,
+        )?
+        else {
+            continue;
+        };
+        let relation_type = graph_relation_version_type(relation.kind, &identity);
         graph
             .upsert_edge(
-                &relation.source_node_id,
-                &relation.target_node_id,
-                relation_graph_properties(&snapshot.workspace_id, relation, &metadata),
-                brain_relation_type(relation.kind),
+                &source_version_id,
+                &target_version_id,
+                relation_graph_properties(&snapshot.workspace_id, relation, &metadata, &identity),
+                &relation_type,
             )
             .with_context(|| {
                 format!(
@@ -59,14 +112,42 @@ pub(super) fn persist_graph_snapshot_in_transaction(
                     relation.relation_id
                 )
             })?;
+        invalidate_live_graph_relation_versions(
+            graph,
+            &snapshot.workspace_id,
+            &identity.logical_id,
+            Some(&identity.version_id),
+            graph_record_invalidation_time(snapshot, relation.valid_from, relation.valid_to),
+            &identity.created_by_event_id,
+        )?;
     }
+    invalidate_live_graph_relation_versions_not_in(
+        graph,
+        &snapshot.workspace_id,
+        &current_relation_logical_ids,
+        snapshot.generated_at as i64,
+        &created_by_event_id,
+    )?;
     persist_graph_evidence_record_index_in_transaction(graph, &snapshot.workspace_id)?;
 
     mark_import_jobs_graph_ready_in_transaction(graph, snapshot)?;
 
+    let live_graph_node_ids = graph_nodes
+        .iter()
+        .filter(|node| node.valid_to.is_none())
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
     let report = KnowledgeGraphPersistReport {
-        node_count: graph_nodes.len(),
-        relation_count: snapshot.relations.len(),
+        node_count: live_graph_node_ids.len(),
+        relation_count: snapshot
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.valid_to.is_none()
+                    && live_graph_node_ids.contains(relation.source_node_id.as_str())
+                    && live_graph_node_ids.contains(relation.target_node_id.as_str())
+            })
+            .count(),
     };
     persist_graph_checkpoint_metadata_in_transaction(graph, snapshot, &report)?;
 
@@ -167,14 +248,18 @@ fn persist_graph_evidence_record_index_in_transaction(
         workspace_id,
         "node",
         "node_props_text",
+        "node_props_int",
         "node_id",
+        "logical_id",
     )?;
     persist_graph_evidence_record_index_for_table(
         graph,
         workspace_id,
         "edge",
         "edge_props_text",
+        "edge_props_int",
         "edge_id",
+        "relation_id",
     )?;
     Ok(())
 }
@@ -184,14 +269,42 @@ fn persist_graph_evidence_record_index_for_table(
     workspace_id: &str,
     record_kind: &str,
     table: &str,
+    int_table: &str,
     id_column: &str,
+    logical_id_key: &str,
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
+    let logical_key_id = ensure_graphlite_property_key_id(graph, logical_id_key)?;
+    let version_key_id = ensure_graphlite_property_key_id(graph, "version_id")?;
+    let event_key_id = ensure_graphlite_property_key_id(graph, "created_by_event_id")?;
+    let valid_from_key_id = ensure_graphlite_property_key_id(graph, "valid_from")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
     let mut query = sqlite
         .prepare(&format!(
-            "SELECT evidence.{id_column}, evidence.value
+            "SELECT evidence.{id_column},
+                    evidence.value,
+                    logical.value,
+                    version.value,
+                    event.value,
+                    COALESCE(valid_from.value, 0),
+                    COALESCE(valid_to.value, 0)
              FROM {table} evidence
              JOIN {table} workspace ON workspace.{id_column} = evidence.{id_column}
+             LEFT JOIN {table} logical
+               ON logical.{id_column} = evidence.{id_column}
+              AND logical.key_id = ?2
+             LEFT JOIN {table} version
+               ON version.{id_column} = evidence.{id_column}
+              AND version.key_id = ?3
+             LEFT JOIN {table} event
+               ON event.{id_column} = evidence.{id_column}
+              AND event.key_id = ?4
+             LEFT JOIN {int_table} valid_from
+               ON valid_from.{id_column} = evidence.{id_column}
+              AND valid_from.key_id = ?5
+             LEFT JOIN {int_table} valid_to
+               ON valid_to.{id_column} = evidence.{id_column}
+              AND valid_to.key_id = ?6
              JOIN property_keys evidence_key ON evidence_key.id = evidence.key_id
              JOIN property_keys workspace_key ON workspace_key.id = workspace.key_id
              WHERE evidence_key.key = 'evidence_ids_json'
@@ -206,12 +319,24 @@ fn persist_graph_evidence_record_index_for_table(
                 workspace_id,
                 evidence_id,
                 record_kind,
-                record_internal_id
-            ) VALUES (?1, ?2, ?3, ?4)",
+                record_internal_id,
+                logical_record_id,
+                version_id,
+                created_by_event_id,
+                valid_from,
+                valid_to
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .context("failed preparing graph evidence record index insert")?;
     let mut rows = query
-        .query([workspace_id])
+        .query((
+            workspace_id,
+            logical_key_id,
+            version_key_id,
+            event_key_id,
+            valid_from_key_id,
+            valid_to_key_id,
+        ))
         .with_context(|| format!("failed querying graph {record_kind} evidence index rows"))?;
     while let Some(row) = rows
         .next()
@@ -221,6 +346,11 @@ fn persist_graph_evidence_record_index_for_table(
             .get::<_, i64>(0)
             .context("read graph evidence record internal id")?;
         let evidence_ids_json: String = row.get(1).context("read graph evidence refs")?;
+        let logical_record_id: String = row.get(2).unwrap_or_default();
+        let version_id: String = row.get(3).unwrap_or_default();
+        let created_by_event_id: String = row.get(4).unwrap_or_default();
+        let valid_from: i64 = row.get(5).unwrap_or_default();
+        let valid_to: i64 = row.get(6).unwrap_or_default();
         let Ok(evidence_ids) = serde_json::from_str::<Vec<String>>(&evidence_ids_json) else {
             continue;
         };
@@ -231,6 +361,11 @@ fn persist_graph_evidence_record_index_for_table(
                     evidence_id.as_str(),
                     record_kind,
                     record_internal_id,
+                    logical_record_id.as_str(),
+                    version_id.as_str(),
+                    created_by_event_id.as_str(),
+                    valid_from,
+                    valid_to,
                 ))
                 .with_context(|| {
                     format!("failed indexing graph {record_kind} evidence ref {evidence_id}")
@@ -341,6 +476,484 @@ struct GraphRecordMetadata {
     status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(super) struct GraphRecordVersionIdentity {
+    pub(super) logical_id: String,
+    pub(super) version_id: String,
+    pub(super) created_by_event_id: String,
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_snapshot_created_by_event_id(snapshot: &BrainRepoSnapshot) -> String {
+    snapshot
+        .events
+        .last()
+        .map(|event| event.event_id.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "snapshot-{}-{}",
+                snapshot.workspace_id, snapshot.generated_at
+            )
+        })
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_node_version_identity(
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> GraphRecordVersionIdentity {
+    GraphRecordVersionIdentity {
+        logical_id: logical_id.into(),
+        version_id: graph_record_version_id("node", workspace_id, logical_id, created_by_event_id),
+        created_by_event_id: created_by_event_id.into(),
+    }
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_relation_version_identity(
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> GraphRecordVersionIdentity {
+    GraphRecordVersionIdentity {
+        logical_id: logical_id.into(),
+        version_id: graph_record_version_id(
+            "relation",
+            workspace_id,
+            logical_id,
+            created_by_event_id,
+        ),
+        created_by_event_id: created_by_event_id.into(),
+    }
+}
+
+#[allow(dead_code)]
+fn graph_record_version_id(
+    record_kind: &str,
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> String {
+    let payload = serde_json::json!({
+        "kind": record_kind,
+        "workspace": workspace_id,
+        "logical": logical_id,
+        "event": created_by_event_id,
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_else(|_| {
+        format!("{record_kind}:{workspace_id}:{logical_id}:{created_by_event_id}").into_bytes()
+    });
+    let digest = hex_digest(ring::digest::digest(&ring::digest::SHA256, &encoded).as_ref());
+    format!("hyprduck-{record_kind}-version-{}", &digest[..32])
+}
+
+fn graph_record_invalidation_time(
+    snapshot: &BrainRepoSnapshot,
+    valid_from: u64,
+    valid_to: Option<u64>,
+) -> i64 {
+    valid_to
+        .or((valid_from > 0).then_some(valid_from))
+        .unwrap_or(snapshot.generated_at) as i64
+}
+
+fn resolve_live_graph_node_version_id(
+    graph: &Graph,
+    workspace_id: &str,
+    logical_id: &str,
+) -> Result<Option<String>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let workspace_key_id = ensure_graphlite_property_key_id(graph, "workspace_id")?;
+    let logical_key_id = ensure_graphlite_property_key_id(graph, "logical_id")?;
+    let id_key_id = ensure_graphlite_property_key_id(graph, "id")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
+    let mut statement = sqlite
+        .prepare(
+            "SELECT id.value
+             FROM node_props_text id
+             JOIN node_props_text workspace
+               ON workspace.node_id = id.node_id
+              AND workspace.key_id = ?1
+             LEFT JOIN node_props_text logical
+               ON logical.node_id = id.node_id
+              AND logical.key_id = ?2
+             LEFT JOIN node_props_int valid_to
+               ON valid_to.node_id = id.node_id
+              AND valid_to.key_id = ?4
+             WHERE id.key_id = ?3
+               AND workspace.value = ?5
+               AND COALESCE(NULLIF(logical.value, ''), id.value) = ?6
+               AND COALESCE(valid_to.value, 0) <= 0
+             ORDER BY CASE WHEN logical.value IS NULL OR logical.value = '' THEN 0 ELSE 1 END DESC,
+                      id.node_id DESC
+             LIMIT 1",
+        )
+        .context("failed preparing live GraphQLite node version lookup")?;
+    let mut rows = statement
+        .query((
+            workspace_key_id,
+            logical_key_id,
+            id_key_id,
+            valid_to_key_id,
+            workspace_id,
+            logical_id,
+        ))
+        .context("failed querying live GraphQLite node version")?;
+    Ok(rows
+        .next()
+        .context("failed reading live GraphQLite node version")?
+        .map(|row| row.get(0).context("read live GraphQLite node version id"))
+        .transpose()?)
+}
+
+fn graph_endpoint_version_id(
+    graph: &Graph,
+    workspace_id: &str,
+    current_versions: &BTreeMap<String, String>,
+    logical_id: &str,
+) -> Result<Option<String>> {
+    if let Some(version_id) = current_versions.get(logical_id) {
+        return Ok(Some(version_id.clone()));
+    }
+    resolve_live_graph_node_version_id(graph, workspace_id, logical_id)
+}
+
+fn invalidate_live_graph_node_versions(
+    graph: &Graph,
+    workspace_id: &str,
+    logical_id: &str,
+    keep_version_id: Option<&str>,
+    valid_to: i64,
+    superseded_by: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let workspace_key_id = ensure_graphlite_property_key_id(graph, "workspace_id")?;
+    let logical_key_id = ensure_graphlite_property_key_id(graph, "logical_id")?;
+    let id_key_id = ensure_graphlite_property_key_id(graph, "id")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
+    let keep_version_id = keep_version_id.unwrap_or_default();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT id.node_id, id.value
+             FROM node_props_text id
+             JOIN node_props_text workspace
+               ON workspace.node_id = id.node_id
+              AND workspace.key_id = ?1
+             LEFT JOIN node_props_text logical
+               ON logical.node_id = id.node_id
+              AND logical.key_id = ?2
+             LEFT JOIN node_props_int current_valid_to
+               ON current_valid_to.node_id = id.node_id
+              AND current_valid_to.key_id = ?4
+             WHERE id.key_id = ?3
+               AND workspace.value = ?5
+               AND COALESCE(NULLIF(logical.value, ''), id.value) = ?6
+               AND (?7 = '' OR id.value != ?7)
+               AND COALESCE(current_valid_to.value, 0) <= 0",
+        )
+        .context("failed preparing live GraphQLite node invalidation query")?;
+    let mut rows = statement
+        .query((
+            workspace_key_id,
+            logical_key_id,
+            id_key_id,
+            valid_to_key_id,
+            workspace_id,
+            logical_id,
+            keep_version_id,
+        ))
+        .context("failed querying live GraphQLite node versions")?;
+    let mut node_ids = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading live GraphQLite node version")?
+    {
+        node_ids.push(row.get::<_, i64>(0).context("read GraphQLite node id")?);
+    }
+    drop(rows);
+    drop(statement);
+    for node_id in node_ids {
+        set_graphlite_int_property(
+            graph,
+            "node_props_int",
+            "node_id",
+            node_id,
+            "valid_to",
+            valid_to,
+        )?;
+        set_graphlite_text_property(
+            graph,
+            "node_props_text",
+            "node_id",
+            node_id,
+            "superseded_by",
+            superseded_by,
+        )?;
+    }
+    Ok(())
+}
+
+fn invalidate_live_graph_node_versions_not_in(
+    graph: &Graph,
+    workspace_id: &str,
+    keep_logical_ids: &BTreeSet<String>,
+    valid_to: i64,
+    superseded_by: &str,
+) -> Result<()> {
+    for logical_id in live_graph_node_logical_ids(graph, workspace_id)? {
+        if !keep_logical_ids.contains(&logical_id) {
+            invalidate_live_graph_node_versions(
+                graph,
+                workspace_id,
+                &logical_id,
+                None,
+                valid_to,
+                superseded_by,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn live_graph_node_logical_ids(graph: &Graph, workspace_id: &str) -> Result<BTreeSet<String>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let workspace_key_id = ensure_graphlite_property_key_id(graph, "workspace_id")?;
+    let logical_key_id = ensure_graphlite_property_key_id(graph, "logical_id")?;
+    let id_key_id = ensure_graphlite_property_key_id(graph, "id")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
+    let mut statement = sqlite
+        .prepare(
+            "SELECT COALESCE(NULLIF(logical.value, ''), id.value)
+             FROM node_props_text id
+             JOIN node_props_text workspace
+               ON workspace.node_id = id.node_id
+              AND workspace.key_id = ?1
+             LEFT JOIN node_props_text logical
+               ON logical.node_id = id.node_id
+              AND logical.key_id = ?2
+             LEFT JOIN node_props_int valid_to
+               ON valid_to.node_id = id.node_id
+              AND valid_to.key_id = ?4
+             WHERE id.key_id = ?3
+               AND workspace.value = ?5
+               AND COALESCE(valid_to.value, 0) <= 0",
+        )
+        .context("failed preparing live GraphQLite node logical id query")?;
+    let mut rows = statement
+        .query((
+            workspace_key_id,
+            logical_key_id,
+            id_key_id,
+            valid_to_key_id,
+            workspace_id,
+        ))
+        .context("failed querying live GraphQLite node logical ids")?;
+    let mut logical_ids = BTreeSet::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading live GraphQLite node logical id")?
+    {
+        logical_ids.insert(row.get(0).context("read GraphQLite node logical id")?);
+    }
+    Ok(logical_ids)
+}
+
+fn invalidate_live_graph_relation_versions(
+    graph: &Graph,
+    workspace_id: &str,
+    logical_id: &str,
+    keep_version_id: Option<&str>,
+    valid_to: i64,
+    superseded_by: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let workspace_key_id = ensure_graphlite_property_key_id(graph, "workspace_id")?;
+    let relation_key_id = ensure_graphlite_property_key_id(graph, "relation_id")?;
+    let version_key_id = ensure_graphlite_property_key_id(graph, "version_id")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
+    let keep_version_id = keep_version_id.unwrap_or_default();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT relation.edge_id
+             FROM edge_props_text relation
+             JOIN edge_props_text workspace
+               ON workspace.edge_id = relation.edge_id
+              AND workspace.key_id = ?1
+             LEFT JOIN edge_props_text version
+               ON version.edge_id = relation.edge_id
+              AND version.key_id = ?3
+             LEFT JOIN edge_props_int current_valid_to
+               ON current_valid_to.edge_id = relation.edge_id
+              AND current_valid_to.key_id = ?4
+             WHERE relation.key_id = ?2
+               AND workspace.value = ?5
+               AND relation.value = ?6
+               AND (?7 = '' OR version.value != ?7)
+               AND COALESCE(current_valid_to.value, 0) <= 0",
+        )
+        .context("failed preparing live GraphQLite relation invalidation query")?;
+    let mut rows = statement
+        .query((
+            workspace_key_id,
+            relation_key_id,
+            version_key_id,
+            valid_to_key_id,
+            workspace_id,
+            logical_id,
+            keep_version_id,
+        ))
+        .context("failed querying live GraphQLite relation versions")?;
+    let mut edge_ids = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading live GraphQLite relation version")?
+    {
+        edge_ids.push(row.get::<_, i64>(0).context("read GraphQLite edge id")?);
+    }
+    drop(rows);
+    drop(statement);
+    for edge_id in edge_ids {
+        set_graphlite_int_property(
+            graph,
+            "edge_props_int",
+            "edge_id",
+            edge_id,
+            "valid_to",
+            valid_to,
+        )?;
+        set_graphlite_text_property(
+            graph,
+            "edge_props_text",
+            "edge_id",
+            edge_id,
+            "superseded_by",
+            superseded_by,
+        )?;
+    }
+    Ok(())
+}
+
+fn invalidate_live_graph_relation_versions_not_in(
+    graph: &Graph,
+    workspace_id: &str,
+    keep_logical_ids: &BTreeSet<String>,
+    valid_to: i64,
+    superseded_by: &str,
+) -> Result<()> {
+    for logical_id in live_graph_relation_logical_ids(graph, workspace_id)? {
+        if !keep_logical_ids.contains(&logical_id) {
+            invalidate_live_graph_relation_versions(
+                graph,
+                workspace_id,
+                &logical_id,
+                None,
+                valid_to,
+                superseded_by,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn live_graph_relation_logical_ids(graph: &Graph, workspace_id: &str) -> Result<BTreeSet<String>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let workspace_key_id = ensure_graphlite_property_key_id(graph, "workspace_id")?;
+    let relation_key_id = ensure_graphlite_property_key_id(graph, "relation_id")?;
+    let valid_to_key_id = ensure_graphlite_property_key_id(graph, "valid_to")?;
+    let mut statement = sqlite
+        .prepare(
+            "SELECT relation.value
+             FROM edge_props_text relation
+             JOIN edge_props_text workspace
+               ON workspace.edge_id = relation.edge_id
+              AND workspace.key_id = ?1
+             LEFT JOIN edge_props_int valid_to
+               ON valid_to.edge_id = relation.edge_id
+              AND valid_to.key_id = ?3
+             WHERE relation.key_id = ?2
+               AND workspace.value = ?4
+               AND COALESCE(valid_to.value, 0) <= 0",
+        )
+        .context("failed preparing live GraphQLite relation logical id query")?;
+    let mut rows = statement
+        .query((
+            workspace_key_id,
+            relation_key_id,
+            valid_to_key_id,
+            workspace_id,
+        ))
+        .context("failed querying live GraphQLite relation logical ids")?;
+    let mut logical_ids = BTreeSet::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading live GraphQLite relation logical id")?
+    {
+        logical_ids.insert(row.get(0).context("read GraphQLite relation logical id")?);
+    }
+    Ok(logical_ids)
+}
+
+fn ensure_graphlite_property_key_id(graph: &Graph, key: &str) -> Result<i64> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "INSERT OR IGNORE INTO property_keys (key) VALUES (?1)",
+            [key],
+        )
+        .with_context(|| format!("failed ensuring GraphQLite property key {key}"))?;
+    sqlite
+        .query_row(
+            "SELECT id FROM property_keys WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("failed reading GraphQLite property key {key}"))
+}
+
+fn set_graphlite_int_property(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    record_id: i64,
+    key: &str,
+    value: i64,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let key_id = ensure_graphlite_property_key_id(graph, key)?;
+    sqlite
+        .execute(
+            &format!(
+                "INSERT OR REPLACE INTO {table} ({id_column}, key_id, value) VALUES (?1, ?2, ?3)"
+            ),
+            (record_id, key_id, value),
+        )
+        .with_context(|| format!("failed setting GraphQLite int property {key}"))
+        .map(|_| ())
+}
+
+fn set_graphlite_text_property(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    record_id: i64,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let key_id = ensure_graphlite_property_key_id(graph, key)?;
+    sqlite
+        .execute(
+            &format!(
+                "INSERT OR REPLACE INTO {table} ({id_column}, key_id, value) VALUES (?1, ?2, ?3)"
+            ),
+            (record_id, key_id, value),
+        )
+        .with_context(|| format!("failed setting GraphQLite text property {key}"))
+        .map(|_| ())
+}
+
 fn node_graph_metadata(
     snapshot: &BrainRepoSnapshot,
     node: &BrainNodeRecord,
@@ -443,6 +1056,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: vec![source.source_id.clone()],
                 confidence: None,
                 updated_at: source.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for wiki_page in &snapshot.wiki_pages {
@@ -458,6 +1074,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: wiki_page.source_refs.clone(),
                 confidence: None,
                 updated_at: wiki_page.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for entity in &snapshot.entities {
@@ -473,6 +1092,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: entity.source_refs.clone(),
                 confidence: None,
                 updated_at: entity.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
     for claim in &snapshot.claims {
@@ -488,6 +1110,9 @@ fn current_graph_nodes(snapshot: &BrainRepoSnapshot) -> Vec<BrainNodeRecord> {
                 source_ids: claim.source_refs.clone(),
                 confidence: None,
                 updated_at: claim.updated_at,
+                valid_from: 0,
+                valid_to: None,
+                superseded_by: None,
             });
     }
 
@@ -845,59 +1470,52 @@ fn persist_wiki_pages_snapshot_in_transaction(
     snapshot: &BrainRepoSnapshot,
 ) -> Result<()> {
     let sqlite = graph.connection().sqlite_connection();
-    sqlite
-        .execute(
-            "DELETE FROM wiki_sections
-             WHERE wiki_page_id IN (
-               SELECT wiki_page_id FROM wiki_revisions WHERE workspace_id = ?1
-             )",
-            [snapshot.workspace_id.as_str()],
-        )
-        .context("failed clearing wiki section rows")?;
-    sqlite
-        .execute(
-            "DELETE FROM wiki_pages WHERE workspace_id = ?1",
-            [snapshot.workspace_id.as_str()],
-        )
-        .context("failed clearing wiki page rows")?;
-    sqlite
-        .execute(
-            "DELETE FROM wiki_revisions WHERE workspace_id = ?1",
-            [snapshot.workspace_id.as_str()],
-        )
-        .context("failed clearing wiki revision rows")?;
-    sqlite
-        .execute(
-            "DELETE FROM wiki_fts WHERE workspace_id = ?1",
-            [snapshot.workspace_id.as_str()],
-        )
-        .context("failed clearing wiki FTS rows")?;
+    let created_by_event_id = graph_snapshot_created_by_event_id(snapshot);
+    let mut current_page_ids = BTreeSet::new();
     for page in &snapshot.wiki_pages {
-        let stored_page_id = {
-            let mut statement = sqlite
-                .prepare("SELECT workspace_id FROM wiki_pages WHERE wiki_page_id = ?1 LIMIT 1")
-                .context("failed preparing wiki page id scope query")?;
-            let mut rows = statement
-                .query([page.page_id.as_str()])
-                .context("failed checking existing wiki page id scope")?;
-            let existing_workspace = rows
-                .next()
-                .context("failed reading existing wiki page id scope")?
-                .map(|row| row.get::<_, String>(0))
-                .transpose()
-                .context("failed decoding existing wiki page id scope")?;
-            if existing_workspace
-                .as_deref()
-                .is_some_and(|existing| existing != snapshot.workspace_id)
-            {
-                format!("{}:{}", snapshot.workspace_id, page.page_id)
-            } else {
-                page.page_id.clone()
-            }
+        let stored_page_id = stored_wiki_page_id(graph, &snapshot.workspace_id, page)?;
+        current_page_ids.insert(stored_page_id.clone());
+        let previous = load_stored_wiki_page_state(graph, &snapshot.workspace_id, &stored_page_id)?;
+        let same_event_revision = previous
+            .as_ref()
+            .is_some_and(|state| state.current_revision_event_id == created_by_event_id);
+        let revision = if same_event_revision {
+            previous.as_ref().map(|state| state.revision).unwrap_or(1)
+        } else {
+            previous
+                .as_ref()
+                .map(|state| state.revision.saturating_add(1))
+                .unwrap_or(1)
         };
+        if let Some(previous) = previous.as_ref().filter(|_| !same_event_revision) {
+            close_wiki_revision(
+                graph,
+                &snapshot.workspace_id,
+                &stored_page_id,
+                previous.revision,
+                snapshot.generated_at as i64,
+                &created_by_event_id,
+            )?;
+        }
         let evidence_refs_json = serde_json::to_string(&page.evidence_refs)
             .context("failed encoding wiki evidence refs")?;
-        let revision = 1_i64;
+        let source_refs_json =
+            serde_json::to_string(&page.source_refs).context("failed encoding wiki source refs")?;
+        let node_refs_json =
+            serde_json::to_string(&page.node_refs).context("failed encoding wiki node refs")?;
+        let relation_refs_json = "[]";
+        let predecessor_revision = (revision > 1).then_some(revision - 1);
+        let version_id = wiki_revision_version_id(
+            &snapshot.workspace_id,
+            &stored_page_id,
+            revision,
+            &created_by_event_id,
+        );
+        let valid_from = page.updated_at.max(
+            (page.updated_at == 0)
+                .then_some(snapshot.generated_at)
+                .unwrap_or(0),
+        ) as i64;
         let approval_status = "materialized";
         let diff_json = "{}";
         sqlite
@@ -911,8 +1529,27 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     approval_status,
                     evidence_refs_json,
                     revision,
+                    current_revision_event_id,
+                    current_revision_version_id,
+                    valid_from,
+                    valid_to,
+                    superseded_by,
                     updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, '', ?12)
+                ON CONFLICT(wiki_page_id) DO UPDATE SET
+                    workspace_id=excluded.workspace_id,
+                    path=excluded.path,
+                    title=excluded.title,
+                    body=excluded.body,
+                    approval_status=excluded.approval_status,
+                    evidence_refs_json=excluded.evidence_refs_json,
+                    revision=excluded.revision,
+                    current_revision_event_id=excluded.current_revision_event_id,
+                    current_revision_version_id=excluded.current_revision_version_id,
+                    valid_from=excluded.valid_from,
+                    valid_to=0,
+                    superseded_by='',
+                    updated_at=excluded.updated_at",
                 (
                     stored_page_id.as_str(),
                     snapshot.workspace_id.as_str(),
@@ -922,10 +1559,13 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     approval_status,
                     evidence_refs_json.as_str(),
                     revision,
+                    created_by_event_id.as_str(),
+                    version_id.as_str(),
+                    valid_from,
                     page.updated_at as i64,
                 ),
             )
-            .with_context(|| format!("failed inserting wiki page row {}", page.page_id))?;
+            .with_context(|| format!("failed upserting wiki page row {}", page.page_id))?;
         sqlite
             .execute(
                 "INSERT INTO wiki_revisions (
@@ -936,9 +1576,34 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     body,
                     approval_status,
                     evidence_refs_json,
+                    source_refs_json,
+                    node_refs_json,
+                    relation_refs_json,
                     diff_json,
+                    version_id,
+                    created_by_event_id,
+                    predecessor_revision,
+                    superseded_by_event_id,
+                    valid_from,
+                    valid_to,
                     updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, '', ?15, 0, ?16)
+                ON CONFLICT(wiki_page_id, revision) DO UPDATE SET
+                    workspace_id=excluded.workspace_id,
+                    title=excluded.title,
+                    body=excluded.body,
+                    approval_status=excluded.approval_status,
+                    evidence_refs_json=excluded.evidence_refs_json,
+                    source_refs_json=excluded.source_refs_json,
+                    node_refs_json=excluded.node_refs_json,
+                    relation_refs_json=excluded.relation_refs_json,
+                    diff_json=excluded.diff_json,
+                    version_id=excluded.version_id,
+                    created_by_event_id=excluded.created_by_event_id,
+                    predecessor_revision=excluded.predecessor_revision,
+                    valid_from=excluded.valid_from,
+                    valid_to=0,
+                    updated_at=excluded.updated_at",
                 (
                     stored_page_id.as_str(),
                     revision,
@@ -947,11 +1612,30 @@ fn persist_wiki_pages_snapshot_in_transaction(
                     page.body.as_str(),
                     approval_status,
                     evidence_refs_json.as_str(),
+                    source_refs_json.as_str(),
+                    node_refs_json.as_str(),
+                    relation_refs_json,
                     diff_json,
+                    version_id.as_str(),
+                    created_by_event_id.as_str(),
+                    predecessor_revision,
+                    valid_from,
                     page.updated_at as i64,
                 ),
             )
-            .with_context(|| format!("failed inserting wiki revision row {}", page.page_id))?;
+            .with_context(|| format!("failed upserting wiki revision row {}", page.page_id))?;
+        sqlite
+            .execute(
+                "DELETE FROM wiki_sections WHERE wiki_page_id = ?1 AND revision = ?2",
+                (stored_page_id.as_str(), revision),
+            )
+            .with_context(|| format!("failed clearing wiki sections for {}", page.page_id))?;
+        sqlite
+            .execute(
+                "DELETE FROM wiki_fts WHERE wiki_page_id = ?1 AND revision = ?2",
+                (stored_page_id.as_str(), revision),
+            )
+            .with_context(|| format!("failed clearing wiki FTS rows for {}", page.page_id))?;
         for section in wiki_sections_from_page(page) {
             let section_evidence_refs_json = serde_json::to_string(&section.evidence_refs)
                 .context("failed encoding wiki section evidence refs")?;
@@ -993,7 +1677,170 @@ fn persist_wiki_pages_snapshot_in_transaction(
                 .with_context(|| format!("failed indexing wiki section {}", page.page_id))?;
         }
     }
+    invalidate_absent_wiki_pages(
+        graph,
+        &snapshot.workspace_id,
+        &current_page_ids,
+        snapshot.generated_at as i64,
+        &created_by_event_id,
+    )?;
     Ok(())
+}
+
+struct StoredWikiPageState {
+    revision: i64,
+    current_revision_event_id: String,
+}
+
+fn stored_wiki_page_id(graph: &Graph, workspace_id: &str, page: &WikiPage) -> Result<String> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT workspace_id FROM wiki_pages WHERE wiki_page_id = ?1 LIMIT 1")
+        .context("failed preparing wiki page id scope query")?;
+    let mut rows = statement
+        .query([page.page_id.as_str()])
+        .context("failed checking existing wiki page id scope")?;
+    let existing_workspace = rows
+        .next()
+        .context("failed reading existing wiki page id scope")?
+        .map(|row| row.get::<_, String>(0))
+        .transpose()
+        .context("failed decoding existing wiki page id scope")?;
+    if existing_workspace
+        .as_deref()
+        .is_some_and(|existing| existing != workspace_id)
+    {
+        Ok(format!("{}:{}", workspace_id, page.page_id))
+    } else {
+        Ok(page.page_id.clone())
+    }
+}
+
+fn load_stored_wiki_page_state(
+    graph: &Graph,
+    workspace_id: &str,
+    wiki_page_id: &str,
+) -> Result<Option<StoredWikiPageState>> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT revision, current_revision_event_id
+             FROM wiki_pages
+             WHERE workspace_id = ?1 AND wiki_page_id = ?2
+             LIMIT 1",
+        )
+        .context("failed preparing wiki page state query")?;
+    let mut rows = statement
+        .query((workspace_id, wiki_page_id))
+        .context("failed querying wiki page state")?;
+    let Some(row) = rows.next().context("failed reading wiki page state")? else {
+        return Ok(None);
+    };
+    Ok(Some(StoredWikiPageState {
+        revision: row.get(0).context("read wiki revision")?,
+        current_revision_event_id: row.get(1).context("read wiki current event")?,
+    }))
+}
+
+fn close_wiki_revision(
+    graph: &Graph,
+    workspace_id: &str,
+    wiki_page_id: &str,
+    revision: i64,
+    valid_to: i64,
+    superseded_by_event_id: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "UPDATE wiki_revisions
+             SET valid_to = ?4,
+                 superseded_by_event_id = ?5
+             WHERE workspace_id = ?1
+               AND wiki_page_id = ?2
+               AND revision = ?3
+               AND valid_to = 0",
+            (
+                workspace_id,
+                wiki_page_id,
+                revision,
+                valid_to,
+                superseded_by_event_id,
+            ),
+        )
+        .with_context(|| format!("failed closing wiki revision {wiki_page_id}:{revision}"))?;
+    Ok(())
+}
+
+fn invalidate_absent_wiki_pages(
+    graph: &Graph,
+    workspace_id: &str,
+    current_page_ids: &BTreeSet<String>,
+    valid_to: i64,
+    superseded_by_event_id: &str,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT wiki_page_id, revision
+             FROM wiki_pages
+             WHERE workspace_id = ?1 AND valid_to = 0",
+        )
+        .context("failed preparing live wiki page query")?;
+    let mut rows = statement
+        .query([workspace_id])
+        .context("failed querying live wiki pages")?;
+    let mut stale_pages = Vec::new();
+    while let Some(row) = rows.next().context("failed reading live wiki page")? {
+        let wiki_page_id: String = row.get(0).context("read live wiki page id")?;
+        let revision: i64 = row.get(1).context("read live wiki page revision")?;
+        if !current_page_ids.contains(&wiki_page_id) {
+            stale_pages.push((wiki_page_id, revision));
+        }
+    }
+    drop(rows);
+    drop(statement);
+    for (wiki_page_id, revision) in stale_pages {
+        sqlite
+            .execute(
+                "UPDATE wiki_pages
+                 SET valid_to = ?3,
+                     superseded_by = ?4
+                 WHERE workspace_id = ?1
+                   AND wiki_page_id = ?2
+                   AND valid_to = 0",
+                (
+                    workspace_id,
+                    wiki_page_id.as_str(),
+                    valid_to,
+                    superseded_by_event_id,
+                ),
+            )
+            .with_context(|| format!("failed invalidating wiki page {wiki_page_id}"))?;
+        close_wiki_revision(
+            graph,
+            workspace_id,
+            &wiki_page_id,
+            revision,
+            valid_to,
+            superseded_by_event_id,
+        )?;
+    }
+    Ok(())
+}
+
+fn wiki_revision_version_id(
+    workspace_id: &str,
+    wiki_page_id: &str,
+    revision: i64,
+    created_by_event_id: &str,
+) -> String {
+    graph_record_version_id(
+        "wiki",
+        workspace_id,
+        &format!("{wiki_page_id}:{revision}"),
+        created_by_event_id,
+    )
 }
 
 struct WikiSectionRow {
@@ -1172,11 +2019,24 @@ fn node_graph_properties(
     workspace_id: &str,
     node: &BrainNodeRecord,
     metadata: &GraphRecordMetadata,
+    identity: &GraphRecordVersionIdentity,
 ) -> Vec<(String, PropertyValue)> {
     vec![
         (
             "workspace_id".into(),
             PropertyValue::Text(workspace_id.into()),
+        ),
+        (
+            "logical_id".into(),
+            PropertyValue::Text(identity.logical_id.clone()),
+        ),
+        (
+            "version_id".into(),
+            PropertyValue::Text(identity.version_id.clone()),
+        ),
+        (
+            "created_by_event_id".into(),
+            PropertyValue::Text(identity.created_by_event_id.clone()),
         ),
         (
             "kind".into(),
@@ -1237,6 +2097,18 @@ fn node_graph_properties(
             "updated_at".into(),
             PropertyValue::Integer(node.updated_at as i64),
         ),
+        (
+            "valid_from".into(),
+            PropertyValue::Integer(node.valid_from as i64),
+        ),
+        (
+            "valid_to".into(),
+            PropertyValue::Integer(node.valid_to.unwrap_or_default() as i64),
+        ),
+        (
+            "superseded_by".into(),
+            PropertyValue::Text(node.superseded_by.clone().unwrap_or_default()),
+        ),
     ]
 }
 
@@ -1244,6 +2116,7 @@ fn relation_graph_properties(
     workspace_id: &str,
     relation: &BrainRelationRecord,
     metadata: &GraphRecordMetadata,
+    identity: &GraphRecordVersionIdentity,
 ) -> Vec<(String, PropertyValue)> {
     vec![
         (
@@ -1251,8 +2124,28 @@ fn relation_graph_properties(
             PropertyValue::Text(workspace_id.into()),
         ),
         (
+            "logical_id".into(),
+            PropertyValue::Text(identity.logical_id.clone()),
+        ),
+        (
+            "version_id".into(),
+            PropertyValue::Text(identity.version_id.clone()),
+        ),
+        (
+            "created_by_event_id".into(),
+            PropertyValue::Text(identity.created_by_event_id.clone()),
+        ),
+        (
             "relation_id".into(),
             PropertyValue::Text(relation.relation_id.clone()),
+        ),
+        (
+            "source_logical_id".into(),
+            PropertyValue::Text(relation.source_node_id.clone()),
+        ),
+        (
+            "target_logical_id".into(),
+            PropertyValue::Text(relation.target_node_id.clone()),
         ),
         (
             "kind".into(),
@@ -1303,6 +2196,18 @@ fn relation_graph_properties(
         (
             "updated_at".into(),
             PropertyValue::Integer(relation.updated_at as i64),
+        ),
+        (
+            "valid_from".into(),
+            PropertyValue::Integer(relation.valid_from as i64),
+        ),
+        (
+            "valid_to".into(),
+            PropertyValue::Integer(relation.valid_to.unwrap_or_default() as i64),
+        ),
+        (
+            "superseded_by".into(),
+            PropertyValue::Text(relation.superseded_by.clone().unwrap_or_default()),
         ),
     ]
 }
@@ -1377,6 +2282,19 @@ fn brain_relation_type(kind: BrainRelationKind) -> &'static str {
         BrainRelationKind::LinksTo => "LINKS_TO",
         BrainRelationKind::RelatedTo => "RELATED_TO",
     }
+}
+
+fn graph_relation_version_type(
+    kind: BrainRelationKind,
+    identity: &GraphRecordVersionIdentity,
+) -> String {
+    let suffix = identity
+        .version_id
+        .rsplit('-')
+        .next()
+        .unwrap_or(identity.version_id.as_str());
+    let suffix = suffix.get(..16).unwrap_or(suffix);
+    format!("{}_V_{}", brain_relation_type(kind), suffix)
 }
 
 fn brain_relation_kind_slug(kind: BrainRelationKind) -> &'static str {

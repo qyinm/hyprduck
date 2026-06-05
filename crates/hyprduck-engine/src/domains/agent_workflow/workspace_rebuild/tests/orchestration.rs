@@ -278,6 +278,9 @@ fn materialized_report_counts_reflect_current_snapshot() {
         source_ids: Vec::new(),
         confidence: None,
         updated_at: 1,
+        valid_from: 0,
+        valid_to: None,
+        superseded_by: None,
     });
     snapshot.memories.push(MemoryRecord {
         memory_id: "memory-a".into(),

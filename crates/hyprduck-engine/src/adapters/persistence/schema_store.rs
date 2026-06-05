@@ -6,7 +6,7 @@ use std::path::Path;
 use super::graph_snapshot_store::GRAPHQLITE_SCHEMA_VERSION;
 
 pub(super) const KNOWLEDGE_DB_FILE_NAME: &str = "hyprduck.sqlite";
-const KNOWLEDGE_SCHEMA_VERSION: i64 = 1;
+const KNOWLEDGE_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct KnowledgeStoreHealth {
@@ -61,10 +61,10 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
         INSERT INTO knowledge_meta (key, value)
-        VALUES ('knowledge_schema_version', '1')
+        VALUES ('knowledge_schema_version', '2')
         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=unixepoch();
         INSERT INTO knowledge_meta (key, value)
-        VALUES ('graphqlite_schema_version', '1')
+        VALUES ('graphqlite_schema_version', '2')
         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=unixepoch();
 
         CREATE TABLE IF NOT EXISTS import_jobs (
@@ -174,6 +174,11 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             approval_status TEXT NOT NULL,
             evidence_refs_json TEXT NOT NULL DEFAULT '[]',
             revision INTEGER NOT NULL DEFAULT 1,
+            current_revision_event_id TEXT NOT NULL DEFAULT '',
+            current_revision_version_id TEXT NOT NULL DEFAULT '',
+            valid_from INTEGER NOT NULL DEFAULT 0,
+            valid_to INTEGER NOT NULL DEFAULT 0,
+            superseded_by TEXT NOT NULL DEFAULT '',
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
         CREATE INDEX IF NOT EXISTS idx_wiki_pages_workspace_updated_at
@@ -187,7 +192,16 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             body TEXT NOT NULL,
             approval_status TEXT NOT NULL,
             evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+            source_refs_json TEXT NOT NULL DEFAULT '[]',
+            node_refs_json TEXT NOT NULL DEFAULT '[]',
+            relation_refs_json TEXT NOT NULL DEFAULT '[]',
             diff_json TEXT NOT NULL DEFAULT '{}',
+            version_id TEXT NOT NULL DEFAULT '',
+            created_by_event_id TEXT NOT NULL DEFAULT '',
+            predecessor_revision INTEGER,
+            superseded_by_event_id TEXT NOT NULL DEFAULT '',
+            valid_from INTEGER NOT NULL DEFAULT 0,
+            valid_to INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
             PRIMARY KEY (wiki_page_id, revision),
             FOREIGN KEY (wiki_page_id) REFERENCES wiki_pages(wiki_page_id) ON DELETE CASCADE
@@ -273,6 +287,11 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             evidence_id TEXT NOT NULL,
             record_kind TEXT NOT NULL,
             record_internal_id INTEGER NOT NULL,
+            logical_record_id TEXT NOT NULL DEFAULT '',
+            version_id TEXT NOT NULL DEFAULT '',
+            created_by_event_id TEXT NOT NULL DEFAULT '',
+            valid_from INTEGER NOT NULL DEFAULT 0,
+            valid_to INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (workspace_id, evidence_id, record_kind, record_internal_id)
         ) WITHOUT ROWID;
         DROP INDEX IF EXISTS idx_graph_evidence_record_index_lookup;
@@ -342,12 +361,59 @@ pub(super) fn ensure_schema(path: &Path) -> Result<()> {
             }
         }
     }
-    for column in ["path TEXT NOT NULL DEFAULT ''"] {
+    for column in [
+        "path TEXT NOT NULL DEFAULT ''",
+        "current_revision_event_id TEXT NOT NULL DEFAULT ''",
+        "current_revision_version_id TEXT NOT NULL DEFAULT ''",
+        "valid_from INTEGER NOT NULL DEFAULT 0",
+        "valid_to INTEGER NOT NULL DEFAULT 0",
+        "superseded_by TEXT NOT NULL DEFAULT ''",
+    ] {
         let result = sqlite.execute(&format!("ALTER TABLE wiki_pages ADD COLUMN {column}"), []);
         if let Err(error) = result {
             let message = error.to_string();
             if !message.contains("duplicate column name") {
                 return Err(error).context("failed migrating wiki_pages table");
+            }
+        }
+    }
+    for column in [
+        "source_refs_json TEXT NOT NULL DEFAULT '[]'",
+        "node_refs_json TEXT NOT NULL DEFAULT '[]'",
+        "relation_refs_json TEXT NOT NULL DEFAULT '[]'",
+        "version_id TEXT NOT NULL DEFAULT ''",
+        "created_by_event_id TEXT NOT NULL DEFAULT ''",
+        "predecessor_revision INTEGER",
+        "superseded_by_event_id TEXT NOT NULL DEFAULT ''",
+        "valid_from INTEGER NOT NULL DEFAULT 0",
+        "valid_to INTEGER NOT NULL DEFAULT 0",
+    ] {
+        let result = sqlite.execute(
+            &format!("ALTER TABLE wiki_revisions ADD COLUMN {column}"),
+            [],
+        );
+        if let Err(error) = result {
+            let message = error.to_string();
+            if !message.contains("duplicate column name") {
+                return Err(error).context("failed migrating wiki_revisions table");
+            }
+        }
+    }
+    for column in [
+        "logical_record_id TEXT NOT NULL DEFAULT ''",
+        "version_id TEXT NOT NULL DEFAULT ''",
+        "created_by_event_id TEXT NOT NULL DEFAULT ''",
+        "valid_from INTEGER NOT NULL DEFAULT 0",
+        "valid_to INTEGER NOT NULL DEFAULT 0",
+    ] {
+        let result = sqlite.execute(
+            &format!("ALTER TABLE graph_evidence_record_index ADD COLUMN {column}"),
+            [],
+        );
+        if let Err(error) = result {
+            let message = error.to_string();
+            if !message.contains("duplicate column name") {
+                return Err(error).context("failed migrating graph_evidence_record_index table");
             }
         }
     }

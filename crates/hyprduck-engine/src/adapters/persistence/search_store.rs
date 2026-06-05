@@ -1,6 +1,6 @@
 //! Internal helpers extracted from the engine facade module.
 
-use super::row_decode::row_string_array;
+use super::row_decode::{row_i64, row_string_array};
 use anyhow::{Context, Result};
 use graphqlite::Graph;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,16 @@ pub(super) fn evidence_graph_neighbor_counts(
         if node_workspace_id != workspace_id {
             continue;
         }
+        let is_live = match properties.get("valid_to") {
+            Some(graphqlite::Value::Integer(value)) => *value <= 0,
+            Some(graphqlite::Value::Float(value)) => *value <= 0.0,
+            Some(graphqlite::Value::String(value)) => value.trim().parse::<i64>().unwrap_or(0) <= 0,
+            Some(graphqlite::Value::Null) | None => true,
+            Some(_) => false,
+        };
+        if !is_live {
+            continue;
+        }
         let Some(graphqlite::Value::String(node_id)) = properties.get("id") else {
             continue;
         };
@@ -115,12 +125,17 @@ pub(super) fn append_graph_neighbor_hits(
         .connection()
         .cypher_builder(
             "MATCH (n {workspace_id: $workspace_id})
-             RETURN n.id AS node_id, n.evidence_ids_json AS evidence_ids_json",
+             RETURN n.id AS node_id,
+                    n.evidence_ids_json AS evidence_ids_json,
+                    n.valid_to AS valid_to",
         )
         .param("workspace_id", workspace_id)
         .run()
         .context("failed finding GraphQLite retrieval seed nodes")?;
     for row in &seed_rows {
+        if !row_is_live(row, "valid_to")? {
+            continue;
+        }
         let node_id = row.get::<String>("node_id").context("read seed node id")?;
         let evidence_ids =
             row_string_array(row, "evidence_ids_json").context("read seed node evidence refs")?;
@@ -140,6 +155,8 @@ pub(super) fn append_graph_neighbor_hits(
             seed_node_id.as_str(),
             "MATCH (seed {id: $seed_node_id})-[r]->(neighbor)
              RETURN neighbor.workspace_id AS neighbor_workspace_id,
+                    neighbor.valid_to AS neighbor_valid_to,
+                    r.valid_to AS relationship_valid_to,
                     neighbor.evidence_ids_json AS neighbor_evidence_ids_json,
                     r.evidence_ids_json AS relationship_evidence_ids_json",
             &mut candidate_evidence_ids,
@@ -150,6 +167,8 @@ pub(super) fn append_graph_neighbor_hits(
             seed_node_id.as_str(),
             "MATCH (neighbor)-[r]->(seed {id: $seed_node_id})
              RETURN neighbor.workspace_id AS neighbor_workspace_id,
+                    neighbor.valid_to AS neighbor_valid_to,
+                    r.valid_to AS relationship_valid_to,
                     neighbor.evidence_ids_json AS neighbor_evidence_ids_json,
                     r.evidence_ids_json AS relationship_evidence_ids_json",
             &mut candidate_evidence_ids,
@@ -225,6 +244,9 @@ fn append_cypher_seed_relationship_endpoint_evidence_ids(
             "MATCH (source)-[r]->(target)
              RETURN source.workspace_id AS source_workspace_id,
                     target.workspace_id AS target_workspace_id,
+                    source.valid_to AS source_valid_to,
+                    target.valid_to AS target_valid_to,
+                    r.valid_to AS relationship_valid_to,
                     source.evidence_ids_json AS source_evidence_ids_json,
                     target.evidence_ids_json AS target_evidence_ids_json,
                     r.evidence_ids_json AS relationship_evidence_ids_json",
@@ -239,6 +261,12 @@ fn append_cypher_seed_relationship_endpoint_evidence_ids(
             .get::<String>("target_workspace_id")
             .context("read target workspace id")?;
         if source_workspace_id != workspace_id || target_workspace_id != workspace_id {
+            continue;
+        }
+        if !row_is_live(row, "source_valid_to")?
+            || !row_is_live(row, "target_valid_to")?
+            || !row_is_live(row, "relationship_valid_to")?
+        {
             continue;
         }
         let relationship_evidence_ids = row_string_array(row, "relationship_evidence_ids_json")
@@ -282,6 +310,9 @@ fn append_cypher_neighbor_evidence_ids(
         if neighbor_workspace_id != workspace_id {
             continue;
         }
+        if !row_is_live(row, "neighbor_valid_to")? || !row_is_live(row, "relationship_valid_to")? {
+            continue;
+        }
         for column in [
             "neighbor_evidence_ids_json",
             "relationship_evidence_ids_json",
@@ -292,6 +323,10 @@ fn append_cypher_neighbor_evidence_ids(
         }
     }
     Ok(())
+}
+
+fn row_is_live(row: &graphqlite::Row, column: &str) -> Result<bool> {
+    Ok(row_i64(row, column).with_context(|| format!("read {column}"))? <= 0)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -458,9 +493,12 @@ pub(super) fn append_wiki_fts_hits(
                 wp.evidence_refs_json,
                 bm25(wiki_fts) AS lexical_rank
              FROM wiki_fts w
-             JOIN wiki_pages wp ON wp.wiki_page_id = w.wiki_page_id
+             JOIN wiki_pages wp
+               ON wp.wiki_page_id = w.wiki_page_id
+              AND wp.revision = w.revision
              WHERE w.workspace_id = ?1 AND wiki_fts MATCH ?2
                AND wp.approval_status IN ('materialized', 'approved')
+               AND wp.valid_to <= 0
              ORDER BY lexical_rank ASC
              LIMIT ?3",
         )
