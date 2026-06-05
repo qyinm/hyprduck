@@ -204,6 +204,11 @@ materialized files above. The wire contract is defined in
 `sourceOfTruthPath`, `latestReadableSnapshotPath`, and `materializedPaths` so UI,
 MCP, and agent consumers can audit exactly which files were loaded.
 
+Graph nodes and relations may retain lifecycle metadata for audit and replay.
+MCP and desktop graph reads expose the live projection: records with `validTo`
+set are excluded from current graph snapshots, node reads, search, and graph
+trail retrieval. See `docs/graph-event-history.md` for the replay contract.
+
 ## Example Calls
 
 ```json
