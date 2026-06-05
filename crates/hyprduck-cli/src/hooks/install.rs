@@ -140,7 +140,7 @@ fn merge_config_toml(path: &Path) -> Result<()> {
     } else {
         String::new()
     };
-    let stripped = remove_managed_block(&existing);
+    let stripped = remove_managed_block(&existing)?;
     let block = codex_mcp_approval_block();
     write_file_atomically(path, format!("{}{}", stripped.trim_end(), block))?;
     Ok(())
@@ -224,16 +224,35 @@ fn codex_approvals_config_check(path: &Path) -> Result<ConfigCheck> {
     ))
 }
 
-fn managed_config_block(text: &str) -> Result<Option<String>> {
-    let Some(start) = text.find(CONFIG_BLOCK_START) else {
+struct ManagedConfigBlockSpan {
+    full_start: usize,
+    full_end: usize,
+    content_start: usize,
+    content_end: usize,
+}
+
+fn managed_config_block(text: &str) -> Result<Option<&str>> {
+    let Some(span) = managed_config_block_span(text)? else {
         return Ok(None);
     };
-    let block_start = start + CONFIG_BLOCK_START.len();
-    let Some(relative_end) = text[block_start..].find(CONFIG_BLOCK_END) else {
+    Ok(Some(&text[span.content_start..span.content_end]))
+}
+
+fn managed_config_block_span(text: &str) -> Result<Option<ManagedConfigBlockSpan>> {
+    let Some(full_start) = text.find(CONFIG_BLOCK_START) else {
+        return Ok(None);
+    };
+    let content_start = full_start + CONFIG_BLOCK_START.len();
+    let Some(relative_end) = text[content_start..].find(CONFIG_BLOCK_END) else {
         return Err(anyhow!("HyprDuck managed config block is missing its end marker"));
     };
-    let end = block_start + relative_end;
-    Ok(Some(text[block_start..end].to_string()))
+    let content_end = content_start + relative_end;
+    Ok(Some(ManagedConfigBlockSpan {
+        full_start,
+        full_end: content_end + CONFIG_BLOCK_END.len(),
+        content_start,
+        content_end,
+    }))
 }
 
 fn is_hyprduck_managed_group(entry: &Value) -> bool {
@@ -255,27 +274,14 @@ fn is_hyprduck_managed_hook(hook: &Value) -> bool {
     command_is_managed || status_is_managed
 }
 
-fn remove_managed_block(text: &str) -> String {
-    let mut output = Vec::new();
-    let mut skipping = false;
-    for line in text.lines() {
-        if line.trim() == CONFIG_BLOCK_START {
-            skipping = true;
-            continue;
-        }
-        if line.trim() == CONFIG_BLOCK_END {
-            skipping = false;
-            continue;
-        }
-        if !skipping {
-            output.push(line);
-        }
-    }
-    let mut joined = output.join("\n");
-    if !joined.is_empty() {
-        joined.push('\n');
-    }
-    joined
+fn remove_managed_block(text: &str) -> Result<String> {
+    let Some(span) = managed_config_block_span(text)? else {
+        return Ok(text.to_string());
+    };
+    let mut output = String::with_capacity(text.len() - (span.full_end - span.full_start));
+    output.push_str(&text[..span.full_start]);
+    output.push_str(&text[span.full_end..]);
+    Ok(output)
 }
 
 fn codex_mcp_approval_block() -> String {
