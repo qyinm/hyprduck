@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::hooks::policy::automation_metadata_for_tool;
+use super::automation_policy::automation_metadata_for_tool;
 
 use super::args::{PROPOSAL_ID_PATTERN, WRITE_CONTENT_TYPES};
 use super::supports_local_path_disclosure;

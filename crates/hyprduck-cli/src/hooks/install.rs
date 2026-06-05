@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::policy::AUTOMATIC_MCP_TOOLS;
+use crate::mcp::automation_policy::AUTOMATIC_MCP_TOOLS;
 
 const HOOKS_FILE: &str = "hooks.json";
 const CONFIG_FILE: &str = "config.toml";

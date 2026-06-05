@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 use super::events::{AgentTarget, HookEvent, HookInput};
-use super::policy::{policy_for_mcp_tool, AutomationDecision};
+use crate::mcp::automation_policy::{policy_for_mcp_tool, AutomationDecision};
 
 pub(crate) fn parse_codex_input(input: &str) -> Result<HookInput> {
     let value: Value = serde_json::from_str(input.trim())

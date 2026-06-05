@@ -14,6 +14,7 @@ use serde_json::json;
 use serde_json::{Map, Value};
 
 mod args;
+pub(crate) mod automation_policy;
 mod cache;
 mod import_jobs;
 mod policy;
