@@ -11,6 +11,75 @@ const CONFIG_BLOCK_START: &str = "# BEGIN HYPRDUCK HOOK AUTOMATION";
 const CONFIG_BLOCK_END: &str = "# END HYPRDUCK HOOK AUTOMATION";
 const HYPRDUCK_STATUS_PREFIX: &str = "HyprDuck:";
 
+#[derive(Clone, Copy)]
+struct CodexHookSpec {
+    event: &'static str,
+    matcher: Option<&'static str>,
+    status: &'static str,
+}
+
+const CODEX_HOOK_SPECS: &[CodexHookSpec] = &[
+    CodexHookSpec {
+        event: "SessionStart",
+        matcher: Some("startup|resume|clear|compact"),
+        status: "HyprDuck: loading context",
+    },
+    CodexHookSpec {
+        event: "UserPromptSubmit",
+        matcher: None,
+        status: "HyprDuck: checking context",
+    },
+    CodexHookSpec {
+        event: "PreToolUse",
+        matcher: Some("mcp__hyprduck__.*|apply_patch|Edit|Write"),
+        status: "HyprDuck: checking automation policy",
+    },
+    CodexHookSpec {
+        event: "PermissionRequest",
+        matcher: Some("mcp__hyprduck__.*"),
+        status: "HyprDuck: checking MCP approval policy",
+    },
+    CodexHookSpec {
+        event: "PostToolUse",
+        matcher: Some("mcp__hyprduck__.*|apply_patch|Edit|Write"),
+        status: "HyprDuck: recording workflow guidance",
+    },
+    CodexHookSpec {
+        event: "Stop",
+        matcher: None,
+        status: "HyprDuck: finalizing hook state",
+    },
+];
+
+#[derive(Clone, Copy)]
+struct CodexApprovalSpec {
+    tool: &'static str,
+    approval_mode: &'static str,
+}
+
+impl CodexApprovalSpec {
+    fn toml_line(self) -> String {
+        format!(
+            "mcp_servers.hyprduck.tools.{}.approval_mode = \"{}\"",
+            self.tool, self.approval_mode
+        )
+    }
+}
+
+fn codex_approval_specs() -> impl Iterator<Item = CodexApprovalSpec> {
+    AUTOMATIC_MCP_TOOLS
+        .iter()
+        .copied()
+        .map(|tool| CodexApprovalSpec {
+            tool,
+            approval_mode: "auto",
+        })
+        .chain(std::iter::once(CodexApprovalSpec {
+            tool: "write_reject",
+            approval_mode: "prompt",
+        }))
+}
+
 pub(crate) struct CodexInstallPaths {
     pub(crate) home: PathBuf,
     pub(crate) hooks_file: PathBuf,
@@ -82,41 +151,8 @@ fn merge_hooks_json(path: &Path, command: &str) -> Result<()> {
         .as_object_mut()
         .ok_or_else(|| anyhow!("{}.hooks must be a JSON object", path.display()))?;
 
-    for (event, matcher, status) in [
-        (
-            "SessionStart",
-            Some("startup|resume|clear|compact"),
-            "HyprDuck: loading context",
-        ),
-        ("UserPromptSubmit", None, "HyprDuck: checking context"),
-        (
-            "PreToolUse",
-            Some("mcp__hyprduck__.*|apply_patch|Edit|Write"),
-            "HyprDuck: checking automation policy",
-        ),
-        (
-            "PermissionRequest",
-            Some("mcp__hyprduck__.*"),
-            "HyprDuck: checking MCP approval policy",
-        ),
-        (
-            "PostToolUse",
-            Some("mcp__hyprduck__.*|apply_patch|Edit|Write"),
-            "HyprDuck: recording workflow guidance",
-        ),
-        ("Stop", None, "HyprDuck: finalizing hook state"),
-    ] {
-        let mut group = json!({
-            "hooks": [{
-                "type": "command",
-                "command": command,
-                "statusMessage": status
-            }]
-        });
-        if let Some(matcher) = matcher {
-            group["matcher"] = json!(matcher);
-        }
-        replace_hyprduck_group(hooks, event, group)?;
+    for spec in CODEX_HOOK_SPECS {
+        replace_hyprduck_group(hooks, spec, codex_hook_group(*spec, command))?;
     }
 
     let pretty = serde_json::to_string_pretty(&root)?;
@@ -124,11 +160,31 @@ fn merge_hooks_json(path: &Path, command: &str) -> Result<()> {
     Ok(())
 }
 
-fn replace_hyprduck_group(hooks: &mut Map<String, Value>, event: &str, group: Value) -> Result<()> {
-    let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
+fn codex_hook_group(spec: CodexHookSpec, command: &str) -> Value {
+    let mut group = json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "statusMessage": spec.status
+        }]
+    });
+    if let Some(matcher) = spec.matcher {
+        group["matcher"] = json!(matcher);
+    }
+    group
+}
+
+fn replace_hyprduck_group(
+    hooks: &mut Map<String, Value>,
+    spec: &CodexHookSpec,
+    group: Value,
+) -> Result<()> {
+    let entries = hooks
+        .entry(spec.event)
+        .or_insert_with(|| Value::Array(Vec::new()));
     let array = entries
         .as_array_mut()
-        .ok_or_else(|| anyhow!("hooks.{event} must be an array"))?;
+        .ok_or_else(|| anyhow!("hooks.{} must be an array", spec.event))?;
     array.retain(|entry| !is_hyprduck_managed_group(entry));
     array.push(group);
     Ok(())
@@ -192,10 +248,15 @@ fn codex_hooks_config_check(path: &Path) -> Result<ConfigCheck> {
         .get("hooks")
         .and_then(Value::as_object)
         .is_some_and(|hooks| {
-            hooks.values().any(|entries| {
-                entries
-                    .as_array()
-                    .is_some_and(|array| array.iter().any(is_hyprduck_managed_group))
+            CODEX_HOOK_SPECS.iter().all(|spec| {
+                hooks
+                    .get(spec.event)
+                    .and_then(Value::as_array)
+                    .is_some_and(|array| {
+                        array
+                            .iter()
+                            .any(|entry| is_hyprduck_managed_group_for_spec(entry, spec))
+                    })
             })
         });
     Ok(ConfigCheck::valid(configured))
@@ -212,15 +273,8 @@ fn codex_approvals_config_check(path: &Path) -> Result<ConfigCheck> {
         Ok(None) => return Ok(ConfigCheck::valid(false)),
         Err(error) => return Ok(ConfigCheck::invalid(error.to_string())),
     };
-    let automatic_tools_configured = AUTOMATIC_MCP_TOOLS.iter().all(|tool| {
-        block.contains(&format!(
-            "mcp_servers.hyprduck.tools.{tool}.approval_mode = \"auto\""
-        ))
-    });
-    let destructive_tools_prompted =
-        block.contains("mcp_servers.hyprduck.tools.write_reject.approval_mode = \"prompt\"");
     Ok(ConfigCheck::valid(
-        automatic_tools_configured && destructive_tools_prompted,
+        codex_approval_specs().all(|spec| block.contains(&spec.toml_line())),
     ))
 }
 
@@ -262,16 +316,47 @@ fn is_hyprduck_managed_group(entry: &Value) -> bool {
         .is_some_and(|hooks| hooks.iter().any(is_hyprduck_managed_hook))
 }
 
+fn is_hyprduck_managed_group_for_spec(entry: &Value, spec: &CodexHookSpec) -> bool {
+    let matcher_matches = match (spec.matcher, entry.get("matcher").and_then(Value::as_str)) {
+        (Some(expected), Some(actual)) => expected == actual,
+        (None, None) => true,
+        _ => false,
+    };
+    matcher_matches
+        && entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|hooks| {
+                hooks
+                    .iter()
+                    .any(|hook| is_hyprduck_managed_hook_for_spec(hook, spec))
+            })
+}
+
 fn is_hyprduck_managed_hook(hook: &Value) -> bool {
     let command_is_managed = hook
         .get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command.ends_with("hooks run codex") || command.contains(" hooks run codex"));
+        .is_some_and(|command| {
+            command.ends_with("hooks run codex") || command.contains(" hooks run codex")
+        });
     let status_is_managed = hook
         .get("statusMessage")
         .and_then(Value::as_str)
         .is_some_and(|status| status.starts_with(HYPRDUCK_STATUS_PREFIX));
     command_is_managed || status_is_managed
+}
+
+fn is_hyprduck_managed_hook_for_spec(hook: &Value, spec: &CodexHookSpec) -> bool {
+    hook.get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| {
+            command.ends_with("hooks run codex") || command.contains(" hooks run codex")
+        })
+        && hook
+            .get("statusMessage")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == spec.status)
 }
 
 fn remove_managed_block(text: &str) -> Result<String> {
@@ -287,12 +372,10 @@ fn remove_managed_block(text: &str) -> Result<String> {
 fn codex_mcp_approval_block() -> String {
     let mut block = format!("\n{CONFIG_BLOCK_START}\n");
     block.push_str("# HyprDuck hooks keep destructive removal/overwrite actions approval-gated.\n");
-    for tool in AUTOMATIC_MCP_TOOLS {
-        block.push_str(&format!(
-            "mcp_servers.hyprduck.tools.{tool}.approval_mode = \"auto\"\n"
-        ));
+    for spec in codex_approval_specs() {
+        block.push_str(&spec.toml_line());
+        block.push('\n');
     }
-    block.push_str("mcp_servers.hyprduck.tools.write_reject.approval_mode = \"prompt\"\n");
     block.push_str(CONFIG_BLOCK_END);
     block.push('\n');
     block
