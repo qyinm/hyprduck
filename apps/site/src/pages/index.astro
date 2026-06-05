@@ -67,7 +67,7 @@ const providers = [
           <a href="#providers">Providers</a>
           <a href="#output">Output</a>
         </nav>
-        <a class="pill pill-primary nav-cta" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">
+        <a class="pill nav-cta gloss-btn" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">
           <img src={assetPath('github.webp')} alt="" class="github-icon" />
           View GitHub
         </a>
@@ -86,8 +86,12 @@ const providers = [
             HyprDuck imports PDFs and Word files, renders every page into images, runs your chosen AI provider, and saves linked markdown that stays inspectable on your machine.
           </p>
           <div class="hero-actions">
-            <a class="pill pill-primary" href="https://github.com/qyinm/hyprduck" target="_blank" rel="noopener">Download desktop</a>
-            <a class="pill pill-secondary" href="#workflow">See workflow</a>
+            <a class="gloss-btn download-hero-btn" href="https://github.com/qyinm/hyprduck/releases" target="_blank" rel="noopener">
+              <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 384 512" class="apple-icon" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"></path></svg>
+              Download for macOS
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="arrow-icon"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+            </a>
+            <a class="gloss-btn-light" href="#workflow">See workflow</a>
           </div>
           <div class="hero-meta" aria-label="Product metadata">
             <span class="tag-pill">macOS</span>
@@ -99,15 +103,13 @@ const providers = [
         <div class="container hero-product">
           <div class="desktop-frame hairline-card" aria-label="HyprDuck desktop preview">
             <div class="macos-drag-region"></div>
-            <div class="chrome-buttons">
-              <span class="chrome-btn" aria-label="Toggle sidebar">
+            <div class="chrome-left">
+              <span class="chrome-btn-inner" aria-label="Collapse sidebar">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg>
               </span>
-              <span class="chrome-btn chrome-bell" aria-label="Brain health">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
-                <span class="bell-badge">2</span>
-              </span>
-              <span class="chrome-btn chrome-btn-active" aria-label="Toggle inspector">
+            </div>
+            <div class="chrome-right">
+              <span class="chrome-btn-inner chrome-btn-active" aria-label="Hide details">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/></svg>
               </span>
             </div>
@@ -129,28 +131,21 @@ const providers = [
                 <DemoGraph client:load selected={{ kind: "node", id: "concept-revenue" }} onSelect={() => {}} />
                 <form class="graph-composer">
                   <button class="composer-attach" type="button" aria-label="Attach files">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
                   </button>
                   <input class="composer-input" placeholder="Ask this knowledge graph..." value="" />
-                  <select class="composer-select">
-                    <option>Ask only</option>
-                    <option>Add to context</option>
-                  </select>
                   <button class="composer-send" type="submit" aria-label="Ask" disabled>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                   </button>
                 </form>
               </div>
               <aside class="inspector-rail">
-                <div class="inspector-header">
-                  <h3 class="inspector-heading">Right inspector</h3>
-                  <p class="inspector-desc">Selection detail, source provenance, and evidence stay visible without leaving the graph.</p>
-                </div>
                 <div class="inspector-body">
+                  <div class="inspector-placeholder">Select an item or connection to inspect its evidence.</div>
                   <div class="inspector-section">
                     <div class="inspector-tags">
                       <span class="inspector-tag">concept</span>
-                      <span class="inspector-tag">72% draft confidence</span>
+                      <span class="inspector-tag">72% confidence</span>
                     </div>
                     <h4 class="inspector-node-name">Q3 Revenue</h4>
                     <p class="inspector-node-desc">Board report revenue figures for Q3 extracted from financial summary table on page 3.</p>
@@ -373,7 +368,7 @@ const providers = [
 
   .desktop-frame {
     display: grid;
-    grid-template-columns: 172px minmax(0, 1fr);
+    grid-template-columns: 256px minmax(0, 1fr);
     min-height: 520px;
     overflow: hidden;
     position: relative;
@@ -382,85 +377,73 @@ const providers = [
   .macos-drag-region {
     position: absolute;
     inset: 0;
-    height: 32px;
+    height: 48px;
     z-index: 1;
     pointer-events: none;
   }
 
-  .chrome-buttons {
+  .chrome-left {
     position: absolute;
-    top: 8px;
-    left: 80px;
-    right: 12px;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    left: 44px;
+    top: 10px;
+    z-index: 5;
     pointer-events: none;
   }
 
-  .chrome-btn {
+  .chrome-right {
+    position: absolute;
+    right: 8px;
+    top: 10px;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .chrome-btn-inner {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    border: 1px solid var(--color-hairline);
-    background: var(--color-canvas);
+    width: 28px;
+    height: 28px;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background: rgba(255,255,255,0.8);
     color: var(--color-body);
     pointer-events: auto;
+    backdrop-filter: blur(8px);
+    transition: all 0.15s;
   }
 
-  .chrome-btn-active {
+  .chrome-btn-inner.chrome-btn-active {
     background: var(--color-ink);
     color: var(--color-canvas);
-  }
-
-  .chrome-bell {
-    margin-left: auto;
-    position: relative;
-  }
-
-  .bell-badge {
-    position: absolute;
-    top: -3px;
-    right: -3px;
-    display: grid;
-    place-items: center;
-    min-width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--color-terminal-green);
-    color: #fff;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1;
-    padding: 0 3px;
+    border-color: var(--color-ink);
   }
 
   .desktop-sidebar {
     border-right: 1px solid var(--color-hairline);
     background: var(--color-surface-soft);
-    padding: 0 10px 12px;
+    padding: 0 12px 12px;
     display: flex;
     flex-direction: column;
   }
 
   .sidebar-spacer {
-    height: 42px;
+    height: 48px;
     flex-shrink: 0;
   }
 
   .sidebar-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-radius: var(--radius-full);
+    gap: 12px;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 9999px;
+    border: 1px solid transparent;
     color: var(--color-body);
     font-size: 13px;
     font-weight: 500;
+    transition: all 0.15s;
   }
 
   .sidebar-item + .sidebar-item {
@@ -468,6 +451,7 @@ const providers = [
   }
 
   .sidebar-item.active {
+    border-color: var(--color-hairline-strong);
     background: var(--color-canvas);
     color: var(--color-ink);
   }
@@ -481,7 +465,7 @@ const providers = [
   .desktop-main {
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) clamp(200px, 26vw, 260px);
+    grid-template-columns: minmax(0, 1fr) clamp(18rem, 28vw, 24rem);
     background: var(--color-canvas);
   }
 
@@ -503,14 +487,14 @@ const providers = [
     z-index: 10;
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: min(420px, calc(100% - 40px));
-    height: 48px;
+    gap: 12px;
+    width: min(440px, calc(100% - 40px));
+    height: 56px;
     padding: 0 8px 0 4px;
     border: 1px solid var(--color-hairline);
-    border-radius: 28px;
-    background: var(--color-canvas);
-    box-shadow: 0 8px 32px rgba(15, 23, 42, 0.1);
+    border-radius: 9999px;
+    background: rgba(255,255,255,0.95);
+    box-shadow: 0 18px 60px -12px rgba(15,23,42,0.12);
     backdrop-filter: blur(8px);
   }
 
@@ -521,11 +505,12 @@ const providers = [
     width: 36px;
     height: 36px;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: 9999px;
     background: var(--color-surface-soft);
     color: var(--color-body);
     flex-shrink: 0;
     cursor: default;
+    transition: all 0.2s;
   }
 
   .composer-input {
@@ -533,7 +518,7 @@ const providers = [
     min-width: 0;
     border: none;
     background: transparent;
-    padding: 0 4px;
+    padding: 0 8px;
     font-size: 14px;
     color: var(--color-ink);
     outline: none;
@@ -544,20 +529,6 @@ const providers = [
     color: var(--color-mute);
   }
 
-  .composer-select {
-    height: 32px;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-soft);
-    padding: 0 8px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--color-ink);
-    outline: none;
-    cursor: default;
-    flex-shrink: 0;
-  }
-
   .composer-send {
     display: inline-flex;
     align-items: center;
@@ -565,11 +536,12 @@ const providers = [
     width: 36px;
     height: 36px;
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: 9999px;
     background: var(--color-ink);
     color: var(--color-canvas);
     flex-shrink: 0;
     cursor: default;
+    transition: all 0.2s;
   }
 
   .composer-send:disabled {
@@ -874,8 +846,8 @@ const providers = [
       display: none;
     }
 
-    .chrome-buttons {
-      left: 14px;
+    .chrome-left {
+      left: 12px;
     }
 
     .desktop-main {
@@ -898,6 +870,86 @@ const providers = [
     .capability-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+  }
+
+  /* Glossy dark button (navbar) */
+  .gloss-btn {
+    background: linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0.85));
+    backdrop-filter: saturate(200%) blur(40px);
+    -webkit-backdrop-filter: saturate(200%) blur(40px);
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.25), inset 0 -1px 1px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.08);
+    color: #fff;
+    transition: all 0.3s;
+  }
+
+  .gloss-btn:hover {
+    background: linear-gradient(to bottom, rgba(0,0,0,0.82), rgba(0,0,0,0.9));
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.3), inset 0 -1px 1px rgba(0,0,0,0.1), 0 12px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.1);
+    transform: translateY(-1px);
+  }
+
+  /* Glossy light button (See workflow) */
+  .gloss-btn-light {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 8px 16px;
+    border-radius: 9999px;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.75));
+    backdrop-filter: saturate(200%) blur(40px);
+    -webkit-backdrop-filter: saturate(200%) blur(40px);
+    border: 1px solid rgba(0,0,0,0.08);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.8), inset 0 -1px 1px rgba(0,0,0,0.03), 0 8px 24px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.04);
+    color: #000;
+    transition: all 0.3s;
+  }
+
+  .gloss-btn-light:hover {
+    background: linear-gradient(to bottom, rgba(255,255,255,0.92), rgba(255,255,255,0.82));
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 1px rgba(0,0,0,0.03), 0 12px 32px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.06);
+    transform: translateY(-1px);
+  }
+
+  /* Hero download button — extends .gloss-btn (dark glossy) */
+  .download-hero-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 8px 16px;
+    border-radius: 9999px;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: all 0.3s;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .download-hero-btn .apple-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .download-hero-btn .arrow-icon {
+    width: 16px;
+    height: 16px;
+    opacity: 0;
+    margin-left: -12px;
+    transition: all 0.3s;
+  }
+
+  .download-hero-btn:hover .arrow-icon {
+    opacity: 1;
+    margin-left: 0;
   }
 
   @media (max-width: 720px) {
@@ -943,6 +995,10 @@ const providers = [
 
     .hero-actions .pill {
       width: min(100%, 220px);
+    }
+
+    .download-hero-btn {
+      width: min(100%, 260px);
     }
 
     .graph-column .graph-composer {
