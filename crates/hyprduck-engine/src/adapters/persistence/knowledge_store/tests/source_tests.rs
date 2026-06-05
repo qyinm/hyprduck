@@ -1098,7 +1098,7 @@ fn assert_graph_node_metadata(store: &KnowledgeStore, node_id: &str) {
     let rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (n {id: $node_id})
+            "MATCH (n {logical_id: $node_id})
                  RETURN n.evidence_ids_json AS evidence_ids_json,
                         n.source_ids_json AS source_ids_json,
                         n.producer_run_id AS producer_run_id,
@@ -1129,7 +1129,7 @@ fn assert_graph_lifecycle_metadata(store: &KnowledgeStore) {
     let node_rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (n {id: 'node-a'})
+            "MATCH (n {logical_id: 'node-a'})
                  RETURN n.valid_from AS valid_from,
                         n.valid_to AS valid_to,
                         n.superseded_by AS superseded_by",
@@ -1149,14 +1149,21 @@ fn assert_graph_lifecycle_metadata(store: &KnowledgeStore) {
     let relation_rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (a {id: 'node-a'})-[r:RELATED_TO]->(b {id: 'node-b'})
-                 RETURN r.valid_from AS valid_from,
+            "MATCH (a)-[r]->(b)
+                 RETURN r.relation_id AS relation_id,
+                        r.valid_from AS valid_from,
                         r.valid_to AS valid_to,
                         r.superseded_by AS superseded_by",
         )
         .run()
         .expect("query graph relation lifecycle metadata");
-    let relation_row = relation_rows.get(0).expect("graph relation lifecycle row");
+    let relation_row = relation_rows
+        .iter()
+        .find(|row| {
+            row.get::<String>("relation_id")
+                .is_ok_and(|relation_id| relation_id == "rel-a")
+        })
+        .expect("graph relation lifecycle row");
     assert_eq!(
         relation_row
             .get::<i64>("valid_from")
@@ -1182,7 +1189,7 @@ fn assert_graph_wiki_page_node(store: &KnowledgeStore, node_id: &str) {
     let rows = graph
         .connection()
         .cypher_builder(
-            "MATCH (n:WikiPage {id: $node_id})
+            "MATCH (n:WikiPage {logical_id: $node_id})
                  RETURN n.kind AS kind,
                         n.label AS label,
                         n.aliases_json AS aliases_json,
@@ -1212,8 +1219,11 @@ fn assert_graph_edge_metadata(
     let rows = graph
         .connection()
         .cypher_builder(&format!(
-            "MATCH (a {{id: $source_node_id}})-[r:{relation_type}]->(b {{id: $target_node_id}})
-                 RETURN r.evidence_ids_json AS evidence_ids_json,
+            "MATCH (a)-[r]->(b)
+                 RETURN r.source_logical_id AS source_node_id,
+                        r.target_logical_id AS target_node_id,
+                        r.kind AS kind,
+                        r.evidence_ids_json AS evidence_ids_json,
                         r.source_ids_json AS source_ids_json,
                         r.producer_run_id AS producer_run_id,
                         r.producer_run_ids_json AS producer_run_ids_json,
@@ -1221,11 +1231,21 @@ fn assert_graph_edge_metadata(
                         r.status AS status,
                         r.updated_at AS updated_at"
         ))
-        .param("source_node_id", source_node_id)
-        .param("target_node_id", target_node_id)
         .run()
         .expect("query graph edge metadata");
-    let row = rows.get(0).expect("graph edge metadata row");
+    let row = rows
+        .iter()
+        .find(|row| {
+            row.get::<String>("source_node_id")
+                .is_ok_and(|source| source == source_node_id)
+                && row
+                    .get::<String>("target_node_id")
+                    .is_ok_and(|target| target == target_node_id)
+                && row
+                    .get::<String>("kind")
+                    .is_ok_and(|kind| kind == relation_type.to_ascii_lowercase())
+        })
+        .expect("graph edge metadata row");
     assert_string_array(row, "evidence_ids_json", &["evidence-a"]);
     assert_string_array(row, "source_ids_json", &["source-a"]);
     assert_eq!(

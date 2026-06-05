@@ -810,7 +810,7 @@ fn build_context_pack_graph_trail(
     let direct_relation_links =
         graph_trail_index.relation_links_for_evidence(&evidence.evidence_ref);
     for link in direct_relation_links {
-        direct_relation_ids.insert(link.relation.relation_id.clone());
+        let previous_direct_len = direct.len();
         push_graph_record(
             &mut direct,
             &mut direct_keys,
@@ -822,6 +822,9 @@ fn build_context_pack_graph_trail(
                 link.relation.label
             ),
         );
+        if direct.len() > previous_direct_len {
+            direct_relation_ids.insert(link.relation.relation_id.clone());
+        }
         push_adjacent_node_from_relation_endpoint(
             graph_trail_index,
             &link.source,
@@ -1114,7 +1117,7 @@ fn load_graph_trail_relation_links_for_node(
     workspace_id: &str,
     node_id: &str,
 ) -> Result<Vec<GraphTrailRelationLink>> {
-    let Some(internal_node_id) = graphqlite_internal_node_id(graph, node_id)? else {
+    let Some(internal_node_id) = graphqlite_internal_node_id(graph, workspace_id, node_id)? else {
         return Ok(Vec::new());
     };
     let sqlite = graph.connection().sqlite_connection();
@@ -1240,16 +1243,51 @@ fn graphqlite_ids_by_evidence_index(
     Ok(ids_by_ref)
 }
 
-fn graphqlite_internal_node_id(graph: &Graph, node_id: &str) -> Result<Option<i64>> {
-    let Some(key_id) = graphqlite_text_property_key_id(graph, "id")? else {
+fn graphqlite_internal_node_id(
+    graph: &Graph,
+    workspace_id: &str,
+    node_id: &str,
+) -> Result<Option<i64>> {
+    let Some(id_key_id) = graphqlite_text_property_key_id(graph, "id")? else {
         return Ok(None);
     };
+    let Some(workspace_key_id) = graphqlite_text_property_key_id(graph, "workspace_id")? else {
+        return Ok(None);
+    };
+    let logical_key_id = graphqlite_text_property_key_id(graph, "logical_id")?;
+    let valid_to_key_id = graphqlite_text_property_key_id(graph, "valid_to")?;
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
-        .prepare("SELECT node_id FROM node_props_text WHERE key_id = ?1 AND value = ?2")
+        .prepare(
+            "SELECT id.node_id
+             FROM node_props_text id
+             JOIN node_props_text workspace
+               ON workspace.node_id = id.node_id
+              AND workspace.key_id = ?2
+             LEFT JOIN node_props_text logical
+               ON logical.node_id = id.node_id
+              AND logical.key_id = ?3
+             LEFT JOIN node_props_int valid_to
+               ON valid_to.node_id = id.node_id
+              AND valid_to.key_id = ?4
+             WHERE id.key_id = ?1
+               AND workspace.value = ?5
+               AND COALESCE(NULLIF(logical.value, ''), id.value) = ?6
+               AND COALESCE(valid_to.value, 0) <= 0
+             ORDER BY CASE WHEN logical.value IS NULL OR logical.value = '' THEN 0 ELSE 1 END DESC,
+                      id.node_id DESC
+             LIMIT 1",
+        )
         .context("failed preparing GraphQLite node id lookup")?;
     let mut rows = statement
-        .query((key_id, node_id))
+        .query((
+            id_key_id,
+            workspace_key_id,
+            logical_key_id.unwrap_or(0),
+            valid_to_key_id.unwrap_or(0),
+            workspace_id,
+            node_id,
+        ))
         .context("failed querying GraphQLite node id lookup")?;
     Ok(rows
         .next()
@@ -1293,16 +1331,19 @@ fn load_graph_trail_relation_link_by_edge_id(
     };
     let source_id = row.get(0).context("read GraphQLite edge source id")?;
     let target_id = row.get(1).context("read GraphQLite edge target id")?;
+    if !graphqlite_int_property_is_live(graph, "edge_props_int", "edge_id", edge_id)? {
+        return Ok(None);
+    }
+    let props = graphqlite_edge_text_properties(graph, edge_id)?;
+    if !graph_record_status_is_active(graphlite_prop(&props, "status")) {
+        return Ok(None);
+    }
     let Some(source) = load_graph_trail_node_by_internal_id(graph, workspace_id, source_id)? else {
         return Ok(None);
     };
     let Some(target) = load_graph_trail_node_by_internal_id(graph, workspace_id, target_id)? else {
         return Ok(None);
     };
-    let props = graphqlite_edge_text_properties(graph, edge_id)?;
-    if !graph_record_status_is_active(graphlite_prop(&props, "status")) {
-        return Ok(None);
-    }
     Ok(Some(GraphTrailRelationLink {
         relation: GraphTrailRelation {
             relation_id: graphlite_prop(&props, "relation_id").into(),
@@ -1324,8 +1365,13 @@ fn load_graph_trail_node_by_internal_id(
     if graphlite_prop(&props, "workspace_id") != workspace_id {
         return Ok(None);
     }
+    if !graphqlite_int_property_is_live(graph, "node_props_int", "node_id", internal_node_id)? {
+        return Ok(None);
+    }
+    let logical_id = graphlite_prop(&props, "logical_id");
+    let physical_id = graphlite_prop(&props, "id");
     Ok(Some(GraphTrailNode {
-        node_id: graphlite_prop(&props, "id").into(),
+        node_id: graph_trail_public_id(logical_id, physical_id).into(),
         kind: graphlite_prop(&props, "kind").into(),
         label: graphlite_prop(&props, "label").into(),
         aliases: graphlite_string_array_prop(&props, "aliases_json")?,
@@ -1333,6 +1379,50 @@ fn load_graph_trail_node_by_internal_id(
         source_ids: graphlite_string_array_prop(&props, "source_ids_json")?,
         status: graphlite_prop(&props, "status").into(),
     }))
+}
+
+fn graph_trail_public_id<'a>(logical_id: &'a str, physical_id: &'a str) -> &'a str {
+    if logical_id.trim().is_empty() {
+        physical_id
+    } else {
+        logical_id
+    }
+}
+
+fn graphqlite_int_property_is_live(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    record_id: i64,
+) -> Result<bool> {
+    Ok(graphqlite_int_property(graph, table, id_column, record_id, "valid_to")? <= 0)
+}
+
+fn graphqlite_int_property(
+    graph: &Graph,
+    table: &str,
+    id_column: &str,
+    record_id: i64,
+    key: &str,
+) -> Result<i64> {
+    let Some(key_id) = graphqlite_text_property_key_id(graph, key)? else {
+        return Ok(0);
+    };
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(&format!(
+            "SELECT value FROM {table} WHERE {id_column} = ?1 AND key_id = ?2"
+        ))
+        .with_context(|| format!("failed preparing GraphQLite {table} int property query"))?;
+    let mut rows = statement
+        .query((record_id, key_id))
+        .with_context(|| format!("failed querying GraphQLite {table} int property"))?;
+    Ok(rows
+        .next()
+        .with_context(|| format!("failed reading GraphQLite {table} int property"))?
+        .map(|row| row.get(0).context("read GraphQLite int property"))
+        .transpose()?
+        .unwrap_or_default())
 }
 
 fn graphqlite_node_text_properties(
