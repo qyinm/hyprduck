@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
 
+use crate::hooks::policy::automation_metadata_for_tool;
+
 use super::args::{PROPOSAL_ID_PATTERN, WRITE_CONTENT_TYPES};
 use super::supports_local_path_disclosure;
 
@@ -404,11 +406,18 @@ fn tool_definition(
         );
     }
 
+    let automation_policy = automation_metadata_for_tool(name);
+    let destructive = automation_policy
+        .get("destructive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     let mut annotations = json!({
         "readOnlyHint": read_only,
-        "destructiveHint": false,
+        "destructiveHint": destructive,
         "idempotentHint": read_only,
-        "openWorldHint": false
+        "openWorldHint": false,
+        "hyprduckAutomationPolicy": automation_policy
     });
     if let Some(policy) = mutating_tool_policy(name) {
         annotations["hyprduckMutationPolicy"] = json!({

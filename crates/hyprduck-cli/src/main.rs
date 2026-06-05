@@ -2,13 +2,14 @@ mod app;
 mod benchmark;
 mod cli;
 mod eval;
+mod hooks;
 mod mcp;
 mod metrics;
 mod tui;
 mod ui;
 
 use anyhow::Result;
-use cli::{Cli, Commands, GraphStateSelector};
+use cli::{Cli, Commands, GraphStateSelector, HooksCommand};
 use hyprduck_engine_client::{resolve_engine_launch, EngineClient, SubprocessEngineClient};
 use hyprduck_engine_types::{
     BrainReadScope, CompileProjectRequest, ContextPackParseConfidence, DocumentFormat,
@@ -39,12 +40,29 @@ fn main() -> Result<()> {
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Serve) => run_serve(),
         Some(Commands::Mcp { command }) => run_mcp(command),
+        Some(Commands::Hooks { command }) => run_hooks(command),
         Some(Commands::Engines { command }) => run_engines(command),
         Some(Commands::Demo { command }) => run_demo(command),
         Some(Commands::Brain { command }) => run_brain(command),
         Some(Commands::Eval { command }) => run_eval(command),
         Some(Commands::Parse { input }) => run_parse(input),
         None => tui::run_tui(),
+    }
+}
+
+fn run_hooks(command: HooksCommand) -> Result<()> {
+    match command {
+        HooksCommand::InstallCodex => hooks::install_codex_hooks(),
+        HooksCommand::StatusCodex => hooks::print_codex_hook_status(),
+        HooksCommand::RunCodex => {
+            use std::io::Read;
+
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input)?;
+            let output = hooks::run_codex_hook(&input)?;
+            println!("{output}");
+            Ok(())
+        }
     }
 }
 
