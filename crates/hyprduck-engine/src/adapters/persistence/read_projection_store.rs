@@ -1128,6 +1128,7 @@ fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec
              FROM wiki_pages
              WHERE workspace_id = ?1
                AND approval_status IN ('materialized', 'approved')
+               AND valid_to <= 0
              ORDER BY path ASC, wiki_page_id ASC",
         )
         .context("failed preparing graph canvas wiki page query")?;

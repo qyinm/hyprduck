@@ -999,6 +999,186 @@ fn graph_read_projections_exclude_invalidated_records() {
     }));
 }
 
+#[test]
+fn wiki_materialization_appends_revisions_and_fts_searches_current_revision() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+
+    let first_snapshot = wiki_revision_snapshot(
+        "event-a",
+        "evidence-a",
+        "ObsoleteWikiUniqueToken",
+        "Old wiki body",
+        10,
+    );
+    store
+        .persist_graph_snapshot(&first_snapshot)
+        .expect("persist first wiki snapshot");
+
+    let second_snapshot = wiki_revision_snapshot(
+        "event-b",
+        "evidence-b",
+        "CurrentWikiUniqueToken",
+        "New wiki body",
+        20,
+    );
+    store
+        .persist_graph_snapshot(&second_snapshot)
+        .expect("persist second wiki snapshot");
+
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    let current_page = sqlite
+        .query_row(
+            "SELECT revision, body, current_revision_event_id, valid_to
+             FROM wiki_pages
+             WHERE workspace_id = 'workspace-default'
+               AND wiki_page_id = 'wiki-alpha'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .expect("current wiki page row");
+    assert_eq!(current_page.0, 2);
+    assert!(current_page.1.contains("CurrentWikiUniqueToken"));
+    assert_eq!(current_page.2, "event-b");
+    assert_eq!(current_page.3, 0);
+
+    let revision_rows = sqlite
+        .prepare(
+            "SELECT revision,
+                    body,
+                    predecessor_revision,
+                    superseded_by_event_id,
+                    valid_to,
+                    version_id,
+                    created_by_event_id
+             FROM wiki_revisions
+             WHERE wiki_page_id = 'wiki-alpha'
+             ORDER BY revision ASC",
+        )
+        .expect("prepare wiki revision rows")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .expect("query wiki revision rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect wiki revision rows");
+    assert_eq!(revision_rows.len(), 2);
+    assert!(revision_rows[0].1.contains("ObsoleteWikiUniqueToken"));
+    assert_eq!(revision_rows[0].2, None);
+    assert_eq!(revision_rows[0].3, "event-b");
+    assert_eq!(revision_rows[0].4, 20);
+    assert!(!revision_rows[0].5.is_empty());
+    assert_eq!(revision_rows[0].6, "event-a");
+    assert!(revision_rows[1].1.contains("CurrentWikiUniqueToken"));
+    assert_eq!(revision_rows[1].2, Some(1));
+    assert_eq!(revision_rows[1].3, "");
+    assert_eq!(revision_rows[1].4, 0);
+    assert!(!revision_rows[1].5.is_empty());
+    assert_eq!(revision_rows[1].6, "event-b");
+
+    let obsolete_raw_fts_count = sqlite
+        .query_row(
+            "SELECT count(*) FROM wiki_fts WHERE wiki_fts MATCH 'ObsoleteWikiUniqueToken'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("old wiki fts row remains for history");
+    assert_eq!(obsolete_raw_fts_count, 1);
+
+    let obsolete_hits = store
+        .hybrid_retrieve("workspace-default", "ObsoleteWikiUniqueToken", 5)
+        .expect("retrieve obsolete wiki token");
+    assert!(obsolete_hits
+        .iter()
+        .all(|hit| hit.source_id != "wiki-alpha"));
+
+    let current_hits = store
+        .hybrid_retrieve("workspace-default", "CurrentWikiUniqueToken", 5)
+        .expect("retrieve current wiki token");
+    assert!(current_hits.iter().any(|hit| {
+        hit.source_id == "wiki-alpha"
+            && hit.evidence_id == "evidence-b"
+            && hit.evidence_type == "wiki_evidence"
+    }));
+}
+
+fn wiki_revision_snapshot(
+    event_id: &str,
+    evidence_id: &str,
+    wiki_token: &str,
+    wiki_body: &str,
+    timestamp: u64,
+) -> BrainRepoSnapshot {
+    BrainRepoSnapshot {
+        workspace_id: "workspace-default".into(),
+        generated_at: timestamp,
+        sources: vec![SourceRecord {
+            source_id: "source-a".into(),
+            workspace_id: "workspace-default".into(),
+            original_path: "/tmp/source-a.pdf".into(),
+            source_path: "/tmp/source-a.pdf".into(),
+            markdown_path: "/tmp/source-a.md".into(),
+            format: SourceFormat::pdf(),
+            status: SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: timestamp,
+        }],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![EvidenceRef {
+            id: evidence_id.into(),
+            page_label: "p1".into(),
+            page_index: Some(0),
+            snippet: format!("{evidence_id} source evidence."),
+            source_path: Some("/tmp/source-a.pdf".into()),
+            source_id: Some("source-a".into()),
+            markdown_path: Some("/tmp/source-a.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        }],
+        memories: Vec::new(),
+        wiki_pages: vec![WikiPage {
+            page_id: "wiki-alpha".into(),
+            workspace_id: "workspace-default".into(),
+            path: "wiki/alpha".into(),
+            title: "Alpha Wiki".into(),
+            body: format!("# Overview\n{wiki_body}\n\n## Evidence\n{wiki_token}"),
+            node_refs: vec!["node-alpha".into()],
+            source_refs: vec!["source-a".into()],
+            evidence_refs: vec![evidence_id.into()],
+            updated_at: timestamp,
+        }],
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: vec![test_brain_event(
+            event_id,
+            "workspace-default",
+            &[evidence_id],
+        )],
+    }
+}
+
 fn graph_checkpoint_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
     let graph = Graph::open(&store.path).context("open graph")?;
     let count = graph

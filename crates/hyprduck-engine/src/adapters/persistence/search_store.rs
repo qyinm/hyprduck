@@ -493,9 +493,12 @@ pub(super) fn append_wiki_fts_hits(
                 wp.evidence_refs_json,
                 bm25(wiki_fts) AS lexical_rank
              FROM wiki_fts w
-             JOIN wiki_pages wp ON wp.wiki_page_id = w.wiki_page_id
+             JOIN wiki_pages wp
+               ON wp.wiki_page_id = w.wiki_page_id
+              AND wp.revision = w.revision
              WHERE w.workspace_id = ?1 AND wiki_fts MATCH ?2
                AND wp.approval_status IN ('materialized', 'approved')
+               AND wp.valid_to <= 0
              ORDER BY lexical_rank ASC
              LIMIT ?3",
         )

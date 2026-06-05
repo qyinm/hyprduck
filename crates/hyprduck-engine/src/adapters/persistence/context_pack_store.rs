@@ -279,6 +279,7 @@ pub(super) fn load_wiki_page_for_source(
              FROM wiki_pages
              WHERE workspace_id = ?1
                AND approval_status IN ('materialized', 'approved')
+               AND valid_to <= 0
                AND evidence_refs_json <> '[]'
              ORDER BY updated_at DESC",
         )
@@ -321,6 +322,7 @@ pub(super) fn load_wiki_page_by_path(
              WHERE workspace_id = ?1
                AND path = ?2
                AND approval_status IN ('materialized', 'approved')
+               AND valid_to <= 0
              LIMIT 1",
         )
         .context("failed preparing wiki page by path query")?;
