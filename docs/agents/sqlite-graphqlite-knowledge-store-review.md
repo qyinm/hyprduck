@@ -12,8 +12,8 @@ contract before the next layer consumes it:
 
 1. Versioned SQLite state is the canonical store for projects, sources, pages,
    typed evidence, wiki content, approvals, proposals, checkpoints, and events.
-2. GraphQLite is loaded as the required primary graph store during workspace
-   initialization.
+2. GraphQLite is loaded as the required primary versioned graph store during
+   workspace initialization.
 3. Relational DB writes, GraphQLite mutations, and audit events commit under one
    transaction boundary.
 4. Retrieval reads from FTS5, GraphQLite graph neighborhoods, and typed evidence
@@ -42,11 +42,14 @@ SQLite responsibilities:
 
 GraphQLite responsibilities:
 
-1. Current graph nodes for sources, pages, concepts, entities, claims, and wiki
-   pages.
-2. Current semantic relationships such as mentions, supports, cites, contradicts,
-   derived-from, and source-of.
-3. Graph-neighborhood retrieval and future graph-native algorithms once current
+1. Versioned graph nodes for sources, pages, concepts, entities, claims, and
+   wiki pages, with stable logical IDs kept separate from physical version IDs.
+2. Versioned semantic relationships such as mentions, supports, cites,
+   contradicts, derived-from, and source-of, with logical endpoint IDs preserved
+   for public DTOs.
+3. Live graph projection queries that hide superseded records from normal MCP,
+   desktop, search, graph trail, and Context Pack reads.
+4. Graph-neighborhood retrieval and future graph-native algorithms once current
    graph data has enough stability evidence.
 
 The migration architecture rejects split ownership. A graph mutation that cannot
@@ -73,13 +76,16 @@ Required invariants:
 5. Context Pack and page-evidence reads resolve citations from evidence rows and
    preserve source, page, quoted text, hash, provider route, locality, parse
    confidence, and evidence type.
+6. Lifecycle history reads expose graph and wiki version metadata only through
+   explicit selectors; normal retrieval must keep using the live projection.
 
 Representative verification:
 
 1. `brain_health_is_clean_for_empty_workspace`
 2. `agent_session_write_rejects_unknown_evidence_ref`
 3. `agent_session_write_revalidates_evidence_on_commit`
-4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
+4. `read_graph_history_returns_record_versions_for_graph_and_wiki_records`
+5. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
 
 ## Dependency And Packaging Review
 
@@ -93,8 +99,8 @@ Release-blocking checks:
 
 1. The engine dependency remains pinned to the reviewed GraphQLite version.
 2. Workspace initialization opens the canonical `hyprduck.sqlite` file through
-   GraphQLite and records `hyprduck.sqlite:graphqlite` as the graph storage
-   location.
+   GraphQLite and records `hyprduck.sqlite:graphqlite` as the redacted graph
+   storage label.
 3. The GraphQLite gate creates, reads, cleans up, and verifies rollback behavior
    before normal workspace operation is considered healthy.
 4. Health output reports `graphqliteReleaseGate=passed` only when GraphQLite is
@@ -106,7 +112,7 @@ Representative verification:
 
 1. `knowledge_store_creates_canonical_schema_and_graphqlite_gate`
 2. `graphqlite_gate_rejects_non_transactional_graph_mutations`
-3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
+3. `graph_snapshot_versions_logical_records_and_keeps_live_relation_endpoints`
 
 ## Test Engineering Gate
 
@@ -128,15 +134,19 @@ Required coverage:
    deferred vector search, deferred graph algorithms, and governance posture.
 4. MCP: agent-facing read and write tools preserve cited evidence behavior,
    default path redaction, and narrow mutation semantics.
-5. Desktop: graph canvas reads must come from DB or GraphQLite projections rather
-   than materialized JSON direct reads.
+5. Desktop: graph canvas reads must come from the DB/GraphQLite live projection
+   rather than materialized JSON direct reads.
+6. History: `read_graph_history` must list node, relation, and wiki versions
+   only when explicit lifecycle selectors are provided, without raw local paths
+   or rollback/replay selectors.
 
 Representative verification:
 
 1. `brain_repo`
 2. `graphqlite_gate`
-3. `graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph`
+3. `graph_snapshot_versions_logical_records_and_keeps_live_relation_endpoints`
 4. `mcp_server_exposes_read_and_agent_session_write_brain_tools`
+5. `read_graph_history_returns_record_versions_for_graph_and_wiki_records`
 
 ## Executor Completion Review
 

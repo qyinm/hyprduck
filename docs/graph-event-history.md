@@ -67,10 +67,47 @@ source scope. Workspace-linking artifacts that depend on deleted source evidence
 are dropped rather than retained as graph history, because they are derived
 cross-source projections and must not keep stale source joins alive.
 
+GraphQLite persists graph records as versioned physical records. Public graph
+IDs remain logical IDs in DTOs, while stored node and relation versions carry
+explicit `logical_id`, `version_id`, `created_by_event_id`, `valid_from`,
+`valid_to`, and `superseded_by` properties. Relation versions preserve logical
+`source_logical_id` and `target_logical_id` values for agent-facing reads while
+GraphQLite stores the physical version endpoints.
+
 Agent and desktop read surfaces use the live projection: graph records with
 `validTo` set are excluded from graph canvas reads, `read_node` relations,
 graph search results, and GraphQLite-backed graph-neighborhood retrieval. The
-durable event log and materialized history remain available for audit and replay.
+durable event log and versioned GraphQLite records remain available through
+explicit history reads.
+
+## Wiki Revision Lifecycle
+
+Wiki pages use relational SQLite as the body and proof store. `wiki_pages`
+holds the current live projection for a page, and `wiki_revisions` keeps the
+revision lineage. Each revision records the producing event, deterministic
+version ID, predecessor revision, lifecycle fields, evidence refs, source refs,
+and graph refs.
+
+Normal wiki reads and wiki FTS retrieval use only the current live revision.
+Historical wiki revision text can be inspected through explicit history reads,
+but stale revision content does not influence Context Pack retrieval or
+`read_wiki_page` by default.
+
+## History Read Surface
+
+MCP `read_graph_history` keeps the existing materialized state list and adds an
+optional `recordHistory` projection when callers provide a graph record or wiki
+page selector:
+
+- `recordKind: "node"` with `recordId` returns versions for one logical node.
+- `recordKind: "relation"` with `recordId` returns versions for one logical relation.
+- `recordKind: "wiki_page"` with `recordId`, or `wikiPath` by itself, returns wiki revision history.
+
+Record history responses include logical IDs, version IDs, creating event IDs,
+lifecycle timestamps, evidence refs, source refs, graph refs, and redacted
+storage labels such as `hyprduck.sqlite:graphqlite` or
+`hyprduck.sqlite:wiki_revisions`. They do not expose raw local paths or
+rollback/replay selectors.
 
 ## Rollback And Snapshots
 
