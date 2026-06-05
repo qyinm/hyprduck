@@ -1039,7 +1039,7 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         generated_at: 100,
         sources: std::slice::from_ref(&source),
         nodes: &[source_node.clone(), concept_x.clone(), concept_y.clone()],
-        relations: &[edge_x.clone(), edge_y],
+        relations: &[edge_x.clone(), edge_y.clone()],
         evidence: &[evidence.clone(), old_provider_evidence.clone()],
         claims: &[],
     });
@@ -1047,7 +1047,7 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         100,
         std::slice::from_ref(&source),
         &[source_node.clone(), concept_x.clone(), concept_y.clone()],
-        std::slice::from_ref(&edge_x),
+        &[edge_x.clone(), edge_y],
         &[evidence.clone(), old_provider_evidence.clone()],
         &[],
         std::slice::from_ref(&old_wiki_page),
@@ -1084,19 +1084,20 @@ fn provider_overlay_replay_uses_latest_event_per_source_stage() {
         .nodes
         .iter()
         .any(|node| node.node_id == "concept-x"));
-    assert!(!replayed
-        .nodes
-        .iter()
-        .any(|node| node.node_id == "concept-y"));
-    assert!(!replayed
+    assert!(replayed.nodes.iter().any(|node| node.node_id == "concept-y"
+        && node.valid_to == Some(200)
+        && node.superseded_by.as_deref() == Some("evt-provider-new")));
+    assert!(replayed
         .relations
         .iter()
-        .any(|relation| relation.relation_id == "edge-source-y"));
+        .any(|relation| relation.relation_id == "edge-source-y"
+            && relation.valid_to == Some(200)
+            && relation.superseded_by.as_deref() == Some("evt-provider-new")));
     assert!(replayed
         .evidence
         .iter()
         .any(|evidence| evidence.id == "ev-source-a"));
-    assert!(!replayed
+    assert!(replayed
         .evidence
         .iter()
         .any(|evidence| evidence.id == "ev-provider-old"));
@@ -1216,10 +1217,12 @@ fn full_workspace_rebuild_replay_supersedes_old_source_sets() {
     let replayed = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
         .expect("read replayed graph");
 
-    assert!(!replayed
+    assert!(replayed
         .nodes
         .iter()
-        .any(|node| node.node_id == "concept-stale-a"));
+        .any(|node| node.node_id == "concept-stale-a"
+            && node.valid_to == Some(200)
+            && node.superseded_by.as_deref() == Some("evt-full-new")));
 }
 
 #[test]
