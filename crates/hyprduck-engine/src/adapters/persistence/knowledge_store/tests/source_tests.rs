@@ -795,6 +795,210 @@ fn wiki_content_rejects_missing_evidence_before_durable_rows_commit() {
     );
 }
 
+#[test]
+fn graph_read_projections_exclude_invalidated_records() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let source = SourceRecord {
+        source_id: "source-a".into(),
+        workspace_id: "workspace-default".into(),
+        original_path: "/tmp/source-a.pdf".into(),
+        source_path: "/tmp/source-a.pdf".into(),
+        markdown_path: "/tmp/source-a.md".into(),
+        format: SourceFormat::pdf(),
+        status: SourceStatus::ingested(),
+        page_count: 1,
+        description: String::new(),
+        user_context: String::new(),
+        ingest_instruction: String::new(),
+        updated_at: 10,
+    };
+    let live_evidence = EvidenceRef {
+        id: "evidence-live".into(),
+        page_label: "p1".into(),
+        page_index: Some(0),
+        snippet: "Live graph evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let stale_evidence = EvidenceRef {
+        id: "evidence-stale".into(),
+        page_label: "p1".into(),
+        page_index: Some(0),
+        snippet: "Stale graph evidence.".into(),
+        source_path: Some(source.source_path.clone()),
+        source_id: Some(source.source_id.clone()),
+        markdown_path: Some(source.markdown_path.clone()),
+        image_path: None,
+        provenance: Some("test".into()),
+    };
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: "workspace-default".into(),
+        generated_at: 30,
+        sources: vec![source],
+        nodes: vec![
+            BrainNodeRecord {
+                node_id: "node-live".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Live node".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.9),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainNodeRecord {
+                node_id: "node-neighbor".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Live neighbor".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.9),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainNodeRecord {
+                node_id: "node-stale".into(),
+                kind: BrainNodeKind::Concept,
+                label: "Stale node".into(),
+                scope: BrainScope::Project,
+                aliases: Vec::new(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                source_ids: vec!["source-a".into()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: Some(20),
+                superseded_by: Some("event-new".into()),
+            },
+        ],
+        relations: vec![
+            BrainRelationRecord {
+                relation_id: "rel-live".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-neighbor".into(),
+                label: "live relation".into(),
+                evidence_ids: vec![live_evidence.id.clone()],
+                confidence: Some(0.8),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+            BrainRelationRecord {
+                relation_id: "rel-stale".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-stale".into(),
+                label: "stale relation".into(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: Some(20),
+                superseded_by: Some("event-new".into()),
+            },
+            BrainRelationRecord {
+                relation_id: "rel-live-to-stale-node".into(),
+                kind: BrainRelationKind::RelatedTo,
+                source_node_id: "node-live".into(),
+                target_node_id: "node-stale".into(),
+                label: "live relation to stale node".into(),
+                evidence_ids: vec![stale_evidence.id.clone()],
+                confidence: Some(0.5),
+                updated_at: 10,
+                valid_from: 10,
+                valid_to: None,
+                superseded_by: None,
+            },
+        ],
+        evidence: vec![live_evidence, stale_evidence],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: vec![test_brain_event(
+            "event-new",
+            "workspace-default",
+            &["evidence-live", "evidence-stale"],
+        )],
+    };
+
+    let report = store
+        .persist_graph_snapshot(&snapshot)
+        .expect("persist graph snapshot");
+    assert_eq!(
+        report,
+        KnowledgeGraphPersistReport {
+            node_count: 3,
+            relation_count: 1,
+        }
+    );
+    assert_eq!(
+        store
+            .graph_snapshot_counts("workspace-default")
+            .expect("graph counts"),
+        report
+    );
+
+    let (nodes, relations, _) = store
+        .read_graph_canvas_projection_from_db("workspace-default")
+        .expect("read graph canvas")
+        .expect("graph canvas");
+    assert!(nodes.iter().any(|node| node.node_id == "node-live"));
+    assert!(!nodes.iter().any(|node| node.node_id == "node-stale"));
+    assert!(relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live"));
+    assert!(!relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-stale"));
+    assert!(!relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live-to-stale-node"));
+
+    assert!(store
+        .read_node_from_db("workspace-default", "node-stale")
+        .expect("read stale node")
+        .is_none());
+    let live_node = store
+        .read_node_from_db("workspace-default", "node-live")
+        .expect("read live node")
+        .expect("live node");
+    assert!(live_node
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "rel-live"));
+    assert!(live_node.relations.iter().all(|relation| {
+        relation.relation_id != "rel-stale" && relation.relation_id != "rel-live-to-stale-node"
+    }));
+
+    let graph_results = store
+        .search_brain_from_db("workspace-default", "stale", 10)
+        .expect("search graph");
+    assert!(graph_results.iter().all(|result| {
+        !(matches!(
+            result.kind,
+            hyprduck_engine_types::BrainSearchResultKind::Node
+                | hyprduck_engine_types::BrainSearchResultKind::Relation
+        ) && result.id.contains("stale"))
+    }));
+}
+
 fn graph_checkpoint_count(store: &KnowledgeStore, workspace_id: &str) -> Result<i64> {
     let graph = Graph::open(&store.path).context("open graph")?;
     let count = graph

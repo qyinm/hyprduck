@@ -64,9 +64,22 @@ pub(super) fn persist_graph_snapshot_in_transaction(
 
     mark_import_jobs_graph_ready_in_transaction(graph, snapshot)?;
 
+    let live_graph_node_ids = graph_nodes
+        .iter()
+        .filter(|node| node.valid_to.is_none())
+        .map(|node| node.node_id.as_str())
+        .collect::<BTreeSet<_>>();
     let report = KnowledgeGraphPersistReport {
-        node_count: graph_nodes.len(),
-        relation_count: snapshot.relations.len(),
+        node_count: live_graph_node_ids.len(),
+        relation_count: snapshot
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.valid_to.is_none()
+                    && live_graph_node_ids.contains(relation.source_node_id.as_str())
+                    && live_graph_node_ids.contains(relation.target_node_id.as_str())
+            })
+            .count(),
     };
     persist_graph_checkpoint_metadata_in_transaction(graph, snapshot, &report)?;
 

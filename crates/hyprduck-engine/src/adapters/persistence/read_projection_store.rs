@@ -327,6 +327,8 @@ fn load_node_relations_from_db(
                 r.kind AS kind,
                 source.id AS source_node_id,
                 target.id AS target_node_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
                 r.label AS label,
                 r.evidence_ids_json AS evidence_ids_json,
                 r.source_ids_json AS source_ids_json,
@@ -342,6 +344,8 @@ fn load_node_relations_from_db(
                 r.kind AS kind,
                 source.id AS source_node_id,
                 target.id AS target_node_id,
+                source.valid_to AS source_valid_to,
+                target.valid_to AS target_valid_to,
                 r.label AS label,
                 r.evidence_ids_json AS evidence_ids_json,
                 r.source_ids_json AS source_ids_json,
@@ -481,8 +485,17 @@ fn load_node_relation_rows_from_db(
         .context("failed querying GraphQLite node relations")?;
     let mut relations = Vec::new();
     for row in &rows {
+        if !row_live_by_valid_to(row, "source_valid_to")?
+            || !row_live_by_valid_to(row, "target_valid_to")?
+        {
+            continue;
+        }
+        let relation = graph_canvas_relation_from_row(row)?;
+        if !graph_relation_is_live(&relation) {
+            continue;
+        }
         relations.push(NodeRelationRow {
-            relation: graph_canvas_relation_from_row(row)?,
+            relation,
             source_ids: row_string_array(row, "source_ids_json")
                 .context("read node relation source refs")?,
         });
@@ -840,26 +853,8 @@ pub(super) fn graph_snapshot_counts(
     workspace_id: &str,
 ) -> Result<KnowledgeGraphPersistReport> {
     let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let node_count = graph
-        .connection()
-        .cypher_builder("MATCH (n {workspace_id: $workspace_id}) RETURN count(n) AS count")
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed counting GraphQLite nodes")?
-        .get(0)
-        .and_then(|row| row.get::<i64>("count").ok())
-        .unwrap_or_default() as usize;
-    let relation_count = graph
-        .connection()
-        .cypher_builder(
-            "MATCH (n {workspace_id: $workspace_id})-[r]->(m {workspace_id: $workspace_id}) RETURN count(r) AS count",
-        )
-        .param("workspace_id", workspace_id)
-        .run()
-        .context("failed counting GraphQLite relations")?
-        .get(0)
-        .and_then(|row| row.get::<i64>("count").ok())
-        .unwrap_or_default() as usize;
+    let node_count = load_graph_canvas_nodes(&graph, workspace_id)?.len();
+    let relation_count = load_graph_canvas_relations(&graph, workspace_id)?.len();
     Ok(KnowledgeGraphPersistReport {
         node_count,
         relation_count,
@@ -891,6 +886,7 @@ fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<Brai
         .iter()
         .map(graph_canvas_node_from_row)
         .collect::<Result<Vec<_>>>()?;
+    nodes.retain(graph_node_is_live);
     nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     Ok(nodes)
 }
@@ -921,7 +917,10 @@ fn load_graph_canvas_node_by_id(
         .param("node_id", node_id)
         .run()
         .context("failed querying GraphQLite graph canvas node")?;
-    rows.get(0).map(graph_canvas_node_from_row).transpose()
+    rows.get(0)
+        .map(graph_canvas_node_from_row)
+        .transpose()
+        .map(|node| node.filter(graph_node_is_live))
 }
 
 fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> {
@@ -967,6 +966,8 @@ fn load_graph_canvas_relations(
                     r.kind AS kind,
                     source.id AS source_node_id,
                     target.id AS target_node_id,
+                    source.valid_to AS source_valid_to,
+                    target.valid_to AS target_valid_to,
                     r.label AS label,
                     r.evidence_ids_json AS evidence_ids_json,
                     r.confidence AS confidence,
@@ -978,10 +979,18 @@ fn load_graph_canvas_relations(
         .param("workspace_id", workspace_id)
         .run()
         .context("failed querying GraphQLite graph canvas relations")?;
-    let mut relations = rows
-        .iter()
-        .map(graph_canvas_relation_from_row)
-        .collect::<Result<Vec<_>>>()?;
+    let mut relations = Vec::new();
+    for row in &rows {
+        if !row_live_by_valid_to(row, "source_valid_to")?
+            || !row_live_by_valid_to(row, "target_valid_to")?
+        {
+            continue;
+        }
+        let relation = graph_canvas_relation_from_row(row)?;
+        if graph_relation_is_live(&relation) {
+            relations.push(relation);
+        }
+    }
     relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     Ok(relations)
 }
@@ -1017,6 +1026,18 @@ fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelation
 
 fn positive_i64_as_u64(value: i64) -> Option<u64> {
     (value > 0).then_some(value as u64)
+}
+
+fn row_live_by_valid_to(row: &graphqlite::Row, column: &str) -> Result<bool> {
+    Ok(row_i64(row, column).with_context(|| format!("read {column}"))? <= 0)
+}
+
+fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
+    node.valid_to.is_none()
+}
+
+fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
+    relation.valid_to.is_none()
 }
 
 fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
