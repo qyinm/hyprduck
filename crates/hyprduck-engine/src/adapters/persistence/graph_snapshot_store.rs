@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::policy::redact_path_for_agent;
 
-pub(crate) const GRAPHQLITE_SCHEMA_VERSION: i64 = 1;
+pub(crate) const GRAPHQLITE_SCHEMA_VERSION: i64 = 2;
+#[allow(dead_code)]
+pub(super) const GRAPH_VERSION_LEGACY_EVENT_ID: &str = "legacy-graphqlite-current";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct KnowledgeGraphPersistReport {
@@ -352,6 +354,79 @@ struct GraphRecordMetadata {
     source_ids: Vec<String>,
     producer_run_ids: Vec<String>,
     status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(super) struct GraphRecordVersionIdentity {
+    pub(super) logical_id: String,
+    pub(super) version_id: String,
+    pub(super) created_by_event_id: String,
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_snapshot_created_by_event_id(snapshot: &BrainRepoSnapshot) -> String {
+    snapshot
+        .events
+        .last()
+        .map(|event| event.event_id.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "snapshot-{}-{}",
+                snapshot.workspace_id, snapshot.generated_at
+            )
+        })
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_node_version_identity(
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> GraphRecordVersionIdentity {
+    GraphRecordVersionIdentity {
+        logical_id: logical_id.into(),
+        version_id: graph_record_version_id("node", workspace_id, logical_id, created_by_event_id),
+        created_by_event_id: created_by_event_id.into(),
+    }
+}
+
+#[allow(dead_code)]
+pub(super) fn graph_relation_version_identity(
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> GraphRecordVersionIdentity {
+    GraphRecordVersionIdentity {
+        logical_id: logical_id.into(),
+        version_id: graph_record_version_id(
+            "relation",
+            workspace_id,
+            logical_id,
+            created_by_event_id,
+        ),
+        created_by_event_id: created_by_event_id.into(),
+    }
+}
+
+#[allow(dead_code)]
+fn graph_record_version_id(
+    record_kind: &str,
+    workspace_id: &str,
+    logical_id: &str,
+    created_by_event_id: &str,
+) -> String {
+    let payload = serde_json::json!({
+        "kind": record_kind,
+        "workspace": workspace_id,
+        "logical": logical_id,
+        "event": created_by_event_id,
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_else(|_| {
+        format!("{record_kind}:{workspace_id}:{logical_id}:{created_by_event_id}").into_bytes()
+    });
+    let digest = hex_digest(ring::digest::digest(&ring::digest::SHA256, &encoded).as_ref());
+    format!("hyprduck-{record_kind}-version-{}", &digest[..32])
 }
 
 fn node_graph_metadata(

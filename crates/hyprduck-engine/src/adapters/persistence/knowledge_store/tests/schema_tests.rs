@@ -9,10 +9,26 @@ fn knowledge_store_creates_canonical_schema_and_graphqlite_gate() {
     assert!(store.path().ends_with("hyprduck.sqlite"));
 
     let health = store.health().expect("health");
-    assert_eq!(health.db_schema_version, 1);
-    assert_eq!(health.graph_schema_version, 1);
+    assert_eq!(health.db_schema_version, 2);
+    assert_eq!(health.graph_schema_version, 2);
     assert!(health.graphqlite_loaded);
     assert!(health.graphqlite_transactional);
+}
+
+#[test]
+fn graph_version_id_helpers_are_deterministic_and_kind_scoped() {
+    let node = graph_node_version_identity("workspace-default", "node-a", "event-a");
+    let same_node = graph_node_version_identity("workspace-default", "node-a", "event-a");
+    let next_node = graph_node_version_identity("workspace-default", "node-a", "event-b");
+    let relation = graph_relation_version_identity("workspace-default", "node-a", "event-a");
+
+    assert_eq!(node, same_node);
+    assert_eq!(node.logical_id, "node-a");
+    assert_eq!(node.created_by_event_id, "event-a");
+    assert!(node.version_id.starts_with("hyprduck-node-version-"));
+    assert_ne!(node.version_id, next_node.version_id);
+    assert_ne!(node.version_id, relation.version_id);
+    assert_eq!(GRAPH_VERSION_LEGACY_EVENT_ID, "legacy-graphqlite-current");
 }
 
 #[test]

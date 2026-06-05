@@ -40,7 +40,10 @@ use super::context_pack_store::{
 use super::graph_snapshot_store::persist_graph_snapshot_in_transaction;
 pub(crate) use super::graph_snapshot_store::KnowledgeGraphPersistReport;
 #[cfg(test)]
-use super::graph_snapshot_store::GRAPHQLITE_SCHEMA_VERSION;
+use super::graph_snapshot_store::{
+    graph_node_version_identity, graph_relation_version_identity, GRAPHQLITE_SCHEMA_VERSION,
+    GRAPH_VERSION_LEGACY_EVENT_ID,
+};
 use super::import_job_store;
 use super::read_projection_store::{
     graph_snapshot_counts, hybrid_retrieve_from_db, read_graph_canvas_projection_from_db,
