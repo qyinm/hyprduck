@@ -19,6 +19,24 @@ Register HyprDuck with Codex:
 hyprduck mcp install codex
 ```
 
+Enable HyprDuck hook automation for Codex:
+
+```bash
+hyprduck hooks install codex
+```
+
+The hook install keeps MCP as the tool surface and adds Codex lifecycle hooks
+that remind Codex to use HyprDuck automatically at session and prompt time. It
+also configures known non-destructive HyprDuck MCP tools for automatic approval
+while keeping destructive removal or overwrite actions prompt-gated. After
+installing, open `/hooks` in Codex and trust the HyprDuck command hooks.
+
+Inspect hook setup:
+
+```bash
+hyprduck hooks status codex
+```
+
 For a proof that uses MCP `import_source`, register the approved import root at
 install time so Codex launches HyprDuck with the import allowlist:
 
