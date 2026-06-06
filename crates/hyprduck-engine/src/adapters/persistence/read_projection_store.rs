@@ -151,16 +151,17 @@ pub(super) fn hybrid_retrieve_from_db(
             .sqlite_connection()
             .prepare(
                 "SELECT e.evidence_id, e.source_id, e.evidence_type, e.snippet
-                     FROM evidence_items e
-                     JOIN sources s ON s.source_id = e.source_id
-                     WHERE e.snippet LIKE '%' || ?1 || '%'
+                 FROM evidence_items e
+                 JOIN sources s ON s.source_id = e.source_id
+                     WHERE e.workspace_id = ?1
+                       AND e.snippet LIKE '%' || ?2 || '%'
                        AND e.status = 'active'
                        AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
-                     LIMIT ?2",
+                     LIMIT ?3",
             )
             .context("failed preparing hybrid retrieval fallback query")?;
         let mut fallback_rows = fallback_statement
-            .query((query, limit as i64))
+            .query((workspace_id, query, limit as i64))
             .context("failed running hybrid retrieval fallback query")?;
         while let Some(row) = fallback_rows
             .next()

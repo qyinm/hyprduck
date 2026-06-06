@@ -545,8 +545,10 @@ pub(super) fn append_wiki_fts_hits(
 #[allow(dead_code)]
 pub(super) fn fts_phrase_query(query: &str) -> String {
     query
-        .replace('"', " ")
-        .split_whitespace()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" ")
 }

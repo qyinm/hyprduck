@@ -591,6 +591,101 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert_graph_checkpoint_metadata(&store, "workspace-default");
 }
 
+#[test]
+fn hybrid_retrieve_sanitizes_punctuation_for_fts_queries() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let snapshot = BrainRepoSnapshot {
+        workspace_id: "workspace-default".into(),
+        generated_at: 10,
+        sources: vec![SourceRecord {
+            source_id: "source-alpha".into(),
+            workspace_id: "workspace-default".into(),
+            original_path: "/Users/hyprduck/private/source-alpha.pdf".into(),
+            source_path: "/Users/hyprduck/private/source-alpha.pdf".into(),
+            markdown_path: "/Users/hyprduck/private/source-alpha.md".into(),
+            format: SourceFormat::pdf(),
+            status: SourceStatus::ingested(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: 10,
+        }],
+        nodes: Vec::new(),
+        relations: Vec::new(),
+        evidence: vec![EvidenceRef {
+            id: "evidence-alpha".into(),
+            page_label: "Page 1".into(),
+            page_index: Some(0),
+            snippet: "Collection of pairs: key element lookup.".into(),
+            source_path: Some("/Users/hyprduck/private/source-alpha.pdf".into()),
+            source_id: Some("source-alpha".into()),
+            markdown_path: Some("/Users/hyprduck/private/source-alpha.md".into()),
+            image_path: None,
+            provenance: None,
+        }],
+        memories: Vec::new(),
+        wiki_pages: Vec::new(),
+        entities: Vec::new(),
+        claims: Vec::new(),
+        extractions: Vec::new(),
+        events: Vec::new(),
+    };
+    store
+        .persist_graph_snapshot(&snapshot)
+        .expect("persist graph snapshot");
+
+    let hits = store
+        .hybrid_retrieve("workspace-default", "(key, element)", 5)
+        .expect("punctuation query should not produce FTS syntax error");
+
+    assert!(hits.iter().any(|hit| hit.evidence_id == "evidence-alpha"));
+}
+
+#[test]
+fn hybrid_retrieve_fallback_stays_within_requested_workspace() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "INSERT INTO sources (source_id, workspace_id, format, status, page_count)
+             VALUES (?1, ?2, 'markdown', 'ingested', 1)",
+            ("source-other", "workspace-other"),
+        )
+        .expect("insert other workspace source");
+    sqlite
+        .execute(
+            "INSERT INTO evidence_items (
+                evidence_id,
+                workspace_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                status
+             ) VALUES (?1, ?2, ?3, 0, 'Page 1', 'text_evidence', ?4, 'active')",
+            (
+                "evidence-other",
+                "workspace-other",
+                "source-other",
+                "fallbackleakuniquetoken only exists outside the requested workspace",
+            ),
+        )
+        .expect("insert other workspace evidence without FTS row");
+
+    let hits = store
+        .hybrid_retrieve("workspace-default", "fallbackleakuniquetoken", 5)
+        .expect("fallback retrieval should stay scoped");
+
+    assert!(hits.is_empty(), "{hits:#?}");
+}
+
 fn assert_wiki_relational_content(store: &KnowledgeStore, wiki_page_id: &str) {
     let graph = Graph::open(store.path()).expect("open graph");
     let sqlite = graph.connection().sqlite_connection();
