@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use graphqlite::{Row, Value};
 
-pub(super) fn non_empty_string(value: String) -> Option<String> {
+pub(crate) fn non_empty_string(value: String) -> Option<String> {
     if value.is_empty() {
         None
     } else {
@@ -24,7 +24,7 @@ pub(super) fn row_string(row: &Row, column: &str) -> Result<String> {
     }
 }
 
-pub(super) fn row_i64(row: &Row, column: &str) -> Result<i64> {
+pub(crate) fn row_i64(row: &Row, column: &str) -> Result<i64> {
     match row.get_value(column) {
         Some(Value::Integer(value)) => Ok(*value),
         Some(Value::Float(value)) => Ok(*value as i64),
@@ -37,7 +37,7 @@ pub(super) fn row_i64(row: &Row, column: &str) -> Result<i64> {
     }
 }
 
-pub(super) fn row_string_array(row: &Row, column: &str) -> Result<Vec<String>> {
+pub(crate) fn row_string_array(row: &Row, column: &str) -> Result<Vec<String>> {
     match row.get_value(column) {
         Some(Value::Array(values)) => Ok(values
             .iter()

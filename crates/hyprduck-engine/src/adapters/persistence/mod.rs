@@ -1,12 +1,11 @@
 mod agent_write_store;
 mod artifact_store;
-mod context_pack_store;
+pub(crate) mod context_pack_store;
 mod graph_snapshot_store;
 mod import_job_store;
-mod read_projection_store;
-mod row_decode;
+pub(crate) mod read_projection_store;
+pub(crate) mod row_decode;
 mod schema_store;
-mod search_store;
 mod source_manifest_store;
 
 pub(crate) mod brain_artifact_repository;

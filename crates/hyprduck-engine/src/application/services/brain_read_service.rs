@@ -1,5 +1,7 @@
 use crate::*;
-use std::path::{Component, Path};
+use std::path::Path;
+
+use crate::policy;
 
 const READ_NODE_FALLBACK_EVIDENCE_LIMIT: usize = 32;
 const READ_NODE_FALLBACK_RELATION_LIMIT: usize = 64;
@@ -27,12 +29,16 @@ pub(crate) fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchB
 pub(crate) fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+
+    // Prefer the DB projection (authoritative per AGENTS.md).
+    // Only fall back to the legacy BrainReader artifact path when the DB has no data for this source.
     if let Some(mut response) = store.read_source_from_db(
         &request.scope.workspace_id,
         &request.source_id,
         request.include_local_paths,
     )? {
         if request.include_local_paths {
+            // Enrichment with real local paths still requires the artifact snapshot for now.
             if let Ok(reader) = BrainReader::open(&request.scope) {
                 enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
             }
@@ -40,18 +46,9 @@ pub(crate) fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourc
         }
         return Ok(response);
     }
+
+    // Legacy artifact-only path (kept for migration / artifact-only workspaces).
     let reader = BrainReader::open(&request.scope)?;
-    if let Some(mut response) = store.read_source_from_db(
-        &request.scope.workspace_id,
-        &request.source_id,
-        request.include_local_paths,
-    )? {
-        if request.include_local_paths {
-            enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
-            expand_read_source_local_paths(&mut response, &root);
-        }
-        return Ok(response);
-    }
     let source = reader
         .snapshot
         .sources
@@ -84,7 +81,7 @@ pub(crate) fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourc
         evidence,
     };
     if !request.include_local_paths {
-        redact_read_source_agent_paths(&mut response);
+        policy::redact_read_source_agent_paths(&mut response);
     }
     Ok(response)
 }
@@ -98,6 +95,8 @@ pub(crate) fn handle_read_page_evidence(
 
     let root = resolve_brain_workspace_root(&request.scope)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+
+    // Prefer DB projection.
     if let Some(mut response) = store.read_page_evidence_from_db(
         &request.scope.workspace_id,
         &request.source_id,
@@ -113,6 +112,7 @@ pub(crate) fn handle_read_page_evidence(
         return Ok(response);
     }
 
+    // Legacy artifact path.
     let reader = BrainReader::open(&request.scope)?;
     let source = reader
         .snapshot
@@ -158,49 +158,13 @@ pub(crate) fn handle_read_page_evidence(
         warnings: artifact_metadata.warnings,
     };
     if !request.include_local_paths {
-        redact_page_evidence_agent_paths(&mut response);
+        policy::redact_page_evidence_agent_paths(&mut response);
     }
     Ok(response)
 }
 
-fn redact_read_source_agent_paths(response: &mut ReadSourceResponseData) {
-    redact_source_record_agent_paths(&mut response.source);
-    for evidence in &mut response.evidence {
-        redact_optional_agent_path(&mut evidence.source_path);
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
-    }
-}
-
-fn redact_page_evidence_agent_paths(response: &mut ReadPageEvidenceResponseData) {
-    redact_source_record_agent_paths(&mut response.source);
-    for evidence in &mut response.evidence {
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
-    }
-}
-
-fn redact_source_record_agent_paths(source: &mut SourceRecord) {
-    source.original_path = redact_agent_path(&source.original_path);
-    source.source_path = redact_agent_path(&source.source_path);
-    source.markdown_path = redact_agent_path(&source.markdown_path);
-}
-
-fn redact_optional_agent_path(value: &mut Option<String>) {
-    if let Some(path) = value {
-        *path = redact_agent_path(path);
-    }
-}
-
-fn redact_agent_path(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    Path::new(value)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<redacted>".into())
-}
+// Redaction helpers have been moved to the canonical policy module (see policy.rs).
+// They are now reusable from both the DB projection path and the legacy BrainReader path.
 
 fn enrich_read_source_with_local_paths(
     response: &mut ReadSourceResponseData,
@@ -381,9 +345,9 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .cloned()
         .collect::<Vec<_>>();
     for evidence in &mut evidence {
-        redact_optional_agent_path(&mut evidence.source_path);
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
+        policy::redact_optional_agent_path(&mut evidence.source_path);
+        policy::redact_optional_agent_path(&mut evidence.markdown_path);
+        policy::redact_optional_agent_path(&mut evidence.image_path);
     }
     let relations = reader
         .snapshot
@@ -414,101 +378,21 @@ fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
 }
 
 fn read_node_fallback_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
-    read_node_fallback_text_is_safe(&relation.relation_id)
-        && read_node_fallback_text_is_safe(&relation.label)
-        && read_node_fallback_text_is_safe(&relation.source_node_id)
-        && read_node_fallback_text_is_safe(&relation.target_node_id)
+    policy::is_agent_text_safe(&relation.relation_id)
+        && policy::is_agent_text_safe(&relation.label)
+        && policy::is_agent_text_safe(&relation.source_node_id)
+        && policy::is_agent_text_safe(&relation.target_node_id)
 }
 
 fn sanitize_read_node_fallback_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
-    if !read_node_fallback_text_is_safe(&node.node_id)
-        || !read_node_fallback_text_is_safe(&node.label)
+    if !policy::is_agent_text_safe(&node.node_id)
+        || !policy::is_agent_text_safe(&node.label)
     {
         return None;
     }
     node.aliases
-        .retain(|alias| read_node_fallback_text_is_safe(alias));
+        .retain(|alias| policy::is_agent_text_safe(alias));
     Some(node)
-}
-
-fn read_node_fallback_text_is_safe(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    let normalized = value.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
-    if read_node_fallback_text_has_home_path(&lower)
-        || read_node_fallback_text_has_windows_absolute_path(&normalized)
-        || read_node_fallback_text_has_unix_absolute_path(&normalized)
-        || read_node_fallback_text_has_forbidden_path_marker(&lower)
-    {
-        return false;
-    }
-    let path = Path::new(&normalized);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir))
-}
-
-fn read_node_fallback_text_has_home_path(lower: &str) -> bool {
-    let bytes = lower.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"~/" && read_node_fallback_path_token_starts_at(bytes, index)
-    })
-}
-
-fn read_node_fallback_text_has_windows_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    read_node_fallback_text_has_unc_path(normalized)
-        || bytes.windows(3).enumerate().any(|(index, window)| {
-            window[0].is_ascii_alphabetic()
-                && window[1] == b':'
-                && window[2] == b'/'
-                && read_node_fallback_path_token_starts_at(bytes, index)
-        })
-}
-
-fn read_node_fallback_text_has_unc_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"//"
-            && read_node_fallback_path_token_starts_at(bytes, index)
-            && index
-                .checked_sub(1)
-                .map(|prev| bytes[prev] != b':')
-                .unwrap_or(true)
-    })
-}
-
-fn read_node_fallback_text_has_unix_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window[0] == b'/'
-            && window[1] != b'/'
-            && read_node_fallback_path_token_starts_at(bytes, index)
-    })
-}
-
-fn read_node_fallback_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
-    index == 0
-        || bytes[index - 1].is_ascii_whitespace()
-        || matches!(
-            bytes[index - 1],
-            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
-        )
-}
-
-fn read_node_fallback_text_has_forbidden_path_marker(lower: &str) -> bool {
-    lower.contains("docs/private")
-        || lower.contains("docs%2fprivate")
-        || lower.contains("docs%5cprivate")
-        || lower.contains("file://")
-        || lower.contains("../")
-        || lower.contains("%2e")
-        || lower.contains("%2f")
-        || lower.contains("%5c")
 }
 
 pub(crate) fn handle_read_recent_events(

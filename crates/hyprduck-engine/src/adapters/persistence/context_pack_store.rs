@@ -11,18 +11,18 @@ use std::collections::BTreeMap;
 use super::row_decode::non_empty_string;
 
 #[derive(Debug, Clone)]
-pub(super) struct ContextPackEvidenceRow {
-    pub(super) evidence_id: String,
-    pub(super) source_id: String,
-    pub(super) page_index: Option<i64>,
-    pub(super) page_label: String,
-    pub(super) evidence_type: String,
-    pub(super) snippet: String,
-    pub(super) source_path_redacted: String,
-    pub(super) markdown_path_redacted: String,
-    pub(super) image_path_redacted: String,
-    pub(super) provenance: String,
-    pub(super) confidence: Option<f64>,
+pub(crate) struct ContextPackEvidenceRow {
+    pub(crate) evidence_id: String,
+    pub(crate) source_id: String,
+    pub(crate) page_index: Option<i64>,
+    pub(crate) page_label: String,
+    pub(crate) evidence_type: String,
+    pub(crate) snippet: String,
+    pub(crate) source_path_redacted: String,
+    pub(crate) markdown_path_redacted: String,
+    pub(crate) image_path_redacted: String,
+    pub(crate) provenance: String,
+    pub(crate) confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ pub(super) struct ContextPackSourceRow {
     pub(super) updated_at: i64,
 }
 
-pub(super) fn evidence_snippet_from_ids(evidence_ids: &[String]) -> String {
+pub(crate) fn evidence_snippet_from_ids(evidence_ids: &[String]) -> String {
     if evidence_ids.is_empty() {
         String::new()
     } else {
@@ -52,7 +52,7 @@ pub(super) fn evidence_snippet_from_ids(evidence_ids: &[String]) -> String {
     }
 }
 
-pub(super) fn load_context_pack_evidence_row(
+pub(crate) fn load_context_pack_evidence_row(
     graph: &Graph,
     workspace_id: &str,
     evidence_id: &str,

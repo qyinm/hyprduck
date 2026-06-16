@@ -1,10 +1,24 @@
-//! Internal helpers extracted from the engine facade module.
+//! Query-time brain search / hybrid retrieval domain logic (evidence + graph + wiki).
+//! Policy (intent, scoring, stage combination) lives here in the retrieval domain.
+//! Heavy data access (specific FTS queries, graph expansion SQL/Cypher) still reaches
+//! into persistence adapters for the raw mechanics.
 
-use super::row_decode::{row_i64, row_string_array};
 use anyhow::{Context, Result};
 use graphqlite::Graph;
+use hyprduck_engine_types::{
+    BrainSearchResult, BrainSearchResultKind,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use crate::adapters::persistence::context_pack_store::{
+    evidence_snippet_from_ids, load_context_pack_evidence_row,
+};
+use crate::adapters::persistence::read_projection_store::{
+    load_graph_canvas_nodes, load_graph_canvas_relations, load_graph_canvas_wiki_pages,
+};
+use crate::adapters::persistence::row_decode::{non_empty_string, row_i64, row_string_array};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -18,7 +32,7 @@ pub(crate) struct HybridRetrievalHit {
     pub(crate) score: f64,
 }
 
-pub(super) fn db_search_terms(query: &str) -> Vec<String> {
+pub(crate) fn db_search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric())
         .map(|term| term.trim().to_lowercase())
@@ -26,13 +40,13 @@ pub(super) fn db_search_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn db_match_score(terms: &[String], haystack: &str) -> Option<usize> {
+pub(crate) fn db_match_score(terms: &[String], haystack: &str) -> Option<usize> {
     let lower = haystack.to_lowercase();
     let matched = terms.iter().filter(|term| lower.contains(*term)).count();
     (matched > 0).then(|| matched * 100)
 }
 
-pub(super) fn db_best_snippet(text: &str, terms: &[String]) -> String {
+pub(crate) fn db_best_snippet(text: &str, terms: &[String]) -> String {
     let lower = text.to_lowercase();
     for term in terms {
         if let Some(index) = lower.find(term) {
@@ -47,12 +61,12 @@ pub(super) fn db_best_snippet(text: &str, terms: &[String]) -> String {
     text.trim().chars().take(240).collect()
 }
 
-pub(super) fn db_float_score(score: f64) -> usize {
+pub(crate) fn db_float_score(score: f64) -> usize {
     (score.max(0.0) * 1000.0).round() as usize
 }
 
 #[allow(dead_code)]
-pub(super) fn evidence_graph_neighbor_counts(
+pub(crate) fn evidence_graph_neighbor_counts(
     graph: &Graph,
     workspace_id: &str,
 ) -> Result<BTreeMap<String, i64>> {
@@ -104,7 +118,7 @@ pub(super) fn evidence_graph_neighbor_counts(
 }
 
 #[allow(dead_code)]
-pub(super) fn append_graph_neighbor_hits(
+pub(crate) fn append_graph_neighbor_hits(
     graph: &Graph,
     workspace_id: &str,
     limit: usize,
@@ -330,7 +344,7 @@ fn row_is_live(row: &graphqlite::Row, column: &str) -> Result<bool> {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct EvidenceQueryIntent {
+pub(crate) struct EvidenceQueryIntent {
     wants_table: bool,
     wants_visual: bool,
     wants_summary: bool,
@@ -339,7 +353,7 @@ pub(super) struct EvidenceQueryIntent {
 }
 
 impl EvidenceQueryIntent {
-    pub(super) fn from_query(query: &str) -> Self {
+    pub(crate) fn from_query(query: &str) -> Self {
         let query = query.to_lowercase();
         let contains_any = |needles: &[&str]| needles.iter().any(|needle| query.contains(needle));
         Self {
@@ -388,7 +402,7 @@ impl EvidenceQueryIntent {
         }
     }
 
-    pub(super) fn boost(self, evidence_type: &str) -> f64 {
+    pub(crate) fn boost(self, evidence_type: &str) -> f64 {
         let intent_boost = match evidence_type {
             "table_evidence" if self.wants_table => 0.14,
             "image_region_evidence" | "ocr_evidence" | "caption_evidence" if self.wants_visual => {
@@ -411,7 +425,7 @@ impl EvidenceQueryIntent {
 }
 
 #[allow(dead_code)]
-pub(super) fn append_source_page_fts_hits(
+pub(crate) fn append_source_page_fts_hits(
     graph: &Graph,
     workspace_id: &str,
     fts_query: &str,
@@ -474,7 +488,7 @@ pub(super) fn append_source_page_fts_hits(
 }
 
 #[allow(dead_code)]
-pub(super) fn append_wiki_fts_hits(
+pub(crate) fn append_wiki_fts_hits(
     graph: &Graph,
     workspace_id: &str,
     fts_query: &str,
@@ -543,12 +557,258 @@ pub(super) fn append_wiki_fts_hits(
 }
 
 #[allow(dead_code)]
-pub(super) fn fts_phrase_query(query: &str) -> String {
-    query
-        .split(|ch: char| !ch.is_alphanumeric())
-        .map(str::trim)
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+pub(crate) fn fts_phrase_query(query: &str) -> String {
+    db_search_terms(query)
+        .into_iter()
+        .map(|term| format!("\"{}\"", term.replace('\"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[allow(dead_code)]
+pub(crate) fn hybrid_retrieve_from_db(
+    path: &Path,
+    workspace_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<HybridRetrievalHit>> {
+    let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
+    let graph_neighbor_counts = evidence_graph_neighbor_counts(&graph, workspace_id)?;
+    let fts_query = fts_phrase_query(query);
+    if fts_query.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let evidence_intent = EvidenceQueryIntent::from_query(query);
+
+    let mut statement = graph
+        .connection()
+        .sqlite_connection()
+        .prepare(
+            "SELECT
+                    f.evidence_id,
+                    f.source_id,
+                    f.evidence_type,
+                    f.text,
+                    bm25(evidence_fts) AS lexical_rank
+                 FROM evidence_fts f
+                 JOIN evidence_items e ON e.evidence_id = f.evidence_id
+                 JOIN sources s ON s.source_id = e.source_id
+                 WHERE e.workspace_id = ?1 AND evidence_fts MATCH ?2
+                   AND e.status = 'active'
+                   AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
+                 ORDER BY lexical_rank ASC
+                 LIMIT ?3",
+        )
+        .context("failed preparing hybrid retrieval query")?;
+    let mut rows = statement
+        .query((workspace_id, fts_query.as_str(), limit as i64))
+        .context("failed running hybrid retrieval query")?;
+    let mut hits = Vec::new();
+    while let Some(row) = rows.next().context("failed reading hybrid retrieval row")? {
+        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+        let source_id: String = row.get(1).context("failed reading source id")?;
+        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+        let snippet: String = row.get(3).context("failed reading evidence text")?;
+        let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
+        let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+        let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
+        let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+        hits.push(HybridRetrievalHit {
+            evidence_id,
+            source_id,
+            evidence_type,
+            snippet,
+            lexical_rank,
+            graph_neighbor_count,
+            score: -lexical_rank + typed_evidence_boost + graph_boost,
+        });
+    }
+    if hits.len() < limit {
+        append_graph_neighbor_hits(
+            &graph,
+            workspace_id,
+            limit,
+            &graph_neighbor_counts,
+            &evidence_intent,
+            &mut hits,
+        )?;
+    }
+    if hits.len() < limit {
+        append_source_page_fts_hits(
+            &graph,
+            workspace_id,
+            fts_query.as_str(),
+            limit,
+            &graph_neighbor_counts,
+            &evidence_intent,
+            &mut hits,
+        )?;
+    }
+    if hits.len() < limit {
+        append_wiki_fts_hits(
+            &graph,
+            workspace_id,
+            fts_query.as_str(),
+            limit,
+            &graph_neighbor_counts,
+            &evidence_intent,
+            &mut hits,
+        )?;
+    }
+    if hits.is_empty() {
+        let mut fallback_statement = graph
+            .connection()
+            .sqlite_connection()
+            .prepare(
+                "SELECT e.evidence_id, e.source_id, e.evidence_type, e.snippet
+                 FROM evidence_items e
+                 JOIN sources s ON s.source_id = e.source_id
+                     WHERE e.workspace_id = ?1
+                       AND e.snippet LIKE '%' || ?2 || '%'
+                       AND e.status = 'active'
+                       AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
+                     LIMIT ?3",
+            )
+            .context("failed preparing hybrid retrieval fallback query")?;
+        let mut fallback_rows = fallback_statement
+            .query((workspace_id, query, limit as i64))
+            .context("failed running hybrid retrieval fallback query")?;
+        while let Some(row) = fallback_rows
+            .next()
+            .context("failed reading hybrid retrieval fallback row")?
+        {
+            let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+            let source_id: String = row.get(1).context("failed reading source id")?;
+            let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+            let snippet: String = row.get(3).context("failed reading evidence text")?;
+            let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+            let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
+            let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+            hits.push(HybridRetrievalHit {
+                evidence_id,
+                source_id,
+                evidence_type,
+                snippet,
+                lexical_rank: 0.0,
+                graph_neighbor_count,
+                score: typed_evidence_boost + graph_boost,
+            });
+        }
+    }
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(hits)
+}
+
+#[allow(dead_code)]
+pub(crate) fn search_brain_from_db(
+    path: &Path,
+    workspace_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<BrainSearchResult>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let terms = db_search_terms(query);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
+    let mut results = Vec::new();
+    for hit in hybrid_retrieve_from_db(path, workspace_id, query, limit)? {
+        let row = load_context_pack_evidence_row(&graph, workspace_id, &hit.evidence_id)?;
+        let path = row
+            .as_ref()
+            .and_then(|row| non_empty_string(row.markdown_path_redacted.clone()));
+        results.push(BrainSearchResult {
+            kind: if hit.evidence_type == "wiki_evidence" {
+                BrainSearchResultKind::WikiPage
+            } else {
+                BrainSearchResultKind::Evidence
+            },
+            id: hit.evidence_id,
+            title: hit.source_id,
+            path,
+            score: db_float_score(hit.score),
+            snippet: hit.snippet,
+        });
+    }
+
+    for node in load_graph_canvas_nodes(&graph, workspace_id)? {
+        let haystack = format!(
+            "{} {} {} {}",
+            node.node_id,
+            node.label,
+            node.aliases.join(" "),
+            node.source_ids.join(" ")
+        );
+        if let Some(score) = db_match_score(&terms, &haystack) {
+            results.push(BrainSearchResult {
+                kind: BrainSearchResultKind::Node,
+                id: node.node_id,
+                title: node.label,
+                path: None,
+                score,
+                snippet: evidence_snippet_from_ids(&node.evidence_ids),
+            });
+        }
+    }
+
+    for relation in load_graph_canvas_relations(&graph, workspace_id)? {
+        let haystack = format!(
+            "{} {:?} {} {} {} {}",
+            relation.relation_id,
+            relation.kind,
+            relation.source_node_id,
+            relation.target_node_id,
+            relation.label,
+            relation.evidence_ids.join(" ")
+        );
+        if let Some(score) = db_match_score(&terms, &haystack) {
+            results.push(BrainSearchResult {
+                kind: BrainSearchResultKind::Relation,
+                id: relation.relation_id,
+                title: relation.label,
+                path: None,
+                score,
+                snippet: format!(
+                    "{:?}: {} -> {}; {}",
+                    relation.kind,
+                    relation.source_node_id,
+                    relation.target_node_id,
+                    evidence_snippet_from_ids(&relation.evidence_ids)
+                ),
+            });
+        }
+    }
+
+    for page in load_graph_canvas_wiki_pages(&graph, workspace_id)? {
+        let haystack = format!("{} {} {}", page.path, page.title, page.body);
+        if let Some(score) = db_match_score(&terms, &haystack) {
+            results.push(BrainSearchResult {
+                kind: BrainSearchResultKind::WikiPage,
+                id: page.page_id,
+                title: page.title,
+                path: Some(page.path),
+                score,
+                snippet: db_best_snippet(&page.body, &terms),
+            });
+        }
+    }
+
+    results.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    results.dedup_by(|left, right| left.kind == right.kind && left.id == right.id);
+    results.truncate(limit);
+    Ok(results)
 }

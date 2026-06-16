@@ -4,27 +4,24 @@ use anyhow::{anyhow, Context, Result};
 use graphqlite::Graph;
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainScope,
-    BrainSearchResult, BrainSearchResultKind, GraphSnapshotSourceRecord, PageEvidenceV0,
+    GraphSnapshotSourceRecord, PageEvidenceV0,
     ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData, SourceFormat,
     SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use super::context_pack_store::{
-    db_parse_confidence, evidence_snippet_from_ids, load_context_pack_evidence_row,
+    db_parse_confidence, load_context_pack_evidence_row,
     load_context_pack_evidence_rows_for_source, load_context_pack_source_row,
     load_evidence_refs_by_ids, load_evidence_refs_for_source, load_wiki_page_by_path,
     load_wiki_page_for_source, source_record_from_context_row,
 };
 use super::graph_snapshot_store::KnowledgeGraphPersistReport;
 use super::row_decode::{non_empty_string, row_i64, row_string, row_string_array};
-use super::search_store::{
-    append_graph_neighbor_hits, append_source_page_fts_hits, append_wiki_fts_hits, db_best_snippet,
-    db_float_score, db_match_score, db_search_terms, evidence_graph_neighbor_counts,
-    fts_phrase_query, EvidenceQueryIntent, HybridRetrievalHit,
-};
+// (Retrieval policy moved to domains/retrieval/brain_search; see that module.
+use crate::policy;
 
 #[derive(Debug)]
 struct NodeRelationRow {
@@ -55,144 +52,6 @@ pub(crate) struct RelationalEvidenceProof {
     pub(crate) created_at: i64,
 }
 
-#[allow(dead_code)]
-pub(super) fn hybrid_retrieve_from_db(
-    path: &Path,
-    workspace_id: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<HybridRetrievalHit>> {
-    let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let graph_neighbor_counts = evidence_graph_neighbor_counts(&graph, workspace_id)?;
-    let fts_query = fts_phrase_query(query);
-    if fts_query.is_empty() || limit == 0 {
-        return Ok(Vec::new());
-    }
-    let evidence_intent = EvidenceQueryIntent::from_query(query);
-
-    let mut statement = graph
-        .connection()
-        .sqlite_connection()
-        .prepare(
-            "SELECT
-                    f.evidence_id,
-                    f.source_id,
-                    f.evidence_type,
-                    f.text,
-                    bm25(evidence_fts) AS lexical_rank
-                 FROM evidence_fts f
-                 JOIN evidence_items e ON e.evidence_id = f.evidence_id
-                 JOIN sources s ON s.source_id = e.source_id
-                 WHERE e.workspace_id = ?1 AND evidence_fts MATCH ?2
-                   AND e.status = 'active'
-                   AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
-                 ORDER BY lexical_rank ASC
-                 LIMIT ?3",
-        )
-        .context("failed preparing hybrid retrieval query")?;
-    let mut rows = statement
-        .query((workspace_id, fts_query.as_str(), limit as i64))
-        .context("failed running hybrid retrieval query")?;
-    let mut hits = Vec::new();
-    while let Some(row) = rows.next().context("failed reading hybrid retrieval row")? {
-        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
-        let source_id: String = row.get(1).context("failed reading source id")?;
-        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
-        let snippet: String = row.get(3).context("failed reading evidence text")?;
-        let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
-        let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
-        let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
-        let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
-        hits.push(HybridRetrievalHit {
-            evidence_id,
-            source_id,
-            evidence_type,
-            snippet,
-            lexical_rank,
-            graph_neighbor_count,
-            score: -lexical_rank + typed_evidence_boost + graph_boost,
-        });
-    }
-    if hits.len() < limit {
-        append_graph_neighbor_hits(
-            &graph,
-            workspace_id,
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
-    if hits.len() < limit {
-        append_source_page_fts_hits(
-            &graph,
-            workspace_id,
-            fts_query.as_str(),
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
-    if hits.len() < limit {
-        append_wiki_fts_hits(
-            &graph,
-            workspace_id,
-            fts_query.as_str(),
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
-    if hits.is_empty() {
-        let mut fallback_statement = graph
-            .connection()
-            .sqlite_connection()
-            .prepare(
-                "SELECT e.evidence_id, e.source_id, e.evidence_type, e.snippet
-                 FROM evidence_items e
-                 JOIN sources s ON s.source_id = e.source_id
-                     WHERE e.workspace_id = ?1
-                       AND e.snippet LIKE '%' || ?2 || '%'
-                       AND e.status = 'active'
-                       AND s.status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
-                     LIMIT ?3",
-            )
-            .context("failed preparing hybrid retrieval fallback query")?;
-        let mut fallback_rows = fallback_statement
-            .query((workspace_id, query, limit as i64))
-            .context("failed running hybrid retrieval fallback query")?;
-        while let Some(row) = fallback_rows
-            .next()
-            .context("failed reading hybrid retrieval fallback row")?
-        {
-            let evidence_id: String = row.get(0).context("failed reading evidence id")?;
-            let source_id: String = row.get(1).context("failed reading source id")?;
-            let evidence_type: String = row.get(2).context("failed reading evidence type")?;
-            let snippet: String = row.get(3).context("failed reading evidence text")?;
-            let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
-            let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
-            let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
-            hits.push(HybridRetrievalHit {
-                evidence_id,
-                source_id,
-                evidence_type,
-                snippet,
-                lexical_rank: 0.0,
-                graph_neighbor_count,
-                score: typed_evidence_boost + graph_boost,
-            });
-        }
-    }
-    hits.sort_by(|left, right| {
-        right
-            .score
-            .partial_cmp(&left.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    Ok(hits)
-}
 
 #[allow(dead_code)]
 pub(super) fn read_source_from_db(
@@ -437,98 +296,19 @@ fn load_node_relations_from_db(
 }
 
 fn read_node_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
-    read_node_agent_text_is_safe(&relation.relation_id)
-        && read_node_agent_text_is_safe(&relation.label)
-        && read_node_agent_text_is_safe(&relation.source_node_id)
-        && read_node_agent_text_is_safe(&relation.target_node_id)
+    policy::is_agent_text_safe(&relation.relation_id)
+        && policy::is_agent_text_safe(&relation.label)
+        && policy::is_agent_text_safe(&relation.source_node_id)
+        && policy::is_agent_text_safe(&relation.target_node_id)
 }
 
 fn sanitize_read_node_agent_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
-    if !read_node_agent_text_is_safe(&node.node_id) || !read_node_agent_text_is_safe(&node.label) {
+    if !policy::is_agent_text_safe(&node.node_id) || !policy::is_agent_text_safe(&node.label) {
         return None;
     }
     node.aliases
-        .retain(|alias| read_node_agent_text_is_safe(alias));
+        .retain(|alias| policy::is_agent_text_safe(alias));
     Some(node)
-}
-
-fn read_node_agent_text_is_safe(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    let normalized = value.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
-    if read_node_text_has_home_path(&lower)
-        || read_node_text_has_windows_absolute_path(&normalized)
-        || read_node_text_has_unix_absolute_path(&normalized)
-        || read_node_text_has_forbidden_path_marker(&lower)
-    {
-        return false;
-    }
-    let path = Path::new(&normalized);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir))
-}
-
-fn read_node_text_has_home_path(lower: &str) -> bool {
-    let bytes = lower.as_bytes();
-    bytes
-        .windows(2)
-        .enumerate()
-        .any(|(index, window)| window == b"~/" && read_node_path_token_starts_at(bytes, index))
-}
-
-fn read_node_text_has_windows_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    read_node_text_has_unc_path(normalized)
-        || bytes.windows(3).enumerate().any(|(index, window)| {
-            window[0].is_ascii_alphabetic()
-                && window[1] == b':'
-                && window[2] == b'/'
-                && read_node_path_token_starts_at(bytes, index)
-        })
-}
-
-fn read_node_text_has_unc_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"//"
-            && read_node_path_token_starts_at(bytes, index)
-            && index
-                .checked_sub(1)
-                .map(|prev| bytes[prev] != b':')
-                .unwrap_or(true)
-    })
-}
-
-fn read_node_text_has_unix_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window[0] == b'/' && window[1] != b'/' && read_node_path_token_starts_at(bytes, index)
-    })
-}
-
-fn read_node_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
-    index == 0
-        || bytes[index - 1].is_ascii_whitespace()
-        || matches!(
-            bytes[index - 1],
-            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
-        )
-}
-
-fn read_node_text_has_forbidden_path_marker(lower: &str) -> bool {
-    lower.contains("docs/private")
-        || lower.contains("docs%2fprivate")
-        || lower.contains("docs%5cprivate")
-        || lower.contains("file://")
-        || lower.contains("../")
-        || lower.contains("%2e")
-        || lower.contains("%2f")
-        || lower.contains("%5c")
 }
 
 fn load_node_relation_rows_from_db(
@@ -740,113 +520,6 @@ pub(super) fn read_graph_snapshot_sources_from_db(
     Ok(sources)
 }
 
-pub(super) fn search_brain_from_db(
-    path: &Path,
-    workspace_id: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<BrainSearchResult>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-    let terms = db_search_terms(query);
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let graph = Graph::open(path).context("GraphQLite failed to open knowledge DB")?;
-    let mut results = Vec::new();
-    for hit in hybrid_retrieve_from_db(path, workspace_id, query, limit)? {
-        let row = load_context_pack_evidence_row(&graph, workspace_id, &hit.evidence_id)?;
-        let path = row
-            .as_ref()
-            .and_then(|row| non_empty_string(row.markdown_path_redacted.clone()));
-        results.push(BrainSearchResult {
-            kind: if hit.evidence_type == "wiki_evidence" {
-                BrainSearchResultKind::WikiPage
-            } else {
-                BrainSearchResultKind::Evidence
-            },
-            id: hit.evidence_id,
-            title: hit.source_id,
-            path,
-            score: db_float_score(hit.score),
-            snippet: hit.snippet,
-        });
-    }
-
-    for node in load_graph_canvas_nodes(&graph, workspace_id)? {
-        let haystack = format!(
-            "{} {} {} {}",
-            node.node_id,
-            node.label,
-            node.aliases.join(" "),
-            node.source_ids.join(" ")
-        );
-        if let Some(score) = db_match_score(&terms, &haystack) {
-            results.push(BrainSearchResult {
-                kind: BrainSearchResultKind::Node,
-                id: node.node_id,
-                title: node.label,
-                path: None,
-                score,
-                snippet: evidence_snippet_from_ids(&node.evidence_ids),
-            });
-        }
-    }
-
-    for relation in load_graph_canvas_relations(&graph, workspace_id)? {
-        let haystack = format!(
-            "{} {:?} {} {} {} {}",
-            relation.relation_id,
-            relation.kind,
-            relation.source_node_id,
-            relation.target_node_id,
-            relation.label,
-            relation.evidence_ids.join(" ")
-        );
-        if let Some(score) = db_match_score(&terms, &haystack) {
-            results.push(BrainSearchResult {
-                kind: BrainSearchResultKind::Relation,
-                id: relation.relation_id,
-                title: relation.label,
-                path: None,
-                score,
-                snippet: format!(
-                    "{:?}: {} -> {}; {}",
-                    relation.kind,
-                    relation.source_node_id,
-                    relation.target_node_id,
-                    evidence_snippet_from_ids(&relation.evidence_ids)
-                ),
-            });
-        }
-    }
-
-    for page in load_graph_canvas_wiki_pages(&graph, workspace_id)? {
-        let haystack = format!("{} {} {}", page.path, page.title, page.body);
-        if let Some(score) = db_match_score(&terms, &haystack) {
-            results.push(BrainSearchResult {
-                kind: BrainSearchResultKind::WikiPage,
-                id: page.page_id,
-                title: page.title,
-                path: Some(page.path),
-                score,
-                snippet: db_best_snippet(&page.body, &terms),
-            });
-        }
-    }
-
-    results.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then_with(|| left.title.cmp(&right.title))
-    });
-    results.dedup_by(|left, right| left.kind == right.kind && left.id == right.id);
-    results.truncate(limit);
-    Ok(results)
-}
 
 #[allow(dead_code)]
 pub(super) fn resolve_evidence_proof(
@@ -924,7 +597,7 @@ pub(super) fn graph_snapshot_counts(
     })
 }
 
-fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<BrainNodeRecord>> {
+pub(crate) fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<BrainNodeRecord>> {
     let rows = graph
         .connection()
         .cypher_builder(
@@ -1000,7 +673,7 @@ fn graph_canvas_node_from_row(row: &graphqlite::Row) -> Result<BrainNodeRecord> 
     })
 }
 
-fn load_graph_canvas_relations(
+pub(crate) fn load_graph_canvas_relations(
     graph: &Graph,
     workspace_id: &str,
 ) -> Result<Vec<BrainRelationRecord>> {
@@ -1116,7 +789,7 @@ fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
     relation.valid_to.is_none()
 }
 
-fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
+pub(crate) fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
         .prepare(
