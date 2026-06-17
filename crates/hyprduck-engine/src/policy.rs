@@ -309,3 +309,16 @@ fn expand_string_path(value: &mut String, workspace_root: &Path, segments: &[&st
     path.push(value.as_str());
     *value = path.to_string_lossy().into_owned();
 }
+
+/// Graph trail warning helper centralized in policy (moved from context_pack_service
+/// during Phase 3 DB-first cleanup; reusable, matches prior duplicate in knowledge_store).
+pub(crate) fn graph_trail_unavailable_warning(
+    message: &str,
+) -> hyprduck_engine_types::ContextPackWarningV0 {
+    hyprduck_engine_types::ContextPackWarningV0 {
+        warning_type: "graph_trail_unavailable".into(),
+        severity: hyprduck_engine_types::ContextPackWarningSeverity::Low,
+        message: message.into(),
+        page_refs: Vec::new(),
+    }
+}
