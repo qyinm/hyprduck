@@ -1,4 +1,5 @@
 use super::*;
+use crate::KnowledgeStore;
 
 pub(crate) fn source_like_node_ids_for_concept(
     project: &KnowledgeProject,
@@ -394,10 +395,35 @@ fn materialized_workspace_answer_candidates(reader: &BrainReader) -> Vec<Workspa
         });
     }
 
-    for page in reader
-        .read_all_wiki_pages()
-        .unwrap_or_else(|_| reader.snapshot.wiki_pages.clone())
-    {
+    // DB first for canvas wiki (KnowledgeStore read_graph_canvas_projection_from_db); reader fallback narrow/explicit.
+    // Part of project_service + answer update for "DB가 이기게" consistency (AGENTS.md).
+    let wiki_pages: Vec<_> = {
+        let root = reader.root();
+        let ws = &reader.snapshot.workspace_id;
+        let db_path = KnowledgeStore::default_path_for_root(root);
+        if db_path.exists() {
+            if let Ok(Some((_, _, wikis))) = KnowledgeStore::open(db_path)
+                .and_then(|s| s.read_graph_canvas_projection_from_db(ws))
+            {
+                if !wikis.is_empty() {
+                    wikis
+                } else {
+                    reader
+                        .read_all_wiki_pages()
+                        .unwrap_or_else(|_| reader.snapshot.wiki_pages.clone())
+                }
+            } else {
+                reader
+                    .read_all_wiki_pages()
+                    .unwrap_or_else(|_| reader.snapshot.wiki_pages.clone())
+            }
+        } else {
+            reader
+                .read_all_wiki_pages()
+                .unwrap_or_else(|_| reader.snapshot.wiki_pages.clone())
+        }
+    };
+    for page in wiki_pages {
         candidates.push(WorkspaceAnswerCandidate {
             kind_label: "wiki page",
             title: page.title.clone(),

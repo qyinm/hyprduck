@@ -298,7 +298,9 @@ fn managed_config_block_span(text: &str) -> Result<Option<ManagedConfigBlockSpan
     };
     let content_start = full_start + CONFIG_BLOCK_START.len();
     let Some(relative_end) = text[content_start..].find(CONFIG_BLOCK_END) else {
-        return Err(anyhow!("HyprDuck managed config block is missing its end marker"));
+        return Err(anyhow!(
+            "HyprDuck managed config block is missing its end marker"
+        ));
     };
     let content_end = content_start + relative_end;
     Ok(Some(ManagedConfigBlockSpan {

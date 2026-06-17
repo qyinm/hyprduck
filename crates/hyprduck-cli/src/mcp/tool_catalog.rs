@@ -1,9 +1,7 @@
 use serde_json::{json, Value};
 
 use super::args::{PROPOSAL_ID_PATTERN, WRITE_CONTENT_TYPES};
-use super::automation_policy::{
-    policy_for_mcp_tool, AutomationDecision, ToolAutomationPolicy,
-};
+use super::automation_policy::{policy_for_mcp_tool, AutomationDecision, ToolAutomationPolicy};
 use super::supports_local_path_disclosure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

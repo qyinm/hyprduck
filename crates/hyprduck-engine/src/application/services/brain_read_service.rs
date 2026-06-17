@@ -1,5 +1,6 @@
 use crate::*;
-use std::path::{Component, Path};
+
+use crate::policy;
 
 const READ_NODE_FALLBACK_EVIDENCE_LIMIT: usize = 32;
 const READ_NODE_FALLBACK_RELATION_LIMIT: usize = 64;
@@ -27,31 +28,30 @@ pub(crate) fn handle_search_brain(request: SearchBrainRequest) -> Result<SearchB
 pub(crate) fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourceResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+
+    // Prefer the DB projection (authoritative per AGENTS.md).
+    // Only fall back to the legacy BrainReader artifact path when the DB has no data for this source.
     if let Some(mut response) = store.read_source_from_db(
         &request.scope.workspace_id,
         &request.source_id,
         request.include_local_paths,
     )? {
         if request.include_local_paths {
+            // Enrichment with real local paths still requires the artifact snapshot for now.
             if let Ok(reader) = BrainReader::open(&request.scope) {
-                enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
+                policy::enrich_read_source_with_local_paths(
+                    &mut response,
+                    &reader.snapshot,
+                    &request.source_id,
+                );
             }
-            expand_read_source_local_paths(&mut response, &root);
+            policy::expand_read_source_local_paths(&mut response, &root);
         }
         return Ok(response);
     }
+
+    // Legacy artifact-only path (kept for migration / artifact-only workspaces).
     let reader = BrainReader::open(&request.scope)?;
-    if let Some(mut response) = store.read_source_from_db(
-        &request.scope.workspace_id,
-        &request.source_id,
-        request.include_local_paths,
-    )? {
-        if request.include_local_paths {
-            enrich_read_source_with_local_paths(&mut response, &reader, &request.source_id);
-            expand_read_source_local_paths(&mut response, &root);
-        }
-        return Ok(response);
-    }
     let source = reader
         .snapshot
         .sources
@@ -84,7 +84,7 @@ pub(crate) fn handle_read_source(request: ReadSourceRequest) -> Result<ReadSourc
         evidence,
     };
     if !request.include_local_paths {
-        redact_read_source_agent_paths(&mut response);
+        policy::redact_read_source_agent_paths(&mut response);
     }
     Ok(response)
 }
@@ -98,6 +98,8 @@ pub(crate) fn handle_read_page_evidence(
 
     let root = resolve_brain_workspace_root(&request.scope)?;
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
+
+    // Prefer DB projection.
     if let Some(mut response) = store.read_page_evidence_from_db(
         &request.scope.workspace_id,
         &request.source_id,
@@ -106,13 +108,18 @@ pub(crate) fn handle_read_page_evidence(
     )? {
         if request.include_local_paths {
             if let Ok(reader) = BrainReader::open(&request.scope) {
-                enrich_page_evidence_with_local_paths(&mut response, &reader, &request.source_id);
+                policy::enrich_page_evidence_with_local_paths(
+                    &mut response,
+                    &reader.snapshot,
+                    &request.source_id,
+                );
             }
-            expand_page_evidence_local_paths(&mut response, &root);
+            policy::expand_page_evidence_local_paths(&mut response, &root);
         }
         return Ok(response);
     }
 
+    // Legacy artifact path.
     let reader = BrainReader::open(&request.scope)?;
     let source = reader
         .snapshot
@@ -158,187 +165,14 @@ pub(crate) fn handle_read_page_evidence(
         warnings: artifact_metadata.warnings,
     };
     if !request.include_local_paths {
-        redact_page_evidence_agent_paths(&mut response);
+        policy::redact_page_evidence_agent_paths(&mut response);
     }
     Ok(response)
 }
 
-fn redact_read_source_agent_paths(response: &mut ReadSourceResponseData) {
-    redact_source_record_agent_paths(&mut response.source);
-    for evidence in &mut response.evidence {
-        redact_optional_agent_path(&mut evidence.source_path);
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
-    }
-}
-
-fn redact_page_evidence_agent_paths(response: &mut ReadPageEvidenceResponseData) {
-    redact_source_record_agent_paths(&mut response.source);
-    for evidence in &mut response.evidence {
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
-    }
-}
-
-fn redact_source_record_agent_paths(source: &mut SourceRecord) {
-    source.original_path = redact_agent_path(&source.original_path);
-    source.source_path = redact_agent_path(&source.source_path);
-    source.markdown_path = redact_agent_path(&source.markdown_path);
-}
-
-fn redact_optional_agent_path(value: &mut Option<String>) {
-    if let Some(path) = value {
-        *path = redact_agent_path(path);
-    }
-}
-
-fn redact_agent_path(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    Path::new(value)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<redacted>".into())
-}
-
-fn enrich_read_source_with_local_paths(
-    response: &mut ReadSourceResponseData,
-    reader: &BrainReader,
-    source_id: &str,
-) {
-    if let Some(source) = reader
-        .snapshot
-        .sources
-        .iter()
-        .find(|source| source.source_id == source_id)
-    {
-        response.source.original_path = source.original_path.clone();
-        response.source.source_path = source.source_path.clone();
-        response.source.markdown_path = source.markdown_path.clone();
-    }
-
-    let evidence_by_id = reader
-        .snapshot
-        .evidence
-        .iter()
-        .map(|evidence| (evidence.id.as_str(), evidence))
-        .collect::<BTreeMap<_, _>>();
-    for evidence in &mut response.evidence {
-        if let Some(raw) = evidence_by_id.get(evidence.id.as_str()) {
-            evidence.source_path = raw.source_path.clone();
-            evidence.markdown_path = raw.markdown_path.clone();
-            evidence.image_path = raw.image_path.clone();
-        }
-    }
-}
-
-fn expand_read_source_local_paths(response: &mut ReadSourceResponseData, workspace_root: &Path) {
-    expand_source_record_local_paths(&mut response.source, workspace_root);
-    for evidence in &mut response.evidence {
-        let source_id = evidence
-            .source_id
-            .as_deref()
-            .unwrap_or(response.source.source_id.as_str());
-        expand_optional_path(
-            &mut evidence.source_path,
-            workspace_root,
-            &["sources", source_id],
-        );
-        expand_optional_path(
-            &mut evidence.markdown_path,
-            workspace_root,
-            &["artifacts", source_id, "pages"],
-        );
-        expand_optional_path(
-            &mut evidence.image_path,
-            workspace_root,
-            &["artifacts", source_id, "images"],
-        );
-    }
-}
-
-fn enrich_page_evidence_with_local_paths(
-    response: &mut ReadPageEvidenceResponseData,
-    reader: &BrainReader,
-    source_id: &str,
-) {
-    if let Some(source) = reader
-        .snapshot
-        .sources
-        .iter()
-        .find(|source| source.source_id == source_id)
-    {
-        response.source.original_path = source.original_path.clone();
-        response.source.source_path = source.source_path.clone();
-        response.source.markdown_path = source.markdown_path.clone();
-    }
-
-    let evidence_by_id = reader
-        .snapshot
-        .evidence
-        .iter()
-        .map(|evidence| (evidence.id.as_str(), evidence))
-        .collect::<BTreeMap<_, _>>();
-    for evidence in &mut response.evidence {
-        if let Some(raw) = evidence_by_id.get(evidence.evidence_ref.as_str()) {
-            evidence.markdown_path = raw.markdown_path.clone();
-            evidence.image_path = raw.image_path.clone();
-        }
-    }
-}
-
-fn expand_page_evidence_local_paths(
-    response: &mut ReadPageEvidenceResponseData,
-    workspace_root: &Path,
-) {
-    expand_source_record_local_paths(&mut response.source, workspace_root);
-    let source_id = response.source.source_id.as_str();
-    for evidence in &mut response.evidence {
-        expand_optional_path(
-            &mut evidence.markdown_path,
-            workspace_root,
-            &["artifacts", source_id, "pages"],
-        );
-        expand_optional_path(
-            &mut evidence.image_path,
-            workspace_root,
-            &["artifacts", source_id, "images"],
-        );
-    }
-}
-
-fn expand_source_record_local_paths(source: &mut SourceRecord, workspace_root: &Path) {
-    expand_string_path(&mut source.original_path, workspace_root, &[]);
-    expand_string_path(
-        &mut source.source_path,
-        workspace_root,
-        &["sources", source.source_id.as_str()],
-    );
-    expand_string_path(
-        &mut source.markdown_path,
-        workspace_root,
-        &["artifacts", source.source_id.as_str()],
-    );
-}
-
-fn expand_optional_path(value: &mut Option<String>, workspace_root: &Path, segments: &[&str]) {
-    if let Some(path) = value {
-        expand_string_path(path, workspace_root, segments);
-    }
-}
-
-fn expand_string_path(value: &mut String, workspace_root: &Path, segments: &[&str]) {
-    if value.is_empty() || value == "[redacted-local-path]" || Path::new(value).is_absolute() {
-        return;
-    }
-    let mut path = workspace_root.to_path_buf();
-    for segment in segments {
-        path.push(segment);
-    }
-    path.push(value.as_str());
-    *value = path.to_string_lossy().into_owned();
-}
+// Redaction and local-path enrichment/expand helpers now live in policy.rs
+// (centralized "agent-safe read" contract, reusable with snapshot data or BrainReader.snapshot).
+// See policy.rs for the implementation (enrich/expand take &BrainRepoSnapshot, not &BrainReader).
 
 pub(crate) fn handle_read_wiki_page(
     request: ReadWikiPageRequest,
@@ -366,7 +200,7 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .snapshot
         .nodes
         .iter()
-        .find(|node| node.node_id == request.node_id && graph_node_is_live(node))
+        .find(|node| node.node_id == request.node_id && node.valid_to.is_none())
         .cloned()
         .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
     let node = sanitize_read_node_fallback_node(node)
@@ -381,16 +215,16 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .cloned()
         .collect::<Vec<_>>();
     for evidence in &mut evidence {
-        redact_optional_agent_path(&mut evidence.source_path);
-        redact_optional_agent_path(&mut evidence.markdown_path);
-        redact_optional_agent_path(&mut evidence.image_path);
+        policy::redact_optional_agent_path(&mut evidence.source_path);
+        policy::redact_optional_agent_path(&mut evidence.markdown_path);
+        policy::redact_optional_agent_path(&mut evidence.image_path);
     }
     let relations = reader
         .snapshot
         .relations
         .iter()
         .filter(|relation| {
-            graph_relation_is_live(relation)
+            relation.valid_to.is_none()
                 && (relation.source_node_id == node.node_id
                     || relation.target_node_id == node.node_id)
         })
@@ -405,110 +239,20 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
     })
 }
 
-fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
-    node.valid_to.is_none()
-}
-
-fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
-    relation.valid_to.is_none()
-}
-
 fn read_node_fallback_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {
-    read_node_fallback_text_is_safe(&relation.relation_id)
-        && read_node_fallback_text_is_safe(&relation.label)
-        && read_node_fallback_text_is_safe(&relation.source_node_id)
-        && read_node_fallback_text_is_safe(&relation.target_node_id)
+    policy::is_agent_text_safe(&relation.relation_id)
+        && policy::is_agent_text_safe(&relation.label)
+        && policy::is_agent_text_safe(&relation.source_node_id)
+        && policy::is_agent_text_safe(&relation.target_node_id)
 }
 
 fn sanitize_read_node_fallback_node(mut node: BrainNodeRecord) -> Option<BrainNodeRecord> {
-    if !read_node_fallback_text_is_safe(&node.node_id)
-        || !read_node_fallback_text_is_safe(&node.label)
-    {
+    if !policy::is_agent_text_safe(&node.node_id) || !policy::is_agent_text_safe(&node.label) {
         return None;
     }
     node.aliases
-        .retain(|alias| read_node_fallback_text_is_safe(alias));
+        .retain(|alias| policy::is_agent_text_safe(alias));
     Some(node)
-}
-
-fn read_node_fallback_text_is_safe(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    let normalized = value.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
-    if read_node_fallback_text_has_home_path(&lower)
-        || read_node_fallback_text_has_windows_absolute_path(&normalized)
-        || read_node_fallback_text_has_unix_absolute_path(&normalized)
-        || read_node_fallback_text_has_forbidden_path_marker(&lower)
-    {
-        return false;
-    }
-    let path = Path::new(&normalized);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir))
-}
-
-fn read_node_fallback_text_has_home_path(lower: &str) -> bool {
-    let bytes = lower.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"~/" && read_node_fallback_path_token_starts_at(bytes, index)
-    })
-}
-
-fn read_node_fallback_text_has_windows_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    read_node_fallback_text_has_unc_path(normalized)
-        || bytes.windows(3).enumerate().any(|(index, window)| {
-            window[0].is_ascii_alphabetic()
-                && window[1] == b':'
-                && window[2] == b'/'
-                && read_node_fallback_path_token_starts_at(bytes, index)
-        })
-}
-
-fn read_node_fallback_text_has_unc_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"//"
-            && read_node_fallback_path_token_starts_at(bytes, index)
-            && index
-                .checked_sub(1)
-                .map(|prev| bytes[prev] != b':')
-                .unwrap_or(true)
-    })
-}
-
-fn read_node_fallback_text_has_unix_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window[0] == b'/'
-            && window[1] != b'/'
-            && read_node_fallback_path_token_starts_at(bytes, index)
-    })
-}
-
-fn read_node_fallback_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
-    index == 0
-        || bytes[index - 1].is_ascii_whitespace()
-        || matches!(
-            bytes[index - 1],
-            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
-        )
-}
-
-fn read_node_fallback_text_has_forbidden_path_marker(lower: &str) -> bool {
-    lower.contains("docs/private")
-        || lower.contains("docs%2fprivate")
-        || lower.contains("docs%5cprivate")
-        || lower.contains("file://")
-        || lower.contains("../")
-        || lower.contains("%2e")
-        || lower.contains("%2f")
-        || lower.contains("%5c")
 }
 
 pub(crate) fn handle_read_recent_events(

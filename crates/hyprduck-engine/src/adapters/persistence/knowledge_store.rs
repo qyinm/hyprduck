@@ -21,7 +21,7 @@ use hyprduck_engine_types::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use super::agent_write_store::load_brain_event_operation;
@@ -46,20 +46,24 @@ use super::graph_snapshot_store::{
 };
 use super::import_job_store;
 use super::read_projection_store::{
-    graph_snapshot_counts, hybrid_retrieve_from_db, read_graph_canvas_projection_from_db,
+    graph_snapshot_counts, read_graph_canvas_projection_from_db,
     read_graph_snapshot_sources_from_db, read_node_from_db, read_page_evidence_from_db,
-    read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof, search_brain_from_db,
-    RelationalEvidenceProof,
+    read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof, RelationalEvidenceProof,
 };
+
+// Query-time brain retrieval (hybrid + search_brain) policy now lives in the domain.
 use super::row_decode::non_empty_string;
 use super::schema_store::{
     count_rows_for_workspace, ensure_schema, schema_version, validate_graphqlite_gate,
     GraphqliteGateReport, KnowledgeStoreHealth, KnowledgeStoreStateSummary, KNOWLEDGE_DB_FILE_NAME,
 };
-#[cfg(test)]
-use super::search_store::EvidenceQueryIntent;
-use super::search_store::HybridRetrievalHit;
 use super::source_manifest_store::persist_source_manifest_in_transaction;
+#[cfg(test)]
+use crate::domains::retrieval::brain_search::EvidenceQueryIntent;
+use crate::domains::retrieval::brain_search::HybridRetrievalHit;
+use crate::domains::retrieval::brain_search::{hybrid_retrieve_from_db, search_brain_from_db};
+
+use crate::policy;
 
 #[derive(Debug, Clone)]
 pub(crate) struct KnowledgeStore {
@@ -338,7 +342,7 @@ impl KnowledgeStore {
         budget: usize,
         pack_id: String,
         generated_at: String,
-    ) -> Result<ContextPackV1> {
+    ) -> Result<(BrainContextPack, ContextPackV1)> {
         let limit = budget.clamp(1, 24);
         let hits = self
             .hybrid_retrieve(workspace_id, query, limit)
@@ -482,7 +486,7 @@ impl KnowledgeStore {
                     "Graph trail unavailable for the selected evidence; citation evidence remains available.",
                 ));
         }
-        Ok(context_pack)
+        Ok((pack, context_pack))
     }
 
     #[allow(dead_code)]
@@ -719,14 +723,14 @@ impl GraphTrailIndex {
 
     fn node_is_eligible(&self, node: &GraphTrailNode) -> bool {
         graph_trail_node_status_is_visible(&node.kind, &node.status)
-            && graph_trail_agent_text_is_safe(&node.node_id)
-            && graph_trail_agent_text_is_safe(&node.label)
+            && policy::is_agent_text_safe(&node.node_id)
+            && policy::is_agent_text_safe(&node.label)
             && self.refs_are_eligible(&node.evidence_ids, &node.source_ids)
     }
 
     fn relation_is_eligible(&self, relation: &GraphTrailRelation) -> bool {
-        graph_trail_agent_text_is_safe(&relation.relation_id)
-            && graph_trail_agent_text_is_safe(&relation.label)
+        policy::is_agent_text_safe(&relation.relation_id)
+            && policy::is_agent_text_safe(&relation.label)
             && self.refs_are_eligible(&relation.evidence_ids, &relation.source_ids)
     }
 
@@ -1009,7 +1013,7 @@ fn push_follow_up_for_graph_node(
             if let Some(path) = node
                 .aliases
                 .iter()
-                .find(|path| is_safe_agent_wiki_path(path))
+                .find(|path| policy::is_safe_agent_wiki_path(path))
             {
                 push_context_pack_follow_up(
                     follow_up,
@@ -1495,85 +1499,6 @@ fn graph_trail_node_status_is_visible(kind: &str, status: &str) -> bool {
     graph_record_status_is_active(status) || (kind == "claim" && status == "supported")
 }
 
-fn graph_trail_agent_text_is_safe(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    let normalized = value.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
-    if graph_trail_text_has_home_path(&lower)
-        || graph_trail_text_has_windows_absolute_path(&normalized)
-        || graph_trail_text_has_unix_absolute_path(&normalized)
-        || graph_trail_text_has_forbidden_path_marker(&lower)
-    {
-        return false;
-    }
-    let path = Path::new(&normalized);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir))
-}
-
-fn graph_trail_text_has_home_path(lower: &str) -> bool {
-    let bytes = lower.as_bytes();
-    bytes
-        .windows(2)
-        .enumerate()
-        .any(|(index, window)| window == b"~/" && graph_trail_path_token_starts_at(bytes, index))
-}
-
-fn graph_trail_text_has_windows_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    graph_trail_text_has_unc_path(normalized)
-        || bytes.windows(3).enumerate().any(|(index, window)| {
-            window[0].is_ascii_alphabetic()
-                && window[1] == b':'
-                && window[2] == b'/'
-                && graph_trail_path_token_starts_at(bytes, index)
-        })
-}
-
-fn graph_trail_text_has_unc_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window == b"//"
-            && graph_trail_path_token_starts_at(bytes, index)
-            && index
-                .checked_sub(1)
-                .map(|prev| bytes[prev] != b':')
-                .unwrap_or(true)
-    })
-}
-
-fn graph_trail_text_has_unix_absolute_path(normalized: &str) -> bool {
-    let bytes = normalized.as_bytes();
-    bytes.windows(2).enumerate().any(|(index, window)| {
-        window[0] == b'/' && window[1] != b'/' && graph_trail_path_token_starts_at(bytes, index)
-    })
-}
-
-fn graph_trail_path_token_starts_at(bytes: &[u8], index: usize) -> bool {
-    index == 0
-        || bytes[index - 1].is_ascii_whitespace()
-        || matches!(
-            bytes[index - 1],
-            b'(' | b'[' | b'{' | b'<' | b'"' | b'\'' | b'=' | b':'
-        )
-}
-
-fn graph_trail_text_has_forbidden_path_marker(lower: &str) -> bool {
-    lower.contains("docs/private")
-        || lower.contains("docs%2fprivate")
-        || lower.contains("docs%5cprivate")
-        || lower.contains("file://")
-        || lower.contains("../")
-        || lower.contains("%2e")
-        || lower.contains("%2f")
-        || lower.contains("%5c")
-}
-
 fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {
     match kind {
         "claim" => ContextPackGraphRecordKindV1::Claim,
@@ -1585,27 +1510,6 @@ fn graph_record_kind_for_node(kind: &str) -> ContextPackGraphRecordKindV1 {
 
 fn graph_record_status_is_active(status: &str) -> bool {
     status.is_empty() || status == "active"
-}
-
-fn is_safe_agent_wiki_path(path: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
-    if !lower.starts_with("wiki/") || graph_trail_text_has_forbidden_path_marker(&lower) {
-        return false;
-    }
-    let path_after_prefix = &normalized["wiki/".len()..];
-    let lower_after_prefix = &lower["wiki/".len()..];
-    if graph_trail_text_has_home_path(lower_after_prefix)
-        || graph_trail_text_has_windows_absolute_path(path_after_prefix)
-        || graph_trail_text_has_unix_absolute_path(path_after_prefix)
-    {
-        return false;
-    }
-    let path = Path::new(&normalized);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 #[cfg(test)]

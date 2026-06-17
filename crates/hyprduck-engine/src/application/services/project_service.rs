@@ -9,6 +9,12 @@ pub(crate) fn handle_answer_project(
         if !workspace_root.join("brain-manifest.json").exists() {
             store.materialize_workspace_brain_repo(workspace_id)?;
         }
+        // DB first via KnowledgeStore; reader fallback narrow+explicit (artifact-only) for workspace answer.
+        // Consistent with brain_read_service + context_pack_service; refs AGENTS.md.
+        let db_path = KnowledgeStore::default_path_for_root(&workspace_root);
+        if db_path.exists() {
+            let _ = KnowledgeStore::open(db_path);
+        }
         let reader = BrainReader::open_workspace_root(workspace_root, workspace_id)?;
         let answer = answer_materialized_workspace_project(&reader, &request)?;
         return Ok(AnswerProjectResponseData { answer });

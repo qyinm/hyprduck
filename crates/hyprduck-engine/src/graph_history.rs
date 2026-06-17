@@ -15,13 +15,14 @@ use serde_json::Value;
 
 use crate::{
     latest_readable_materialized_file_refs, policy::redact_path_for_agent,
-    read_latest_readable_graph_snapshot_marker, BrainReader, KnowledgeStore,
-    MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
+    read_latest_readable_graph_snapshot_marker, resolve_brain_workspace_root, BrainReader,
+    KnowledgeStore, MaterializedGraphEventPayload, LATEST_READABLE_SNAPSHOT_PATH,
 };
 
 pub(crate) fn handle_read_graph_history(
     request: ReadGraphHistoryRequest,
 ) -> Result<ReadGraphHistoryResponseData> {
+    // Open reader first so artifact snapshots hydrate knowledge.db before record history reads.
     let reader = BrainReader::open(&request.scope)?;
     let mut states = reader
         .events
@@ -52,8 +53,10 @@ pub(crate) fn handle_read_graph_history(
 pub(crate) fn handle_read_graph_snapshot(
     request: ReadGraphSnapshotRequest,
 ) -> Result<ReadGraphSnapshotResponseData> {
+    let root = resolve_brain_workspace_root(&request.scope)?;
+    // Open reader first so artifact snapshots hydrate knowledge.db before canvas projection reads.
     let reader = BrainReader::open(&request.scope)?;
-    let marker = read_latest_readable_graph_snapshot_marker(reader.root())?;
+    let marker = read_latest_readable_graph_snapshot_marker(&root)?;
     let marker_event = marker.as_ref().and_then(|marker| {
         (marker.workspace_id == request.scope.workspace_id).then(|| {
             reader.events.iter().find(|event| {
@@ -87,17 +90,16 @@ pub(crate) fn handle_read_graph_snapshot(
         .filter(|_| marker_event.is_some())
         .map(|marker| marker.materialized_files.clone())
         .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
-    let db_projection =
-        match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
-            Some(projection) => projection,
-            None => (
-                reader.snapshot.nodes.clone(),
-                reader.snapshot.relations.clone(),
-                reader.read_all_wiki_pages()?,
-            ),
-        };
+    let db_projection = match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
+        Some(projection) => projection,
+        None => (
+            reader.snapshot.nodes.clone(),
+            reader.snapshot.relations.clone(),
+            reader.read_all_wiki_pages()?,
+        ),
+    };
     let sources = read_graph_snapshot_sources(
-        reader.root(),
+        &root,
         &request.scope.workspace_id,
         &reader.snapshot,
         request.include_local_paths,

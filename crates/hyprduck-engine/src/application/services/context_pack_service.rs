@@ -1,36 +1,17 @@
+use crate::policy;
 use crate::*;
 
 pub(crate) fn handle_get_context_pack(
     request: GetContextPackRequest,
 ) -> Result<GetContextPackResponseData> {
-    let reader = BrainReader::open(&request.scope)?;
     let budget = request.budget.unwrap_or(8000);
-    let context_pack = if request.selected_node_id.is_some() {
-        reader.context_pack_with_selection(
-            &request.query,
-            budget,
-            request.selected_node_id.as_deref(),
-        )?
-    } else {
-        reader.context_pack(&request.query, budget)?
-    };
-    let artifact_metadata =
-        build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
     let pack_id = format!("ctx_{}", uuid::Uuid::now_v7().simple());
     let generated_at = current_iso_timestamp_utc();
-    let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
-        &context_pack,
-        pack_id.clone(),
-        generated_at.clone(),
-        &artifact_metadata,
-    );
-    let context_pack_v1 = hyprduck_engine_types::ContextPackV1::from_brain_context_pack(
-        &context_pack,
-        pack_id,
-        generated_at,
-        &artifact_metadata,
-    );
-    let context_pack_v1 = if request.selected_node_id.is_none() {
+
+    // Prefer DB assemble path for primary context pack (v1) per AGENTS.md (DB/GraphQLite authoritative).
+    // DB assemble is attempted first for non-selection case; reader is opened only if DB assemble
+    // is inapplicable (selected_node) or fails (conditional fallback, matching brain_read_service pattern).
+    let db_pack = if request.selected_node_id.is_none() {
         let root = resolve_brain_workspace_root(&request.scope)?;
         let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
         store
@@ -38,19 +19,55 @@ pub(crate) fn handle_get_context_pack(
                 &request.scope.workspace_id,
                 &request.query,
                 budget,
-                context_pack_v1.pack_id.clone(),
-                context_pack_v1.generated_at.clone(),
+                pack_id.clone(),
+                generated_at.clone(),
             )
-            .unwrap_or_else(|_| {
-                let mut degraded_pack = context_pack_v1;
-                degraded_pack.warnings.push(graph_trail_unavailable_warning(
+            .ok()
+            .filter(|(_, v1)| db_context_pack_v1_has_content(v1))
+    } else {
+        None
+    };
+
+    let (context_pack, context_pack_v0, context_pack_v1) = if let Some((context_pack, v1)) = db_pack {
+        let context_pack_v0 = context_pack_v0_from_v1(v1.clone());
+        (context_pack, context_pack_v0, v1)
+    } else {
+        // Reader path (selected_node or DB assemble failure).
+        let reader = BrainReader::open(&request.scope)?;
+        let context_pack = if request.selected_node_id.is_some() {
+            reader.context_pack_with_selection(
+                &request.query,
+                budget,
+                request.selected_node_id.as_deref(),
+            )?
+        } else {
+            reader.context_pack(&request.query, budget)?
+        };
+        let artifact_metadata =
+            build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
+        let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
+            &context_pack,
+            pack_id.clone(),
+            generated_at.clone(),
+            &artifact_metadata,
+        );
+        let mut context_pack_v1 = hyprduck_engine_types::ContextPackV1::from_brain_context_pack(
+            &context_pack,
+            pack_id.clone(),
+            generated_at.clone(),
+            &artifact_metadata,
+        );
+        if request.selected_node_id.is_none() {
+            // DB was attempted (no selected) but failed -> degrade with warning (as before).
+            context_pack_v1
+                .warnings
+                .push(policy::graph_trail_unavailable_warning(
                     "Graph trail projection failed; citation evidence remains available.",
                 ));
-                degraded_pack
-            })
-    } else {
-        context_pack_v1
+        }
+        (context_pack, context_pack_v0, context_pack_v1)
     };
+
     let persisted_context_pack_path = if request.persist {
         Some(persist_context_pack_v1(&request.scope, &context_pack_v1)?)
     } else {
@@ -81,15 +98,6 @@ pub(crate) fn persist_context_pack_v1(
     fs::write(&latest_path, json)
         .with_context(|| format!("failed writing {}", latest_path.display()))?;
     Ok(latest_path.display().to_string())
-}
-
-fn graph_trail_unavailable_warning(message: &str) -> hyprduck_engine_types::ContextPackWarningV0 {
-    hyprduck_engine_types::ContextPackWarningV0 {
-        warning_type: "graph_trail_unavailable".into(),
-        severity: hyprduck_engine_types::ContextPackWarningSeverity::Low,
-        message: message.into(),
-        page_refs: Vec::new(),
-    }
 }
 
 pub(crate) fn handle_read_context_pack(
@@ -142,6 +150,10 @@ pub(crate) fn handle_read_context_pack(
         );
     }
     Ok(ReadContextPackResponseData { context_pack })
+}
+
+fn db_context_pack_v1_has_content(v1: &hyprduck_engine_types::ContextPackV1) -> bool {
+    !v1.selected_evidence.is_empty() || !v1.source_set.is_empty()
 }
 
 fn context_pack_v0_from_v1(
