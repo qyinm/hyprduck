@@ -11,7 +11,7 @@ pub(crate) fn handle_get_context_pack(
     // Prefer DB assemble path for primary context pack (v1) per AGENTS.md (DB/GraphQLite authoritative).
     // DB assemble is attempted first for non-selection case; reader is opened only if DB assemble
     // is inapplicable (selected_node) or fails (conditional fallback, matching brain_read_service pattern).
-    let db_v1 = if request.selected_node_id.is_none() {
+    let db_pack = if request.selected_node_id.is_none() {
         let root = resolve_brain_workspace_root(&request.scope)?;
         let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
         store
@@ -23,30 +23,12 @@ pub(crate) fn handle_get_context_pack(
                 generated_at.clone(),
             )
             .ok()
+            .filter(|(_, v1)| db_context_pack_v1_has_content(v1))
     } else {
         None
     };
 
-    let (context_pack, context_pack_v0, context_pack_v1) = if let Some(v1) = db_v1 {
-        // DB primary success path: synthesize minimal BrainContextPack for response compatibility
-        // (DB assemble populates authoritative agent-facing v1/v0 with sources/evidence; graph
-        // fields like nodes/claims are not part of the DB context pack projection).
-        let context_pack = hyprduck_engine_types::BrainContextPack {
-            workspace_id: request.scope.workspace_id.clone(),
-            query: request.query.clone(),
-            token_budget: budget,
-            summary: "Context assembled from DB evidence using SQLite FTS5 retrieval and GraphQLite graph expansion.".into(),
-            wiki_pages: Vec::new(),
-            nodes: Vec::new(),
-            sources: Vec::new(),
-            memories: Vec::new(),
-            entities: Vec::new(),
-            claims: Vec::new(),
-            relations: Vec::new(),
-            evidence: Vec::new(),
-            recent_events: Vec::new(),
-            warnings: Vec::new(),
-        };
+    let (context_pack, context_pack_v0, context_pack_v1) = if let Some((context_pack, v1)) = db_pack {
         let context_pack_v0 = context_pack_v0_from_v1(v1.clone());
         (context_pack, context_pack_v0, v1)
     } else {
@@ -168,6 +150,10 @@ pub(crate) fn handle_read_context_pack(
         );
     }
     Ok(ReadContextPackResponseData { context_pack })
+}
+
+fn db_context_pack_v1_has_content(v1: &hyprduck_engine_types::ContextPackV1) -> bool {
+    !v1.selected_evidence.is_empty() || !v1.source_set.is_empty()
 }
 
 fn context_pack_v0_from_v1(

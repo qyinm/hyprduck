@@ -334,7 +334,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
         .expect("graph neighbor evidence hit");
     assert_eq!(beta_neighbor_hit.snippet, "Beta neighbor evidence.");
     update_source_context_pack_metadata(&store, "source-a");
-    let context_pack = store
+    let (_, context_pack) = store
         .assemble_context_pack_v1_from_db(
             "workspace-default",
             "Alpha",
@@ -554,7 +554,7 @@ fn graph_snapshot_is_persisted_as_current_graphqlite_workspace_graph() {
     assert!(filtered_hits
         .iter()
         .all(|hit| hit.evidence_id != "evidence-b"));
-    let filtered_context_pack = store
+    let (_, filtered_context_pack) = store
         .assemble_context_pack_v1_from_db(
             "workspace-default",
             "Alpha",

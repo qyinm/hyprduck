@@ -342,7 +342,7 @@ impl KnowledgeStore {
         budget: usize,
         pack_id: String,
         generated_at: String,
-    ) -> Result<ContextPackV1> {
+    ) -> Result<(BrainContextPack, ContextPackV1)> {
         let limit = budget.clamp(1, 24);
         let hits = self
             .hybrid_retrieve(workspace_id, query, limit)
@@ -486,7 +486,7 @@ impl KnowledgeStore {
                     "Graph trail unavailable for the selected evidence; citation evidence remains available.",
                 ));
         }
-        Ok(context_pack)
+        Ok((pack, context_pack))
     }
 
     #[allow(dead_code)]

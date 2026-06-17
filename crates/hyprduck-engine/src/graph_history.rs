@@ -22,10 +22,7 @@ use crate::{
 pub(crate) fn handle_read_graph_history(
     request: ReadGraphHistoryRequest,
 ) -> Result<ReadGraphHistoryResponseData> {
-    let root = resolve_brain_workspace_root(&request.scope)?;
-    // DB first (KnowledgeStore + its read paths for record_history); reader only for event states list.
-    // Explicit conditional reader for artifact-only cases. See brain_read_service/context_pack_service + AGENTS.md.
-    let record_history = read_graph_record_history(&root, &request)?;
+    // Open reader first so artifact snapshots hydrate knowledge.db before record history reads.
     let reader = BrainReader::open(&request.scope)?;
     let mut states = reader
         .events
@@ -35,7 +32,7 @@ pub(crate) fn handle_read_graph_history(
                 && is_completed_graph_materialized_event(event)
         })
         .cloned()
-        .map(|event| graph_history_entry_from_event(&root, event))
+        .map(|event| graph_history_entry_from_event(reader.root(), event))
         .collect::<Result<Vec<_>>>()?;
     states.sort_by(|left, right| {
         right
@@ -46,6 +43,7 @@ pub(crate) fn handle_read_graph_history(
     if let Some(limit) = request.limit {
         states.truncate(limit);
     }
+    let record_history = read_graph_record_history(reader.root(), &request)?;
     Ok(ReadGraphHistoryResponseData {
         states,
         record_history,
