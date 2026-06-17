@@ -36,6 +36,9 @@ impl BrainReader {
                 workspace_id
             );
         }
+        // LEGACY: full snapshot artifact load (graph/*.json etc). DB canvas migration guard below.
+        // search + context_pack* below are legacy-only (services prefer DB assemble; see context_pack_service).
+        // Phase 4: shrink reader.rs start; no behavior change.
         snapshot.nodes = repo.read_json_artifact("graph/nodes.json")?;
         snapshot.relations = repo.read_json_artifact("graph/edges.json")?;
         snapshot.evidence = repo.read_json_artifact("graph/evidence.json")?;
@@ -70,6 +73,8 @@ impl BrainReader {
         self.repo.root()
     }
 
+    // LEGACY-only: snapshot search used by context_pack and direct legacy callers (brain_read_service fallback etc).
+    // Gradually moving assembly to DB side per prior tasks.
     pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<BrainSearchResult> {
         let terms = search_terms(query);
         if terms.is_empty() || limit == 0 {
@@ -96,7 +101,7 @@ impl BrainReader {
             .snapshot
             .nodes
             .iter()
-            .filter(|node| graph_node_is_live(node))
+            .filter(|node| node.valid_to.is_none())
         {
             let haystack = format!("{} {} {}", node.node_id, node.label, node.aliases.join(" "));
             if let Some(score) = match_score(&terms, &haystack) {
@@ -158,7 +163,7 @@ impl BrainReader {
             .snapshot
             .relations
             .iter()
-            .filter(|relation| graph_relation_is_live(relation))
+            .filter(|relation| relation.valid_to.is_none())
         {
             let haystack = format!(
                 "{} {:?} {} {} {} {}",
@@ -315,6 +320,9 @@ impl BrainReader {
         self.context_pack_with_selection(query, budget, None)
     }
 
+    // LEGACY: context_pack* assemble from snapshot. DB assemble (assemble_context_pack_v1_from_db) preferred in
+    // context_pack_service; reader path kept only for selected_node case + fallbacks (no behavior change here).
+    // Phase 4: start pushing these toward DB side by marking.
     pub(crate) fn context_pack_with_selection(
         &self,
         query: &str,
@@ -381,7 +389,7 @@ impl BrainReader {
                 .snapshot
                 .nodes
                 .iter()
-                .find(|node| node.node_id == selected_node_id && graph_node_is_live(node))
+                .find(|node| node.node_id == selected_node_id && node.valid_to.is_none())
             {
                 selected_bias_node_ids.insert(node.node_id.clone());
                 selected_bias_evidence_ids.extend(node.evidence_ids.iter().cloned());
@@ -413,7 +421,7 @@ impl BrainReader {
             .snapshot
             .nodes
             .iter()
-            .filter(|node| graph_node_is_live(node))
+            .filter(|node| node.valid_to.is_none())
         {
             if node_ids.contains(&node.node_id)
                 || node
@@ -472,7 +480,7 @@ impl BrainReader {
             .snapshot
             .relations
             .iter()
-            .filter(|relation| graph_relation_is_live(relation))
+            .filter(|relation| relation.valid_to.is_none())
         {
             if relation_ids.contains(&relation.relation_id)
                 || node_ids.contains(&relation.source_node_id)
@@ -492,7 +500,7 @@ impl BrainReader {
             .snapshot
             .nodes
             .iter()
-            .filter(|node| graph_node_is_live(node))
+            .filter(|node| node.valid_to.is_none())
         {
             if node_ids.contains(&node.node_id) {
                 source_ids.extend(node.source_ids.iter().cloned());
@@ -518,7 +526,7 @@ impl BrainReader {
             .snapshot
             .nodes
             .iter()
-            .filter(|node| graph_node_is_live(node))
+            .filter(|node| node.valid_to.is_none())
             .filter(|node| node_ids.contains(&node.node_id))
             .cloned()
             .collect::<Vec<_>>();
@@ -530,7 +538,7 @@ impl BrainReader {
             .snapshot
             .relations
             .iter()
-            .filter(|relation| graph_relation_is_live(relation))
+            .filter(|relation| relation.valid_to.is_none())
             .filter(|relation| {
                 relation_ids.contains(&relation.relation_id)
                     || selected_node_ids.contains(&relation.source_node_id)
@@ -686,14 +694,6 @@ fn context_pack_graph_fact_limit(budget: usize) -> usize {
     } else {
         DEFAULT_CONTEXT_PACK_GRAPH_FACT_LIMIT
     }
-}
-
-fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
-    node.valid_to.is_none()
-}
-
-fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
-    relation.valid_to.is_none()
 }
 
 fn cap_context_pack_records(
