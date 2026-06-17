@@ -54,9 +54,7 @@ pub(crate) fn handle_read_graph_snapshot(
     request: ReadGraphSnapshotRequest,
 ) -> Result<ReadGraphSnapshotResponseData> {
     let root = resolve_brain_workspace_root(&request.scope)?;
-    // DB first: call canvas helper (which uses KnowledgeStore::...read_graph_canvas_projection_from_db) before opening reader.
-    // Reader fallback narrow for artifact-only + event metadata. Consistent pattern + AGENTS.md.
-    let db_projection = read_graph_canvas_projection(&root, &request.scope.workspace_id)?;
+    // Open reader first so artifact snapshots hydrate knowledge.db before canvas projection reads.
     let reader = BrainReader::open(&request.scope)?;
     let marker = read_latest_readable_graph_snapshot_marker(&root)?;
     let marker_event = marker.as_ref().and_then(|marker| {
@@ -92,7 +90,7 @@ pub(crate) fn handle_read_graph_snapshot(
         .filter(|_| marker_event.is_some())
         .map(|marker| marker.materialized_files.clone())
         .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
-    let db_projection = match db_projection {
+    let db_projection = match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
         Some(projection) => projection,
         None => (
             reader.snapshot.nodes.clone(),
