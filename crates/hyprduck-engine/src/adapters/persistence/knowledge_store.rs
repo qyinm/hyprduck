@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::unix_timestamp_seconds;
+
 #[cfg(test)]
 use super::agent_write_store::load_brain_event_operation;
 pub(crate) use super::agent_write_store::AgentWriteProposalRecord;
@@ -37,7 +39,9 @@ use super::context_pack_store::{
     db_context_evidence_type, db_parse_confidence, load_context_pack_evidence_row,
     load_context_pack_source_row,
 };
-use super::graph_snapshot_store::persist_graph_snapshot_in_transaction;
+use super::graph_snapshot_store::{
+    persist_graph_snapshot_in_transaction, purge_workspace_source_in_transaction,
+};
 pub(crate) use super::graph_snapshot_store::KnowledgeGraphPersistReport;
 #[cfg(test)]
 use super::graph_snapshot_store::{
@@ -208,6 +212,20 @@ impl KnowledgeStore {
                 Err(error)
             }
         }
+    }
+
+    pub(crate) fn purge_workspace_source(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
+        purge_workspace_source_in_transaction(
+            &graph,
+            workspace_id,
+            source_id,
+            unix_timestamp_seconds() as i64,
+        )
     }
 
     pub(crate) fn persist_graph_snapshot(

@@ -597,7 +597,32 @@ impl KnowledgeProjectStore {
             project_id = escape_sqlite(&row.project_id),
         );
         self.run_sql(&sql)?;
+        let workspace_root = workspace_root_from_summary(&row.summary)
+            .or_else(|| workspace_root_for_rows(&[(row.clone(), None)]))
+            .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id));
+        let workspace_db = KnowledgeStore::default_path_for_root(&workspace_root);
+        if workspace_db.exists() {
+            KnowledgeStore::open(workspace_db)?.purge_workspace_source(workspace_id, source_id)?;
+        }
         Ok(Some(row))
+    }
+
+    fn persist_workspace_graph_snapshot(
+        workspace_root: &Path,
+        snapshot: &BrainRepoSnapshot,
+    ) -> Result<KnowledgeGraphPersistReport> {
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(workspace_root))?
+            .persist_graph_snapshot(snapshot)
+    }
+
+    fn persist_project_and_workspace_graph_snapshots(
+        &self,
+        workspace_root: &Path,
+        snapshot: &BrainRepoSnapshot,
+    ) -> Result<()> {
+        KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(snapshot)?;
+        Self::persist_workspace_graph_snapshot(workspace_root, snapshot)?;
+        Ok(())
     }
 
     pub(crate) fn load_projects_for_workspace(
@@ -743,7 +768,7 @@ impl KnowledgeProjectStore {
             let workspace_root = fallback_workspace_root(&self.path, workspace_id);
             let mut snapshot = empty_replayed_brain_snapshot(workspace_id);
             snapshot.generated_at = unix_timestamp_seconds();
-            KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
+            self.persist_project_and_workspace_graph_snapshots(&workspace_root, &snapshot)?;
             return write_materialized_brain_repo(&workspace_root, &snapshot);
         }
         let workspace_root = workspace_root_for_rows(&rows)
@@ -763,7 +788,7 @@ impl KnowledgeProjectStore {
             &existing_nodes,
             &existing_relations,
         );
-        KnowledgeStore::open(self.path.clone())?.persist_graph_snapshot(&snapshot)?;
+        self.persist_project_and_workspace_graph_snapshots(&workspace_root, &snapshot)?;
         write_materialized_brain_repo(&workspace_root, &snapshot)
     }
 

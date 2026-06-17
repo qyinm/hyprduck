@@ -1208,6 +1208,106 @@ fn persist_snapshot_sources_in_transaction(
             )
             .with_context(|| format!("failed upserting evidence source row {source_id}"))?;
     }
+    prune_workspace_sources_not_in_snapshot(graph, snapshot)?;
+    Ok(())
+}
+
+pub(super) fn purge_workspace_source_in_transaction(
+    graph: &Graph,
+    workspace_id: &str,
+    source_id: &str,
+    invalidated_at: i64,
+) -> Result<()> {
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "DELETE FROM sources WHERE workspace_id = ?1 AND source_id = ?2",
+            (workspace_id, source_id),
+        )
+        .with_context(|| format!("failed deleting workspace source row {source_id}"))?;
+    sqlite
+        .execute("DELETE FROM source_pages WHERE source_id = ?1", [source_id])
+        .with_context(|| format!("failed deleting source pages for {source_id}"))?;
+    sqlite
+        .execute(
+            "DELETE FROM source_page_fts WHERE source_id = ?1",
+            [source_id],
+        )
+        .with_context(|| format!("failed deleting source page FTS for {source_id}"))?;
+    sqlite
+        .execute(
+            "DELETE FROM evidence_fts WHERE source_id = ?1",
+            [source_id],
+        )
+        .with_context(|| format!("failed deleting evidence FTS for {source_id}"))?;
+    sqlite
+        .execute(
+            "DELETE FROM evidence_items WHERE source_id = ?1",
+            [source_id],
+        )
+        .with_context(|| format!("failed deleting evidence items for {source_id}"))?;
+    sqlite
+        .execute(
+            "DELETE FROM import_jobs WHERE workspace_id = ?1 AND source_id = ?2",
+            (workspace_id, source_id),
+        )
+        .with_context(|| format!("failed deleting import job for {source_id}"))?;
+    let source_node_id = format!("source:{source_id}");
+    invalidate_live_graph_node_versions(
+        graph,
+        workspace_id,
+        &source_node_id,
+        None,
+        invalidated_at,
+        "workspace_source_deleted",
+    )?;
+    Ok(())
+}
+
+fn prune_workspace_sources_not_in_snapshot(
+    graph: &Graph,
+    snapshot: &BrainRepoSnapshot,
+) -> Result<()> {
+    let mut keep_source_ids = snapshot
+        .sources
+        .iter()
+        .map(|source| source.source_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for evidence in &snapshot.evidence {
+        if let Some(source_id) = evidence.source_id.as_deref() {
+            keep_source_ids.insert(source_id);
+        }
+    }
+    for node in &snapshot.nodes {
+        for source_id in &node.source_ids {
+            keep_source_ids.insert(source_id.as_str());
+        }
+    }
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare("SELECT source_id FROM sources WHERE workspace_id = ?1")
+        .context("failed preparing workspace source prune query")?;
+    let mut rows = statement
+        .query([snapshot.workspace_id.as_str()])
+        .context("failed querying workspace sources for prune")?;
+    let mut stale_source_ids = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("failed reading workspace source row for prune")?
+    {
+        let source_id: String = row.get(0).context("read workspace source id for prune")?;
+        if !keep_source_ids.contains(source_id.as_str()) {
+            stale_source_ids.push(source_id);
+        }
+    }
+    for source_id in stale_source_ids {
+        purge_workspace_source_in_transaction(
+            graph,
+            &snapshot.workspace_id,
+            &source_id,
+            snapshot.generated_at as i64,
+        )?;
+    }
     Ok(())
 }
 
