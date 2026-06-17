@@ -5,9 +5,7 @@
 
 use anyhow::{Context, Result};
 use graphqlite::Graph;
-use hyprduck_engine_types::{
-    BrainSearchResult, BrainSearchResultKind,
-};
+use hyprduck_engine_types::{BrainSearchResult, BrainSearchResultKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

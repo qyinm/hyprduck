@@ -200,7 +200,7 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .snapshot
         .nodes
         .iter()
-        .find(|node| node.node_id == request.node_id && graph_node_is_live(node))
+        .find(|node| node.node_id == request.node_id && node.valid_to.is_none())
         .cloned()
         .ok_or_else(|| anyhow!("node {} was not found", request.node_id))?;
     let node = sanitize_read_node_fallback_node(node)
@@ -224,7 +224,7 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         .relations
         .iter()
         .filter(|relation| {
-            graph_relation_is_live(relation)
+            relation.valid_to.is_none()
                 && (relation.source_node_id == node.node_id
                     || relation.target_node_id == node.node_id)
         })
@@ -237,14 +237,6 @@ pub(crate) fn handle_read_node(request: ReadNodeRequest) -> Result<ReadNodeRespo
         evidence,
         relations,
     })
-}
-
-fn graph_node_is_live(node: &BrainNodeRecord) -> bool {
-    node.valid_to.is_none()
-}
-
-fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
-    relation.valid_to.is_none()
 }
 
 fn read_node_fallback_relation_is_agent_safe(relation: &BrainRelationRecord) -> bool {

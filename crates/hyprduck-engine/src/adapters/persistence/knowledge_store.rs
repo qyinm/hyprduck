@@ -48,23 +48,20 @@ use super::import_job_store;
 use super::read_projection_store::{
     graph_snapshot_counts, read_graph_canvas_projection_from_db,
     read_graph_snapshot_sources_from_db, read_node_from_db, read_page_evidence_from_db,
-    read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof,
-    RelationalEvidenceProof,
+    read_source_from_db, read_wiki_page_from_db, resolve_evidence_proof, RelationalEvidenceProof,
 };
 
 // Query-time brain retrieval (hybrid + search_brain) policy now lives in the domain.
-use crate::domains::retrieval::brain_search::{
-    hybrid_retrieve_from_db, search_brain_from_db,
-};
 use super::row_decode::non_empty_string;
 use super::schema_store::{
     count_rows_for_workspace, ensure_schema, schema_version, validate_graphqlite_gate,
     GraphqliteGateReport, KnowledgeStoreHealth, KnowledgeStoreStateSummary, KNOWLEDGE_DB_FILE_NAME,
 };
+use super::source_manifest_store::persist_source_manifest_in_transaction;
 #[cfg(test)]
 use crate::domains::retrieval::brain_search::EvidenceQueryIntent;
 use crate::domains::retrieval::brain_search::HybridRetrievalHit;
-use super::source_manifest_store::persist_source_manifest_in_transaction;
+use crate::domains::retrieval::brain_search::{hybrid_retrieve_from_db, search_brain_from_db};
 
 use crate::policy;
 

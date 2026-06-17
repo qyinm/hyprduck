@@ -46,7 +46,8 @@ pub(crate) fn policy_for_mcp_tool(tool_name: &str) -> ToolAutomationPolicy {
         Some(tool) if AUTOMATIC_MCP_TOOLS.contains(&tool) => ToolAutomationPolicy {
             decision: AutomationDecision::Automatic,
             destructive: false,
-            reason: "known HyprDuck action covered by existing MCP scope, evidence, and audit policy",
+            reason:
+                "known HyprDuck action covered by existing MCP scope, evidence, and audit policy",
         },
         _ => ToolAutomationPolicy {
             decision: AutomationDecision::RequiresApproval,

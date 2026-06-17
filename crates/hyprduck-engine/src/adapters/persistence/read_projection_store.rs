@@ -4,9 +4,8 @@ use anyhow::{anyhow, Context, Result};
 use graphqlite::Graph;
 use hyprduck_engine_types::{
     BrainNodeKind, BrainNodeRecord, BrainRelationKind, BrainRelationRecord, BrainScope,
-    GraphSnapshotSourceRecord, PageEvidenceV0,
-    ReadNodeResponseData, ReadPageEvidenceResponseData, ReadSourceResponseData, SourceFormat,
-    SourceStatus, WikiPage,
+    GraphSnapshotSourceRecord, PageEvidenceV0, ReadNodeResponseData, ReadPageEvidenceResponseData,
+    ReadSourceResponseData, SourceFormat, SourceStatus, WikiPage,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -51,7 +50,6 @@ pub(crate) struct RelationalEvidenceProof {
     pub(crate) status: String,
     pub(crate) created_at: i64,
 }
-
 
 #[allow(dead_code)]
 pub(super) fn read_source_from_db(
@@ -520,7 +518,6 @@ pub(super) fn read_graph_snapshot_sources_from_db(
     Ok(sources)
 }
 
-
 #[allow(dead_code)]
 pub(super) fn resolve_evidence_proof(
     path: &Path,
@@ -597,7 +594,10 @@ pub(super) fn graph_snapshot_counts(
     })
 }
 
-pub(crate) fn load_graph_canvas_nodes(graph: &Graph, workspace_id: &str) -> Result<Vec<BrainNodeRecord>> {
+pub(crate) fn load_graph_canvas_nodes(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<Vec<BrainNodeRecord>> {
     let rows = graph
         .connection()
         .cypher_builder(
@@ -789,7 +789,10 @@ fn graph_relation_is_live(relation: &BrainRelationRecord) -> bool {
     relation.valid_to.is_none()
 }
 
-pub(crate) fn load_graph_canvas_wiki_pages(graph: &Graph, workspace_id: &str) -> Result<Vec<WikiPage>> {
+pub(crate) fn load_graph_canvas_wiki_pages(
+    graph: &Graph,
+    workspace_id: &str,
+) -> Result<Vec<WikiPage>> {
     let sqlite = graph.connection().sqlite_connection();
     let mut statement = sqlite
         .prepare(

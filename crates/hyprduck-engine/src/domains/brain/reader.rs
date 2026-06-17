@@ -1,11 +1,5 @@
 use crate::*;
 
-const DEFAULT_CONTEXT_PACK_EVIDENCE_LIMIT: usize = 15;
-const SMALL_CONTEXT_PACK_EVIDENCE_LIMIT: usize = 8;
-const DEFAULT_CONTEXT_PACK_GRAPH_FACT_LIMIT: usize = 12;
-const SMALL_CONTEXT_PACK_GRAPH_FACT_LIMIT: usize = 5;
-const SMALL_CONTEXT_PACK_BUDGET_THRESHOLD: usize = 4_000;
-
 pub(crate) struct BrainReader {
     pub(crate) repo: BrainArtifactRepository,
     pub(crate) snapshot: BrainRepoSnapshot,
@@ -38,7 +32,8 @@ impl BrainReader {
         }
         // LEGACY: full snapshot artifact load (graph/*.json etc). DB canvas migration guard below.
         // search + context_pack* below are legacy-only (services prefer DB assemble; see context_pack_service).
-        // Phase 4: shrink reader.rs start; no behavior change.
+        // Phase 4 continuation: context pack scoring/capping extracted to policy.rs (reader shrunk ~200 LOC).
+        // No behavior change.
         snapshot.nodes = repo.read_json_artifact("graph/nodes.json")?;
         snapshot.relations = repo.read_json_artifact("graph/edges.json")?;
         snapshot.evidence = repo.read_json_artifact("graph/evidence.json")?;
@@ -322,7 +317,7 @@ impl BrainReader {
 
     // LEGACY: context_pack* assemble from snapshot. DB assemble (assemble_context_pack_v1_from_db) preferred in
     // context_pack_service; reader path kept only for selected_node case + fallbacks (no behavior change here).
-    // Phase 4: start pushing these toward DB side by marking.
+    // Phase 4: moved scoring/capping helpers to policy.rs to shrink reader (continuation).
     pub(crate) fn context_pack_with_selection(
         &self,
         query: &str,
@@ -610,7 +605,7 @@ impl BrainReader {
 
         let (evidence_before_cap, graph_fact_before_cap) =
             (evidence.len(), claims.len() + relations.len());
-        cap_context_pack_records(
+        policy::cap_context_pack_records(
             query,
             budget,
             &selected_bias_node_ids,
@@ -680,199 +675,6 @@ impl BrainReader {
     }
 }
 
-fn context_pack_evidence_limit(budget: usize) -> usize {
-    if budget <= SMALL_CONTEXT_PACK_BUDGET_THRESHOLD {
-        SMALL_CONTEXT_PACK_EVIDENCE_LIMIT
-    } else {
-        DEFAULT_CONTEXT_PACK_EVIDENCE_LIMIT
-    }
-}
-
-fn context_pack_graph_fact_limit(budget: usize) -> usize {
-    if budget <= SMALL_CONTEXT_PACK_BUDGET_THRESHOLD {
-        SMALL_CONTEXT_PACK_GRAPH_FACT_LIMIT
-    } else {
-        DEFAULT_CONTEXT_PACK_GRAPH_FACT_LIMIT
-    }
-}
-
-fn cap_context_pack_records(
-    query: &str,
-    budget: usize,
-    selected_bias_node_ids: &BTreeSet<String>,
-    selected_bias_evidence_ids: &BTreeSet<String>,
-    nodes: &mut Vec<BrainNodeRecord>,
-    claims: &mut Vec<ClaimRecord>,
-    relations: &mut Vec<BrainRelationRecord>,
-    evidence: &mut Vec<EvidenceRef>,
-) {
-    let terms = search_terms(query);
-    evidence.sort_by(|left, right| {
-        context_pack_evidence_score(right, &terms, selected_bias_evidence_ids)
-            .cmp(&context_pack_evidence_score(
-                left,
-                &terms,
-                selected_bias_evidence_ids,
-            ))
-            .then(left.id.cmp(&right.id))
-    });
-    evidence.truncate(context_pack_evidence_limit(budget));
-    let selected_evidence_ids = evidence
-        .iter()
-        .map(|evidence| evidence.id.clone())
-        .collect::<BTreeSet<_>>();
-
-    claims.retain(|claim| {
-        claim
-            .evidence_refs
-            .iter()
-            .any(|evidence_ref| selected_evidence_ids.contains(evidence_ref))
-    });
-    relations.retain(|relation| {
-        relation
-            .evidence_ids
-            .iter()
-            .any(|evidence_id| selected_evidence_ids.contains(evidence_id))
-    });
-
-    claims.sort_by(|left, right| {
-        context_pack_claim_score(
-            right,
-            &terms,
-            &selected_evidence_ids,
-            selected_bias_node_ids,
-        )
-        .cmp(&context_pack_claim_score(
-            left,
-            &terms,
-            &selected_evidence_ids,
-            selected_bias_node_ids,
-        ))
-        .then(left.claim_id.cmp(&right.claim_id))
-    });
-    let graph_fact_limit = context_pack_graph_fact_limit(budget);
-    claims.truncate(graph_fact_limit);
-    let relation_limit = graph_fact_limit.saturating_sub(claims.len());
-    relations.sort_by(|left, right| {
-        context_pack_relation_score(right, &selected_evidence_ids, selected_bias_node_ids)
-            .cmp(&context_pack_relation_score(
-                left,
-                &selected_evidence_ids,
-                selected_bias_node_ids,
-            ))
-            .then(left.relation_id.cmp(&right.relation_id))
-    });
-    relations.truncate(relation_limit);
-
-    let mut required_node_ids = claims
-        .iter()
-        .flat_map(|claim| claim.topic_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    for relation in relations.iter() {
-        required_node_ids.insert(relation.source_node_id.clone());
-        required_node_ids.insert(relation.target_node_id.clone());
-    }
-    for node in nodes.iter() {
-        if node
-            .evidence_ids
-            .iter()
-            .any(|evidence_id| selected_evidence_ids.contains(evidence_id))
-        {
-            required_node_ids.insert(node.node_id.clone());
-        }
-    }
-    nodes.retain(|node| required_node_ids.contains(&node.node_id));
-    nodes.sort_by(|left, right| {
-        context_pack_node_score(
-            right,
-            &terms,
-            &selected_evidence_ids,
-            selected_bias_node_ids,
-        )
-        .cmp(&context_pack_node_score(
-            left,
-            &terms,
-            &selected_evidence_ids,
-            selected_bias_node_ids,
-        ))
-        .then(left.node_id.cmp(&right.node_id))
-    });
-    nodes.truncate(graph_fact_limit.saturating_mul(2).max(1));
-}
-
-fn context_pack_evidence_score(
-    evidence: &EvidenceRef,
-    terms: &[String],
-    selected_bias_evidence_ids: &BTreeSet<String>,
-) -> usize {
-    match_score(terms, &evidence.snippet).unwrap_or(0)
-        + evidence
-            .source_id
-            .as_ref()
-            .and_then(|source_id| match_score(terms, source_id))
-            .unwrap_or(0)
-        + if selected_bias_evidence_ids.contains(&evidence.id) {
-            10_000
-        } else {
-            0
-        }
-}
-
-fn context_pack_claim_score(
-    claim: &ClaimRecord,
-    terms: &[String],
-    selected_evidence_ids: &BTreeSet<String>,
-    selected_bias_node_ids: &BTreeSet<String>,
-) -> usize {
-    let selected_evidence_count = claim
-        .evidence_refs
-        .iter()
-        .filter(|evidence_id| selected_evidence_ids.contains(*evidence_id))
-        .count();
-    let selected_node_bias = claim
-        .topic_refs
-        .iter()
-        .any(|node_id| selected_bias_node_ids.contains(node_id));
-    selected_evidence_count * 100
-        + match_score(terms, &claim.statement).unwrap_or(0)
-        + if selected_node_bias { 10_000 } else { 0 }
-}
-
-fn context_pack_relation_score(
-    relation: &BrainRelationRecord,
-    selected_evidence_ids: &BTreeSet<String>,
-    selected_bias_node_ids: &BTreeSet<String>,
-) -> usize {
-    let selected_evidence_count = relation
-        .evidence_ids
-        .iter()
-        .filter(|evidence_id| selected_evidence_ids.contains(*evidence_id))
-        .count();
-    let kind_score = match relation.kind {
-        BrainRelationKind::RelatedTo | BrainRelationKind::SourceOf => 1,
-        _ => 4,
-    };
-    let selected_node_bias = selected_bias_node_ids.contains(&relation.source_node_id)
-        || selected_bias_node_ids.contains(&relation.target_node_id);
-    selected_evidence_count * 100 + kind_score + if selected_node_bias { 10_000 } else { 0 }
-}
-
-fn context_pack_node_score(
-    node: &BrainNodeRecord,
-    terms: &[String],
-    selected_evidence_ids: &BTreeSet<String>,
-    selected_bias_node_ids: &BTreeSet<String>,
-) -> usize {
-    let selected_evidence_count = node
-        .evidence_ids
-        .iter()
-        .filter(|evidence_id| selected_evidence_ids.contains(*evidence_id))
-        .count();
-    selected_evidence_count * 100
-        + match_score(terms, &format!("{} {}", node.label, node.aliases.join(" "))).unwrap_or(0)
-        + if selected_bias_node_ids.contains(&node.node_id) {
-            10_000
-        } else {
-            0
-        }
-}
+// Context pack scoring/capping helpers moved to policy.rs (Phase 4 shrink).
+// Only cap_context_pack_records (and supporting fns) live in policy now for reuse
+// and to keep reader.rs focused on thin legacy wrappers + artifact loading.
