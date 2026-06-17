@@ -748,8 +748,9 @@ impl KnowledgeProjectStore {
         }
         let workspace_root = workspace_root_for_rows(&rows)
             .unwrap_or_else(|| fallback_workspace_root(&self.path, workspace_id));
-        let aggregate = aggregate_workspace_project(workspace_id, rows.clone());
+        let mut aggregate = aggregate_workspace_project(workspace_id, rows.clone());
         let corrections = self.load_workspace_corrections(workspace_id)?;
+        apply_workspace_delete_corrections_to_aggregate(&mut aggregate, &corrections);
         let existing_memories = read_memory_records(&workspace_root)?;
         let existing_nodes = read_existing_graph_nodes(&workspace_root)?;
         let existing_relations = read_existing_graph_relations(&workspace_root)?;

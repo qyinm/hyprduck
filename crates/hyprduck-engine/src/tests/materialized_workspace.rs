@@ -887,6 +887,105 @@ fn deleting_source_replays_provider_graph_for_remaining_sources() {
 }
 
 #[test]
+fn workspace_delete_source_resolves_canvas_node_id_alias() {
+    let _guard = TEST_ENV_LOCK.lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store_path = temp.path().join("knowledge.sqlite3");
+    let store = KnowledgeProjectStore::new(store_path.clone());
+    let (project, manifest) = compile_manifest_fixture_project_with_source(
+        &temp,
+        "# System Design Interview\n\n## Page 1\n\nChapter 13 source node.\n",
+        "source-ch13",
+        "SystemDesignInterview-CH13",
+        12,
+    );
+    let request = CompileProjectRequest {
+        source_markdown_path: manifest.markdown_path.clone(),
+        source_document_path: Some(manifest.source_path.clone()),
+        source_manifest_path: Some(manifest.manifest_path.clone()),
+        workspace_id: Some(manifest.workspace_id.clone()),
+        source_id: Some(manifest.source_id.clone()),
+        skip_graph_generation: None,
+    };
+    store
+        .save_project(&project, &request, Some(&manifest))
+        .expect("save source");
+    store
+        .materialize_workspace_brain_repo(DEFAULT_WORKSPACE_ID)
+        .expect("materialize workspace");
+
+    let rows = store
+        .load_projects_for_workspace(DEFAULT_WORKSPACE_ID)
+        .expect("load workspace rows");
+    let workspace_root = workspace_root_for_rows(&rows).expect("workspace root");
+    let mut snapshot = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read materialized snapshot");
+    let canvas_alias_node_id = "SystemDesignInterview-CH13.pdf".to_string();
+    snapshot.nodes.push(BrainNodeRecord {
+        node_id: canvas_alias_node_id.clone(),
+        kind: BrainNodeKind::Source,
+        label: "SystemDesignInterview-CH13.pdf".into(),
+        scope: BrainScope::Project,
+        aliases: Vec::new(),
+        evidence_ids: Vec::new(),
+        source_ids: vec![manifest.source_id.clone()],
+        confidence: Some(0.72),
+        updated_at: 12,
+        valid_from: 12,
+        valid_to: None,
+        superseded_by: None,
+    });
+    write_materialized_brain_repo(&workspace_root, &snapshot).expect("write alias source node");
+    KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+        .expect("open knowledge store")
+        .persist_graph_snapshot(&snapshot)
+        .expect("persist alias source node");
+
+    let previous_store = std::env::var_os("HYPRDUCK_PROJECT_STORE");
+    let previous_output = std::env::var_os("HYPRDUCK_OUTPUT_DIR");
+    std::env::set_var("HYPRDUCK_PROJECT_STORE", &store_path);
+    std::env::set_var("HYPRDUCK_OUTPUT_DIR", temp.path());
+    handle_apply_correction(ApplyCorrectionRequest {
+        project_id: workspace_project_id(DEFAULT_WORKSPACE_ID),
+        node_id: canvas_alias_node_id,
+        kind: CorrectionKind::Delete,
+        target_node_id: None,
+        value: None,
+    })
+    .expect("delete source via canvas alias node id");
+    match previous_store {
+        Some(value) => std::env::set_var("HYPRDUCK_PROJECT_STORE", value),
+        None => std::env::remove_var("HYPRDUCK_PROJECT_STORE"),
+    }
+    match previous_output {
+        Some(value) => std::env::set_var("HYPRDUCK_OUTPUT_DIR", value),
+        None => std::env::remove_var("HYPRDUCK_OUTPUT_DIR"),
+    }
+
+    let after_delete = read_materialized_brain_snapshot(&workspace_root, DEFAULT_WORKSPACE_ID)
+        .expect("read after delete");
+    assert!(after_delete
+        .sources
+        .iter()
+        .all(|source| source.source_id != manifest.source_id));
+    assert!(after_delete.nodes.iter().all(|node| {
+        node.node_id != format!("source:{}", manifest.source_id)
+            && node.node_id != "SystemDesignInterview-CH13.pdf"
+    }));
+    let canvas_projection = KnowledgeStore::open(KnowledgeStore::default_path_for_root(
+        &workspace_root,
+    ))
+    .expect("open knowledge store")
+    .read_graph_canvas_projection_from_db(DEFAULT_WORKSPACE_ID)
+    .expect("read canvas projection")
+    .expect("canvas projection present");
+    assert!(canvas_projection.0.iter().all(|node| {
+        node.node_id != format!("source:{}", manifest.source_id)
+            && node.node_id != "SystemDesignInterview-CH13.pdf"
+    }));
+}
+
+#[test]
 fn provider_overlay_replay_uses_latest_event_per_source_stage() {
     let temp = tempfile::tempdir().expect("temp dir");
     let workspace_root = temp.path().join(DEFAULT_WORKSPACE_ID);

@@ -865,6 +865,38 @@ pub(crate) fn source_ids_for_deleted_source_node(
     source_ids
 }
 
+pub(crate) fn apply_workspace_delete_corrections_to_aggregate(
+    project: &mut KnowledgeProject,
+    corrections: &[WorkspaceCorrection],
+) {
+    for correction in corrections {
+        if correction.kind != CorrectionKind::Delete {
+            continue;
+        }
+        remove_project_nodes(
+            project,
+            &workspace_delete_node_ids_for_correction(correction),
+        );
+    }
+}
+
+pub(crate) fn workspace_delete_node_ids_for_correction(
+    correction: &WorkspaceCorrection,
+) -> BTreeSet<String> {
+    let mut node_ids = BTreeSet::from([correction.aggregate_node_id.clone()]);
+    if let Some(source_id) = correction.aggregate_node_id.strip_prefix("source:") {
+        node_ids.insert(source_node_id(source_id));
+    }
+    for source_node_ref in &correction.source_node_ids {
+        if let Some((_, node_id)) = source_node_ref.split_once(':') {
+            if !node_id.is_empty() {
+                node_ids.insert(node_id.to_string());
+            }
+        }
+    }
+    node_ids
+}
+
 pub(crate) fn remove_project_nodes(project: &mut KnowledgeProject, node_ids: &BTreeSet<String>) {
     project.nodes.retain(|node| !node_ids.contains(&node.id));
     project

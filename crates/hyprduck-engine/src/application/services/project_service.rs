@@ -293,6 +293,20 @@ fn handle_apply_workspace_correction(
     let selected_detail = match aggregate.details_by_node_id.get(&request.node_id) {
         Some(detail) => detail,
         None if request.kind == CorrectionKind::Delete => {
+            if let Some(detail) = resolve_workspace_source_detail_for_delete(
+                store,
+                workspace_id,
+                &rows,
+                &aggregate,
+                &request.node_id,
+            )? {
+                return handle_delete_workspace_source_node(
+                    store,
+                    workspace_id,
+                    &detail,
+                    request,
+                );
+            }
             return handle_delete_materialized_workspace_node(store, workspace_id, &rows, request);
         }
         None => bail!("workspace node {} was not found", request.node_id),
@@ -409,10 +423,13 @@ fn handle_delete_materialized_workspace_node(
     let workspace_root = workspace_root_for_rows(rows)
         .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
     let snapshot = read_materialized_brain_snapshot(&workspace_root, workspace_id)?;
-    let Some(node) = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == request.node_id)
+    let Some(node) = find_live_materialized_workspace_node(
+        store,
+        workspace_id,
+        &workspace_root,
+        &snapshot,
+        &request.node_id,
+    )?
     else {
         store.materialize_workspace_brain_repo(workspace_id)?;
         let project = store
@@ -420,6 +437,25 @@ fn handle_delete_materialized_workspace_node(
             .unwrap_or_else(|| empty_workspace_project(workspace_id));
         return Ok(ApplyCorrectionResponseData { project });
     };
+    if node.kind == BrainNodeKind::Source {
+        if let Some(detail) = workspace_source_detail_from_brain_node(
+            &aggregate_workspace_project(workspace_id, rows.to_vec()),
+            &node,
+        ) {
+            return handle_delete_workspace_source_node(
+                store,
+                workspace_id,
+                &detail,
+                request,
+            );
+        }
+        if let Some(source_id) = workspace_source_id_from_brain_node(&node) {
+            if let Some(deleted_row) = store.delete_workspace_source(workspace_id, &source_id)? {
+                remove_source_chunks(&workspace_root, &source_id)?;
+                remove_deleted_workspace_source_artifacts(&workspace_root, &deleted_row)?;
+            }
+        }
+    }
     store.append_workspace_correction(&WorkspaceCorrection {
         id: Uuid::now_v7().to_string(),
         workspace_id: workspace_id.to_string(),
@@ -523,6 +559,83 @@ fn remove_deleted_workspace_source_artifacts(
 fn is_managed_source_artifact_dir(workspace_root: &Path, source_id: &str, dir: &Path) -> bool {
     dir == workspace_root.join("sources").join(source_id)
         || dir == workspace_root.join("artifacts").join(source_id)
+}
+
+fn resolve_workspace_source_detail_for_delete(
+    store: &KnowledgeProjectStore,
+    workspace_id: &str,
+    rows: &[(StoredSourceRow, Option<KnowledgeProject>)],
+    aggregate: &KnowledgeProject,
+    node_id: &str,
+) -> Result<Option<GraphNodeDetail>> {
+    let workspace_root = workspace_root_for_rows(rows)
+        .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
+    let snapshot = read_materialized_brain_snapshot(&workspace_root, workspace_id)?;
+    let Some(node) =
+        find_live_materialized_workspace_node(store, workspace_id, &workspace_root, &snapshot, node_id)?
+    else {
+        return Ok(None);
+    };
+    Ok(workspace_source_detail_from_brain_node(aggregate, &node))
+}
+
+fn find_live_materialized_workspace_node(
+    _store: &KnowledgeProjectStore,
+    workspace_id: &str,
+    workspace_root: &Path,
+    snapshot: &BrainRepoSnapshot,
+    node_id: &str,
+) -> Result<Option<BrainNodeRecord>> {
+    if let Some(node) = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == node_id && node.valid_to.is_none())
+        .cloned()
+    {
+        return Ok(Some(node));
+    }
+
+    let db_path = KnowledgeStore::default_path_for_root(workspace_root);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let projection = KnowledgeStore::open(db_path)?
+        .read_graph_canvas_projection_from_db(workspace_id)?;
+    Ok(projection.and_then(|(nodes, _, _)| {
+        nodes
+            .into_iter()
+            .find(|node| node.node_id == node_id)
+    }))
+}
+
+fn workspace_source_detail_from_brain_node(
+    aggregate: &KnowledgeProject,
+    node: &BrainNodeRecord,
+) -> Option<GraphNodeDetail> {
+    if node.kind != BrainNodeKind::Source {
+        return None;
+    }
+    if let Some(source_id) = workspace_source_id_from_brain_node(node) {
+        let canonical_node_id = source_node_id(&source_id);
+        if let Some(detail) = aggregate.details_by_node_id.get(&canonical_node_id) {
+            return Some(detail.clone());
+        }
+    }
+    aggregate
+        .details_by_node_id
+        .values()
+        .find(|detail| {
+            is_source_like_node_kind(detail.node.kind)
+                && (detail.node.label == node.label || detail.canonical_name == node.label)
+        })
+        .cloned()
+}
+
+fn workspace_source_id_from_brain_node(node: &BrainNodeRecord) -> Option<String> {
+    node.source_ids
+        .first()
+        .cloned()
+        .or_else(|| node.node_id.strip_prefix("source:").map(ToOwned::to_owned))
 }
 
 pub(crate) fn empty_workspace_project(workspace_id: &str) -> KnowledgeProject {
