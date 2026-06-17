@@ -1,6 +1,9 @@
 use std::path::{Component, Path};
 
-use hyprduck_engine_types::{ReadPageEvidenceResponseData, ReadSourceResponseData, SourceRecord};
+use hyprduck_engine_types::{
+    BrainRepoSnapshot, ReadPageEvidenceResponseData, ReadSourceResponseData, SourceRecord,
+};
+use std::collections::BTreeMap;
 
 pub(crate) fn redact_path_for_agent(value: &str) -> String {
     let trimmed = value.trim();
@@ -32,7 +35,10 @@ pub(crate) fn is_agent_text_safe(value: &str) -> bool {
         return false;
     }
     let path = Path::new(&normalized);
-    !path.is_absolute() && path.components().all(|component| !matches!(component, Component::ParentDir))
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 /// Variant for wiki paths that must start with "wiki/" and otherwise pass the normal agent text safety rules.
@@ -51,7 +57,10 @@ pub(crate) fn is_safe_agent_wiki_path(path: &str) -> bool {
         return false;
     }
     let path = Path::new(&normalized);
-    !path.is_absolute() && path.components().all(|component| !matches!(component, Component::ParentDir))
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 fn has_home_path(lower: &str) -> bool {
@@ -78,16 +87,18 @@ fn has_unc_path(normalized: &str) -> bool {
     bytes.windows(2).enumerate().any(|(index, window)| {
         window == b"//"
             && path_token_starts_at(bytes, index)
-            && index.checked_sub(1).map(|prev| bytes[prev] != b':').unwrap_or(true)
+            && index
+                .checked_sub(1)
+                .map(|prev| bytes[prev] != b':')
+                .unwrap_or(true)
     })
 }
 
 fn has_unix_absolute_path(normalized: &str) -> bool {
     let bytes = normalized.as_bytes();
-    bytes
-        .windows(2)
-        .enumerate()
-        .any(|(index, window)| window[0] == b'/' && window[1] != b'/' && path_token_starts_at(bytes, index))
+    bytes.windows(2).enumerate().any(|(index, window)| {
+        window[0] == b'/' && window[1] != b'/' && path_token_starts_at(bytes, index)
+    })
 }
 
 fn path_token_starts_at(bytes: &[u8], index: usize) -> bool {
@@ -115,6 +126,8 @@ fn has_forbidden_path_marker(lower: &str) -> bool {
 // These were previously duplicated in brain_read_service.rs and tied to the
 // legacy BrainReader path. Moving them makes the "what an agent is allowed to see"
 // contract canonical and reusable from both DB and artifact paths.
+// Enrichment / expand helpers were moved here (Phase 1 continuation) so they
+// accept snapshot data only (not &BrainReader) for reuse from DB projections.
 // -----------------------------------------------------------------------------
 
 /// Redact a single path for agent consumption (same logic as the basic one,
@@ -150,4 +163,149 @@ pub(crate) fn redact_page_evidence_agent_paths(response: &mut ReadPageEvidenceRe
         redact_optional_agent_path(&mut evidence.markdown_path);
         redact_optional_agent_path(&mut evidence.image_path);
     }
+}
+
+// -----------------------------------------------------------------------------
+// Local-path enrichment + expansion for include_local_paths reads.
+// These operate on snapshot data (sources/evidence carrying the raw paths from
+// artifact) + workspace root to produce absolute local paths in responses.
+// They were extracted from brain_read_service so the policy layer owns the
+// agent read contract and the helpers no longer require a BrainReader.
+// -----------------------------------------------------------------------------
+
+pub(crate) fn enrich_read_source_with_local_paths(
+    response: &mut ReadSourceResponseData,
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+) {
+    if let Some(source) = snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+    {
+        response.source.original_path = source.original_path.clone();
+        response.source.source_path = source.source_path.clone();
+        response.source.markdown_path = source.markdown_path.clone();
+    }
+
+    let evidence_by_id = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    for evidence in &mut response.evidence {
+        if let Some(raw) = evidence_by_id.get(evidence.id.as_str()) {
+            evidence.source_path = raw.source_path.clone();
+            evidence.markdown_path = raw.markdown_path.clone();
+            evidence.image_path = raw.image_path.clone();
+        }
+    }
+}
+
+pub(crate) fn expand_read_source_local_paths(
+    response: &mut ReadSourceResponseData,
+    workspace_root: &Path,
+) {
+    expand_source_record_local_paths(&mut response.source, workspace_root);
+    for evidence in &mut response.evidence {
+        let source_id = evidence
+            .source_id
+            .as_deref()
+            .unwrap_or(response.source.source_id.as_str());
+        expand_optional_path(
+            &mut evidence.source_path,
+            workspace_root,
+            &["sources", source_id],
+        );
+        expand_optional_path(
+            &mut evidence.markdown_path,
+            workspace_root,
+            &["artifacts", source_id, "pages"],
+        );
+        expand_optional_path(
+            &mut evidence.image_path,
+            workspace_root,
+            &["artifacts", source_id, "images"],
+        );
+    }
+}
+
+pub(crate) fn enrich_page_evidence_with_local_paths(
+    response: &mut ReadPageEvidenceResponseData,
+    snapshot: &BrainRepoSnapshot,
+    source_id: &str,
+) {
+    if let Some(source) = snapshot
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+    {
+        response.source.original_path = source.original_path.clone();
+        response.source.source_path = source.source_path.clone();
+        response.source.markdown_path = source.markdown_path.clone();
+    }
+
+    let evidence_by_id = snapshot
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    for evidence in &mut response.evidence {
+        if let Some(raw) = evidence_by_id.get(evidence.evidence_ref.as_str()) {
+            evidence.markdown_path = raw.markdown_path.clone();
+            evidence.image_path = raw.image_path.clone();
+        }
+    }
+}
+
+pub(crate) fn expand_page_evidence_local_paths(
+    response: &mut ReadPageEvidenceResponseData,
+    workspace_root: &Path,
+) {
+    expand_source_record_local_paths(&mut response.source, workspace_root);
+    let source_id = response.source.source_id.as_str();
+    for evidence in &mut response.evidence {
+        expand_optional_path(
+            &mut evidence.markdown_path,
+            workspace_root,
+            &["artifacts", source_id, "pages"],
+        );
+        expand_optional_path(
+            &mut evidence.image_path,
+            workspace_root,
+            &["artifacts", source_id, "images"],
+        );
+    }
+}
+
+fn expand_source_record_local_paths(source: &mut SourceRecord, workspace_root: &Path) {
+    expand_string_path(&mut source.original_path, workspace_root, &[]);
+    expand_string_path(
+        &mut source.source_path,
+        workspace_root,
+        &["sources", source.source_id.as_str()],
+    );
+    expand_string_path(
+        &mut source.markdown_path,
+        workspace_root,
+        &["artifacts", source.source_id.as_str()],
+    );
+}
+
+fn expand_optional_path(value: &mut Option<String>, workspace_root: &Path, segments: &[&str]) {
+    if let Some(path) = value {
+        expand_string_path(path, workspace_root, segments);
+    }
+}
+
+fn expand_string_path(value: &mut String, workspace_root: &Path, segments: &[&str]) {
+    if value.is_empty() || value == "[redacted-local-path]" || Path::new(value).is_absolute() {
+        return;
+    }
+    let mut path = workspace_root.to_path_buf();
+    for segment in segments {
+        path.push(segment);
+    }
+    path.push(value.as_str());
+    *value = path.to_string_lossy().into_owned();
 }
