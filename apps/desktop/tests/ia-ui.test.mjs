@@ -118,6 +118,11 @@ test("Docs page focuses first users on importing source files", () => {
   expect(docsSource).toMatch(/onViewInGraph/);
   expect(docsSource).toMatch(/Open extracted text/);
   expect(docsSource).toMatch(/Reveal in Finder/);
+  expect(docsSource).not.toMatch(/Filter/);
+  expect(docsSource).not.toMatch(/readOnly/);
+  expect(docsSource).toMatch(/value=\{sourceSearch\}/);
+  expect(docsSource).toMatch(/visibleSources\.map/);
+  expect(docsSource).toMatch(/normalize\("NFC"\)/);
   expect(localesSource).toMatch(/Add private docs/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);

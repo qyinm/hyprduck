@@ -1,9 +1,8 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { AlertTriangle, ExternalLink, FileText, FolderOpen, Search, Upload, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { fileNameFromPath } from "./pathUtils";
@@ -31,6 +30,24 @@ interface DocsWorkspaceProps {
 export function DocsWorkspace(props: DocsWorkspaceProps) {
   const { importStatus, sources, onChooseFile, onOpenArtifact, onRetryFailedPages, onViewInGraph } =
     props;
+  const [sourceSearch, setSourceSearch] = useState("");
+  const visibleSources = useMemo(() => {
+    const query = normalizeSearchText(sourceSearch.trim());
+    if (!query) {
+      return sources;
+    }
+
+    return sources.filter((source) => {
+      const fileName = fileNameFromPath(source.original_path || source.source_path);
+      return [
+        fileName,
+        source.original_path,
+        source.source_path,
+        source.markdown_path,
+        statusLabel(source.status),
+      ].some((value) => normalizeSearchText(value).includes(query));
+    });
+  }, [sourceSearch, sources]);
   const warnings = sources.filter((source) => source.status === "failed" || source.status === "stale");
 
   return (
@@ -107,14 +124,21 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
               <h2 className="text-lg font-semibold text-foreground">Sources</h2>
               <Badge variant="secondary">{sources.length}</Badge>
             </div>
-            <div className="flex min-w-[16rem] items-center gap-2">
+            <div className="min-w-[16rem]">
               <div className="relative min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search sources" readOnly />
+                <input
+                  aria-label="Search sources"
+                  autoComplete="off"
+                  className="ui-input"
+                  onChange={(event) => setSourceSearch(event.currentTarget.value)}
+                  placeholder="Search sources"
+                  spellCheck={false}
+                  style={{ paddingLeft: "2.5rem" }}
+                  type="search"
+                  value={sourceSearch}
+                />
               </div>
-              <Button size="sm" type="button" variant="outline">
-                Filter
-              </Button>
             </div>
           </div>
           <div className="mt-4 overflow-hidden rounded-lg border border-border">
@@ -130,8 +154,12 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                 No sources indexed yet.
               </div>
+            ) : visibleSources.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                No sources match "{sourceSearch.trim()}".
+              </div>
             ) : (
-              sources.map((source) => (
+              visibleSources.map((source) => (
                 <div
                   className="grid grid-cols-[minmax(12rem,1fr)_7rem_5rem_8rem_10rem_8rem] items-center gap-4 border-b border-border px-4 py-3 text-sm last:border-b-0"
                   key={source.source_id}
@@ -240,6 +268,10 @@ function statusLabel(status: WorkspaceSourceSummary["status"]) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function normalizeSearchText(value: string) {
+  return value.normalize("NFC").toLowerCase();
 }
 
 function formatTimestamp(value: number) {
