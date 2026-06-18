@@ -188,6 +188,14 @@ test("Agent page renders chat UI and uses the agent_chat_ask IPC contract", () =
   expect(agentChatSource).toMatch(/Selected source/);
   expect(agentChatSource).toMatch(/Graph context/);
   expect(agentChatSource).toMatch(/Thinking with your indexed evidence/);
+  expect(agentChatSource).toMatch(/hasConversation/);
+  expect(agentChatSource).toMatch(/Ask a follow-up about your indexed docs/);
+  expect(agentChatSource).toMatch(/overflow-hidden px-6 pb-5/);
+  expect(agentChatSource).toMatch(/rounded-xl border border-border bg-background p-3 shadow-sm/);
+  expect(agentChatSource).not.toMatch(/border-t border-border bg-muted\/20/);
+  expect(agentChatSource).toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background/);
+  expect(agentChatSource).toMatch(/border-r border-border bg-muted\/20 px-3 pb-3 pt-14/);
+  expect(agentChatSource).not.toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background pt-12/);
   expect(appSource).toMatch(/invoke\("agent_chat_ask"/);
   expect(appTypesSource).toMatch(/interface AgentChatAskPayload/);
   expect(appTypesSource).toMatch(/interface AgentChatAskResult/);

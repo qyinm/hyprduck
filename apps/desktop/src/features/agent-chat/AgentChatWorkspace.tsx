@@ -89,6 +89,7 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
     }
     return threads.find((thread) => thread.id === activeThreadId) ?? threads[0] ?? null;
   }, [activeThreadId, threads]);
+  const hasConversation = Boolean(activeThread?.messages.length);
 
   const sourceIds = useMemo(() => {
     if (scopeMode === "selected_source") {
@@ -171,9 +172,63 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
     }
   };
 
+  const composer = (placeholder: string) => (
+    <div className="rounded-xl border border-border bg-background p-3 shadow-sm">
+      <Textarea
+        className="min-h-20 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+        placeholder={placeholder}
+        value={input}
+      />
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <ScopeButton active={scopeMode === "all_docs"} icon={<Globe2 size={14} />} onClick={() => setScopeMode("all_docs")}>
+            All docs
+          </ScopeButton>
+          <ScopeButton
+            active={scopeMode === "selected_source"}
+            icon={<FileText size={14} />}
+            onClick={() => setScopeMode("selected_source")}
+          >
+            Selected source
+          </ScopeButton>
+          <ScopeButton
+            active={scopeMode === "graph_context"}
+            icon={<Network size={14} />}
+            onClick={() => setScopeMode("graph_context")}
+          >
+            Graph context
+          </ScopeButton>
+          {scopeMode === "selected_source" && (
+            <select
+              className="h-8 max-w-[14rem] rounded-md border border-border bg-background px-2 text-xs text-foreground"
+              onChange={(event) => setSelectedSourceId(event.target.value)}
+              value={selectedSourceId}
+            >
+              {sources.map((source) => (
+                <option key={source.source_id} value={source.source_id}>
+                  {fileNameFromPath(source.original_path || source.source_path)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <Button disabled={!canSend} onClick={() => void send()} size="icon" type="button">
+          <ArrowUp size={16} />
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] bg-background pt-12">
-      <aside className="flex min-h-0 flex-col border-r border-border bg-muted/20 px-3 py-3">
+    <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] bg-background">
+      <aside className="flex min-h-0 flex-col border-r border-border bg-muted/20 px-3 pb-3 pt-14">
         <Button className="justify-start gap-2" onClick={startThread} type="button" variant="secondary">
           <Plus size={16} />
           New chat
@@ -211,114 +266,80 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
         </div>
       </aside>
 
-      <section className="flex min-h-0 flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-8">
-          <div className="flex min-h-[18rem] w-full max-w-3xl flex-1 flex-col justify-center">
-            {activeThread && activeThread.messages.length > 0 ? (
-              <div className="mb-8 space-y-4">
-                {activeThread.messages.map((message) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    pending={pending && message.text.startsWith("Thinking")}
-                    result={resultsByMessageId[message.id]}
-                  />
-                ))}
+      <section className="flex min-h-0 flex-col overflow-hidden pt-12">
+        {hasConversation ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center overflow-hidden px-6 pb-5">
+            <div className="flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4">
+                <div className="space-y-4">
+                  {activeThread?.messages.map((message) => (
+                    <MessageBubble
+                      key={message.id}
+                      message={message}
+                      pending={pending && message.text.startsWith("Thinking")}
+                      result={resultsByMessageId[message.id]}
+                    />
+                  ))}
+                </div>
               </div>
-            ) : (
+
+              <div className="shrink-0 pb-1">
+                {composer("Ask a follow-up about your indexed docs")}
+                {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+                {!providerReady ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Configure OpenRouter or Ollama in Settings before asking the agent.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-8">
+            <div className="flex min-h-[18rem] w-full max-w-3xl flex-1 flex-col justify-center">
               <div className="mb-8 text-center">
                 <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-full border border-border bg-background">
                   <Sparkles size={18} />
                 </div>
                 <h1 className="text-2xl font-semibold text-foreground">What should we work on?</h1>
               </div>
-            )}
 
-            <div className="rounded-xl border border-border bg-background shadow-sm">
-              <Textarea
-                className="min-h-20 resize-none border-0 bg-transparent p-4 shadow-none focus-visible:ring-0"
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault();
-                    void send();
-                  }
-                }}
-                placeholder="Ask anything about your indexed docs"
-                value={input}
-              />
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/20 px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <ScopeButton active={scopeMode === "all_docs"} icon={<Globe2 size={14} />} onClick={() => setScopeMode("all_docs")}>
-                    All docs
-                  </ScopeButton>
-                  <ScopeButton
-                    active={scopeMode === "selected_source"}
-                    icon={<FileText size={14} />}
-                    onClick={() => setScopeMode("selected_source")}
-                  >
-                    Selected source
-                  </ScopeButton>
-                  <ScopeButton
-                    active={scopeMode === "graph_context"}
-                    icon={<Network size={14} />}
-                    onClick={() => setScopeMode("graph_context")}
-                  >
-                    Graph context
-                  </ScopeButton>
-                  {scopeMode === "selected_source" && (
-                    <select
-                      className="h-8 max-w-[14rem] rounded-md border border-border bg-background px-2 text-xs text-foreground"
-                      onChange={(event) => setSelectedSourceId(event.target.value)}
-                      value={selectedSourceId}
-                    >
-                      {sources.map((source) => (
-                        <option key={source.source_id} value={source.source_id}>
-                          {fileNameFromPath(source.original_path || source.source_path)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-                <Button disabled={!canSend} onClick={() => void send()} size="icon" type="button">
-                  <ArrowUp size={16} />
-                </Button>
-              </div>
-            </div>
+              {composer("Ask anything about your indexed docs")}
 
-            <div className="mt-5 space-y-1">
-              {sources.length === 0 ? (
-                <button
-                  className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-sm text-muted-foreground hover:text-foreground"
-                  onClick={onOpenDocs}
-                  type="button"
-                >
-                  <FileText size={16} />
-                  Add docs before asking the agent
-                </button>
-              ) : (
-                suggestedPrompts(project).map((prompt) => (
+              <div className="mt-5 space-y-1">
+                {sources.length === 0 ? (
                   <button
                     className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-sm text-muted-foreground hover:text-foreground"
-                    key={prompt}
-                    onClick={() => setInput(prompt)}
+                    onClick={onOpenDocs}
                     type="button"
                   >
-                    <MessageCircle size={16} />
-                    {prompt}
+                    <FileText size={16} />
+                    Add docs before asking the agent
                   </button>
-                ))
-              )}
-            </div>
+                ) : (
+                  suggestedPrompts(project).map((prompt) => (
+                    <button
+                      className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-sm text-muted-foreground hover:text-foreground"
+                      key={prompt}
+                      onClick={() => setInput(prompt)}
+                      type="button"
+                    >
+                      <MessageCircle size={16} />
+                      {prompt}
+                    </button>
+                  ))
+                )}
+              </div>
 
-            {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-            {!providerReady ? (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Configure OpenRouter or Ollama in Settings before asking the agent.
-              </p>
-            ) : null}
+              {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+              {!providerReady ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Configure OpenRouter or Ollama in Settings before asking the agent.
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
+        )}
       </section>
     </div>
   );
