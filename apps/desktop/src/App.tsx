@@ -10,23 +10,22 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  FileText,
+  MessageCircle,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Save,
   Settings,
   Sparkles,
 } from "lucide-react";
 import {
-  type AgentTerminalAgent,
-  type AgentTerminalEvent,
-  type AgentTerminalListResult,
-  type AgentTerminalSession,
+  type AgentChatAskPayload,
+  type AgentChatAskResult,
   type DesktopCommand,
   type DesktopCommandParameters,
   type DesktopCommandResult,
-  type DesktopMessage,
   type DesktopUnlisten,
   type EngineConfigPayload,
   type FileSelection,
@@ -44,8 +43,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AgentChatWorkspace } from "@/features/agent-chat/AgentChatWorkspace";
+import { DocsWorkspace } from "@/features/workspace/DocsWorkspace";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
 import { materializedGraphSnapshotToWorkspaceEnvelope } from "@/features/workspace/materializedGraphSnapshot";
@@ -54,10 +54,8 @@ import {
   workspaceUiStateReducer,
 } from "@/features/workspace/state";
 import type {
-  MaterializedGraphSnapshot,
   WorkspaceApplyCorrectionRequest,
   WorkspaceProjectEnvelope,
-  WorkspaceProject,
 } from "@/features/workspace/types";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { TranslationKey } from "@/i18n/locales";
@@ -69,7 +67,8 @@ import {
   hydrateWorkspaceProjectWithSources,
 } from "@/workspaceSourceHydration";
 
-type ActivePanel = "knowledge" | "settings";
+type MainPanel = "docs" | "agent" | "graph";
+type ActivePanel = MainPanel | "settings";
 
 declare global {
   interface Window {
@@ -81,24 +80,21 @@ const IS_WEB_PREVIEW = import.meta.env.VITE_PLATFORM === "web";
 
 const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
-const MAIN_NAV_ITEMS: { id: ActivePanel; labelKey: TranslationKey; icon: ReactNode }[] = [
+const MAIN_NAV_ITEMS: { id: MainPanel; labelKey: TranslationKey; icon: ReactNode }[] = [
   {
-    id: "knowledge",
-    labelKey: "nav.knowledge",
-    icon: (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width={18}
-        height={18}
-        viewBox="0 0 256 256"
-        aria-hidden="true"
-      >
-        <path
-          fill="currentColor"
-          d="M200 152a31.84 31.84 0 0 0-19.53 6.68l-23.11-18A31.65 31.65 0 0 0 160 128c0-.74 0-1.48-.08-2.21l13.23-4.41A32 32 0 1 0 168 104c0 .74 0 1.48.08 2.21l-13.23 4.41A32 32 0 0 0 128 96a32.6 32.6 0 0 0-5.27.44L115.89 81A32 32 0 1 0 96 88a32.6 32.6 0 0 0 5.27-.44l6.84 15.4a31.92 31.92 0 0 0-8.57 39.64l-25.71 22.84a32.06 32.06 0 1 0 10.63 12l25.71-22.84a31.91 31.91 0 0 0 37.36-1.24l23.11 18A31.65 31.65 0 0 0 168 184a32 32 0 1 0 32-32m0-64a16 16 0 1 1-16 16a16 16 0 0 1 16-16M80 56a16 16 0 1 1 16 16a16 16 0 0 1-16-16M56 208a16 16 0 1 1 16-16a16 16 0 0 1-16 16m56-80a16 16 0 1 1 16 16a16 16 0 0 1-16-16m88 72a16 16 0 1 1 16-16a16 16 0 0 1-16 16"
-        />
-      </svg>
-    ),
+    id: "docs",
+    labelKey: "nav.docs",
+    icon: <FileText aria-hidden="true" size={18} />,
+  },
+  {
+    id: "agent",
+    labelKey: "nav.agent",
+    icon: <MessageCircle aria-hidden="true" size={18} />,
+  },
+  {
+    id: "graph",
+    labelKey: "nav.graph",
+    icon: <Network aria-hidden="true" size={18} />,
   },
 ];
 
@@ -194,19 +190,6 @@ async function invoke<K extends DesktopCommand>(
   ...args: DesktopCommandParameters<K>
 ): Promise<DesktopCommandResult<K>> {
   return getDesktopApi().invoke(command, ...args);
-}
-
-async function listAgentTerminalAgents(): Promise<AgentTerminalListResult> {
-  return invoke("agent_terminal_list_agents");
-}
-
-function listenAgentTerminalEvents(
-  handler: (event: AgentTerminalEvent) => void,
-): DesktopUnlisten {
-  return getDesktopApi().listen<AgentTerminalEvent>(
-    "hyprduck://agent-terminal",
-    (message) => handler(message.payload),
-  );
 }
 
 async function loadGraphWorkspaceEnvelope(
@@ -330,7 +313,7 @@ export function App() {
   const [readiness, setReadiness] =
     useState<RuntimeReadinessResponseData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSelection | null>(null);
-  const [activePanel, setActivePanel] = useState<ActivePanel>("knowledge");
+  const [activePanel, setActivePanel] = useState<ActivePanel>("docs");
   const settingsOpen = activePanel === "settings";
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
@@ -517,7 +500,7 @@ export function App() {
     const selection = await invoke("pick_import_file");
     if (selection) {
       setSelectedFile(selection);
-      setActivePanel("knowledge");
+      setActivePanel("docs");
       try {
         await invoke("start_parse", {
           request: {
@@ -534,7 +517,7 @@ export function App() {
 
   const retryFailedPages = async () => {
     await invoke("retry_failed_pages");
-    setActivePanel("knowledge");
+    setActivePanel("docs");
   };
 
   const openLocalArtifact = async (path: string, reveal: boolean) => {
@@ -565,38 +548,20 @@ export function App() {
     setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad, t));
   };
 
-  const createAgentTerminalSession = async (args: {
-    kind?: "agent" | "shell";
-    agentId?: AgentTerminalAgent["id"];
-    nodeId: string | null;
-  }): Promise<AgentTerminalSession> => {
-    return invoke("agent_terminal_create_session", {
-      kind: args.kind ?? "agent",
-      agentId: args.agentId,
-      workspaceId: loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default",
-      projectId: workspaceProject?.summary.projectId ?? null,
-      nodeId: args.nodeId,
-      contextScope: "workspace",
-    });
+  const askAgentChat = async (
+    request: AgentChatAskPayload,
+  ): Promise<AgentChatAskResult> => {
+    return invoke("agent_chat_ask", { request });
   };
 
-  const writeAgentTerminalSession = async (args: {
-    sessionId: string;
-    input: string;
-  }) => {
-    return invoke("agent_terminal_write_session", args);
-  };
-
-  const resizeAgentTerminalSession = async (args: {
-    sessionId: string;
-    cols: number;
-    rows: number;
-  }) => {
-    return invoke("agent_terminal_resize_session", args);
-  };
-
-  const killAgentTerminalSession = async (args: { sessionId: string }) => {
-    return invoke("agent_terminal_kill_session", args);
+  const viewSourceInGraph = (sourceId: string) => {
+    const sourceNodeId = Object.values(workspaceProject?.detailsByNodeId ?? {}).find(
+      (detail) => detail.source?.sourceId === sourceId,
+    )?.node.id;
+    setActivePanel("graph");
+    if (sourceNodeId) {
+      dispatchWorkspaceUi({ type: "select_node", nodeId: sourceNodeId });
+    }
   };
 
   const saveConfig = async (payload: EngineConfigPayload) => {
@@ -640,6 +605,8 @@ export function App() {
   }
 
   const showSidebar = !sidebarCollapsed;
+  const workspaceSources = loadedWorkspaceEnvelope?.sources ?? [];
+  const agentReady = Boolean(validation?.ready && readiness?.ready);
 
   function openSettings() {
     setActivePanel("settings");
@@ -647,7 +614,7 @@ export function App() {
   }
 
   function closeSettings() {
-    setActivePanel("knowledge");
+    setActivePanel("docs");
   }
 
   return (
@@ -662,9 +629,9 @@ export function App() {
       >
         {settingsOpen ? (
           <Button
-            aria-label="Back to Knowledge"
+            aria-label="Back to Docs"
             onClick={() => {
-              setActivePanel("knowledge");
+              setActivePanel("docs");
             }}
             size="icon"
             variant="ghost"
@@ -701,7 +668,7 @@ export function App() {
           </Button>
         )}
       </div>
-      {!settingsOpen && (
+      {activePanel === "graph" && (
         <Button
           aria-expanded={workspaceUiState.inspectorOpen}
           aria-label={
@@ -820,7 +787,26 @@ export function App() {
               validation={validation}
               tab={settingsTab}
             />
-          ) : activePanel === "knowledge" ? (
+          ) : activePanel === "docs" ? (
+            <DocsWorkspace
+              importStatus={graphImportStatus}
+              onChooseFile={chooseFile}
+              onOpenArtifact={openLocalArtifact}
+              onRetryFailedPages={retryFailedPages}
+              onViewInGraph={viewSourceInGraph}
+              sources={workspaceSources}
+            />
+          ) : activePanel === "agent" ? (
+            <AgentChatWorkspace
+              onAskAgentChat={askAgentChat}
+              onOpenDocs={() => setActivePanel("docs")}
+              project={workspaceProject}
+              providerReady={agentReady}
+              selectedNodeId={workspaceUiState.selectedNodeId}
+              sources={workspaceSources}
+              workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}
+            />
+          ) : activePanel === "graph" ? (
             <WorkspaceErrorBoundary
               renderCopy={{
                 unknownError: t("workspace.error.unknownRender"),
@@ -832,15 +818,9 @@ export function App() {
                 dispatch={dispatchWorkspaceUi}
                 importStatus={graphImportStatus}
                 onApplyCorrection={applyWorkspaceCorrection}
-                onCreateAgentTerminalSession={createAgentTerminalSession}
-                onKillAgentTerminalSession={killAgentTerminalSession}
-                onListenAgentTerminalEvents={listenAgentTerminalEvents}
-                onListAgentTerminalAgents={listAgentTerminalAgents}
                 onOpenArtifact={openLocalArtifact}
-                onOpenImport={chooseFile}
-                onResizeAgentTerminalSession={resizeAgentTerminalSession}
+                onOpenDocs={() => setActivePanel("docs")}
                 onRetryFailedPages={retryFailedPages}
-                onWriteAgentTerminalSession={writeAgentTerminalSession}
                 project={workspaceProject}
                 uiState={workspaceUiState}
                 workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}

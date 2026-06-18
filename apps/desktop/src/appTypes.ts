@@ -160,6 +160,77 @@ export interface WorkspaceAnswerPayload {
   question: string;
 }
 
+export type AgentChatScopeMode = "all_docs" | "selected_source" | "graph_context";
+export type AgentChatMessageRole = "user" | "assistant" | "system";
+
+export interface AgentChatMessage {
+  id: string;
+  role: AgentChatMessageRole;
+  text: string;
+  createdAt: number;
+}
+
+export interface AgentChatAskPayload {
+  schemaVersion: "hyprduck.agent_chat.v1";
+  conversationId: string;
+  scope: {
+    workspaceId: string;
+    rootDir?: string | null;
+  };
+  mode: AgentChatScopeMode;
+  selectedNodeId?: string | null;
+  sourceIds: string[];
+  question: string;
+  history: AgentChatMessage[];
+  budget?: number | null;
+  persistContextPack: boolean;
+}
+
+export interface AgentChatProviderSummary {
+  id: string;
+  label: string;
+  modelId: string;
+  hosted: boolean;
+}
+
+export interface AgentChatCitation {
+  evidenceRef: string;
+  sourceId: string;
+  page: number;
+  region?: string | null;
+  span?: string | null;
+  quotedText: string;
+  parseConfidence: string;
+  selectionReason: string;
+  contentHash: string;
+  evidenceType: string;
+}
+
+export interface AgentChatRetrievalTrace {
+  strategy: string;
+  chunksConsidered: number;
+  chunksSelected: number;
+  budgetRequested: number;
+  budgetUsed: number;
+  evidenceTypeTrace?: {
+    considered: Record<string, number>;
+    selected: Record<string, number>;
+  };
+}
+
+export interface AgentChatAskResult {
+  schemaVersion: "hyprduck.agent_chat.v1";
+  conversationId: string;
+  assistantMessage: AgentChatMessage;
+  answer: WorkspaceProject["answerByNodeId"][string];
+  contextPackId: string;
+  persistedContextPackPath?: string | null;
+  citations: AgentChatCitation[];
+  retrievalTrace: AgentChatRetrievalTrace;
+  provider: AgentChatProviderSummary;
+  warnings: string[];
+}
+
 export interface AgentTerminalAgent {
   id: "codex" | "claude_code" | "pi_agent" | "hermes";
   label: string;
@@ -326,6 +397,10 @@ export interface DesktopCommandMap {
   answer_workspace_project: {
     args: { request: WorkspaceAnswerPayload };
     result: WorkspaceProject["answerByNodeId"][string];
+  };
+  agent_chat_ask: {
+    args: { request: AgentChatAskPayload };
+    result: AgentChatAskResult;
   };
   agent_terminal_list_agents: {
     args: undefined;

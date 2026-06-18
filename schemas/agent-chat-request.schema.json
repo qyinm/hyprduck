@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/agent-chat-request.schema.json",
+  "title": "HyprDuck Agent Chat Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "conversationId",
+    "scope",
+    "mode",
+    "question"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
+    "conversationId": { "type": "string", "minLength": 1 },
+    "scope": { "$ref": "#/$defs/brainReadScope" },
+    "mode": {
+      "type": "string",
+      "enum": ["all_docs", "selected_source", "graph_context"]
+    },
+    "selectedNodeId": { "type": ["string", "null"] },
+    "sourceIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "question": { "type": "string", "minLength": 1 },
+    "history": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/message" }
+    },
+    "budget": { "type": ["integer", "null"], "minimum": 1 },
+    "persistContextPack": { "type": "boolean" }
+  },
+  "$defs": {
+    "brainReadScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceId"],
+      "properties": {
+        "workspaceId": { "type": "string", "minLength": 1 },
+        "rootDir": { "type": ["string", "null"] }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "text", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+        "text": { "type": "string" },
+        "createdAt": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

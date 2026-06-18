@@ -552,6 +552,64 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       }
       return { ...answer };
     },
+    agent_chat_ask: (args) => {
+      const workspace = getWebWorkspaceFromSnapshot();
+      if (!workspace.project) {
+        throw new Error("No workspace available in preview mode.");
+      }
+      const answer =
+        workspace.project.answerByNodeId["source:preview"] ??
+        Object.values(workspace.project.answerByNodeId)[0];
+      if (!answer) {
+        throw new Error("No answer available for this workspace in preview mode.");
+      }
+      const now = Math.floor(Date.now() / 1000);
+      return {
+        schemaVersion: "hyprduck.agent_chat.v1",
+        conversationId: args.request.conversationId,
+        assistantMessage: {
+          id: `preview-msg-${now}`,
+          role: "assistant",
+          text:
+            answer.text ??
+            "This preview answer is grounded in the sample workspace evidence.",
+          createdAt: now,
+        },
+        answer,
+        contextPackId: "ctx_web_preview",
+        persistedContextPackPath: null,
+        citations: answer.citations.map((citation) => ({
+          evidenceRef: citation.id,
+          sourceId: citation.sourceId ?? "preview",
+          page: citation.pageIndex ?? 1,
+          region: null,
+          span: null,
+          quotedText: citation.snippet,
+          parseConfidence: "high",
+          selectionReason: citation.provenance ?? "preview evidence",
+          contentHash: "web-preview",
+          evidenceType: "text",
+        })),
+        retrievalTrace: {
+          strategy: "web_preview",
+          chunksConsidered: answer.citations.length,
+          chunksSelected: answer.citations.length,
+          budgetRequested: args.request.budget ?? 8000,
+          budgetUsed: answer.citations.length * 64,
+          evidenceTypeTrace: {
+            considered: { text: answer.citations.length },
+            selected: { text: answer.citations.length },
+          },
+        },
+        provider: {
+          id: webMockConfig.provider,
+          label: webMockConfig.provider === "open_router" ? "OpenRouter" : "Ollama",
+          modelId: webMockConfig.model_id,
+          hosted: webMockConfig.provider === "open_router",
+        },
+        warnings: [],
+      };
+    },
     agent_terminal_list_agents: () => WEB_MOCK_AGENT_LIST,
     agent_terminal_create_session: (args) => {
       const agent =

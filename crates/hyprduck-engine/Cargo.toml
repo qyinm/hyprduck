@@ -11,7 +11,9 @@ base64.workspace = true
 dirs.workspace = true
 markitdown = "=0.1.11"
 reqwest.workspace = true
+rig-core.workspace = true
 ring.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

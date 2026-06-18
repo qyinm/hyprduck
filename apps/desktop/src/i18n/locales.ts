@@ -14,6 +14,9 @@ export type Locale = (typeof LOCALE_OPTIONS)[number]["id"];
 export const TRANSLATIONS = {
   en: {
     "nav.knowledge": "Knowledge",
+    "nav.docs": "Docs",
+    "nav.agent": "Agent",
+    "nav.graph": "Graph",
     "nav.settings": "Settings",
     "nav.general": "General",
     "nav.ai": "AI",
@@ -88,6 +91,9 @@ export const TRANSLATIONS = {
   },
   ko: {
     "nav.knowledge": "지식",
+    "nav.docs": "문서",
+    "nav.agent": "에이전트",
+    "nav.graph": "그래프",
     "nav.settings": "설정",
     "nav.general": "일반",
     "nav.ai": "AI",
@@ -162,6 +168,9 @@ export const TRANSLATIONS = {
   },
   ja: {
     "nav.knowledge": "ナレッジ",
+    "nav.docs": "ドキュメント",
+    "nav.agent": "エージェント",
+    "nav.graph": "グラフ",
     "nav.settings": "設定",
     "nav.general": "一般",
     "nav.ai": "AI",
@@ -236,6 +245,9 @@ export const TRANSLATIONS = {
   },
   es: {
     "nav.knowledge": "Conocimiento",
+    "nav.docs": "Docs",
+    "nav.agent": "Agente",
+    "nav.graph": "Grafo",
     "nav.settings": "Configuración",
     "nav.general": "General",
     "nav.ai": "IA",
@@ -310,6 +322,9 @@ export const TRANSLATIONS = {
   },
   fr: {
     "nav.knowledge": "Connaissances",
+    "nav.docs": "Docs",
+    "nav.agent": "Agent",
+    "nav.graph": "Graphe",
     "nav.settings": "Paramètres",
     "nav.general": "Général",
     "nav.ai": "IA",
@@ -384,6 +399,9 @@ export const TRANSLATIONS = {
   },
   de: {
     "nav.knowledge": "Wissen",
+    "nav.docs": "Docs",
+    "nav.agent": "Agent",
+    "nav.graph": "Graph",
     "nav.settings": "Einstellungen",
     "nav.general": "Allgemein",
     "nav.ai": "KI",

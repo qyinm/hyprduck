@@ -191,6 +191,18 @@ async function registerIpcHandlers() {
           command: "answer_project",
           payload: args.request,
         }).then((response) => response.data.answer);
+      case "agent_chat_ask": {
+        const request = args.request ?? {};
+        const workspaceId =
+          request.scope?.workspaceId ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("agent_chat_ask", {
+          command: "agent_chat_ask",
+          payload: {
+            ...request,
+            scope: brainReadScope(workspaceId),
+          },
+        }).then((response) => response.data);
+      }
       case "agent_terminal_list_agents":
         return agentTerminalSessions.listAgents(args);
       case "agent_terminal_create_session":
