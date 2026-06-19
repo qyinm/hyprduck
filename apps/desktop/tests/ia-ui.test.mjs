@@ -216,7 +216,8 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/ExternalLink/);
   expect(graphSource).toMatch(/FileText/);
   expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/workspace\.inspector\.reviewSuggestions/);
+  expect(graphSource).toMatch(/Trash2/);
+  expect(graphSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
   expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
   expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
   expect(graphSource).toMatch(/customerVisibleDescription/);

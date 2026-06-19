@@ -7,7 +7,6 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import {
@@ -82,18 +81,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0]));
     return Object.fromEntries(entries);
   }, [project?.detailsByNodeId]);
-  const mergeCandidates = useMemo(
-    () =>
-      projectNodes.filter(
-        (node) =>
-          node.kind === "concept" && node.id !== selectedNode?.node.id,
-      ),
-    [projectNodes, selectedNode?.node.id],
-  );
-  const [renameValue, setRenameValue] = useState(selectedNode?.canonicalName ?? "");
-  const [mergeTargetNodeId, setMergeTargetNodeId] = useState<string | null>(
-    mergeCandidates[0]?.id ?? null,
-  );
   const [pendingCorrectionKind, setPendingCorrectionKind] = useState<
     WorkspaceApplyCorrectionRequest["kind"] | null
   >(null);
@@ -112,7 +99,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [answerPending, setAnswerPending] = useState(false);
-  const [correctionsOpen, setCorrectionsOpen] = useState(false);
   const answer = liveAnswer ?? baseAnswer;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
@@ -130,14 +116,20 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const selectedSourcePath =
     selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
   const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
+  const selectedDeleteAction =
+    selectedNode?.actions.find((action) => action.kind === "delete") ?? null;
+  const deleteArmed = selectedNode
+    ? deleteConfirmNodeId === selectedNode.node.id
+    : false;
+  const deleteDisabled =
+    Boolean(selectedDeleteAction?.disabledReason) || pendingCorrectionKind !== null;
+  const isSourceDelete =
+    selectedNode?.node.kind === "source" || selectedNode?.node.kind === "document";
   useEffect(() => {
-    setRenameValue(selectedNode?.canonicalName ?? "");
-    setMergeTargetNodeId(mergeCandidates[0]?.id ?? null);
     setPendingCorrectionKind(null);
     setCorrectionError(null);
     setDeleteConfirmNodeId(null);
-    setCorrectionsOpen(false);
-  }, [mergeCandidates, selectedNode?.canonicalName, selectedNode?.node.id]);
+  }, [selectedNode?.node.id]);
 
   useEffect(() => {
     setLiveAnswer(null);
@@ -172,16 +164,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     request: Omit<WorkspaceApplyCorrectionRequest, "projectId" | "nodeId">,
   ) {
     if (!project || !selectedNode) {
-      return;
-    }
-
-    if (request.kind === "rename" && !(request.value ?? "").trim()) {
-      setCorrectionError(t("workspace.corrections.renameRequired"));
-      return;
-    }
-
-    if (request.kind === "merge" && !request.targetNodeId) {
-      setCorrectionError(t("workspace.corrections.mergeRequired"));
       return;
     }
 
@@ -458,205 +440,44 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                   </div>
                 </section>
 
-                {(selectedNode.actions ?? []).length > 0 ? (
+                {selectedDeleteAction ? (
                   <section className="space-y-2 border-t border-border/70 pt-3">
-                    <Button
-                      className="h-8 w-full justify-between px-2.5 text-xs"
-                      onClick={() => setCorrectionsOpen((open) => !open)}
-                      size="sm"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <span>{t("workspace.inspector.reviewSuggestions")}</span>
-                      <span className="text-muted-foreground">
-                        {selectedNode.actions.length}
-                      </span>
-                    </Button>
-                    {correctionsOpen ? (
-                      <div className="grid gap-2">
-                        {(selectedNode.actions ?? []).map((action) => {
-                        const disabled =
-                          Boolean(action.disabledReason) || pendingCorrectionKind !== null;
-
-                        if (action.disabledReason) {
-                          return (
-                            <div
-                              key={action.kind}
-                              className="rounded-xl border border-dashed border-border/80 px-3 py-3"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm font-medium">{action.label}</span>
-                                <Button disabled size="xs" type="button" variant="outline">
-                                  Unavailable
-                                </Button>
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                {action.disabledReason}
-                              </p>
-                            </div>
-                          );
-                        }
-
-                        if (action.kind === "rename") {
-                          return (
-                            <div
-                              key={action.kind}
-                              className="rounded-xl border border-border/80 px-3 py-3"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm font-medium">{action.label}</span>
-                                <Button
-                                  disabled={disabled || !renameValue.trim()}
-                                  onClick={() =>
-                                    void handleApplyCorrection({
-                                      kind: "rename",
-                                      value: renameValue.trim(),
-                                    })
-                                  }
-                                  size="xs"
-                                  type="button"
-                                >
-                                  {pendingCorrectionKind === "rename"
-                                    ? "Applying…"
-                                    : "Apply"}
-                                </Button>
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                Update the canonical concept name. HyprDuck keeps the previous
-                                label as an alias so provenance stays intact.
-                              </p>
-                              <Input
-                                className="mt-3"
-                                disabled={pendingCorrectionKind !== null}
-                                onChange={(event) => setRenameValue(event.target.value)}
-                                value={renameValue}
-                              />
-                            </div>
-                          );
-                        }
-
-                        if (action.kind === "merge") {
-                          return (
-                            <div
-                              key={action.kind}
-                              className="rounded-xl border border-border/80 px-3 py-3"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm font-medium">{action.label}</span>
-                                <Button
-                                  disabled={disabled || !mergeTargetNodeId}
-                                  onClick={() =>
-                                    void handleApplyCorrection({
-                                      kind: "merge",
-                                      targetNodeId: mergeTargetNodeId,
-                                    })
-                                  }
-                                  size="xs"
-                                  type="button"
-                                >
-                                  {pendingCorrectionKind === "merge"
-                                    ? "Applying…"
-                                    : "Apply"}
-                                </Button>
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                Fold this concept into another canonical node. HyprDuck keeps the
-                                evidence and aliases on the surviving concept.
-                              </p>
-                              <select
-                                className="mt-3 h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                disabled={pendingCorrectionKind !== null}
-                                onChange={(event) => setMergeTargetNodeId(event.target.value)}
-                                value={mergeTargetNodeId ?? ""}
-                              >
-                                {mergeCandidates.map((node) => (
-                                  <option key={node.id} value={node.id}>
-                                    {node.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          );
-                        }
-
-                        if (action.kind === "delete") {
-                          const deleteArmed = deleteConfirmNodeId === selectedNode.node.id;
-                          const isSourceDelete =
-                            selectedNode.node.kind === "source" ||
-                            selectedNode.node.kind === "document";
-                          return (
-                            <div
-                              key={action.kind}
-                              className="rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-3"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm font-medium text-destructive">
-                                  {action.label}
-                                </span>
-                                <Button
-                                  className="gap-1.5"
-                                  disabled={disabled}
-                                  onClick={() => {
-                                    if (!deleteArmed) {
-                                      setDeleteConfirmNodeId(selectedNode.node.id);
-                                      return;
-                                    }
-                                    void handleApplyCorrection({
-                                      kind: "delete",
-                                    });
-                                  }}
-                                  size="xs"
-                                  type="button"
-                                  variant={deleteArmed ? "destructive" : "outline"}
-                                >
-                                  <Trash2 size={13} />
-                                  {pendingCorrectionKind === "delete"
-                                    ? "Deleting..."
-                                    : deleteArmed
-                                      ? "Confirm"
-                                      : "Delete"}
-                                </Button>
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                {isSourceDelete
-                                  ? "Remove this document and the knowledge items it created."
-                                  : "Remove this knowledge item and its connected links."}
-                              </p>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div
-                            key={action.kind}
-                            className="rounded-xl border border-border/80 px-3 py-3"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-sm font-medium">{action.label}</span>
-                              <Button
-                                disabled={disabled}
-                                onClick={() =>
-                                  void handleApplyCorrection({
-                                    kind: "keep_separate",
-                                  })
-                                }
-                                size="xs"
-                                type="button"
-                              >
-                                {pendingCorrectionKind === "keep_separate"
-                                  ? "Applying…"
-                                  : "Apply"}
-                              </Button>
-                            </div>
-                            <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                              Split the visible aliases under this concept into separate nodes
-                              without hiding the original evidence.
-                            </p>
-                          </div>
-                        );
-                        })}
+                    <div className="rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-destructive">
+                          {selectedDeleteAction.label}
+                        </span>
+                        <Button
+                          className="gap-1.5"
+                          disabled={deleteDisabled}
+                          onClick={() => {
+                            if (!deleteArmed) {
+                              setDeleteConfirmNodeId(selectedNode.node.id);
+                              return;
+                            }
+                            void handleApplyCorrection({
+                              kind: "delete",
+                            });
+                          }}
+                          size="xs"
+                          type="button"
+                          variant={deleteArmed ? "destructive" : "outline"}
+                        >
+                          <Trash2 size={13} />
+                          {pendingCorrectionKind === "delete"
+                            ? "Deleting..."
+                            : deleteArmed
+                              ? "Confirm"
+                              : "Delete"}
+                        </Button>
                       </div>
-                    ) : null}
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        {selectedDeleteAction.disabledReason ??
+                          (isSourceDelete
+                            ? "Remove this document and the knowledge items it created."
+                            : "Remove this knowledge item and its connected links.")}
+                      </p>
+                    </div>
                     {correctionError ? (
                       <p className="text-xs leading-5 text-destructive">{correctionError}</p>
                     ) : null}

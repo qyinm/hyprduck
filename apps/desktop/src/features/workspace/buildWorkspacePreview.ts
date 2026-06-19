@@ -86,9 +86,7 @@ export function buildWorkspacePreview(
     description:
       "This workspace is a graph-first preview built from the latest import. HyprDuck is showing the latest automatic ingest preview with visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
-    actions: disabledCorrectionActions(
-      "Correction actions unlock once merge policy and graph editing are connected.",
-    ),
+    actions: [],
     source: {
       workspaceId: "web-preview",
       sourceId: "preview",
@@ -121,11 +119,9 @@ export function buildWorkspacePreview(
       canonicalName: node.label,
       aliases: [`Draft node ${index + 1}`],
       description:
-        "Preview node derived from the latest import output. In the final knowledge workspace this inspector will show concept aliases, merge control, and provenance-backed evidence.",
+        "Preview node derived from the latest import output. In the final knowledge workspace this inspector will show concept aliases and provenance-backed evidence.",
       evidence,
-      actions: disabledCorrectionActions(
-        "Corrections are visible here so the tri-pane workflow can land before backend apply flows are wired.",
-      ),
+      actions: [],
     };
     answerByNodeId[node.id] = previewAnswer(
       `${node.label} is available as a draft workspace node. HyprDuck is keeping the answer conservative until concept linking and confidence scoring are connected.`,
@@ -188,26 +184,6 @@ function previewAnswer(
       },
     ],
   };
-}
-
-function disabledCorrectionActions(reason: string) {
-  return [
-    {
-      kind: "merge" as const,
-      label: "Merge",
-      disabledReason: reason,
-    },
-    {
-      kind: "keep_separate" as const,
-      label: "Keep Separate",
-      disabledReason: reason,
-    },
-    {
-      kind: "rename" as const,
-      label: "Rename",
-      disabledReason: reason,
-    },
-  ];
 }
 
 function extractPageSections(markdown: string): PageSection[] {

@@ -91,7 +91,7 @@ export function materializedGraphSnapshotToWorkspaceEnvelope(
       aliases: materialized.aliases,
       description: nodeDescription(materialized, snapshot),
       evidence,
-      actions: correctionActionsForMaterializedNode(hydratedNode.kind, materialized.aliases),
+      actions: correctionActionsForMaterializedNode(),
       source:
         hydratedNode.kind === "source"
           ? sourceBackingForNode(snapshot, materialized, sourcePath, markdownPath)
@@ -252,23 +252,13 @@ function materializedEdgeSalience(edge: MaterializedGraphRelationRecord) {
   return edge.evidenceIds.length * 100 + kindScore + Math.round((edge.confidence ?? 0) * 100);
 }
 
-function correctionActionsForMaterializedNode(
-  kind: WorkspaceNodeKind,
-  aliases: string[],
-): WorkspaceNodeDetail["actions"] {
-  if (kind === "source" || kind === "document") {
-    return [{ kind: "delete", label: "Delete", disabledReason: null }];
-  }
+function correctionActionsForMaterializedNode(): WorkspaceNodeDetail["actions"] {
   return [
-    { kind: "merge", label: "Merge", disabledReason: null },
     {
-      kind: "keep_separate",
-      label: "Keep Separate",
-      disabledReason: aliases.length ? null : "No grouped aliases are available to split yet.",
+      kind: "delete",
+      label: "Delete",
+      disabledReason: null,
     },
-    { kind: "rename", label: "Rename", disabledReason: null },
-    { kind: "split", label: "Split", disabledReason: null },
-    { kind: "delete", label: "Delete", disabledReason: null },
   ];
 }
 
