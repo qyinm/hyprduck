@@ -7,7 +7,9 @@ use hyprduck_engine_types::{
     DocumentFormat, OutputAsset, ParseEvent, ParseInput, ParseOptions, ParsedPage,
 };
 
-use crate::adapters::documents::markitdown::parse_markitdown_document;
+use crate::adapters::documents::liteparse::{
+    parse_liteparse_document, parse_liteparse_pdf_document,
+};
 use crate::adapters::documents::pdftoppm::convert_pdf_to_pngs;
 use crate::adapters::documents::textutil::extract_text_via_textutil;
 use crate::provider::{parse_image_with_provider, parse_text_with_provider, EngineConfig};
@@ -38,115 +40,19 @@ pub(crate) fn parse_document(
     process_locator: &impl ProcessLocator,
 ) -> Result<ParsedDocument> {
     match input.format {
-        DocumentFormat::Pdf => {
-            parse_pdf_document(input, event_sink, process_locator).or_else(|_| {
-                parse_visual_document(input, template, config, event_sink, process_locator)
-            })
-        }
+        DocumentFormat::Pdf => parse_liteparse_pdf_document(input, event_sink).or_else(|_| {
+            parse_visual_document(input, template, config, event_sink, process_locator)
+        }),
         DocumentFormat::Image => {
             parse_visual_document(input, template, config, event_sink, process_locator)
         }
-        DocumentFormat::Docx => parse_markitdown_document(input, event_sink)
+        DocumentFormat::Docx => parse_liteparse_document(input, event_sink)
             .map(attach_text_preview_assets)
             .or_else(|_| parse_text_document(input, template, config, event_sink, process_locator)),
         DocumentFormat::Doc | DocumentFormat::Markdown => {
             parse_text_document(input, template, config, event_sink, process_locator)
         }
     }
-}
-
-fn parse_pdf_document(
-    input: &ParseInput,
-    event_sink: &mut impl EventSink,
-    process_locator: &impl ProcessLocator,
-) -> Result<ParsedDocument> {
-    event_sink.emit(ParseEvent::ConvertingPages {
-        current: 1,
-        total: 1,
-    })?;
-    let page_images = convert_pdf_to_pngs(Path::new(&input.path), process_locator)?;
-    let total = page_images.len() as u32;
-    let mut assets = Vec::new();
-    for (idx, image_path) in page_images.iter().enumerate() {
-        event_sink.emit(ParseEvent::ConvertingPages {
-            current: (idx + 1) as u32,
-            total,
-        })?;
-        let image_bytes = fs::read(image_path)
-            .with_context(|| format!("failed to read rendered image {}", image_path.display()))?;
-        assets.push(OutputAsset {
-            relative_path: format!("images/page_{}.png", idx + 1),
-            mime_type: "image/png".into(),
-            base64: base64::engine::general_purpose::STANDARD.encode(&image_bytes),
-        });
-    }
-
-    event_sink.emit(ParseEvent::Parsing { current: 1, total })?;
-    let text_document = parse_markitdown_document(input, event_sink)?;
-    let text_pages =
-        split_pdf_markdown_pages(&text_document.pages[0].markdown.clone().unwrap_or_default());
-    let mut success_count = 0usize;
-    let pages = assets
-        .iter()
-        .enumerate()
-        .map(|(idx, asset)| {
-            let markdown = markdown_for_rendered_page(&text_pages, idx);
-            let plain_text = markdown.clone();
-            success_count += usize::from(
-                markdown
-                    .as_ref()
-                    .is_some_and(|value| !value.trim().is_empty()),
-            );
-            let error_message = markdown
-                .as_ref()
-                .is_none_or(|value| value.trim().is_empty())
-                .then(|| "page text was not available from PDF text extraction".into());
-            ParsedPage {
-                index: idx,
-                markdown,
-                plain_text,
-                svg: None,
-                image_asset_path: Some(asset.relative_path.clone()),
-                error_message,
-            }
-        })
-        .collect::<Vec<_>>();
-    let failed_count = pages.len().saturating_sub(success_count);
-
-    Ok(ParsedDocument {
-        page_count: pages.len(),
-        pages,
-        assets,
-        success_count,
-        failed_count,
-    })
-}
-
-fn split_pdf_markdown_pages(markdown: &str) -> Vec<String> {
-    let pages = markdown
-        .split('\u{c}')
-        .map(str::trim)
-        .filter(|page| !page.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if pages.is_empty() {
-        vec![markdown.to_string()]
-    } else {
-        pages
-    }
-}
-
-fn markdown_for_rendered_page(text_pages: &[String], page_index: usize) -> Option<String> {
-    if text_pages.is_empty() {
-        return None;
-    }
-    if text_pages.len() == 1 {
-        return text_pages.first().cloned();
-    }
-    text_pages
-        .get(page_index)
-        .cloned()
-        .or_else(|| text_pages.last().cloned())
 }
 
 fn attach_text_preview_assets(mut document: ParsedDocument) -> ParsedDocument {
