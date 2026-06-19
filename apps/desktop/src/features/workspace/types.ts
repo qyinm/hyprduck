@@ -95,7 +95,7 @@ export interface MaterializedSourceRecord {
 }
 
 export interface WorkspaceCorrectionAction {
-  kind: "merge" | "keep_separate" | "rename" | "split" | "delete";
+  kind: "delete";
   label: string;
   disabledReason?: string | null;
 }

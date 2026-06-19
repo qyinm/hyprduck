@@ -1,8 +1,10 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require("electron");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { ensureHyprduckShellCommand, hostTriple } = require("./main/cli-shim.cjs");
 const {
   EngineRuntime,
@@ -20,7 +22,23 @@ const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-gho
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
+const AGENT_CHAT_EVENT = "hyprduck://agent-chat";
+const SOURCE_PREVIEW_PROTOCOL = "hyprduck-source";
 const MAX_PROGRESS_LOG = 80;
+const MAX_INLINE_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: SOURCE_PREVIEW_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
 
 const snapshot = {
   activeJob: null,
@@ -38,7 +56,10 @@ let engineRuntime = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
 let agentTerminalSessions = null;
+const activeAgentChatStreams = new Map();
+const sourcePreviewPaths = new Map();
 let autoUpdateStarted = false;
+let sourcePreviewProtocolRegistered = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -76,6 +97,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  registerSourcePreviewProtocol();
   await registerIpcHandlers();
   try {
     await maybeImportLegacySwiftConfig();
@@ -191,6 +213,22 @@ async function registerIpcHandlers() {
           command: "answer_project",
           payload: args.request,
         }).then((response) => response.data.answer);
+      case "agent_chat_ask": {
+        const request = args.request ?? {};
+        const workspaceId =
+          request.scope?.workspaceId ?? snapshot.lastWorkspaceId ?? "default";
+        return runEngineCommand("agent_chat_ask", {
+          command: "agent_chat_ask",
+          payload: {
+            ...request,
+            scope: brainReadScope(workspaceId),
+          },
+        }).then((response) => response.data);
+      }
+      case "agent_chat_start":
+        return startAgentChat(args.request ?? {});
+      case "agent_chat_stop":
+        return stopAgentChat(args.requestId);
       case "agent_terminal_list_agents":
         return agentTerminalSessions.listAgents(args);
       case "agent_terminal_create_session":
@@ -213,10 +251,28 @@ async function registerIpcHandlers() {
         return openLocalArtifact(args.path, Boolean(args.reveal));
       case "open_local_artifact":
         return openLocalArtifact(args.path, Boolean(args.reveal));
+      case "read_source_detail":
+        return readSourceDetail(args);
       default:
         throw new Error(`unknown HyprDuck command: ${command}`);
     }
   });
+}
+
+function registerSourcePreviewProtocol() {
+  if (sourcePreviewProtocolRegistered) {
+    return;
+  }
+  protocol.handle(SOURCE_PREVIEW_PROTOCOL, async (request) => {
+    const url = new URL(request.url);
+    const token = url.hostname;
+    const entry = sourcePreviewPaths.get(token);
+    if (!entry || !fs.existsSync(entry.path)) {
+      return new Response("Source preview not found.", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(entry.path).toString());
+  });
+  sourcePreviewProtocolRegistered = true;
 }
 
 function publishAgentTerminalEvent(payload) {
@@ -224,6 +280,89 @@ function publishAgentTerminalEvent(payload) {
     return;
   }
   mainWindow.webContents.send(AGENT_TERMINAL_EVENT, payload);
+}
+
+function publishAgentChatEvent(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send(AGENT_CHAT_EVENT, payload);
+}
+
+function startAgentChat(request) {
+  const requestId = `agent_${crypto.randomUUID()}`;
+  const conversationId = request.conversationId || `chat_${crypto.randomUUID()}`;
+  const assistantMessageId =
+    request.assistantMessageId || `msg_${crypto.randomUUID().replaceAll("-", "")}`;
+  const workspaceId = request.scope?.workspaceId ?? snapshot.lastWorkspaceId ?? "default";
+  const payload = {
+    ...request,
+    conversationId,
+    assistantMessageId,
+    scope: brainReadScope(workspaceId),
+  };
+  const streamState = { requestId, stopped: false };
+  activeAgentChatStreams.set(requestId, streamState);
+
+  setImmediate(() => {
+    if (!activeAgentChatStreams.has(requestId)) {
+      return;
+    }
+    void runEngineCommand(
+      "agent_chat_ask",
+      {
+        command: "agent_chat_ask",
+        payload,
+      },
+      {
+        onEvent: (event) => {
+          if (!activeAgentChatStreams.has(requestId)) {
+            return;
+          }
+          if (!event || typeof event !== "object") {
+            return;
+          }
+          publishAgentChatEvent({ requestId, ...event });
+        },
+      },
+    )
+      .catch((error) => {
+        const active = activeAgentChatStreams.get(requestId);
+        if (!active || active.stopped) {
+          return;
+        }
+        publishAgentChatEvent({
+          requestId,
+          type: "error",
+          code: error.code ?? "runtime_error",
+          message: error.message,
+        });
+      })
+      .finally(() => {
+        activeAgentChatStreams.delete(requestId);
+      });
+  });
+
+  return { requestId, conversationId, assistantMessageId };
+}
+
+function stopAgentChat(requestId) {
+  if (!requestId || !activeAgentChatStreams.has(requestId)) {
+    return { stopped: false };
+  }
+  const active = activeAgentChatStreams.get(requestId);
+  active.stopped = true;
+  if (engineRuntime) {
+    engineRuntime.stop();
+    engineRuntime = null;
+  }
+  publishAgentChatEvent({
+    requestId,
+    type: "stopped",
+    partialText: "",
+  });
+  activeAgentChatStreams.delete(requestId);
+  return { stopped: true };
 }
 
 function startAutoUpdateChecks() {
@@ -638,6 +777,177 @@ async function openLocalArtifact(outputPath, reveal) {
   if (error) {
     throw new Error(error);
   }
+}
+
+function readSourceDetail(args = {}) {
+  const sourceId = String(args.sourceId ?? "");
+  const originalPath = String(args.originalPath ?? "");
+  const sourcePath = String(args.sourcePath ?? "");
+  const markdownPath = String(args.markdownPath ?? "");
+  const format = String(args.format ?? "").toLowerCase();
+  const originalCandidate = originalPath || sourcePath;
+  const original = readOriginalPreview([originalPath, sourcePath], format);
+  const markdown = readMarkdownPreview(markdownPath);
+  return {
+    sourceId,
+    fileName: path.basename(originalCandidate || markdownPath || sourceId || "Source"),
+    format,
+    originalPath,
+    sourcePath,
+    markdownPath,
+    original,
+    markdown,
+  };
+}
+
+function readOriginalPreview(candidatePaths, format) {
+  const resolved = resolveFirstKnownWorkspacePath(candidatePaths);
+  if (!resolved.path) {
+    return {
+      kind: "missing",
+      previewUrl: null,
+      text: null,
+      truncated: false,
+      error: resolved.error ?? "Original file is not available.",
+    };
+  }
+  if (!fs.existsSync(resolved.path)) {
+    return {
+      kind: "missing",
+      previewUrl: null,
+      text: null,
+      truncated: false,
+      error: "Original file is missing.",
+    };
+  }
+  if (isPdfPreview(format, resolved.path)) {
+    return {
+      kind: "pdf",
+      previewUrl: createSourcePreviewUrl(resolved.path),
+      text: null,
+      truncated: false,
+      error: null,
+    };
+  }
+  if (isTextPreview(format, resolved.path)) {
+    const stat = fs.statSync(resolved.path);
+    const byteLimit = Math.min(stat.size, MAX_INLINE_TEXT_PREVIEW_BYTES);
+    const buffer = Buffer.alloc(byteLimit);
+    const fd = fs.openSync(resolved.path, "r");
+    try {
+      fs.readSync(fd, buffer, 0, byteLimit, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    return {
+      kind: "text",
+      previewUrl: null,
+      text: buffer.toString("utf8"),
+      truncated: stat.size > MAX_INLINE_TEXT_PREVIEW_BYTES,
+      error: null,
+    };
+  }
+  return {
+    kind: "unsupported",
+    previewUrl: null,
+    text: null,
+    truncated: false,
+    error: "Inline preview is not available for this file type.",
+  };
+}
+
+function resolveFirstKnownWorkspacePath(candidatePaths) {
+  const errors = [];
+  for (const candidatePath of candidatePaths) {
+    if (!candidatePath) {
+      continue;
+    }
+    const resolved = tryResolveKnownWorkspacePath(candidatePath);
+    if (resolved.path && fs.existsSync(resolved.path)) {
+      return resolved;
+    }
+    if (resolved.error) {
+      errors.push(resolved.error);
+    }
+  }
+  return {
+    path: null,
+    error: errors[0] ?? "No workspace-backed source file is available.",
+  };
+}
+
+function readMarkdownPreview(markdownPath) {
+  const resolved = tryResolveKnownWorkspacePath(markdownPath);
+  if (!resolved.path) {
+    return {
+      text: null,
+      missing: true,
+      error: resolved.error ?? "Parsed markdown is not available.",
+    };
+  }
+  if (!fs.existsSync(resolved.path)) {
+    return {
+      text: null,
+      missing: true,
+      error: "Parsed markdown file is missing.",
+    };
+  }
+  try {
+    return {
+      text: fs.readFileSync(resolved.path, "utf8"),
+      missing: false,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      text: null,
+      missing: true,
+      error: error.message,
+    };
+  }
+}
+
+function tryResolveKnownWorkspacePath(candidatePath) {
+  try {
+    return { path: resolveKnownWorkspacePath(candidatePath), error: null };
+  } catch (error) {
+    return { path: null, error: error.message };
+  }
+}
+
+function createSourcePreviewUrl(safePath) {
+  pruneSourcePreviewPaths();
+  const token = crypto.randomUUID();
+  sourcePreviewPaths.set(token, { path: safePath, createdAt: Date.now() });
+  return `${SOURCE_PREVIEW_PROTOCOL}://${token}/${encodeURIComponent(path.basename(safePath))}`;
+}
+
+function pruneSourcePreviewPaths() {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [token, entry] of sourcePreviewPaths.entries()) {
+    if (entry.createdAt < cutoff) {
+      sourcePreviewPaths.delete(token);
+    }
+  }
+  while (sourcePreviewPaths.size > 200) {
+    const firstToken = sourcePreviewPaths.keys().next().value;
+    if (!firstToken) {
+      return;
+    }
+    sourcePreviewPaths.delete(firstToken);
+  }
+}
+
+function isPdfPreview(format, filePath) {
+  return format === "pdf" || path.extname(filePath).toLowerCase() === ".pdf";
+}
+
+function isTextPreview(format, filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  return (
+    ["txt", "md", "markdown", "csv", "json", "yaml", "yml"].includes(format) ||
+    [".txt", ".md", ".markdown", ".csv", ".json", ".yaml", ".yml"].includes(extension)
+  );
 }
 
 function resolveKnownWorkspacePath(candidatePath) {

@@ -407,7 +407,8 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
                 id: "ev-alpha".into(),
                 page_label: "Page 1".into(),
                 page_index: Some(0),
-                snippet: "Alpha source describes traversal.".into(),
+                snippet: "Alpha source defines Shared Graph as a workspace graph traversal model."
+                    .into(),
                 source_path: Some("/tmp/alpha.md".into()),
                 source_id: Some("source-alpha".into()),
                 markdown_path: Some("/tmp/alpha.md".into()),
@@ -418,7 +419,9 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
                 id: "ev-beta".into(),
                 page_label: "Page 1".into(),
                 page_index: Some(0),
-                snippet: "Beta source describes workspace graphs.".into(),
+                snippet:
+                    "Beta source also defines Shared Graph as a workspace graph traversal model."
+                        .into(),
                 source_path: Some("/tmp/beta.md".into()),
                 source_id: Some("source-beta".into()),
                 markdown_path: Some("/tmp/beta.md".into()),
@@ -439,7 +442,7 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         BrainNodeRecord {
             node_id: "concept-alpha".into(),
             kind: BrainNodeKind::Concept,
-            label: "Traversal".into(),
+            label: "Shared Graph".into(),
             scope: BrainScope::Project,
             aliases: Vec::new(),
             evidence_ids: vec!["ev-alpha".into()],
@@ -453,7 +456,7 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
         BrainNodeRecord {
             node_id: "concept-beta".into(),
             kind: BrainNodeKind::Concept,
-            label: "Workspace graph".into(),
+            label: "Shared Graph".into(),
             scope: BrainScope::Project,
             aliases: Vec::new(),
             evidence_ids: vec!["ev-beta".into()],
@@ -487,11 +490,12 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
             "edges": [
                 {
                     "relationId": "edge-cross",
-                    "kind": "related_to",
+                    "kind": "same_as",
                     "sourceNodeId": "concept-alpha",
                     "targetNodeId": "concept-beta",
-                    "label": "connects to",
+                    "label": "same as",
                     "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "confidence": 0.8,
                     "updatedAt": generated_at
                 },
                 {
@@ -650,6 +654,298 @@ fn provider_workspace_linking_keeps_only_cross_source_relations() {
 }
 
 #[test]
+fn provider_workspace_linking_rejects_docmate_hashing_false_positive() {
+    let generated_at = 42;
+    let mut baseline = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    baseline.generated_at = generated_at;
+    baseline.sources = vec![
+        SourceRecord {
+            source_id: "source-paper".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/paper.pdf".into(),
+            source_path: "/tmp/paper.pdf".into(),
+            markdown_path: "/tmp/paper.md".into(),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+        SourceRecord {
+            source_id: "source-hash".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/ch8.pdf".into(),
+            source_path: "/tmp/ch8.pdf".into(),
+            markdown_path: "/tmp/ch8.md".into(),
+            format: "pdf".into(),
+            status: "ingested".into(),
+            page_count: 39,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+    ];
+    baseline.evidence = vec![
+        EvidenceRef {
+            id: "ev-paper".into(),
+            page_label: "Paper / Page 1".into(),
+            page_index: Some(0),
+            snippet: "DocMate analyzes PDF parsing quality with MinerU and rasterized fallback for hidden text layer corruption.".into(),
+            source_path: Some("/tmp/paper.pdf".into()),
+            source_id: Some("source-paper".into()),
+            markdown_path: Some("/tmp/paper.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+        EvidenceRef {
+            id: "ev-hash".into(),
+            page_label: "ch8 / Page 1".into(),
+            page_index: Some(0),
+            snippet: "Hashing chapter covers hash tables, buckets, slots, collisions, overflow handling, and hash functions.".into(),
+            source_path: Some("/tmp/ch8.pdf".into()),
+            source_id: Some("source-hash".into()),
+            markdown_path: Some("/tmp/ch8.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+    ];
+    baseline.nodes = vec![
+        BrainNodeRecord {
+            node_id: "concept-paper-docmate".into(),
+            kind: BrainNodeKind::Concept,
+            label: "DocMate".into(),
+            scope: BrainScope::Project,
+            aliases: vec!["PDF parsing".into()],
+            evidence_ids: vec!["ev-paper".into()],
+            source_ids: vec!["source-paper".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        },
+        BrainNodeRecord {
+            node_id: "concept-hash-table".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Hash table".into(),
+            scope: BrainScope::Project,
+            aliases: vec!["Hashing".into()],
+            evidence_ids: vec!["ev-hash".into()],
+            source_ids: vec!["source-hash".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        },
+    ];
+    let raw = serde_json::json!({
+        "materializedGraph": {
+            "sources": [],
+            "evidence": [],
+            "nodes": [],
+            "edges": [
+                {
+                    "relationId": "edge-docmate-hash",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-paper-docmate",
+                    "targetNodeId": "concept-hash-table",
+                    "label": "uses indirectly",
+                    "evidenceIds": ["ev-paper", "ev-hash"],
+                    "confidence": 0.5,
+                    "updatedAt": generated_at
+                }
+            ],
+            "claims": [],
+            "memories": [],
+            "wikiPages": [],
+            "entities": [],
+            "extractions": []
+        }
+    })
+    .to_string();
+
+    let mut snapshot =
+        parse_provider_workspace_rebuild_snapshot(&raw).expect("parse workspace linking");
+    normalize_provider_workspace_linking_snapshot(
+        &mut snapshot,
+        DEFAULT_WORKSPACE_ID,
+        &baseline,
+        "source-paper",
+        generated_at,
+    );
+
+    validate_provider_workspace_linking_snapshot(&snapshot, &baseline, "source-paper")
+        .expect("empty workspace linking graph is valid");
+    assert!(snapshot.relations.is_empty());
+}
+
+#[test]
+fn provider_workspace_linking_accepts_high_confidence_inferred_links_only() {
+    let generated_at = 42;
+    let mut baseline = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
+    baseline.generated_at = generated_at;
+    baseline.sources = vec![
+        SourceRecord {
+            source_id: "source-alpha".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/alpha.md".into(),
+            source_path: "/tmp/alpha.md".into(),
+            markdown_path: "/tmp/alpha.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+        SourceRecord {
+            source_id: "source-beta".into(),
+            workspace_id: DEFAULT_WORKSPACE_ID.into(),
+            original_path: "/tmp/beta.md".into(),
+            source_path: "/tmp/beta.md".into(),
+            markdown_path: "/tmp/beta.md".into(),
+            format: "markdown".into(),
+            status: "ingested".into(),
+            page_count: 1,
+            description: String::new(),
+            user_context: String::new(),
+            ingest_instruction: String::new(),
+            updated_at: generated_at,
+        },
+    ];
+    baseline.evidence = vec![
+        EvidenceRef {
+            id: "ev-alpha".into(),
+            page_label: "Alpha".into(),
+            page_index: Some(0),
+            snippet: "Vector search uses cosine similarity for hybrid retrieval ranking.".into(),
+            source_path: Some("/tmp/alpha.md".into()),
+            source_id: Some("source-alpha".into()),
+            markdown_path: Some("/tmp/alpha.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+        EvidenceRef {
+            id: "ev-beta".into(),
+            page_label: "Beta".into(),
+            page_index: Some(0),
+            snippet: "Graph retrieval uses cosine similarity for hybrid retrieval expansion."
+                .into(),
+            source_path: Some("/tmp/beta.md".into()),
+            source_id: Some("source-beta".into()),
+            markdown_path: Some("/tmp/beta.md".into()),
+            image_path: None,
+            provenance: Some("test".into()),
+        },
+    ];
+    baseline.nodes = vec![
+        BrainNodeRecord {
+            node_id: "concept-vector-search".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Vector search".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-alpha".into()],
+            source_ids: vec!["source-alpha".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        },
+        BrainNodeRecord {
+            node_id: "concept-graph-retrieval".into(),
+            kind: BrainNodeKind::Concept,
+            label: "Graph retrieval".into(),
+            scope: BrainScope::Project,
+            aliases: Vec::new(),
+            evidence_ids: vec!["ev-beta".into()],
+            source_ids: vec!["source-beta".into()],
+            confidence: Some(0.9),
+            updated_at: generated_at,
+            valid_from: 0,
+            valid_to: None,
+            superseded_by: None,
+        },
+    ];
+    let raw = serde_json::json!({
+        "materializedGraph": {
+            "sources": [],
+            "evidence": [],
+            "nodes": [],
+            "edges": [
+                {
+                    "relationId": "edge-inferred-accepted",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-vector-search",
+                    "targetNodeId": "concept-graph-retrieval",
+                    "label": "shares hybrid retrieval similarity signal",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "confidence": 0.9,
+                    "updatedAt": generated_at
+                },
+                {
+                    "relationId": "edge-inferred-low-confidence",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-vector-search",
+                    "targetNodeId": "concept-graph-retrieval",
+                    "label": "shares hybrid retrieval similarity signal",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "confidence": 0.8,
+                    "updatedAt": generated_at
+                },
+                {
+                    "relationId": "edge-inferred-generic",
+                    "kind": "related_to",
+                    "sourceNodeId": "concept-vector-search",
+                    "targetNodeId": "concept-graph-retrieval",
+                    "label": "uses indirectly",
+                    "evidenceIds": ["ev-alpha", "ev-beta"],
+                    "confidence": 0.95,
+                    "updatedAt": generated_at
+                }
+            ],
+            "claims": [],
+            "memories": [],
+            "wikiPages": [],
+            "entities": [],
+            "extractions": []
+        }
+    })
+    .to_string();
+
+    let mut snapshot =
+        parse_provider_workspace_rebuild_snapshot(&raw).expect("parse workspace linking");
+    normalize_provider_workspace_linking_snapshot(
+        &mut snapshot,
+        DEFAULT_WORKSPACE_ID,
+        &baseline,
+        "source-alpha",
+        generated_at,
+    );
+
+    validate_provider_workspace_linking_snapshot(&snapshot, &baseline, "source-alpha")
+        .expect("verified inferred workspace link is valid");
+    assert!(snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-inferred-accepted"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-inferred-low-confidence"));
+    assert!(!snapshot
+        .relations
+        .iter()
+        .any(|relation| relation.relation_id == "edge-inferred-generic"));
+}
+
+#[test]
 fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
     let generated_at = 42;
     let mut baseline = empty_replayed_brain_snapshot(DEFAULT_WORKSPACE_ID);
@@ -689,7 +985,8 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
             id: "ev-alpha".into(),
             page_label: "Page 1".into(),
             page_index: Some(0),
-            snippet: "Alpha evidence.".into(),
+            snippet: "Alpha evidence defines Shared Concept as a durable workspace graph concept."
+                .into(),
             source_path: Some("/tmp/alpha.md".into()),
             source_id: Some("source-alpha".into()),
             markdown_path: Some("/tmp/alpha.md".into()),
@@ -700,7 +997,8 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
             id: "ev-beta".into(),
             page_label: "Page 1".into(),
             page_index: Some(0),
-            snippet: "Beta evidence.".into(),
+            snippet: "Beta evidence defines Shared Concept as a durable workspace graph concept."
+                .into(),
             source_path: Some("/tmp/beta.md".into()),
             source_id: Some("source-beta".into()),
             markdown_path: Some("/tmp/beta.md".into()),
@@ -712,7 +1010,7 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
         BrainNodeRecord {
             node_id: "concept-alpha".into(),
             kind: BrainNodeKind::Concept,
-            label: "Alpha".into(),
+            label: "Shared Concept".into(),
             scope: BrainScope::Project,
             aliases: Vec::new(),
             evidence_ids: vec!["ev-alpha".into()],
@@ -726,7 +1024,7 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
         BrainNodeRecord {
             node_id: "concept-beta".into(),
             kind: BrainNodeKind::Concept,
-            label: "Beta".into(),
+            label: "Shared Concept".into(),
             scope: BrainScope::Project,
             aliases: Vec::new(),
             evidence_ids: vec!["ev-beta".into()],
@@ -742,10 +1040,10 @@ fn provider_workspace_linking_caps_relations_claims_and_drops_wiki_pages() {
         .map(|index| {
             serde_json::json!({
                 "relationId": format!("edge-cross-{index:02}"),
-                "kind": "related_to",
+                "kind": "same_as",
                 "sourceNodeId": "concept-alpha",
                 "targetNodeId": "concept-beta",
-                "label": "connects",
+                "label": "same as",
                 "evidenceIds": ["ev-alpha", "ev-beta"],
                 "confidence": 0.9,
                 "updatedAt": generated_at
@@ -918,7 +1216,7 @@ fn workspace_linking_prompt_uses_only_active_workspace_source_chunks() {
     );
     assert!(prompt.contains("Do not return source_of edges"));
     assert!(prompt.contains("Return memories as []"));
-    assert!(prompt.contains("grounded cross-source links such as shared concepts"));
+    assert!(prompt.contains("Allowed cross-source candidates"));
     assert!(!prompt.contains("algorithms, data structures"));
     assert!(!prompt.contains("Stale source-index text must not enter rebuild prompt."));
     assert!(!prompt.contains("source-stale"));

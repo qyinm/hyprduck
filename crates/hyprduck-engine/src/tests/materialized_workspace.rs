@@ -972,13 +972,12 @@ fn workspace_delete_source_resolves_canvas_node_id_alias() {
         node.node_id != format!("source:{}", manifest.source_id)
             && node.node_id != "SystemDesignInterview-CH13.pdf"
     }));
-    let canvas_projection = KnowledgeStore::open(KnowledgeStore::default_path_for_root(
-        &workspace_root,
-    ))
-    .expect("open knowledge store")
-    .read_graph_canvas_projection_from_db(DEFAULT_WORKSPACE_ID)
-    .expect("read canvas projection")
-    .expect("canvas projection present");
+    let canvas_projection =
+        KnowledgeStore::open(KnowledgeStore::default_path_for_root(&workspace_root))
+            .expect("open knowledge store")
+            .read_graph_canvas_projection_from_db(DEFAULT_WORKSPACE_ID)
+            .expect("read canvas projection")
+            .expect("canvas projection present");
     assert!(canvas_projection.0.iter().all(|node| {
         node.node_id != format!("source:{}", manifest.source_id)
             && node.node_id != "SystemDesignInterview-CH13.pdf"

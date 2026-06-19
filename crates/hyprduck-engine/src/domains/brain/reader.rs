@@ -335,6 +335,7 @@ impl BrainReader {
         let mut memory_ids = BTreeSet::new();
         let mut selected_bias_node_ids = BTreeSet::new();
         let mut selected_bias_evidence_ids = BTreeSet::new();
+        let mut query_seed_evidence_ids = BTreeSet::new();
         let mut extra_warnings = Vec::new();
         for result in &results {
             match result.kind {
@@ -344,15 +345,39 @@ impl BrainReader {
                     }
                 }
                 BrainSearchResultKind::Node => {
+                    if let Some(node) = self
+                        .snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.node_id == result.id && node.valid_to.is_none())
+                    {
+                        query_seed_evidence_ids.extend(node.evidence_ids.iter().cloned());
+                    }
                     node_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Entity => {
                     entity_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Claim => {
+                    if let Some(claim) = self
+                        .snapshot
+                        .claims
+                        .iter()
+                        .find(|claim| claim.claim_id == result.id)
+                    {
+                        query_seed_evidence_ids.extend(claim.evidence_refs.iter().cloned());
+                    }
                     claim_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Relation => {
+                    if let Some(relation) = self
+                        .snapshot
+                        .relations
+                        .iter()
+                        .find(|relation| relation.relation_id == result.id)
+                    {
+                        query_seed_evidence_ids.extend(relation.evidence_ids.iter().cloned());
+                    }
                     relation_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Source => {
@@ -363,6 +388,7 @@ impl BrainReader {
                 }
                 BrainSearchResultKind::Evidence => {
                     evidence_ids.insert(result.id.clone());
+                    query_seed_evidence_ids.insert(result.id.clone());
                 }
                 BrainSearchResultKind::Event => {
                     if let Some(event) =
@@ -388,6 +414,7 @@ impl BrainReader {
             {
                 selected_bias_node_ids.insert(node.node_id.clone());
                 selected_bias_evidence_ids.extend(node.evidence_ids.iter().cloned());
+                query_seed_evidence_ids.extend(node.evidence_ids.iter().cloned());
                 node_ids.insert(node.node_id.clone());
                 source_ids.extend(node.source_ids.iter().cloned());
                 evidence_ids.extend(node.evidence_ids.iter().cloned());
@@ -412,6 +439,13 @@ impl BrainReader {
                 evidence_ids.insert(evidence.id.clone());
             }
         }
+        protect_context_pack_source_evidence(
+            &self.snapshot.evidence,
+            query,
+            &source_ids,
+            &query_seed_evidence_ids,
+            &mut selected_bias_evidence_ids,
+        );
         for node in self
             .snapshot
             .nodes
@@ -672,6 +706,96 @@ impl BrainReader {
             recent_events,
             warnings,
         })
+    }
+}
+
+fn protect_context_pack_source_evidence(
+    evidence: &[EvidenceRef],
+    query: &str,
+    source_ids: &BTreeSet<String>,
+    seed_evidence_ids: &BTreeSet<String>,
+    selected_bias_evidence_ids: &mut BTreeSet<String>,
+) {
+    selected_bias_evidence_ids.extend(seed_evidence_ids.iter().cloned());
+    protect_follow_up_evidence(evidence, seed_evidence_ids, selected_bias_evidence_ids);
+
+    let terms = search_terms(query);
+    if terms.is_empty() || source_ids.is_empty() {
+        return;
+    }
+
+    let mut query_matches = evidence
+        .iter()
+        .filter(|evidence| {
+            evidence
+                .source_id
+                .as_ref()
+                .is_some_and(|source_id| source_ids.contains(source_id))
+        })
+        .filter_map(|evidence| {
+            match_score(&terms, &evidence.snippet).map(|score| (score, evidence))
+        })
+        .collect::<Vec<_>>();
+    query_matches.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then(left.page_index.cmp(&right.page_index))
+            .then(left.id.cmp(&right.id))
+    });
+
+    let matched_evidence_ids = query_matches
+        .into_iter()
+        .take(6)
+        .map(|(_, evidence)| evidence.id.clone())
+        .collect::<BTreeSet<_>>();
+    selected_bias_evidence_ids.extend(matched_evidence_ids.iter().cloned());
+    protect_follow_up_evidence(evidence, &matched_evidence_ids, selected_bias_evidence_ids);
+}
+
+fn protect_follow_up_evidence(
+    evidence: &[EvidenceRef],
+    seed_evidence_ids: &BTreeSet<String>,
+    selected_bias_evidence_ids: &mut BTreeSet<String>,
+) {
+    if seed_evidence_ids.is_empty() {
+        return;
+    }
+
+    let mut evidence_by_source: BTreeMap<String, Vec<&EvidenceRef>> = BTreeMap::new();
+    for evidence_ref in evidence {
+        let Some(source_id) = &evidence_ref.source_id else {
+            continue;
+        };
+        evidence_by_source
+            .entry(source_id.clone())
+            .or_default()
+            .push(evidence_ref);
+    }
+
+    for source_evidence in evidence_by_source.values_mut() {
+        source_evidence.sort_by(|left, right| {
+            left.page_index
+                .cmp(&right.page_index)
+                .then(left.id.cmp(&right.id))
+        });
+        for (index, evidence_ref) in source_evidence.iter().enumerate() {
+            if !seed_evidence_ids.contains(&evidence_ref.id) {
+                continue;
+            }
+            let seed_page = evidence_ref.page_index;
+            for candidate in source_evidence.iter().skip(index).take(5) {
+                selected_bias_evidence_ids.insert(candidate.id.clone());
+            }
+            if let Some(seed_page) = seed_page {
+                for candidate in source_evidence.iter().filter(|candidate| {
+                    candidate
+                        .page_index
+                        .is_some_and(|page| page >= seed_page && page <= seed_page + 2)
+                }) {
+                    selected_bias_evidence_ids.insert(candidate.id.clone());
+                }
+            }
+        }
     }
 }
 

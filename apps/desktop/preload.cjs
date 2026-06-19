@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 const ALLOWED_EVENTS = new Set([
   "hyprduck://snapshot",
   "hyprduck://agent-terminal",
+  "hyprduck://agent-chat",
 ]);
 
 contextBridge.exposeInMainWorld("hyprduck", {

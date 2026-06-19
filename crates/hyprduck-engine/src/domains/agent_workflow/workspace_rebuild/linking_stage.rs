@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::super::artifacts::{
     provider_workspace_linking_response_schema, write_provider_graph_run_validation_report,
 };
+use super::super::linking_policy::unverified_workspace_linking_relation_ids;
 use super::super::prompt::build_workspace_linking_prompt;
 use super::super::reports::ProviderGraphMaterializationReport;
 use super::super::response::{
@@ -132,11 +133,14 @@ pub(super) fn materialize_workspace_linking_stage(
     }
 
     let before_linking = capture_materialized_file_snapshot(workspace_root)?;
+    let invalidate_relation_ids =
+        unverified_workspace_linking_relation_ids(&linked_baseline, &manifest.source_id);
     let workspace_linking_event = workspace_linking_materialized_event(
         workspace_id,
         &workspace_linking_run_id,
         manifest,
         &linking_snapshot,
+        &invalidate_relation_ids,
     )?;
     let mut linking_materialization_input = linked_baseline.clone();
     linking_materialization_input.events =

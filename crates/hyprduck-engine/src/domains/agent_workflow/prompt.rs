@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use super::linking_policy::workspace_linking_candidate_summary;
 use crate::source_index::SourceChunk;
 use crate::*;
 
@@ -144,17 +145,21 @@ pub(crate) fn build_workspace_linking_prompt(
     let evidence_json =
         serde_json::to_string_pretty(&snapshot.evidence).context("failed to encode evidence")?;
     let context_refs = import_evidence_context_allowed_refs(context);
+    let candidate_summary = workspace_linking_candidate_summary(snapshot, &manifest.source_id);
 
     Ok(format!(
         r#"You are HyprDuck's workspace linking agent.
 
 Task:
 - The imported sourceId {source_id} already has its own source-local graph.
-- Add only meaningful cross-source links between the imported source graph and the existing workspace graph.
+- Verify only the provided cross-source candidate pairs between the imported source graph and the existing workspace graph.
 - Do not rebuild, replace, or delete existing nodes, edges, claims, memories, wiki pages, sources, or evidence.
 - Prefer edges where one endpoint is grounded in sourceId {source_id} and the other endpoint is grounded in a different source.
-- Actively look for grounded cross-source links such as shared concepts, prerequisites, contrasts, refinements, dependencies, repeated claims, or related methods.
-- Return only records needed for cross-source linking. Return no new edges only when no grounded relationship exists after comparing the imported markdown with the workspace chunks.
+- Return edges only for candidate pairs listed under Allowed cross-source candidates.
+- For direct candidates, return a relation only when the cited evidence directly supports the same concept, prerequisite, dependency, refinement, contradiction, citation, or explicit relationship. Use confidence >= 0.75 for direct links.
+- For inferred candidates, return a relation only when the cited evidence from both sources supports a clear bridge. Use confidence >= 0.85 for inferred links.
+- Do not return generic labels such as "related_to", "uses indirectly", "contrasts with", or "connects to" unless the cited text explicitly states that relationship.
+- Return no new edges when no candidate has grounded evidence support.
 - Return at most 24 cross-source relations and 8 claims.
 - Return memories as [].
 - Return wikiPages as []; HyprDuck synthesizes wiki pages after validated linking.
@@ -190,6 +195,9 @@ Provided sources:
 Provided evidence:
 {evidence_json}
 
+Allowed cross-source candidates:
+{candidate_summary}
+
 Current materialized graph after source-local graph:
 {current_graph_json}
 
@@ -206,6 +214,7 @@ Latest imported markdown:
         context_refs = join_or_none(&context_refs),
         sources_json = sources_json,
         evidence_json = evidence_json,
+        candidate_summary = candidate_summary,
         current_graph_json = current_graph_json,
         all_chunks = if all_chunks.is_empty() {
             "(none)".into()

@@ -300,12 +300,7 @@ fn handle_apply_workspace_correction(
                 &aggregate,
                 &request.node_id,
             )? {
-                return handle_delete_workspace_source_node(
-                    store,
-                    workspace_id,
-                    &detail,
-                    request,
-                );
+                return handle_delete_workspace_source_node(store, workspace_id, &detail, request);
             }
             return handle_delete_materialized_workspace_node(store, workspace_id, &rows, request);
         }
@@ -442,12 +437,7 @@ fn handle_delete_materialized_workspace_node(
             &aggregate_workspace_project(workspace_id, rows.to_vec()),
             &node,
         ) {
-            return handle_delete_workspace_source_node(
-                store,
-                workspace_id,
-                &detail,
-                request,
-            );
+            return handle_delete_workspace_source_node(store, workspace_id, &detail, request);
         }
         if let Some(source_id) = workspace_source_id_from_brain_node(&node) {
             if let Some(deleted_row) = store.delete_workspace_source(workspace_id, &source_id)? {
@@ -571,8 +561,13 @@ fn resolve_workspace_source_detail_for_delete(
     let workspace_root = workspace_root_for_rows(rows)
         .unwrap_or_else(|| fallback_workspace_root(&store.path, workspace_id));
     let snapshot = read_materialized_brain_snapshot(&workspace_root, workspace_id)?;
-    let Some(node) =
-        find_live_materialized_workspace_node(store, workspace_id, &workspace_root, &snapshot, node_id)?
+    let Some(node) = find_live_materialized_workspace_node(
+        store,
+        workspace_id,
+        &workspace_root,
+        &snapshot,
+        node_id,
+    )?
     else {
         return Ok(None);
     };
@@ -599,13 +594,9 @@ fn find_live_materialized_workspace_node(
     if !db_path.exists() {
         return Ok(None);
     }
-    let projection = KnowledgeStore::open(db_path)?
-        .read_graph_canvas_projection_from_db(workspace_id)?;
-    Ok(projection.and_then(|(nodes, _, _)| {
-        nodes
-            .into_iter()
-            .find(|node| node.node_id == node_id)
-    }))
+    let projection =
+        KnowledgeStore::open(db_path)?.read_graph_canvas_projection_from_db(workspace_id)?;
+    Ok(projection.and_then(|(nodes, _, _)| nodes.into_iter().find(|node| node.node_id == node_id)))
 }
 
 fn workspace_source_detail_from_brain_node(

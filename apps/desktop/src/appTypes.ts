@@ -52,6 +52,37 @@ export interface FileSelection {
   format: string;
 }
 
+export type SourceOriginalPreviewKind = "pdf" | "text" | "unsupported" | "missing";
+
+export interface SourceDetailRequest {
+  sourceId: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  format: string;
+}
+
+export interface SourceDetailResult {
+  sourceId: string;
+  fileName: string;
+  format: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  original: {
+    kind: SourceOriginalPreviewKind;
+    previewUrl: string | null;
+    text: string | null;
+    truncated: boolean;
+    error: string | null;
+  };
+  markdown: {
+    text: string | null;
+    missing: boolean;
+    error: string | null;
+  };
+}
+
 export interface ProviderOption {
   id: string;
   label: string;
@@ -159,6 +190,136 @@ export interface WorkspaceAnswerPayload {
   nodeId: string | null;
   question: string;
 }
+
+export type AgentChatScopeMode = "auto" | "all_docs" | "selected_source" | "graph_context";
+export type AgentChatAnswerMode = "general" | "evidence" | "blocked";
+export type AgentChatStreamStatus =
+  | "resolving_scope"
+  | "retrieving_context"
+  | "classifying_question"
+  | "connecting_provider"
+  | "generating"
+  | "validating_citations"
+  | "complete";
+export type AgentChatMessageRole = "user" | "assistant" | "system";
+
+export interface AgentChatMessage {
+  id: string;
+  role: AgentChatMessageRole;
+  text: string;
+  createdAt: number;
+}
+
+export interface AgentChatAskPayload {
+  schemaVersion: "hyprduck.agent_chat.v1";
+  conversationId: string;
+  assistantMessageId?: string | null;
+  scope: {
+    workspaceId: string;
+    rootDir?: string | null;
+  };
+  mode: AgentChatScopeMode;
+  selectedNodeId?: string | null;
+  sourceIds: string[];
+  question: string;
+  history: AgentChatMessage[];
+  budget?: number | null;
+  persistContextPack: boolean;
+}
+
+export interface AgentChatProviderSummary {
+  id: string;
+  label: string;
+  modelId: string;
+  hosted: boolean;
+}
+
+export interface AgentChatCitation {
+  evidenceRef: string;
+  sourceId: string;
+  page: number;
+  region?: string | null;
+  span?: string | null;
+  quotedText: string;
+  parseConfidence: string;
+  selectionReason: string;
+  contentHash: string;
+  evidenceType: string;
+}
+
+export interface AgentChatRetrievalTrace {
+  strategy: string;
+  chunksConsidered: number;
+  chunksSelected: number;
+  budgetRequested: number;
+  budgetUsed: number;
+  evidenceTypeTrace?: {
+    considered: Record<string, number>;
+    selected: Record<string, number>;
+  };
+}
+
+export interface AgentChatAskResult {
+  schemaVersion: "hyprduck.agent_chat.v1";
+  conversationId: string;
+  answerMode: AgentChatAnswerMode;
+  assistantMessage: AgentChatMessage;
+  answer: WorkspaceProject["answerByNodeId"][string];
+  contextPackId: string;
+  persistedContextPackPath?: string | null;
+  citations: AgentChatCitation[];
+  retrievalTrace: AgentChatRetrievalTrace;
+  provider: AgentChatProviderSummary;
+  warnings: string[];
+}
+
+export interface AgentChatStartResult {
+  requestId: string;
+  conversationId: string;
+  assistantMessageId: string;
+}
+
+export type AgentChatStreamEvent =
+  | {
+      requestId: string;
+      type: "started";
+      conversationId: string;
+      assistantMessageId: string;
+      provider: AgentChatProviderSummary;
+      answerMode?: AgentChatAnswerMode | null;
+    }
+  | {
+      requestId: string;
+      type: "status";
+      status: AgentChatStreamStatus;
+      message: string;
+    }
+  | {
+      requestId: string;
+      type: "delta";
+      text: string;
+    }
+  | {
+      requestId: string;
+      type: "citation_update";
+      citations: AgentChatCitation[];
+    }
+  | {
+      requestId: string;
+      type: "final";
+      result: AgentChatAskResult;
+    }
+  | {
+      requestId: string;
+      type: "error";
+      code: string;
+      message: string;
+    }
+  | {
+      requestId: string;
+      type: "stopped";
+      partialText: string;
+    };
 
 export interface AgentTerminalAgent {
   id: "codex" | "claude_code" | "pi_agent" | "hermes";
@@ -319,6 +480,10 @@ export interface DesktopCommandMap {
     args: { path: string; reveal: boolean };
     result: void;
   };
+  read_source_detail: {
+    args: SourceDetailRequest;
+    result: SourceDetailResult;
+  };
   apply_workspace_correction: {
     args: { correction: WorkspaceCorrectionPayload };
     result: WorkspaceProject;
@@ -326,6 +491,18 @@ export interface DesktopCommandMap {
   answer_workspace_project: {
     args: { request: WorkspaceAnswerPayload };
     result: WorkspaceProject["answerByNodeId"][string];
+  };
+  agent_chat_ask: {
+    args: { request: AgentChatAskPayload };
+    result: AgentChatAskResult;
+  };
+  agent_chat_start: {
+    args: { request: AgentChatAskPayload };
+    result: AgentChatStartResult;
+  };
+  agent_chat_stop: {
+    args: { requestId: string };
+    result: { stopped: boolean };
   };
   agent_terminal_list_agents: {
     args: undefined;

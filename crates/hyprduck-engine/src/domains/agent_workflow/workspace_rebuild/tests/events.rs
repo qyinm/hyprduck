@@ -19,6 +19,7 @@ fn provider_graph_materialized_events_use_distinct_operation_types() {
         "provider-workspace-linking-run-b",
         &manifest,
         &snapshot,
+        &[],
     )
     .expect("workspace linking event");
 
@@ -89,13 +90,17 @@ fn workspace_linking_event_is_relation_only() {
         "provider-workspace-linking-run-a",
         &manifest,
         &snapshot,
+        &["edge-stale-weak".into()],
     )
     .expect("workspace linking event");
     let payload: serde_json::Value =
         serde_json::from_str(&event.payload_json).expect("decode payload");
 
     assert!(event.target_node_ids.is_empty());
-    assert_eq!(event.target_edge_ids, vec!["edge-alpha-beta"]);
+    assert_eq!(
+        event.target_edge_ids,
+        vec!["edge-alpha-beta", "edge-stale-weak"]
+    );
     assert_eq!(event.node_refs, vec!["concept-alpha", "concept-beta"]);
     assert_eq!(event.source_refs, vec!["source-alpha", "source-beta"]);
     assert_eq!(event.causality.caused_by_source_ids, vec!["source-alpha"]);

@@ -28,6 +28,7 @@ pub enum EngineCommand {
     LoadProject,
     ApplyCorrection,
     AnswerProject,
+    AgentChatAsk,
     SearchBrain,
     ReadSource,
     ReadPageEvidence,
@@ -594,6 +595,136 @@ pub struct AnswerProjectRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnswerProjectResponseData {
     pub answer: AnswerResponse,
+}
+
+pub const AGENT_CHAT_SCHEMA_VERSION: &str = "hyprduck.agent_chat.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatScopeMode {
+    Auto,
+    AllDocs,
+    SelectedSource,
+    GraphContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatAnswerMode {
+    General,
+    Evidence,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatStreamStatus {
+    ResolvingScope,
+    RetrievingContext,
+    ClassifyingQuestion,
+    ConnectingProvider,
+    Generating,
+    ValidatingCitations,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatMessageRole {
+    User,
+    Assistant,
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatMessage {
+    pub id: String,
+    pub role: AgentChatMessageRole,
+    pub text: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatAskRequest {
+    pub schema_version: String,
+    pub conversation_id: String,
+    #[serde(default)]
+    pub assistant_message_id: Option<String>,
+    pub scope: BrainReadScope,
+    pub mode: AgentChatScopeMode,
+    #[serde(default)]
+    pub selected_node_id: Option<String>,
+    #[serde(default)]
+    pub source_ids: Vec<SourceId>,
+    pub question: String,
+    #[serde(default)]
+    pub history: Vec<AgentChatMessage>,
+    #[serde(default)]
+    pub budget: Option<usize>,
+    #[serde(default)]
+    pub persist_context_pack: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatProviderSummary {
+    pub id: String,
+    pub label: String,
+    pub model_id: String,
+    pub hosted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatAskResponseData {
+    pub schema_version: String,
+    pub conversation_id: String,
+    pub answer_mode: AgentChatAnswerMode,
+    pub assistant_message: AgentChatMessage,
+    pub answer: AnswerResponse,
+    pub context_pack_id: String,
+    #[serde(default)]
+    pub persisted_context_pack_path: Option<String>,
+    #[serde(default)]
+    pub citations: Vec<ContextPackEvidenceV1>,
+    pub retrieval_trace: ContextPackRetrievalTraceV1,
+    pub provider: AgentChatProviderSummary,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentChatStreamEvent {
+    Started {
+        conversation_id: String,
+        assistant_message_id: String,
+        provider: AgentChatProviderSummary,
+        #[serde(default)]
+        answer_mode: Option<AgentChatAnswerMode>,
+    },
+    Status {
+        status: AgentChatStreamStatus,
+        message: String,
+    },
+    Delta {
+        text: String,
+    },
+    CitationUpdate {
+        citations: Vec<ContextPackEvidenceV1>,
+    },
+    Final {
+        result: AgentChatAskResponseData,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+    Stopped {
+        partial_text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2377,12 +2508,19 @@ pub struct EngineRuntimeFailure {
     pub failure: EngineFailure,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineRuntimeEvent {
     pub id: Uuid,
     #[serde(rename = "type")]
     pub message_type: EngineRuntimeMessageType,
-    pub event: ParseEvent,
+    pub event: EngineEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EngineEvent {
+    Parse(ParseEvent),
+    AgentChat(AgentChatStreamEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2396,6 +2534,7 @@ pub enum EngineRequest {
     LoadProject(LoadProjectRequest),
     ApplyCorrection(ApplyCorrectionRequest),
     AnswerProject(AnswerProjectRequest),
+    AgentChatAsk(AgentChatAskRequest),
     SearchBrain(SearchBrainRequest),
     ReadSource(ReadSourceRequest),
     ReadPageEvidence(ReadPageEvidenceRequest),
@@ -2474,12 +2613,20 @@ impl EngineRuntimeFailure {
 }
 
 impl EngineRuntimeEvent {
-    pub fn new(id: Uuid, event: ParseEvent) -> Self {
+    pub fn new(id: Uuid, event: EngineEvent) -> Self {
         Self {
             id,
             message_type: EngineRuntimeMessageType::Event,
             event,
         }
+    }
+
+    pub fn parse(id: Uuid, event: ParseEvent) -> Self {
+        Self::new(id, EngineEvent::Parse(event))
+    }
+
+    pub fn agent_chat(id: Uuid, event: AgentChatStreamEvent) -> Self {
+        Self::new(id, EngineEvent::AgentChat(event))
     }
 }
 
@@ -2674,6 +2821,76 @@ mod tests {
     }
 
     #[test]
+    fn agent_chat_contract_schemas_require_agent_chat_fields() {
+        let request_schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/agent-chat-request.schema.json");
+        let response_schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/agent-chat-response.schema.json");
+        let request_schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_schema_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", request_schema_path.display())
+            }),
+        )
+        .unwrap();
+        let response_schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(&response_schema_path).unwrap_or_else(|err| {
+                panic!("failed to read {}: {err}", response_schema_path.display())
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            request_schema["properties"]["schemaVersion"]["const"],
+            AGENT_CHAT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            response_schema["properties"]["schemaVersion"]["const"],
+            AGENT_CHAT_SCHEMA_VERSION
+        );
+
+        let request_required = request_schema["required"]
+            .as_array()
+            .expect("request schema must define required fields");
+        for field in [
+            "schemaVersion",
+            "conversationId",
+            "scope",
+            "mode",
+            "question",
+        ] {
+            assert!(
+                request_required
+                    .iter()
+                    .any(|value| value.as_str() == Some(field)),
+                "request schema must require {field}"
+            );
+        }
+
+        let response_required = response_schema["required"]
+            .as_array()
+            .expect("response schema must define required fields");
+        for field in [
+            "schemaVersion",
+            "conversationId",
+            "answerMode",
+            "assistantMessage",
+            "answer",
+            "contextPackId",
+            "citations",
+            "retrievalTrace",
+            "provider",
+            "warnings",
+        ] {
+            assert!(
+                response_required
+                    .iter()
+                    .any(|value| value.as_str() == Some(field)),
+                "response schema must require {field}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_request_round_trip() {
         let request = EngineRequest::Parse(ParseRequest {
             version: "1".into(),
@@ -2734,7 +2951,7 @@ mod tests {
     #[test]
     fn runtime_event_envelope_round_trip() {
         let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
-        let event = EngineRuntimeEvent::new(id, ParseEvent::Queued);
+        let event = EngineRuntimeEvent::parse(id, ParseEvent::Queued);
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"event\""));
@@ -2896,6 +3113,123 @@ mod tests {
             serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::AnswerProject);
         assert_eq!(decoded.data.answer.status, AnswerStatus::Grounded);
+    }
+
+    #[test]
+    fn agent_chat_ask_round_trip() {
+        let scope = BrainReadScope {
+            workspace_id: "default".into(),
+            root_dir: Some("/tmp/HyprDuck".into()),
+        };
+        let request = EngineRequest::AgentChatAsk(AgentChatAskRequest {
+            schema_version: AGENT_CHAT_SCHEMA_VERSION.into(),
+            conversation_id: "chat-1".into(),
+            assistant_message_id: Some("msg-2".into()),
+            scope,
+            mode: AgentChatScopeMode::GraphContext,
+            selected_node_id: Some("concept-a".into()),
+            source_ids: vec!["source-1".into()],
+            question: "What should an agent cite?".into(),
+            history: vec![AgentChatMessage {
+                id: "msg-1".into(),
+                role: AgentChatMessageRole::User,
+                text: "Summarize the docs.".into(),
+                created_at: 1,
+            }],
+            budget: Some(4096),
+            persist_context_pack: true,
+        });
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"command\":\"agent_chat_ask\""));
+        assert!(json.contains("\"schemaVersion\":\"hyprduck.agent_chat.v1\""));
+        assert!(json.contains("\"mode\":\"graph_context\""));
+        let decoded: EngineRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, request);
+
+        let response = EngineSuccess::new(
+            EngineCommand::AgentChatAsk,
+            AgentChatAskResponseData {
+                schema_version: AGENT_CHAT_SCHEMA_VERSION.into(),
+                conversation_id: "chat-1".into(),
+                answer_mode: AgentChatAnswerMode::Evidence,
+                assistant_message: AgentChatMessage {
+                    id: "msg-2".into(),
+                    role: AgentChatMessageRole::Assistant,
+                    text: "Use evidence refs.".into(),
+                    created_at: 2,
+                },
+                answer: AnswerResponse {
+                    status: AnswerStatus::Grounded,
+                    text: Some("Use evidence refs.".into()),
+                    explanation: "Generated by the agent chat path.".into(),
+                    citations: Vec::new(),
+                    related_node_ids: Vec::new(),
+                    suggested_actions: Vec::new(),
+                },
+                context_pack_id: "ctx_1".into(),
+                persisted_context_pack_path: Some("/tmp/HyprDuck/context_pack.json".into()),
+                citations: vec![ContextPackEvidenceV1 {
+                    evidence_ref: "ev-1".into(),
+                    source_id: "source-1".into(),
+                    page: 1,
+                    region: None,
+                    span: None,
+                    quoted_text: "Agents should cite source/page/evidence refs.".into(),
+                    parse_confidence: ContextPackParseConfidence::High,
+                    selection_reason: "Matches the question.".into(),
+                    content_hash: "hash".into(),
+                    evidence_type: EvidenceType::Text,
+                    graph_trail: None,
+                }],
+                retrieval_trace: ContextPackRetrievalTraceV1 {
+                    strategy: "keyword".into(),
+                    chunks_considered: 3,
+                    chunks_selected: 1,
+                    budget_requested: 4096,
+                    budget_used: 120,
+                    evidence_type_trace: ContextPackEvidenceTypeTraceV1::default(),
+                },
+                provider: AgentChatProviderSummary {
+                    id: "open_router".into(),
+                    label: "OpenRouter".into(),
+                    model_id: "openai/gpt-4.1-mini".into(),
+                    hosted: true,
+                },
+                warnings: Vec::new(),
+            },
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: EngineSuccess<AgentChatAskResponseData> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.command, EngineCommand::AgentChatAsk);
+        assert_eq!(decoded.data.schema_version, AGENT_CHAT_SCHEMA_VERSION);
+        assert_eq!(decoded.data.answer_mode, AgentChatAnswerMode::Evidence);
+        assert_eq!(decoded.data.citations[0].evidence_ref, "ev-1");
+    }
+
+    #[test]
+    fn agent_chat_stream_event_round_trip() {
+        let event = AgentChatStreamEvent::Status {
+            status: AgentChatStreamStatus::RetrievingContext,
+            message: "Retrieving context...".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"status\""));
+        assert!(json.contains("\"status\":\"retrieving_context\""));
+        let decoded: AgentChatStreamEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let envelope = EngineRuntimeEvent::agent_chat(
+            id,
+            AgentChatStreamEvent::Delta {
+                text: "hello".into(),
+            },
+        );
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(json.contains("\"type\":\"event\""));
+        assert!(json.contains("\"event\":{\"type\":\"delta\""));
+        let decoded: EngineRuntimeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, envelope);
     }
 
     #[test]

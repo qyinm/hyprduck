@@ -90,14 +90,15 @@ pub(crate) fn handle_read_graph_snapshot(
         .filter(|_| marker_event.is_some())
         .map(|marker| marker.materialized_files.clone())
         .unwrap_or_else(|| latest_readable_materialized_file_refs(&reader.snapshot));
-    let db_projection = match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
-        Some(projection) => projection,
-        None => (
-            reader.snapshot.nodes.clone(),
-            reader.snapshot.relations.clone(),
-            reader.read_all_wiki_pages()?,
-        ),
-    };
+    let db_projection =
+        match read_graph_canvas_projection(reader.root(), &request.scope.workspace_id)? {
+            Some(projection) => projection,
+            None => (
+                reader.snapshot.nodes.clone(),
+                reader.snapshot.relations.clone(),
+                reader.read_all_wiki_pages()?,
+            ),
+        };
     let sources = read_graph_snapshot_sources(
         &root,
         &request.scope.workspace_id,

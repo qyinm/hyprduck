@@ -6,7 +6,8 @@ use hyprduck_engine_types::{
 };
 
 use crate::application::services::{
-    brain_health_service, brain_read_service, context_pack_service, project_service,
+    agent_chat_service, brain_health_service, brain_read_service, context_pack_service,
+    project_service,
 };
 use crate::provider::{
     check_readiness, provider_model_catalog, validate_provider, EngineConfig, EngineConfigStore,
@@ -55,6 +56,10 @@ pub(crate) fn encode_success_response(
         EngineRequest::AnswerProject(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::AnswerProject,
             project_service::handle_answer_project(request)?,
+        )),
+        EngineRequest::AgentChatAsk(request) => serde_json::to_string(&EngineSuccess::new(
+            EngineCommand::AgentChatAsk,
+            agent_chat_service::handle_agent_chat_ask(request, &config_store.load()?)?,
         )),
         EngineRequest::SearchBrain(request) => serde_json::to_string(&EngineSuccess::new(
             EngineCommand::SearchBrain,
@@ -178,6 +183,7 @@ pub(crate) fn request_command(request: &EngineRequest) -> EngineCommand {
         EngineRequest::LoadProject(_) => EngineCommand::LoadProject,
         EngineRequest::ApplyCorrection(_) => EngineCommand::ApplyCorrection,
         EngineRequest::AnswerProject(_) => EngineCommand::AnswerProject,
+        EngineRequest::AgentChatAsk(_) => EngineCommand::AgentChatAsk,
         EngineRequest::SearchBrain(_) => EngineCommand::SearchBrain,
         EngineRequest::ReadSource(_) => EngineCommand::ReadSource,
         EngineRequest::ReadPageEvidence(_) => EngineCommand::ReadPageEvidence,

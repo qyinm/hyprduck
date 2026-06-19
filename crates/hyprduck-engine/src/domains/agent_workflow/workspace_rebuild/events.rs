@@ -62,6 +62,7 @@ pub(super) fn workspace_linking_materialized_event(
     run_id: &str,
     manifest: &SourceArtifactManifest,
     snapshot: &BrainRepoSnapshot,
+    invalidate_relation_ids: &[String],
 ) -> Result<BrainEvent> {
     let endpoint_node_ids = snapshot
         .relations
@@ -72,6 +73,14 @@ pub(super) fn workspace_linking_materialized_event(
                 relation.target_node_id.clone(),
             ]
         })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let target_edge_ids = snapshot
+        .relations
+        .iter()
+        .map(|relation| relation.relation_id.clone())
+        .chain(invalidate_relation_ids.iter().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -121,11 +130,7 @@ pub(super) fn workspace_linking_materialized_event(
             .map(|memory| memory.memory_id.clone())
             .collect(),
         target_node_ids: Vec::new(),
-        target_edge_ids: snapshot
-            .relations
-            .iter()
-            .map(|relation| relation.relation_id.clone())
-            .collect(),
+        target_edge_ids,
         target_claim_ids: snapshot
             .claims
             .iter()

@@ -78,9 +78,23 @@ HyprDuck Desktop
 |   +-- Sidebar
 |   +-- Main Content
 |
-+-- Knowledge
++-- Docs
 |   |
-|   +-- Empty State / Add Files
+|   +-- Add Sources
+|   +-- Import Queue
+|   +-- Source Table
+|   +-- Parse Warnings
+|
++-- Agent
+|   |
+|   +-- Local Chat Threads
+|   +-- Central Composer
+|   +-- Scope Selector: all docs / selected source / graph context
+|   +-- Suggested Prompts
+|   +-- IPC-backed Rig agent response with verified citations
+|
++-- Graph
+|   |
 |   +-- Graph Canvas
 |   |   +-- default and primary workspace
 |   |   +-- source nodes
@@ -92,18 +106,6 @@ HyprDuck Desktop
 |   |   +-- source provenance
 |   |   +-- open uploaded file
 |   |   +-- reveal in finder
-|   +-- Revealed Surfaces
-|       +-- Source Library
-|       +-- Wiki
-|       +-- Claims
-|       +-- Conflicts
-|       +-- Ask / Add Files Composer
-|       +-- ask selected graph context
-|       +-- ask whole knowledge base
-|       +-- attach files
-|       +-- add file description
-|       +-- add to knowledge base or ask temporarily
-|       +-- save answer as page/claim/note
 |
 +-- Maintenance Agent
 |   |
@@ -125,12 +127,16 @@ HyprDuck Desktop
 
 ## 3. Navigation Model
 
-기존 `Import / Graph / Settings`를 다음처럼 제품 언어로 바꾼다. `Sources`는 독립 navigation destination이 아니라 `Knowledge` 안의 source library/surface로 흡수한다.
+현재 워크스페이스는 `Docs / Agent / Graph` 세 destination으로 나눈다. 예전 `Knowledge` 단일 화면은 너무 많은 일을 한 화면에 묶었기 때문에 파일 관리, 질문, 관계 검사를 분리한다.
 
 ```text
 Sidebar
 |
-+-- Knowledge     source file, wiki, graph, entity, topic, claim을 탐색하고 질문한다
++-- Docs          source file을 추가하고 import 상태, source table, parse warning을 본다
+|
++-- Agent         터미널이 아니라 HyprDuck agent chat UI에서 citation-backed 답변을 받는다
+|
++-- Graph         graph canvas와 inspector로 document/source/concept 관계를 검사한다
 |
 +-- Settings      provider/schema/storage/maintenance 정책 설정
 
@@ -138,23 +144,13 @@ Window Bar
 |
 +-- Left: Sidebar Toggle   항상 좌측에 위치한다
 +-- Right: History         자동 점검/수정 결과와 사용자 개입이 필요한 충돌을 기록한다
-+-- Far Right: Inspector Toggle   우측 inspector rail을 열고 닫는다
++-- Far Right: Inspector Toggle   Graph 화면에서만 우측 inspector rail을 열고 닫는다
 
 Settings는 window bar에 중복 노출하지 않는다. Settings 진입점은 sidebar 하단에만 둔다.
 History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 History는 window bar의 독립 activity surface로 남고, inspector toggle만 우측 rail을 제어한다.
 ```
 
-첫 MVP에서 너무 많은 탭을 만들기 부담스럽다면 최소형은 아래다.
-
-```text
-MVP Sidebar
-|
-+-- Knowledge
-|
-+-- Settings
-```
-
-사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Knowledge 안의 source library/graph inspector와 History에 노출한다. Ask도 별도 navigation page가 아니라 Knowledge/Graph에서 필요할 때 여는 composer에서 수행한다. Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface다. `History`도 sidebar page가 아니라 우측 상단 window bar의 activity surface로 둔다.
+사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Docs의 import queue/source table과 Graph import banner에 노출한다. Agent는 terminal surface가 아니라 thread list와 central composer를 가진 chat destination이다. Sidebar item에는 source count, Ready/Setup, node count 같은 상태 배지를 넣지 않는다.
 
 ---
 
@@ -166,7 +162,9 @@ MVP Sidebar
 +----------------------+-------------------------------------------+-------------+
 | HyprDuck             | Current Screen                            | Right rail   |
 |                      |                                           | when open    |
-|  > Knowledge         |                                           |             |
+|  > Docs              |                                           |             |
+|    Agent             |                                           |             |
+|    Graph             |                                           |             |
 |                      |                                           |             |
 |  Settings            |                                           |             |
 +----------------------+-------------------------------------------+-------------+

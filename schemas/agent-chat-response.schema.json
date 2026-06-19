@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyprduck.local/schemas/agent-chat-response.schema.json",
+  "title": "HyprDuck Agent Chat Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "conversationId",
+    "answerMode",
+    "assistantMessage",
+    "answer",
+    "contextPackId",
+    "citations",
+    "retrievalTrace",
+    "provider",
+    "warnings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
+    "conversationId": { "type": "string", "minLength": 1 },
+    "answerMode": { "type": "string", "enum": ["general", "evidence", "blocked"] },
+    "assistantMessage": { "$ref": "#/$defs/message" },
+    "answer": { "$ref": "#/$defs/answer" },
+    "contextPackId": { "type": "string" },
+    "persistedContextPackPath": { "type": ["string", "null"] },
+    "citations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/citation" }
+    },
+    "retrievalTrace": { "$ref": "#/$defs/retrievalTrace" },
+    "provider": { "$ref": "#/$defs/provider" },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "text", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+        "text": { "type": "string" },
+        "createdAt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "answer": {
+      "type": "object",
+      "required": ["status", "text", "explanation", "citations", "relatedNodeIds", "suggestedActions"],
+      "properties": {
+        "status": { "type": "string" },
+        "text": { "type": ["string", "null"] },
+        "explanation": { "type": "string" },
+        "citations": { "type": "array" },
+        "relatedNodeIds": { "type": "array", "items": { "type": "string" } },
+        "suggestedActions": { "type": "array" }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "required": [
+        "evidenceRef",
+        "sourceId",
+        "page",
+        "quotedText",
+        "parseConfidence",
+        "selectionReason",
+        "contentHash",
+        "evidenceType"
+      ],
+      "properties": {
+        "evidenceRef": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "page": { "type": "integer", "minimum": 0 },
+        "region": { "type": ["string", "null"] },
+        "span": { "type": ["string", "null"] },
+        "quotedText": { "type": "string" },
+        "parseConfidence": { "type": "string" },
+        "selectionReason": { "type": "string" },
+        "contentHash": { "type": "string" },
+        "evidenceType": { "type": "string" },
+        "graphTrail": { "type": ["object", "null"] }
+      }
+    },
+    "retrievalTrace": {
+      "type": "object",
+      "required": [
+        "strategy",
+        "chunksConsidered",
+        "chunksSelected",
+        "budgetRequested",
+        "budgetUsed",
+        "evidenceTypeTrace"
+      ],
+      "properties": {
+        "strategy": { "type": "string" },
+        "chunksConsidered": { "type": "integer", "minimum": 0 },
+        "chunksSelected": { "type": "integer", "minimum": 0 },
+        "budgetRequested": { "type": "integer", "minimum": 0 },
+        "budgetUsed": { "type": "integer", "minimum": 0 },
+        "evidenceTypeTrace": { "type": "object" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "modelId", "hosted"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "modelId": { "type": "string" },
+        "hosted": { "type": "boolean" }
+      }
+    }
+  }
+}

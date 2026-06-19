@@ -6,8 +6,20 @@ const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
-const agentTerminalSource = readFileSync(
-  new URL("../src/features/agent-terminal/AgentTerminal.tsx", import.meta.url),
+const docsSource = readFileSync(
+  new URL("../src/features/workspace/DocsWorkspace.tsx", import.meta.url),
+  "utf8",
+);
+const agentChatSource = readFileSync(
+  new URL("../src/features/agent-chat/AgentChatWorkspace.tsx", import.meta.url),
+  "utf8",
+);
+const aiElementsMessageSource = readFileSync(
+  new URL("../src/components/ai-elements/message.tsx", import.meta.url),
+  "utf8",
+);
+const aiElementsInlineCitationSource = readFileSync(
+  new URL("../src/components/ai-elements/inline-citation.tsx", import.meta.url),
   "utf8",
 );
 const appTypesSource = readFileSync(new URL("../src/appTypes.ts", import.meta.url), "utf8");
@@ -25,19 +37,31 @@ const modelTaskMatrixSource = readFileSync(
   new URL("../../../docs/model-task-matrix.md", import.meta.url),
   "utf8",
 );
+const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+const packageSource = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+const preloadSource = readFileSync(new URL("../preload.cjs", import.meta.url), "utf8");
 
-test("desktop IA is the committed source of truth for the Knowledge workspace", () => {
-  expect(iaSource).toMatch(/Source와 Ask는 destination이 아니라 Knowledge workspace 안의 interaction surface/);
-  expect(iaSource).toMatch(/File attachment distinguishes Add to knowledge base from Ask only this time/);
+test("desktop IA is the committed source of truth for Docs, Agent, and Graph", () => {
+  expect(iaSource).toMatch(/`Docs \/ Agent \/ Graph` 세 destination/);
+  expect(iaSource).toMatch(/Agent는 terminal surface가 아니라 thread list와 central composer/);
+  expect(iaSource).toMatch(/source count, Ready\/Setup, node count 같은 상태 배지를 넣지 않는다/);
 });
 
-test("app shell exposes only Knowledge and Settings as primary destinations", () => {
-  expect(appSource).toMatch(/type ActivePanel = "knowledge" \| "settings"/);
-  expect(appSource).toMatch(/labelKey: "nav\.knowledge"/);
+test("app shell exposes Docs, Agent, Graph, and Settings as primary destinations", () => {
+  expect(appSource).toMatch(/type MainPanel = "docs" \| "agent" \| "graph"/);
+  expect(appSource).toMatch(/type ActivePanel = MainPanel \| "settings"/);
+  expect(appSource).toMatch(/labelKey: "nav\.docs"/);
+  expect(appSource).toMatch(/labelKey: "nav\.agent"/);
+  expect(appSource).toMatch(/labelKey: "nav\.graph"/);
   expect(appSource).toMatch(/t\("nav\.settings"\)/);
-  expect(localesSource).toMatch(/"nav\.knowledge": "Knowledge"/);
+  expect(localesSource).toMatch(/"nav\.docs": "Docs"/);
+  expect(localesSource).toMatch(/"nav\.agent": "Agent"/);
+  expect(localesSource).toMatch(/"nav\.graph": "Graph"/);
+  expect(appSource).toMatch(/useState<ActivePanel>\("docs"\)/);
+  expect(appSource).not.toMatch(/navBadgeForPanel/);
+  expect(appSource).not.toMatch(/Ready"\s*:\s*"Setup/);
+  expect(appSource).not.toMatch(/\$\{graphNodeCount\} nodes/);
   expect(appSource).not.toMatch(/label: "Import"/);
-  expect(appSource).not.toMatch(/label: "Graph"/);
   expect(appSource).not.toMatch(/History/);
 });
 
@@ -95,13 +119,57 @@ test("settings page hides debug readiness internals", () => {
   expect(settingsSource).not.toMatch(/check\.message/);
 });
 
-test("Knowledge empty state focuses first users on importing source files", () => {
-  expect(graphSource).toMatch(/workspace\.empty\.title/);
-  expect(graphSource).toMatch(/workspace\.empty\.body/);
-  expect(graphSource).toMatch(/workspace\.empty\.chooseFiles/);
+test("Docs page focuses first users on importing source files", () => {
+  expect(appSource).toMatch(/<DocsWorkspace/);
+  expect(docsSource).toMatch(/Add Sources/);
+  expect(docsSource).toMatch(/Supported: PDF, DOCX, DOC/);
+  expect(docsSource).toMatch(/Import Queue/);
+  expect(docsSource).toMatch(/Parse Warnings/);
+  expect(docsSource).toMatch(/onViewInGraph/);
+  expect(docsSource).toMatch(/Details/);
+  expect(docsSource).toMatch(/FileSearch/);
+  expect(docsSource).toMatch(/Waypoints/);
+  expect(docsSource).toMatch(/View in Graph/);
+  expect(docsSource).toMatch(/SourceDetailWorkspace/);
+  expect(docsSource).toMatch(/Original/);
+  expect(docsSource).toMatch(/Parsed Markdown/);
+  expect(docsSource).toMatch(/Document/);
+  expect(docsSource).toMatch(/Page/);
+  expect(docsSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
+  expect(docsSource).toMatch(/visiblePageRange/);
+  expect(docsSource).toMatch(/visiblePageNumbers/);
+  expect(docsSource).toMatch(/pageNumber=\{pageNumber\}/);
+  expect(docsSource).toMatch(/onScroll=\{updateVisiblePages\}/);
+  expect(docsSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
+  expect(docsSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
+  expect(packageSource).toMatch(/"react-pdf": "\^10\.4\.1"/);
+  expect(packageSource).toMatch(/"pdfjs-dist": "5\.4\.296"/);
+  expect(docsSource).toMatch(/top-12 z-\[60\]/);
+  expect(docsSource).toMatch(/data-electron-no-drag/);
+  expect(docsSource).not.toMatch(/type="application\/pdf"/);
+  expect(docsSource).toMatch(/Preview/);
+  expect(docsSource).toMatch(/Raw/);
+  expect(docsSource).toMatch(/Copy/);
+  expect(docsSource).toMatch(/MessageResponse/);
+  expect(docsSource).not.toMatch(/Open extracted text/);
+  expect(docsSource).toMatch(/Reveal in Finder/);
+  expect(docsSource).not.toMatch(/Filter/);
+  expect(docsSource).not.toMatch(/readOnly/);
+  expect(docsSource).toMatch(/value=\{sourceSearch\}/);
+  expect(docsSource).toMatch(/visibleSources\.map/);
+  expect(docsSource).toMatch(/normalize\("NFC"\)/);
+  expect(appSource).toMatch(/onReadSourceDetail=\{readSourceDetail\}/);
+  expect(appSource).toMatch(/invoke\("read_source_detail"/);
+  expect(appTypesSource).toMatch(/interface SourceDetailResult/);
+  expect(appTypesSource).toMatch(/read_source_detail/);
+  expect(mainSource).toMatch(/case "read_source_detail"/);
+  expect(mainSource).toMatch(/resolveKnownWorkspacePath\(candidatePath\)/);
+  expect(mainSource).toMatch(/readOriginalPreview\(\[originalPath, sourcePath\]/);
+  expect(mainSource).toMatch(/resolveFirstKnownWorkspacePath/);
+  expect(mainSource).toMatch(/hyprduck-source/);
+  expect(docsSource).toMatch(/previewableSourcePath\(source\)/);
+  expect(previewApiSource).toMatch(/read_source_detail/);
   expect(localesSource).toMatch(/Add private docs/);
-  expect(localesSource).toMatch(/Drop PDF, DOCX, or DOC files here/);
-  expect(localesSource).toMatch(/source-backed evidence that coding agents can reuse with citations/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);
   expect(graphSource).not.toMatch(/compile|compiled|compiler/i);
@@ -124,10 +192,13 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
   expect(publicModelGuidance).not.toMatch(/brain-corpus|local brain|Graph materialization|Provider-generated graph records|generated graph/);
 });
 
-test("Knowledge workspace keeps the graph canvas and removes onboarding checklist chrome", () => {
+test("Graph workspace keeps the graph canvas and removes chat/import chrome", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/workspace\.prompt\.openTerminal/);
-  expect(graphSource).toMatch(/workspace\.prompt\.placeholder/);
+  expect(graphSource).toMatch(/onOpenDocs/);
+  expect(graphSource).not.toMatch(/AgentTerminal/);
+  expect(graphSource).not.toMatch(/GraphPromptComposer/);
+  expect(graphSource).not.toMatch(/workspace\.prompt\.openTerminal/);
+  expect(graphSource).not.toMatch(/workspace\.prompt\.placeholder/);
   expect(graphSource).not.toMatch(/FirstRunActivationStrip/);
   expect(graphSource).not.toMatch(/aria-label="First-run activation"/);
   expect(graphSource).not.toMatch(/Register the local MCP server/);
@@ -137,7 +208,6 @@ test("Knowledge workspace keeps the graph canvas and removes onboarding checklis
 
 test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/GraphPromptComposer/);
   expect(graphSource).toMatch(/Document/);
   expect(graphSource).toMatch(/File/);
   expect(graphSource).toMatch(/workspace\.inspector\.openFile/);
@@ -146,7 +216,8 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).toMatch(/ExternalLink/);
   expect(graphSource).toMatch(/FileText/);
   expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/workspace\.inspector\.reviewSuggestions/);
+  expect(graphSource).toMatch(/Trash2/);
+  expect(graphSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
   expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
   expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
   expect(graphSource).toMatch(/customerVisibleDescription/);
@@ -155,28 +226,65 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).not.toMatch(/projectionSummary/);
 });
 
-test("bottom prompt composer opens Agent Terminal from focus or submit", () => {
-  expect(graphSource).toMatch(/GraphPromptComposer/);
-  expect(graphSource).toMatch(/AgentTerminal/);
-  expect(graphSource).toMatch(/GraphAnswerWindow/);
-  expect(graphSource).toMatch(/workspace\.prompt\.attachFiles/);
-  expect(graphSource).toMatch(/onFocus=\{openTerminal\}/);
-  expect(graphSource).toMatch(/onOpenAgentTerminal\(\);/);
-  expect(graphSource).toMatch(/onCreateSession=\{onCreateAgentTerminalSession\}/);
-  expect(agentTerminalSource).toMatch(/aria-label="Minimize Agent Terminal"/);
-  expect(graphSource).toMatch(/workspace\.terminal\.resize/);
-  expect(graphSource).toMatch(/workspace\.terminal\.restore/);
-  expect(graphSource).not.toMatch(/onAskProject/);
-  expect(graphSource).not.toMatch(/answer_workspace_project/);
-  expect(graphSource).toMatch(/bottom-24/);
-  expect(localesSource).toMatch(/Open Agent Terminal/);
-  expect(localesSource).toMatch(/Close answer/);
-  expect(localesSource).toMatch(/Answering\.\.\./);
-  expect(graphSource).toMatch(/CompactEvidenceRow/);
-  expect(graphSource).not.toMatch(/Ask or add files to this knowledge base/);
-  expect(graphSource).not.toMatch(/name="attachment-intent"/);
-  expect(graphSource).not.toMatch(/Ask workspace graph or attach files/);
-  expect(graphSource).not.toMatch(/Live answer state|Stored answer state/);
+test("Agent page renders chat UI and uses the streaming agent chat IPC contract", () => {
+  expect(appSource).toMatch(/<AgentChatWorkspace/);
+  expect(agentChatSource).toMatch(/STORAGE_KEY = "hyprduck\.agentChatThreads\.v1"/);
+  expect(agentChatSource).toMatch(/window\.localStorage/);
+  expect(agentChatSource).toMatch(/What should we work on\?/);
+  expect(agentChatSource).toMatch(/mode: "auto"/);
+  expect(agentChatSource).not.toMatch(/setScopeMode/);
+  expect(agentChatSource).not.toMatch(/Selected source/);
+  expect(agentChatSource).not.toMatch(/Graph context/);
+  expect(agentChatSource).toMatch(/onStartAgentChat/);
+  expect(agentChatSource).toMatch(/onStopAgentChat/);
+  expect(agentChatSource).toMatch(/onListenAgentChatEvents/);
+  expect(agentChatSource).toMatch(/event\.type === "delta"/);
+  expect(agentChatSource).toMatch(/event\.type === "stopped"/);
+  expect(agentChatSource).toMatch(/hasConversation/);
+  expect(agentChatSource).toMatch(/Ask a follow-up about your indexed docs/);
+  expect(agentChatSource).toMatch(/overflow-hidden px-6 pb-5/);
+  expect(agentChatSource).toMatch(/\[scrollbar-gutter:stable\]/);
+  expect(agentChatSource).toMatch(/mx-auto w-full max-w-4xl space-y-6 pr-4/);
+  expect(agentChatSource).toMatch(/rounded-2xl border border-border bg-background p-3 shadow-sm/);
+  expect(agentChatSource).toMatch(/MessageResponse/);
+  expect(agentChatSource).toMatch(/components=\{citationComponents\}/);
+  expect(agentChatSource).toMatch(/createCitationComponents/);
+  expect(agentChatSource).toMatch(/InlineCitationMarker/);
+  expect(agentChatSource).toMatch(/linkifyCitationMarkers/);
+  expect(agentChatSource).toMatch(/#citation-\$\{marker\}/);
+  expect(agentChatSource).toMatch(/CitationSources/);
+  expect(agentChatSource).toMatch(/aria-label="Sources"/);
+  expect(agentChatSource).toMatch(/formatAssistantDisplayText/);
+  expect(agentChatSource).toMatch(/ensureCitationMarkers/);
+  expect(agentChatSource).toMatch(/resultsByMessageId: Record<string, AgentChatAskResult>/);
+  expect(agentChatSource).toMatch(/persistThreads\(\{ version: STORAGE_VERSION, threads, activeThreadId, resultsByMessageId \}\)/);
+  expect(agentChatSource).toMatch(/parsed\.resultsByMessageId \?\? \{\}/);
+  expect(agentChatSource).not.toMatch(/border-t border-border bg-muted\/20/);
+  expect(agentChatSource).not.toMatch(/<p className="whitespace-pre-wrap">\{message\.text\}<\/p>/);
+  expect(agentChatSource).toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background/);
+  expect(agentChatSource).toMatch(/border-r border-border bg-muted\/20 px-3 pb-3 pt-14/);
+  expect(agentChatSource).not.toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background pt-12/);
+  expect(aiElementsMessageSource).toMatch(/export const MessageResponse/);
+  expect(aiElementsMessageSource).toMatch(/Streamdown/);
+  expect(aiElementsMessageSource).toMatch(/plugins=\{streamdownPlugins\}/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitation/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitationCardTrigger/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitationQuote/);
+  expect(aiElementsInlineCitationSource).toMatch(/max-h-72/);
+  expect(appSource).toMatch(/invoke\("agent_chat_start"/);
+  expect(appSource).toMatch(/invoke\("agent_chat_stop"/);
+  expect(appSource).toMatch(/hyprduck:\/\/agent-chat/);
+  expect(appTypesSource).toMatch(/interface AgentChatAskPayload/);
+  expect(appTypesSource).toMatch(/interface AgentChatAskResult/);
+  expect(appTypesSource).toMatch(/type AgentChatStreamEvent/);
+  expect(mainSource).toMatch(/case "agent_chat_start"/);
+  expect(mainSource).toMatch(/case "agent_chat_stop"/);
+  expect(mainSource).toMatch(/command: "agent_chat_ask"/);
+  expect(preloadSource).toMatch(/hyprduck:\/\/agent-chat/);
+  expect(graphSource).not.toMatch(/AgentTerminal/);
+  expect(graphSource).not.toMatch(/GraphPromptComposer/);
+  expect(agentChatSource).not.toMatch(/AgentTerminal/);
+  expect(agentChatSource).not.toMatch(/terminal/i);
 });
 
 test("evidence is rendered as UI content instead of raw markdown", () => {
@@ -186,8 +294,6 @@ test("evidence is rendered as UI content instead of raw markdown", () => {
 });
 
 test("workspace graph reader loads the latest materialized snapshot first", () => {
-  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
-
   expect(mainSource).toMatch(/case "load_materialized_graph_snapshot"/);
   expect(mainSource).toMatch(/command: "read_graph_snapshot"/);
   expect(appSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
@@ -202,8 +308,6 @@ test("workspace graph reader loads the latest materialized snapshot first", () =
 });
 
 test("desktop app prepares the short HyprDuck MCP shell command", () => {
-  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
-
   expect(mainSource).toMatch(/ensureHyprduckShellCommand\(app\)/);
   expect(mainSource).toMatch(/require\("\.\/main\/cli-shim\.cjs"\)/);
   expect(cliShimSource).toMatch(/function resolveCliPath\(\)/);
@@ -218,7 +322,6 @@ test("desktop app prepares the short HyprDuck MCP shell command", () => {
 });
 
 test("desktop import jobs use HyprDuck citation lifecycle states", () => {
-  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
   const activeJobStatusAssignments = [
     ...mainSource.matchAll(/snapshot\.activeJob\.status\s*=\s*"([^"]+)"/g),
   ].map((match) => match[1]);

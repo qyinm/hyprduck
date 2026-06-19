@@ -1235,10 +1235,7 @@ pub(super) fn purge_workspace_source_in_transaction(
         )
         .with_context(|| format!("failed deleting source page FTS for {source_id}"))?;
     sqlite
-        .execute(
-            "DELETE FROM evidence_fts WHERE source_id = ?1",
-            [source_id],
-        )
+        .execute("DELETE FROM evidence_fts WHERE source_id = ?1", [source_id])
         .with_context(|| format!("failed deleting evidence FTS for {source_id}"))?;
     sqlite
         .execute(
