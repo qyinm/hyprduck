@@ -1,27 +1,44 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { Components } from "streamdown";
 import {
   ArrowUp,
   Bot,
   FileText,
-  Globe2,
   MessageCircle,
-  Network,
   Plus,
   Search,
   Sparkles,
+  Square,
 } from "lucide-react";
 
 import type {
   AgentChatAskPayload,
   AgentChatAskResult,
+  AgentChatCitation,
   AgentChatMessage,
-  AgentChatScopeMode,
+  AgentChatStartResult,
+  AgentChatStreamEvent,
+  AgentChatStreamStatus,
+  DesktopMessage,
+  DesktopUnlisten,
 } from "@/appTypes";
+import {
+  InlineCitation,
+  InlineCitationCard,
+  InlineCitationCardBody,
+  InlineCitationCardTrigger,
+  InlineCitationQuote,
+  InlineCitationSource,
+} from "@/components/ai-elements/inline-citation";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { fileNameFromPath } from "@/features/workspace/pathUtils";
 import type { WorkspaceProject, WorkspaceSourceSummary } from "@/features/workspace/types";
 
 const STORAGE_KEY = "hyprduck.agentChatThreads.v1";
@@ -40,6 +57,7 @@ interface StoredThreads {
   version: number;
   threads: AgentThread[];
   activeThreadId: string | null;
+  resultsByMessageId: Record<string, AgentChatAskResult>;
 }
 
 interface AgentChatWorkspaceProps {
@@ -48,40 +66,139 @@ interface AgentChatWorkspaceProps {
   selectedNodeId: string | null;
   workspaceId: string;
   providerReady: boolean;
-  onAskAgentChat: (request: AgentChatAskPayload) => Promise<AgentChatAskResult>;
+  onListenAgentChatEvents: (
+    handler: (message: DesktopMessage<AgentChatStreamEvent>) => void | Promise<void>,
+  ) => DesktopUnlisten;
   onOpenDocs: () => void;
+  onStartAgentChat: (request: AgentChatAskPayload) => Promise<AgentChatStartResult>;
+  onStopAgentChat: (requestId: string) => Promise<{ stopped: boolean }>;
+}
+
+interface ActiveStreamState {
+  requestId: string;
+  threadId: string;
+  assistantMessageId: string;
+}
+
+interface MessageStatusState {
+  status: AgentChatStreamStatus;
+  message: string;
 }
 
 export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
   const {
     project,
     providerReady,
-    selectedNodeId,
     sources,
     workspaceId,
-    onAskAgentChat,
+    onListenAgentChatEvents,
     onOpenDocs,
+    onStartAgentChat,
+    onStopAgentChat,
   } = props;
-  const [threads, setThreads] = useState<AgentThread[]>(() => loadStoredThreads().threads);
+  const [storedThreads] = useState<StoredThreads>(() => loadStoredThreads());
+  const [threads, setThreads] = useState<AgentThread[]>(() => storedThreads.threads);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(
-    () => loadStoredThreads().activeThreadId,
+    () => storedThreads.activeThreadId,
   );
   const [input, setInput] = useState("");
-  const [scopeMode, setScopeMode] = useState<AgentChatScopeMode>("all_docs");
-  const [selectedSourceId, setSelectedSourceId] = useState<string>(() => sources[0]?.source_id ?? "");
-  const [pending, setPending] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [activeStream, setActiveStream] = useState<ActiveStreamState | null>(null);
+  const activeStreamRef = useRef<ActiveStreamState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resultsByMessageId, setResultsByMessageId] = useState<Record<string, AgentChatAskResult>>({});
+  const [resultsByMessageId, setResultsByMessageId] = useState<Record<string, AgentChatAskResult>>(
+    () => storedThreads.resultsByMessageId,
+  );
+  const [streamStatusByMessageId, setStreamStatusByMessageId] = useState<
+    Record<string, MessageStatusState>
+  >({});
+  const [stoppedMessageIds, setStoppedMessageIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    persistThreads({ version: STORAGE_VERSION, threads, activeThreadId });
-  }, [activeThreadId, threads]);
+    activeStreamRef.current = activeStream;
+  }, [activeStream]);
 
   useEffect(() => {
-    if (!selectedSourceId && sources[0]?.source_id) {
-      setSelectedSourceId(sources[0].source_id);
-    }
-  }, [selectedSourceId, sources]);
+    persistThreads({ version: STORAGE_VERSION, threads, activeThreadId, resultsByMessageId });
+  }, [activeThreadId, resultsByMessageId, threads]);
+
+  useEffect(() => {
+    return onListenAgentChatEvents((message) => {
+      const event = message.payload;
+      const stream = activeStreamRef.current;
+      if (!stream || event.requestId !== stream.requestId) {
+        return;
+      }
+
+      if (event.type === "status") {
+        setStreamStatusByMessageId((current) => ({
+          ...current,
+          [stream.assistantMessageId]: {
+            status: event.status,
+            message: statusLabel(event.status, event.message),
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "delta") {
+        setThreads((current) =>
+          updateThreadMessage(current, stream.threadId, stream.assistantMessageId, (existing) => ({
+            ...existing,
+            text: `${existing.text}${event.text}`,
+          })),
+        );
+        return;
+      }
+
+      if (event.type === "final") {
+        const assistantMessage = {
+          ...event.result.assistantMessage,
+          id: stream.assistantMessageId,
+          text: event.result.assistantMessage.text || event.result.answer.text || "",
+        };
+        const result = {
+          ...event.result,
+          assistantMessage,
+        };
+        setResultsByMessageId((current) => ({
+          ...current,
+          [assistantMessage.id]: result,
+        }));
+        setThreads((current) =>
+          updateThreadMessage(current, stream.threadId, stream.assistantMessageId, () => assistantMessage),
+        );
+        setStreamStatusByMessageId((current) => removeKey(current, stream.assistantMessageId));
+        setStoppedMessageIds((current) => removeKey(current, stream.assistantMessageId));
+        setActiveStream(null);
+        setError(null);
+        return;
+      }
+
+      if (event.type === "error") {
+        const text = `Agent chat failed: ${event.message}`;
+        setError(event.message);
+        setThreads((current) =>
+          updateThreadMessage(current, stream.threadId, stream.assistantMessageId, (existing) => ({
+            ...existing,
+            text: existing.text || text,
+          })),
+        );
+        setStreamStatusByMessageId((current) => removeKey(current, stream.assistantMessageId));
+        setActiveStream(null);
+        return;
+      }
+
+      if (event.type === "stopped") {
+        setStoppedMessageIds((current) => ({
+          ...current,
+          [stream.assistantMessageId]: true,
+        }));
+        setStreamStatusByMessageId((current) => removeKey(current, stream.assistantMessageId));
+        setActiveStream(null);
+      }
+    });
+  }, [onListenAgentChatEvents]);
 
   const activeThread = useMemo(() => {
     if (!threads.length) {
@@ -91,20 +208,8 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
   }, [activeThreadId, threads]);
   const hasConversation = Boolean(activeThread?.messages.length);
 
-  const sourceIds = useMemo(() => {
-    if (scopeMode === "selected_source") {
-      return selectedSourceId ? [selectedSourceId] : [];
-    }
-    return sources.map((source) => source.source_id);
-  }, [scopeMode, selectedSourceId, sources]);
-
   const canSend =
-    input.trim().length > 0 &&
-    !pending &&
-    providerReady &&
-    sources.length > 0 &&
-    (scopeMode !== "selected_source" || selectedSourceId.length > 0) &&
-    (scopeMode !== "graph_context" || Boolean(selectedNodeId));
+    input.trim().length > 0 && !starting && !activeStream && providerReady;
 
   const startThread = () => {
     const thread = createThread();
@@ -120,62 +225,75 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
     }
     const thread = activeThread ?? createThread(question);
     const userMessage = createMessage("user", question);
-    const pendingMessage = createMessage("assistant", "Thinking with your indexed evidence...");
+    const assistantMessage = createMessage("assistant", "");
     const nextTitle = thread.messages.length === 0 ? titleFromQuestion(question) : thread.title;
     const nextThread: AgentThread = {
       ...thread,
       title: nextTitle,
       updatedAt: unixTimestamp(),
-      messages: [...thread.messages, userMessage, pendingMessage],
+      messages: [...thread.messages, userMessage, assistantMessage],
     };
 
     setInput("");
     setError(null);
-    setPending(true);
+    setStarting(true);
     setActiveThreadId(thread.id);
     setThreads((current) => upsertThread(current, nextThread));
+    setStreamStatusByMessageId((current) => ({
+      ...current,
+      [assistantMessage.id]: {
+        status: "resolving_scope",
+        message: "Resolving scope...",
+      },
+    }));
+    setStoppedMessageIds((current) => removeKey(current, assistantMessage.id));
 
     try {
-      const result = await onAskAgentChat({
+      const started = await onStartAgentChat({
         schemaVersion: AGENT_CHAT_SCHEMA_VERSION,
         conversationId: thread.id,
+        assistantMessageId: assistantMessage.id,
         scope: { workspaceId },
-        mode: scopeMode,
-        selectedNodeId: scopeMode === "graph_context" ? selectedNodeId : null,
-        sourceIds,
+        mode: "auto",
+        selectedNodeId: null,
+        sourceIds: sources.map((source) => source.source_id),
         question,
         history: thread.messages,
         budget: 8_000,
         persistContextPack: true,
       });
-      setResultsByMessageId((current) => ({
-        ...current,
-        [result.assistantMessage.id]: result,
-      }));
-      setThreads((current) =>
-        upsertThread(
-          current,
-          replaceMessage(nextThread, pendingMessage.id, {
-            ...result.assistantMessage,
-            text: result.assistantMessage.text || result.answer.text || "",
-          }),
-        ),
-      );
+      setActiveStream({
+        requestId: started.requestId,
+        threadId: thread.id,
+        assistantMessageId: started.assistantMessageId,
+      });
     } catch (sendError) {
-      const message = createMessage("assistant", `Agent chat failed: ${String(sendError)}`);
-      setError(String(sendError));
+      const message = `Agent chat failed: ${String(sendError)}`;
+      setError(message);
       setThreads((current) =>
-        upsertThread(current, replaceMessage(nextThread, pendingMessage.id, message)),
+        updateThreadMessage(current, thread.id, assistantMessage.id, (existing) => ({
+          ...existing,
+          text: message,
+        })),
       );
+      setStreamStatusByMessageId((current) => removeKey(current, assistantMessage.id));
     } finally {
-      setPending(false);
+      setStarting(false);
     }
   };
 
+  const stop = async () => {
+    const stream = activeStreamRef.current;
+    if (!stream) {
+      return;
+    }
+    await onStopAgentChat(stream.requestId);
+  };
+
   const composer = (placeholder: string) => (
-    <div className="rounded-xl border border-border bg-background p-3 shadow-sm">
+    <div className="rounded-2xl border border-border bg-background p-3 shadow-sm">
       <Textarea
-        className="min-h-20 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
+        className="min-h-24 resize-none border-0 bg-transparent px-2 pb-2 pt-1 text-[15px] shadow-none focus-visible:ring-0"
         onChange={(event) => setInput(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -184,43 +302,18 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
           }
         }}
         placeholder={placeholder}
+        rows={2}
         value={input}
       />
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <ScopeButton active={scopeMode === "all_docs"} icon={<Globe2 size={14} />} onClick={() => setScopeMode("all_docs")}>
-            All docs
-          </ScopeButton>
-          <ScopeButton
-            active={scopeMode === "selected_source"}
-            icon={<FileText size={14} />}
-            onClick={() => setScopeMode("selected_source")}
-          >
-            Selected source
-          </ScopeButton>
-          <ScopeButton
-            active={scopeMode === "graph_context"}
-            icon={<Network size={14} />}
-            onClick={() => setScopeMode("graph_context")}
-          >
-            Graph context
-          </ScopeButton>
-          {scopeMode === "selected_source" && (
-            <select
-              className="h-8 max-w-[14rem] rounded-md border border-border bg-background px-2 text-xs text-foreground"
-              onChange={(event) => setSelectedSourceId(event.target.value)}
-              value={selectedSourceId}
-            >
-              {sources.map((source) => (
-                <option key={source.source_id} value={source.source_id}>
-                  {fileNameFromPath(source.original_path || source.source_path)}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        <Button disabled={!canSend} onClick={() => void send()} size="icon" type="button">
-          <ArrowUp size={16} />
+      <div className="flex items-center justify-end pt-1">
+        <Button
+          className="rounded-full"
+          disabled={!activeStream && !canSend}
+          onClick={() => (activeStream ? void stop() : void send())}
+          size="icon"
+          type="button"
+        >
+          {activeStream ? <Square size={14} /> : <ArrowUp size={16} />}
         </Button>
       </div>
     </div>
@@ -269,15 +362,16 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
       <section className="flex min-h-0 flex-col overflow-hidden pt-12">
         {hasConversation ? (
           <div className="flex min-h-0 flex-1 flex-col items-center overflow-hidden px-6 pb-5">
-            <div className="flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+            <div className="flex min-h-0 w-full max-w-4xl flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4">
-                <div className="space-y-4">
+                <div className="space-y-6">
                   {activeThread?.messages.map((message) => (
                     <MessageBubble
                       key={message.id}
                       message={message}
-                      pending={pending && message.text.startsWith("Thinking")}
                       result={resultsByMessageId[message.id]}
+                      status={streamStatusByMessageId[message.id]}
+                      stopped={Boolean(stoppedMessageIds[message.id])}
                     />
                   ))}
                 </div>
@@ -347,70 +441,219 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
 
 function MessageBubble({
   message,
-  pending,
   result,
+  status,
+  stopped,
 }: {
   message: AgentChatMessage;
-  pending: boolean;
   result?: AgentChatAskResult;
+  status?: MessageStatusState;
+  stopped?: boolean;
 }) {
   const isUser = message.role === "user";
-  return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[min(42rem,88%)] rounded-lg border px-4 py-3 text-sm leading-6",
-          isUser
-            ? "border-primary bg-primary text-primary-foreground"
-            : "border-border bg-muted/20 text-foreground",
-        )}
-      >
-        <div className="mb-1 flex items-center gap-2 text-xs opacity-75">
-          {isUser ? <MessageCircle size={13} /> : <Bot size={13} />}
-          <span>{isUser ? "You" : "Agent"}</span>
-          {pending ? <Badge variant="secondary">Pending</Badge> : null}
-        </div>
-        <p className="whitespace-pre-wrap">{message.text}</p>
-        {result?.citations.length ? (
-          <div className="mt-3 space-y-1 border-t border-border pt-2">
-            {result.citations.slice(0, 3).map((citation) => (
-              <div className="text-xs text-muted-foreground" key={citation.evidenceRef}>
-                [{citation.evidenceRef}] {citation.quotedText.slice(0, 160)}
-              </div>
-            ))}
+  const citations = result?.citations ?? [];
+  const assistantText = isUser ? message.text : formatAssistantDisplayText(message.text, citations);
+  const citedAssistantText = isUser ? assistantText : linkifyCitationMarkers(
+    ensureCitationMarkers(assistantText, citations),
+    citations,
+  );
+  const citationComponents = useMemo(
+    () => (citations.length ? createCitationComponents(citations) : undefined),
+    [citations],
+  );
+
+  if (isUser) {
+    return (
+      <Message className="max-w-[min(32rem,78%)]" from="user">
+        <MessageContent>
+          <div className="flex items-center gap-2 text-xs opacity-75">
+            <MessageCircle size={13} />
+            <span>You</span>
           </div>
-        ) : null}
-      </div>
-    </div>
+          <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
+        </MessageContent>
+      </Message>
+    );
+  }
+
+  return (
+    <Message className="max-w-[min(48rem,92%)]" from="assistant">
+      <MessageContent className="w-full overflow-visible">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <Bot size={13} />
+          <span>Agent</span>
+          {status ? <Badge variant="secondary">{statusLabel(status.status, status.message)}</Badge> : null}
+          {stopped ? <Badge variant="outline">Stopped</Badge> : null}
+        </div>
+        {status && !citedAssistantText ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
+            <span>{statusLabel(status.status, status.message)}</span>
+          </div>
+        ) : (
+          <>
+            <MessageResponse components={citationComponents}>{citedAssistantText}</MessageResponse>
+            {citations.length ? <CitationSources citations={citations} /> : null}
+          </>
+        )}
+      </MessageContent>
+    </Message>
   );
 }
 
-function ScopeButton({
-  active,
+function createCitationComponents(citations: AgentChatCitation[]): Components {
+  return {
+    a: ({ href, children, node: _node, ...props }: ComponentProps<"a"> & { node?: unknown }) => {
+      const marker = typeof href === "string" ? href.match(/^#citation-(\d+)$/) : null;
+      if (marker) {
+        const index = Number(marker[1]);
+        const citation = citations[index - 1];
+        if (citation) {
+          return (
+            <InlineCitationMarker citation={citation} index={index}>
+              {children}
+            </InlineCitationMarker>
+          );
+        }
+      }
+      return (
+        <a
+          className="underline underline-offset-2"
+          href={href}
+          rel="noreferrer"
+          target={href?.startsWith("#") ? undefined : "_blank"}
+          {...props}
+        >
+          {children}
+        </a>
+      );
+    },
+  };
+}
+
+function InlineCitationMarker({
+  citation,
   children,
-  icon,
-  onClick,
+  index,
 }: {
-  active: boolean;
-  children: string;
-  icon: ReactNode;
-  onClick: () => void;
+  citation: AgentChatCitation;
+  children: ReactNode;
+  index: number;
 }) {
+  const title = `Evidence ${index}`;
+  const sourceLabel = citation.page > 0 ? `Page ${citation.page}` : "Source";
   return (
-    <button
-      className={cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium",
-        active
-          ? "border-border bg-background text-foreground shadow-sm"
-          : "border-transparent text-muted-foreground hover:bg-background hover:text-foreground",
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      {icon}
-      {children}
-    </button>
+    <InlineCitation>
+      <InlineCitationCard>
+        <InlineCitationCardTrigger aria-label={`${title}: ${sourceLabel}`} sources={[sourceLabel]}>
+          {children}
+        </InlineCitationCardTrigger>
+        <InlineCitationCardBody>
+          <InlineCitationSource
+            description={citation.selectionReason}
+            title={title}
+            url={`${sourceLabel} · ${shortEvidenceRef(citation.evidenceRef)}`}
+          />
+          <InlineCitationQuote className="mt-2 max-h-56 overflow-y-auto">
+            {citation.quotedText}
+          </InlineCitationQuote>
+        </InlineCitationCardBody>
+      </InlineCitationCard>
+    </InlineCitation>
   );
+}
+
+function CitationSources({ citations }: { citations: AgentChatCitation[] }) {
+  return (
+    <section className="mt-3 border-t border-border pt-3" aria-label="Sources">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <FileText size={13} />
+        <span>Sources</span>
+      </div>
+      <div className="space-y-2">
+        {citations.map((citation, index) => {
+          const sourceLabel = citation.page > 0 ? `Page ${citation.page}` : "Source";
+          return (
+            <details
+              className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"
+              key={citation.evidenceRef}
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-left">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-background text-[11px] font-medium">
+                    {index + 1}
+                  </span>
+                  <span className="font-medium">Evidence {index + 1}</span>
+                </span>
+                <span className="min-w-0 truncate text-xs text-muted-foreground">
+                  {sourceLabel} · {shortEvidenceRef(citation.evidenceRef)}
+                </span>
+              </summary>
+              {citation.selectionReason ? (
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  {citation.selectionReason}
+                </p>
+              ) : null}
+              <blockquote className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-xs leading-5 text-muted-foreground">
+                {citation.quotedText}
+              </blockquote>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function formatAssistantDisplayText(text: string, citations: AgentChatCitation[]): string {
+  if (!text) {
+    return "";
+  }
+  const citationIndex = new Map(
+    citations.map((citation, index) => [citation.evidenceRef, String(index + 1)]),
+  );
+  const withoutRawRefs = text.replace(/\[(ev-[^\]]+)\]/g, (_match, evidenceRef: string) => {
+    const marker = citationIndex.get(evidenceRef);
+    return marker ? ` [${marker}]` : "";
+  });
+  return compactCitationMarkers(withoutRawRefs)
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function ensureCitationMarkers(text: string, citations: AgentChatCitation[]): string {
+  if (!text || citations.length === 0 || /\[\d+\]/.test(text)) {
+    return text;
+  }
+  const markers = citations.slice(0, 4).map((_citation, index) => `[${index + 1}]`).join(" ");
+  return `${text} ${markers}`;
+}
+
+function linkifyCitationMarkers(text: string, citations: AgentChatCitation[]): string {
+  if (!text || citations.length === 0) {
+    return text;
+  }
+  return text.replace(/\[(\d+)\](?!\()/g, (match, marker: string) => {
+    const index = Number(marker);
+    if (!Number.isInteger(index) || index < 1 || index > citations.length) {
+      return match;
+    }
+    return `[${marker}](#citation-${marker})`;
+  });
+}
+
+function compactCitationMarkers(text: string): string {
+  return text.replace(/(?:\s*\[(\d+)\]){2,}/g, (match) => {
+    const markers = [...match.matchAll(/\[(\d+)\]/g)].map((item) => item[1]);
+    const uniqueMarkers = [...new Set(markers)];
+    return uniqueMarkers.map((marker) => ` [${marker}]`).join("");
+  });
+}
+
+function shortEvidenceRef(evidenceRef: string): string {
+  const compactRef = evidenceRef.replace(/^ev-source-/, "ev-");
+  return compactRef.length > 18 ? `${compactRef.slice(0, 18)}...` : compactRef;
 }
 
 function loadStoredThreads(): StoredThreads {
@@ -430,6 +673,7 @@ function loadStoredThreads(): StoredThreads {
       version: STORAGE_VERSION,
       threads: parsed.threads,
       activeThreadId: parsed.activeThreadId ?? parsed.threads[0]?.id ?? null,
+      resultsByMessageId: parsed.resultsByMessageId ?? {},
     };
   } catch {
     return emptyStorage();
@@ -441,7 +685,7 @@ function persistThreads(value: StoredThreads) {
 }
 
 function emptyStorage(): StoredThreads {
-  return { version: STORAGE_VERSION, threads: [], activeThreadId: null };
+  return { version: STORAGE_VERSION, threads: [], activeThreadId: null, resultsByMessageId: {} };
 }
 
 function createThread(seed?: string): AgentThread {
@@ -469,18 +713,54 @@ function upsertThread(threads: AgentThread[], thread: AgentThread): AgentThread[
   return [thread, ...withoutThread].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-function replaceMessage(
-  thread: AgentThread,
+function updateThreadMessage(
+  threads: AgentThread[],
+  threadId: string,
   messageId: string,
-  replacement: AgentChatMessage,
-): AgentThread {
-  return {
-    ...thread,
-    updatedAt: unixTimestamp(),
-    messages: thread.messages.map((message) =>
-      message.id === messageId ? replacement : message,
-    ),
-  };
+  updater: (message: AgentChatMessage) => AgentChatMessage,
+): AgentThread[] {
+  return threads.map((thread) => {
+    if (thread.id !== threadId) {
+      return thread;
+    }
+    return {
+      ...thread,
+      updatedAt: unixTimestamp(),
+      messages: thread.messages.map((message) =>
+        message.id === messageId ? updater(message) : message,
+      ),
+    };
+  });
+}
+
+function removeKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) {
+    return record;
+  }
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
+function statusLabel(status: AgentChatStreamStatus, fallback: string): string {
+  switch (status) {
+    case "resolving_scope":
+      return "Preparing...";
+    case "retrieving_context":
+      return "Retrieving context...";
+    case "classifying_question":
+      return "Classifying question...";
+    case "connecting_provider":
+      return "Connecting provider...";
+    case "generating":
+      return "Generating...";
+    case "validating_citations":
+      return "Validating citations...";
+    case "complete":
+      return "Complete";
+    default:
+      return fallback;
+  }
 }
 
 function suggestedPrompts(project: WorkspaceProject | null): string[] {

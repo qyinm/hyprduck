@@ -3,8 +3,9 @@ use std::io::{self, BufRead, Read, Write};
 
 use anyhow::{Context, Result};
 use hyprduck_engine_types::{
-    EngineCommand, EngineFailure, EngineRequest, EngineRuntimeEvent, EngineRuntimeFailure,
-    EngineRuntimeRequest, EngineRuntimeResponse, EngineSuccess, ParseEvent, ParseRequest,
+    AgentChatAskRequest, AgentChatStreamEvent, EngineCommand, EngineFailure, EngineRequest,
+    EngineRuntimeEvent, EngineRuntimeFailure, EngineRuntimeRequest, EngineRuntimeResponse,
+    EngineSuccess, ParseEvent, ParseRequest,
 };
 use serde_json::{json, Value};
 use uuid::{Uuid, Version};
@@ -66,6 +67,16 @@ fn run_runtime_server() -> Result<()> {
                         encode_runtime_parse_response(id, request, &payload, &config_store)
                             .unwrap_or_else(|error| {
                                 encode_runtime_failure_response(id, EngineCommand::Parse, &error)
+                            })
+                    }
+                    EngineRequest::AgentChatAsk(request) => {
+                        encode_runtime_agent_chat_response(id, request, &config_store)
+                            .unwrap_or_else(|error| {
+                                encode_runtime_failure_response(
+                                    id,
+                                    EngineCommand::AgentChatAsk,
+                                    &error,
+                                )
                             })
                     }
                     request => {
@@ -136,6 +147,34 @@ fn encode_runtime_parse_response(
     response
 }
 
+fn encode_runtime_agent_chat_response(
+    request_id: Uuid,
+    request: AgentChatAskRequest,
+    config_store: &EngineConfigStore,
+) -> Result<String> {
+    RUNTIME_EVENT_REQUEST_ID.with(|current| {
+        *current.borrow_mut() = Some(request_id);
+    });
+    let response = crate::application::services::agent_chat_service::handle_agent_chat_stream(
+        request,
+        &config_store.load()?,
+        &mut |event| emit_agent_chat_event(&event),
+    )
+    .map(|data| serde_json::to_string(&EngineSuccess::new(EngineCommand::AgentChatAsk, data)))
+    .and_then(|response| response.context("failed to encode agent chat response"))
+    .and_then(|response| wrap_runtime_response(request_id, &response));
+    if let Err(error) = &response {
+        let _ = emit_agent_chat_event(&AgentChatStreamEvent::Error {
+            code: "runtime_error".into(),
+            message: error.to_string(),
+        });
+    }
+    RUNTIME_EVENT_REQUEST_ID.with(|current| {
+        *current.borrow_mut() = None;
+    });
+    response
+}
+
 fn encode_parse_response(
     request: ParseRequest,
     raw_payload: &str,
@@ -186,7 +225,7 @@ fn encode_runtime_failure_response(
 
 pub(crate) fn emit_event(event: &ParseEvent) -> Result<()> {
     if let Some(request_id) = RUNTIME_EVENT_REQUEST_ID.with(|current| *current.borrow()) {
-        let line = serde_json::to_string(&EngineRuntimeEvent::new(request_id, event.clone()))
+        let line = serde_json::to_string(&EngineRuntimeEvent::parse(request_id, event.clone()))
             .context("failed to encode runtime parse event")?;
         let mut stderr = io::stderr().lock();
         stderr
@@ -202,6 +241,29 @@ pub(crate) fn emit_event(event: &ParseEvent) -> Result<()> {
     }
 
     let line = serde_json::to_string(event).context("failed to encode parse event")?;
+    eprintln!("{line}");
+    Ok(())
+}
+
+pub(crate) fn emit_agent_chat_event(event: &AgentChatStreamEvent) -> Result<()> {
+    if let Some(request_id) = RUNTIME_EVENT_REQUEST_ID.with(|current| *current.borrow()) {
+        let line =
+            serde_json::to_string(&EngineRuntimeEvent::agent_chat(request_id, event.clone()))
+                .context("failed to encode runtime agent chat event")?;
+        let mut stderr = io::stderr().lock();
+        stderr
+            .write_all(line.as_bytes())
+            .context("failed to write runtime agent chat event")?;
+        stderr
+            .write_all(b"\n")
+            .context("failed to write runtime agent chat event newline")?;
+        stderr
+            .flush()
+            .context("failed to flush runtime agent chat event")?;
+        return Ok(());
+    }
+
+    let line = serde_json::to_string(event).context("failed to encode agent chat event")?;
     eprintln!("{line}");
     Ok(())
 }

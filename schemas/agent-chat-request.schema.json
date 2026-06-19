@@ -14,10 +14,11 @@
   "properties": {
     "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
     "conversationId": { "type": "string", "minLength": 1 },
+    "assistantMessageId": { "type": ["string", "null"], "minLength": 1 },
     "scope": { "$ref": "#/$defs/brainReadScope" },
     "mode": {
       "type": "string",
-      "enum": ["all_docs", "selected_source", "graph_context"]
+      "enum": ["auto", "all_docs", "selected_source", "graph_context"]
     },
     "selectedNodeId": { "type": ["string", "null"] },
     "sourceIds": {

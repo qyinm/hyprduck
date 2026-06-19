@@ -160,7 +160,16 @@ export interface WorkspaceAnswerPayload {
   question: string;
 }
 
-export type AgentChatScopeMode = "all_docs" | "selected_source" | "graph_context";
+export type AgentChatScopeMode = "auto" | "all_docs" | "selected_source" | "graph_context";
+export type AgentChatAnswerMode = "general" | "evidence" | "blocked";
+export type AgentChatStreamStatus =
+  | "resolving_scope"
+  | "retrieving_context"
+  | "classifying_question"
+  | "connecting_provider"
+  | "generating"
+  | "validating_citations"
+  | "complete";
 export type AgentChatMessageRole = "user" | "assistant" | "system";
 
 export interface AgentChatMessage {
@@ -173,6 +182,7 @@ export interface AgentChatMessage {
 export interface AgentChatAskPayload {
   schemaVersion: "hyprduck.agent_chat.v1";
   conversationId: string;
+  assistantMessageId?: string | null;
   scope: {
     workspaceId: string;
     rootDir?: string | null;
@@ -221,6 +231,7 @@ export interface AgentChatRetrievalTrace {
 export interface AgentChatAskResult {
   schemaVersion: "hyprduck.agent_chat.v1";
   conversationId: string;
+  answerMode: AgentChatAnswerMode;
   assistantMessage: AgentChatMessage;
   answer: WorkspaceProject["answerByNodeId"][string];
   contextPackId: string;
@@ -230,6 +241,54 @@ export interface AgentChatAskResult {
   provider: AgentChatProviderSummary;
   warnings: string[];
 }
+
+export interface AgentChatStartResult {
+  requestId: string;
+  conversationId: string;
+  assistantMessageId: string;
+}
+
+export type AgentChatStreamEvent =
+  | {
+      requestId: string;
+      type: "started";
+      conversationId: string;
+      assistantMessageId: string;
+      provider: AgentChatProviderSummary;
+      answerMode?: AgentChatAnswerMode | null;
+    }
+  | {
+      requestId: string;
+      type: "status";
+      status: AgentChatStreamStatus;
+      message: string;
+    }
+  | {
+      requestId: string;
+      type: "delta";
+      text: string;
+    }
+  | {
+      requestId: string;
+      type: "citation_update";
+      citations: AgentChatCitation[];
+    }
+  | {
+      requestId: string;
+      type: "final";
+      result: AgentChatAskResult;
+    }
+  | {
+      requestId: string;
+      type: "error";
+      code: string;
+      message: string;
+    }
+  | {
+      requestId: string;
+      type: "stopped";
+      partialText: string;
+    };
 
 export interface AgentTerminalAgent {
   id: "codex" | "claude_code" | "pi_agent" | "hermes";
@@ -401,6 +460,14 @@ export interface DesktopCommandMap {
   agent_chat_ask: {
     args: { request: AgentChatAskPayload };
     result: AgentChatAskResult;
+  };
+  agent_chat_start: {
+    args: { request: AgentChatAskPayload };
+    result: AgentChatStartResult;
+  };
+  agent_chat_stop: {
+    args: { requestId: string };
+    result: { stopped: boolean };
   };
   agent_terminal_list_agents: {
     args: undefined;

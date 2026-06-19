@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -20,6 +21,7 @@ const { createGhosttyNativeBackendFromEnv } = require("./main/agent-terminal-gho
 
 const SNAPSHOT_EVENT = "hyprduck://snapshot";
 const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
+const AGENT_CHAT_EVENT = "hyprduck://agent-chat";
 const MAX_PROGRESS_LOG = 80;
 
 const snapshot = {
@@ -38,6 +40,7 @@ let engineRuntime = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
 let agentTerminalSessions = null;
+const activeAgentChatStreams = new Map();
 let autoUpdateStarted = false;
 
 function createWindow() {
@@ -203,6 +206,10 @@ async function registerIpcHandlers() {
           },
         }).then((response) => response.data);
       }
+      case "agent_chat_start":
+        return startAgentChat(args.request ?? {});
+      case "agent_chat_stop":
+        return stopAgentChat(args.requestId);
       case "agent_terminal_list_agents":
         return agentTerminalSessions.listAgents(args);
       case "agent_terminal_create_session":
@@ -236,6 +243,89 @@ function publishAgentTerminalEvent(payload) {
     return;
   }
   mainWindow.webContents.send(AGENT_TERMINAL_EVENT, payload);
+}
+
+function publishAgentChatEvent(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send(AGENT_CHAT_EVENT, payload);
+}
+
+function startAgentChat(request) {
+  const requestId = `agent_${crypto.randomUUID()}`;
+  const conversationId = request.conversationId || `chat_${crypto.randomUUID()}`;
+  const assistantMessageId =
+    request.assistantMessageId || `msg_${crypto.randomUUID().replaceAll("-", "")}`;
+  const workspaceId = request.scope?.workspaceId ?? snapshot.lastWorkspaceId ?? "default";
+  const payload = {
+    ...request,
+    conversationId,
+    assistantMessageId,
+    scope: brainReadScope(workspaceId),
+  };
+  const streamState = { requestId, stopped: false };
+  activeAgentChatStreams.set(requestId, streamState);
+
+  setImmediate(() => {
+    if (!activeAgentChatStreams.has(requestId)) {
+      return;
+    }
+    void runEngineCommand(
+      "agent_chat_ask",
+      {
+        command: "agent_chat_ask",
+        payload,
+      },
+      {
+        onEvent: (event) => {
+          if (!activeAgentChatStreams.has(requestId)) {
+            return;
+          }
+          if (!event || typeof event !== "object") {
+            return;
+          }
+          publishAgentChatEvent({ requestId, ...event });
+        },
+      },
+    )
+      .catch((error) => {
+        const active = activeAgentChatStreams.get(requestId);
+        if (!active || active.stopped) {
+          return;
+        }
+        publishAgentChatEvent({
+          requestId,
+          type: "error",
+          code: error.code ?? "runtime_error",
+          message: error.message,
+        });
+      })
+      .finally(() => {
+        activeAgentChatStreams.delete(requestId);
+      });
+  });
+
+  return { requestId, conversationId, assistantMessageId };
+}
+
+function stopAgentChat(requestId) {
+  if (!requestId || !activeAgentChatStreams.has(requestId)) {
+    return { stopped: false };
+  }
+  const active = activeAgentChatStreams.get(requestId);
+  active.stopped = true;
+  if (engineRuntime) {
+    engineRuntime.stop();
+    engineRuntime = null;
+  }
+  publishAgentChatEvent({
+    requestId,
+    type: "stopped",
+    partialText: "",
+  });
+  activeAgentChatStreams.delete(requestId);
+  return { stopped: true };
 }
 
 function startAutoUpdateChecks() {

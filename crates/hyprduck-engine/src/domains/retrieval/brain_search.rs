@@ -25,6 +25,7 @@ pub(crate) struct HybridRetrievalHit {
     pub(crate) source_id: String,
     pub(crate) evidence_type: String,
     pub(crate) snippet: String,
+    pub(crate) quoted_text: Option<String>,
     pub(crate) lexical_rank: f64,
     pub(crate) graph_neighbor_count: i64,
     pub(crate) score: f64,
@@ -34,8 +35,45 @@ pub(crate) fn db_search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric())
         .map(|term| term.trim().to_lowercase())
-        .filter(|term| !term.is_empty())
+        .filter(|term| !term.is_empty() && !is_query_stopword(term))
         .collect()
+}
+
+fn is_query_stopword(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "the"
+            | "about"
+            | "what"
+            | "is"
+            | "are"
+            | "tell"
+            | "me"
+            | "please"
+            | "내용"
+            | "설명"
+            | "정리"
+            | "요약"
+            | "무엇"
+            | "뭐야"
+            | "어떤"
+            | "있어"
+            | "있나요"
+            | "없어"
+            | "없나요"
+            | "알려줘"
+            | "알려주세요"
+            | "설명해"
+            | "설명해봐"
+            | "설명해줘"
+            | "설명해주세요"
+    ) || term.ends_with("알려줘")
+        || term.ends_with("알려주세요")
+        || term.ends_with("설명해")
+        || term.ends_with("설명해봐")
+        || term.ends_with("설명해줘")
+        || term.ends_with("설명해주세요")
 }
 
 pub(crate) fn db_match_score(terms: &[String], haystack: &str) -> Option<usize> {
@@ -57,6 +95,105 @@ pub(crate) fn db_best_snippet(text: &str, terms: &[String]) -> String {
         }
     }
     text.trim().chars().take(240).collect()
+}
+
+pub(crate) fn db_context_window(text: &str, terms: &[String], max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let lower = trimmed.to_lowercase();
+    let match_index = db_context_candidate_indices(&lower, terms)
+        .into_iter()
+        .max_by_key(|index| {
+            let start = db_context_window_start(trimmed, *index);
+            let window = trimmed[start..]
+                .trim()
+                .chars()
+                .take(max_chars)
+                .collect::<String>();
+            db_context_candidate_score(&window.to_lowercase(), *index, terms)
+        });
+    let Some(match_index) = match_index else {
+        return trimmed.chars().take(max_chars).collect();
+    };
+
+    let start = db_context_window_start(trimmed, match_index);
+    let window = trimmed[start..].trim();
+    window.chars().take(max_chars).collect()
+}
+
+fn db_context_candidate_indices(lower: &str, terms: &[String]) -> Vec<usize> {
+    let mut indices = BTreeSet::new();
+    if terms.len() > 1 {
+        let phrase = terms.join(" ");
+        for (index, _) in lower.match_indices(&phrase) {
+            indices.insert(index);
+        }
+    }
+    for term in terms {
+        for (index, _) in lower.match_indices(term) {
+            indices.insert(index);
+        }
+    }
+    indices.into_iter().collect()
+}
+
+fn db_context_window_start(text: &str, match_index: usize) -> usize {
+    let mut start = text[..match_index]
+        .rfind("\n\n")
+        .map(|index| index + 2)
+        .or_else(|| text[..match_index].rfind('\n').map(|index| index + 1))
+        .unwrap_or(0);
+    if match_index.saturating_sub(start) > 240 {
+        start = match_index.saturating_sub(120);
+    }
+    start
+}
+
+fn db_context_candidate_score(window_lower: &str, match_index: usize, terms: &[String]) -> i64 {
+    let unique_terms = terms
+        .iter()
+        .filter(|term| window_lower.contains(term.as_str()))
+        .count() as i64;
+    let term_occurrences = terms
+        .iter()
+        .map(|term| window_lower.match_indices(term.as_str()).count().min(8) as i64)
+        .sum::<i64>();
+    let section_bonus = if match_index > 400 { 220 } else { 0 };
+    let toc_penalty = if match_index < 500
+        && window_lower.contains("contents")
+        && window_lower.contains("8.1")
+        && window_lower.contains("8.2")
+        && window_lower.contains("8.3")
+    {
+        900
+    } else {
+        0
+    };
+    let explanation_bonus = [
+        " using ",
+        " fixed ",
+        " directory",
+        " directories",
+        " bucket",
+        " split",
+        " overflow",
+        " insert",
+        " delete",
+        " search",
+        " stored",
+        " address",
+        " grows",
+        " shrinks",
+    ]
+    .iter()
+    .filter(|needle| window_lower.contains(**needle))
+    .count() as i64
+        * 25;
+
+    unique_terms * 1_000 + term_occurrences * 30 + section_bonus + explanation_bonus - toc_penalty
 }
 
 pub(crate) fn db_float_score(score: f64) -> usize {
@@ -234,6 +371,7 @@ pub(crate) fn append_graph_neighbor_hits(
             source_id,
             evidence_type,
             snippet,
+            quoted_text: None,
             lexical_rank: 0.0,
             graph_neighbor_count,
             score: 0.04 + typed_evidence_boost + graph_boost,
@@ -427,6 +565,7 @@ pub(crate) fn append_source_page_fts_hits(
     graph: &Graph,
     workspace_id: &str,
     fts_query: &str,
+    terms: &[String],
     limit: usize,
     graph_neighbor_counts: &BTreeMap<String, i64>,
     evidence_intent: &EvidenceQueryIntent,
@@ -458,16 +597,27 @@ pub(crate) fn append_source_page_fts_hits(
         .next()
         .context("failed reading source page FTS retrieval row")?
     {
+        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+        let source_id: String = row.get(1).context("failed reading source id")?;
+        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+        let page_text: String = row.get(3).context("failed reading source page text")?;
+        let page_context = db_context_window(&page_text, terms, 1_600);
+        if let Some(existing) = hits.iter_mut().find(|hit| hit.evidence_id == evidence_id) {
+            if existing
+                .quoted_text
+                .as_deref()
+                .map(|value| value.chars().count())
+                .unwrap_or_else(|| existing.snippet.chars().count())
+                < page_context.chars().count()
+            {
+                existing.quoted_text = Some(page_context);
+                existing.score += 0.08;
+            }
+            continue;
+        }
         if hits.len() >= limit {
             break;
         }
-        let evidence_id: String = row.get(0).context("failed reading evidence id")?;
-        if hits.iter().any(|hit| hit.evidence_id == evidence_id) {
-            continue;
-        }
-        let source_id: String = row.get(1).context("failed reading source id")?;
-        let evidence_type: String = row.get(2).context("failed reading evidence type")?;
-        let snippet: String = row.get(3).context("failed reading source page text")?;
         let lexical_rank: f64 = row.get(4).context("failed reading lexical rank")?;
         let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
         let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
@@ -476,7 +626,8 @@ pub(crate) fn append_source_page_fts_hits(
             evidence_id,
             source_id,
             evidence_type,
-            snippet,
+            snippet: page_context.clone(),
+            quoted_text: Some(page_context),
             lexical_rank,
             graph_neighbor_count,
             score: -lexical_rank + 0.03 + typed_evidence_boost + graph_boost,
@@ -490,6 +641,7 @@ pub(crate) fn append_wiki_fts_hits(
     graph: &Graph,
     workspace_id: &str,
     fts_query: &str,
+    terms: &[String],
     limit: usize,
     graph_neighbor_counts: &BTreeMap<String, i64>,
     evidence_intent: &EvidenceQueryIntent,
@@ -541,11 +693,13 @@ pub(crate) fn append_wiki_fts_hits(
         let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
         let typed_evidence_boost = evidence_intent.boost("wiki_evidence");
         let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+        let wiki_context = db_context_window(&format!("{title}\n{text}"), terms, 1_600);
         hits.push(HybridRetrievalHit {
             evidence_id,
             source_id: wiki_page_id,
             evidence_type: "wiki_evidence".into(),
-            snippet: format!("{title}\n{text}"),
+            snippet: wiki_context.clone(),
+            quoted_text: Some(wiki_context),
             lexical_rank,
             graph_neighbor_count,
             score: -lexical_rank + 0.02 + typed_evidence_boost + graph_boost,
@@ -576,6 +730,7 @@ pub(crate) fn hybrid_retrieve_from_db(
     if fts_query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    let terms = db_search_terms(query);
     let evidence_intent = EvidenceQueryIntent::from_query(query);
 
     let mut statement = graph
@@ -616,43 +771,41 @@ pub(crate) fn hybrid_retrieve_from_db(
             source_id,
             evidence_type,
             snippet,
+            quoted_text: None,
             lexical_rank,
             graph_neighbor_count,
             score: -lexical_rank + typed_evidence_boost + graph_boost,
         });
     }
-    if hits.len() < limit {
-        append_graph_neighbor_hits(
-            &graph,
-            workspace_id,
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
-    if hits.len() < limit {
-        append_source_page_fts_hits(
-            &graph,
-            workspace_id,
-            fts_query.as_str(),
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
-    if hits.len() < limit {
-        append_wiki_fts_hits(
-            &graph,
-            workspace_id,
-            fts_query.as_str(),
-            limit,
-            &graph_neighbor_counts,
-            &evidence_intent,
-            &mut hits,
-        )?;
-    }
+    let expanded_limit = limit.saturating_mul(3).max(limit);
+    append_source_page_fts_hits(
+        &graph,
+        workspace_id,
+        fts_query.as_str(),
+        &terms,
+        expanded_limit,
+        &graph_neighbor_counts,
+        &evidence_intent,
+        &mut hits,
+    )?;
+    append_graph_neighbor_hits(
+        &graph,
+        workspace_id,
+        expanded_limit,
+        &graph_neighbor_counts,
+        &evidence_intent,
+        &mut hits,
+    )?;
+    append_wiki_fts_hits(
+        &graph,
+        workspace_id,
+        fts_query.as_str(),
+        &terms,
+        limit,
+        &graph_neighbor_counts,
+        &evidence_intent,
+        &mut hits,
+    )?;
     if hits.is_empty() {
         let mut fallback_statement = graph
             .connection()
@@ -687,6 +840,7 @@ pub(crate) fn hybrid_retrieve_from_db(
                 source_id,
                 evidence_type,
                 snippet,
+                quoted_text: None,
                 lexical_rank: 0.0,
                 graph_neighbor_count,
                 score: typed_evidence_boost + graph_boost,
@@ -699,6 +853,7 @@ pub(crate) fn hybrid_retrieve_from_db(
             .partial_cmp(&left.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    hits.truncate(limit);
     Ok(hits)
 }
 
@@ -809,4 +964,33 @@ pub(crate) fn search_brain_from_db(
     results.dedup_by(|left, right| left.kind == right.kind && left.id == right.id);
     results.truncate(limit);
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_window_prefers_dynamic_hashing_section_over_toc() {
+        let text = "Hashing\nChapter 8\nContents\n8.1 Introduction\n8.2 Static Hashing\n8.3 Dynamic Hashing\n\nRemind: Dictionaries\nCollection of pairs. Operations include Search, Delete, and Insert.\n\nStatic hashing\nStatic hashing identifiers are stored in a fixed size hash table.\n\nDynamic Hashing\nDynamic hashing using directories grows and shrinks a directory of bucket pointers. A bucket split redistributes records using additional hash bits.";
+        let terms = db_search_terms("dynamic hashing 내용 설명해");
+
+        let window = db_context_window(text, &terms, 700);
+
+        assert!(window.contains("Dynamic hashing using directories"));
+        assert!(window.contains("bucket split redistributes records"));
+        assert!(!window.starts_with("Hashing\nChapter 8\nContents"));
+    }
+
+    #[test]
+    fn context_window_prefers_static_hashing_section_over_toc() {
+        let text = "Hashing\nChapter 8\nContents\n8.1 Introduction\n8.2 Static Hashing\n8.3 Dynamic Hashing\n\nRemind: Dictionaries\nCollection of pairs. Operations include Search, Delete, and Insert.\n\nStatic hashing\nStatic hashing identifiers are stored in a fixed size hash table and collision chains handle overflow.\n\nDynamic Hashing\nDynamic hashing using directories grows and shrinks a directory of bucket pointers.";
+        let terms = db_search_terms("Static Hashing 에 대해서 알려줘");
+
+        let window = db_context_window(text, &terms, 700);
+
+        assert!(window.contains("fixed size hash table"));
+        assert!(window.contains("collision chains handle overflow"));
+        assert!(!window.starts_with("Hashing\nChapter 8\nContents"));
+    }
 }

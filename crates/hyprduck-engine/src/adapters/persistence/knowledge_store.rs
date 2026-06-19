@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domains::retrieval::brain_search::{db_context_window, db_search_terms};
 use crate::unix_timestamp_seconds;
 
 #[cfg(test)]
@@ -37,16 +38,16 @@ use super::artifact_store::{
 };
 use super::context_pack_store::{
     db_context_evidence_type, db_parse_confidence, load_context_pack_evidence_row,
-    load_context_pack_source_row,
-};
-use super::graph_snapshot_store::{
-    persist_graph_snapshot_in_transaction, purge_workspace_source_in_transaction,
+    load_context_pack_source_row, ContextPackEvidenceRow,
 };
 pub(crate) use super::graph_snapshot_store::KnowledgeGraphPersistReport;
 #[cfg(test)]
 use super::graph_snapshot_store::{
     graph_node_version_identity, graph_relation_version_identity, GRAPHQLITE_SCHEMA_VERSION,
     GRAPH_VERSION_LEGACY_EVENT_ID,
+};
+use super::graph_snapshot_store::{
+    persist_graph_snapshot_in_transaction, purge_workspace_source_in_transaction,
 };
 use super::import_job_store;
 use super::read_projection_store::{
@@ -214,11 +215,7 @@ impl KnowledgeStore {
         }
     }
 
-    pub(crate) fn purge_workspace_source(
-        &self,
-        workspace_id: &str,
-        source_id: &str,
-    ) -> Result<()> {
+    pub(crate) fn purge_workspace_source(&self, workspace_id: &str, source_id: &str) -> Result<()> {
         let graph = Graph::open(&self.path).context("GraphQLite failed to open knowledge DB")?;
         purge_workspace_source_in_transaction(
             &graph,
@@ -362,6 +359,7 @@ impl KnowledgeStore {
         generated_at: String,
     ) -> Result<(BrainContextPack, ContextPackV1)> {
         let limit = budget.clamp(1, 24);
+        let terms = db_search_terms(query);
         let hits = self
             .hybrid_retrieve(workspace_id, query, limit)
             .context("failed retrieving DB-backed context pack evidence")?;
@@ -372,13 +370,13 @@ impl KnowledgeStore {
             if let Some(row) =
                 load_context_pack_evidence_row(&graph, workspace_id, &hit.evidence_id)?
             {
-                evidence_rows.push(row);
+                evidence_rows.push((row, hit.quoted_text.clone()));
             }
         }
 
         let source_ids = evidence_rows
             .iter()
-            .map(|row| row.source_id.clone())
+            .map(|(row, _)| row.source_id.clone())
             .collect::<BTreeSet<_>>();
         let mut sources = Vec::new();
         let mut source_metadata = BTreeMap::new();
@@ -417,17 +415,27 @@ impl KnowledgeStore {
         > = BTreeMap::new();
         let evidence = evidence_rows
             .into_iter()
-            .filter_map(|row| {
+            .filter_map(|(row, quoted_text_override)| {
                 if !source_metadata.contains_key(&row.source_id) {
                     return None;
                 }
                 let page = row.page_index.unwrap_or(0).max(0) as usize + 1;
+                let mut quoted_text = quoted_text_override
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| row.snippet.clone());
+                if let Some(page_text) = source_page_plain_text_for_evidence(&graph, &row) {
+                    let page_context = db_context_window(&page_text, &terms, 1_600);
+                    if !page_context.trim().is_empty() && page_context.trim() != quoted_text.trim()
+                    {
+                        quoted_text = page_context;
+                    }
+                }
                 let metadata = ContextPackEvidenceMetadataV0 {
                     source_id: row.source_id.clone(),
                     page,
                     region: None,
                     span: None,
-                    quoted_text: row.snippet.clone(),
+                    quoted_text: quoted_text.clone(),
                     parse_confidence: db_parse_confidence(row.confidence),
                     content_hash: source_metadata
                         .get(&row.source_id)
@@ -445,7 +453,7 @@ impl KnowledgeStore {
                     id: row.evidence_id,
                     page_label: row.page_label,
                     page_index: row.page_index.map(|page_index| page_index.max(0) as usize),
-                    snippet: row.snippet,
+                    snippet: quoted_text,
                     source_path: non_empty_string(row.source_path_redacted),
                     source_id: Some(row.source_id),
                     markdown_path: non_empty_string(row.markdown_path_redacted),
@@ -1459,6 +1467,27 @@ fn graphqlite_edge_text_properties(
     edge_id: i64,
 ) -> Result<BTreeMap<String, String>> {
     graphqlite_text_properties(graph, "edge_props_text", "edge_id", edge_id)
+}
+
+fn source_page_plain_text_for_evidence(
+    graph: &Graph,
+    row: &ContextPackEvidenceRow,
+) -> Option<String> {
+    let page_index = row.page_index?;
+    let sqlite = graph.connection().sqlite_connection();
+    let mut statement = sqlite
+        .prepare(
+            "SELECT plain_text
+             FROM source_pages
+             WHERE source_id = ?1
+               AND page_index = ?2
+             LIMIT 1",
+        )
+        .ok()?;
+    let mut rows = statement.query((&row.source_id, page_index)).ok()?;
+    let row = rows.next().ok()??;
+    let text = row.get::<_, String>(0).ok()?;
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn graphqlite_text_properties(

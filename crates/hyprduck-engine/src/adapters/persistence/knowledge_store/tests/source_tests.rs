@@ -645,6 +645,118 @@ fn hybrid_retrieve_sanitizes_punctuation_for_fts_queries() {
 }
 
 #[test]
+fn db_context_pack_uses_source_page_text_for_topic_hits() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "INSERT INTO sources (
+                source_id,
+                workspace_id,
+                original_path_redacted,
+                source_path_redacted,
+                markdown_path_redacted,
+                format,
+                status,
+                page_count,
+                provider_route,
+                provider_locality,
+                content_hash
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'pdf', 'ingested', 12, 'test-local', 'local', 'sha256:hashing')",
+            (
+                "source-hashing",
+                "workspace-default",
+                "[redacted-local-path]/ch8.pdf",
+                "[redacted-local-path]/ch8.pdf",
+                "[redacted-local-path]/ch8.md",
+            ),
+        )
+        .expect("insert source");
+    let page_text = "Hashing\nChapter 8\nContents\n8.1 Introduction\n8.2 Static Hashing\n8.3 Dynamic Hashing\n\nRemind: Dictionaries\nCollection of pairs. Operations include Search, Delete, and Insert.\n\nDynamic Hashing\nDynamic hashing grows and shrinks a directory of bucket pointers as records are inserted or deleted. A bucket split redistributes records using additional hash bits, and directory doubling only happens when the split needs another address bit.";
+    sqlite
+        .execute(
+            "INSERT INTO source_pages (
+                source_id,
+                page_index,
+                page_label,
+                markdown_path_redacted,
+                image_path_redacted,
+                plain_text
+             ) VALUES (?1, 7, 'p8', ?2, '', ?3)",
+            ("source-hashing", "[redacted-local-path]/ch8.md", page_text),
+        )
+        .expect("insert source page");
+    sqlite
+        .execute(
+            "INSERT INTO source_page_fts (source_id, page_index, page_label, text)
+             VALUES (?1, 7, 'p8', ?2)",
+            ("source-hashing", page_text),
+        )
+        .expect("insert source page fts");
+    sqlite
+        .execute(
+            "INSERT INTO evidence_items (
+                evidence_id,
+                workspace_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                source_path_redacted,
+                markdown_path_redacted,
+                status
+             ) VALUES (?1, ?2, ?3, 7, 'p8', 'text_evidence', ?4, ?5, ?6, 'active')",
+            (
+                "evidence-dynamic-heading",
+                "workspace-default",
+                "source-hashing",
+                "Hashing Chapter 8 Contents 8.1 Introduction 8.2 Static Hashing 8.3 Dynamic Hashing",
+                "[redacted-local-path]/ch8.pdf",
+                "[redacted-local-path]/ch8.md",
+            ),
+        )
+        .expect("insert evidence");
+    sqlite
+        .execute(
+            "INSERT INTO evidence_fts (evidence_id, source_id, evidence_type, text)
+             VALUES (?1, ?2, 'text_evidence', ?3)",
+            (
+                "evidence-dynamic-heading",
+                "source-hashing",
+                "Hashing Chapter 8 Contents 8.1 Introduction 8.2 Static Hashing 8.3 Dynamic Hashing",
+            ),
+        )
+        .expect("insert evidence fts");
+
+    let (_, context_pack) = store
+        .assemble_context_pack_v1_from_db(
+            "workspace-default",
+            "dynamic hashing 내용 설명해",
+            8_000,
+            "ctx_dynamic_hashing".into(),
+            "2026-06-19T00:00:00Z".into(),
+        )
+        .expect("assemble context pack");
+    let selected = context_pack
+        .selected_evidence
+        .iter()
+        .find(|evidence| evidence.evidence_ref == "evidence-dynamic-heading")
+        .expect("selected dynamic hashing evidence");
+
+    assert!(
+        selected
+            .quoted_text
+            .contains("bucket split redistributes records"),
+        "{}",
+        selected.quoted_text
+    );
+}
+
+#[test]
 fn hybrid_retrieve_fallback_stays_within_requested_workspace() {
     let temp = tempfile::tempdir().expect("temp dir");
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))

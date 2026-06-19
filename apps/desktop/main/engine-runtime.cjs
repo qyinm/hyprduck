@@ -147,7 +147,9 @@ class EngineRuntime {
         active.onEvent?.(response.event);
         return;
       } else if (response.ok === false) {
-        active.reject(new Error(response.error?.message ?? "engine command failed"));
+        const error = new Error(response.error?.message ?? "engine command failed");
+        error.code = response.error?.code ?? "runtime_error";
+        active.reject(error);
         this.active = null;
       } else if (response.command !== active.expectedCommand) {
         active.reject(

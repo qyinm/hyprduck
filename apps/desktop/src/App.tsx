@@ -22,10 +22,12 @@ import {
 } from "lucide-react";
 import {
   type AgentChatAskPayload,
-  type AgentChatAskResult,
+  type AgentChatStartResult,
+  type AgentChatStreamEvent,
   type DesktopCommand,
   type DesktopCommandParameters,
   type DesktopCommandResult,
+  type DesktopMessage,
   type DesktopUnlisten,
   type EngineConfigPayload,
   type FileSelection,
@@ -548,11 +550,24 @@ export function App() {
     setWorkspaceLoadState(workspaceLoadStateFromResult(nextLoad, t));
   };
 
-  const askAgentChat = async (
+  const startAgentChat = async (
     request: AgentChatAskPayload,
-  ): Promise<AgentChatAskResult> => {
-    return invoke("agent_chat_ask", { request });
+  ): Promise<AgentChatStartResult> => {
+    return invoke("agent_chat_start", { request });
   };
+
+  const stopAgentChat = async (requestId: string): Promise<{ stopped: boolean }> => {
+    return invoke("agent_chat_stop", { requestId });
+  };
+
+  const listenAgentChatEvents = useCallback(
+    (
+      handler: (
+        message: DesktopMessage<AgentChatStreamEvent>,
+      ) => void | Promise<void>,
+    ): DesktopUnlisten => getDesktopApi().listen("hyprduck://agent-chat", handler),
+    [],
+  );
 
   const viewSourceInGraph = (sourceId: string) => {
     const sourceNodeId = Object.values(workspaceProject?.detailsByNodeId ?? {}).find(
@@ -798,8 +813,10 @@ export function App() {
             />
           ) : activePanel === "agent" ? (
             <AgentChatWorkspace
-              onAskAgentChat={askAgentChat}
+              onListenAgentChatEvents={listenAgentChatEvents}
               onOpenDocs={() => setActivePanel("docs")}
+              onStartAgentChat={startAgentChat}
+              onStopAgentChat={stopAgentChat}
               project={workspaceProject}
               providerReady={agentReady}
               selectedNodeId={workspaceUiState.selectedNodeId}

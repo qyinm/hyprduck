@@ -602,9 +602,30 @@ pub const AGENT_CHAT_SCHEMA_VERSION: &str = "hyprduck.agent_chat.v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentChatScopeMode {
+    Auto,
     AllDocs,
     SelectedSource,
     GraphContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatAnswerMode {
+    General,
+    Evidence,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentChatStreamStatus {
+    ResolvingScope,
+    RetrievingContext,
+    ClassifyingQuestion,
+    ConnectingProvider,
+    Generating,
+    ValidatingCitations,
+    Complete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -629,6 +650,8 @@ pub struct AgentChatMessage {
 pub struct AgentChatAskRequest {
     pub schema_version: String,
     pub conversation_id: String,
+    #[serde(default)]
+    pub assistant_message_id: Option<String>,
     pub scope: BrainReadScope,
     pub mode: AgentChatScopeMode,
     #[serde(default)]
@@ -658,6 +681,7 @@ pub struct AgentChatProviderSummary {
 pub struct AgentChatAskResponseData {
     pub schema_version: String,
     pub conversation_id: String,
+    pub answer_mode: AgentChatAnswerMode,
     pub assistant_message: AgentChatMessage,
     pub answer: AnswerResponse,
     pub context_pack_id: String,
@@ -669,6 +693,38 @@ pub struct AgentChatAskResponseData {
     pub provider: AgentChatProviderSummary,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentChatStreamEvent {
+    Started {
+        conversation_id: String,
+        assistant_message_id: String,
+        provider: AgentChatProviderSummary,
+        #[serde(default)]
+        answer_mode: Option<AgentChatAnswerMode>,
+    },
+    Status {
+        status: AgentChatStreamStatus,
+        message: String,
+    },
+    Delta {
+        text: String,
+    },
+    CitationUpdate {
+        citations: Vec<ContextPackEvidenceV1>,
+    },
+    Final {
+        result: AgentChatAskResponseData,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+    Stopped {
+        partial_text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2452,12 +2508,19 @@ pub struct EngineRuntimeFailure {
     pub failure: EngineFailure,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EngineRuntimeEvent {
     pub id: Uuid,
     #[serde(rename = "type")]
     pub message_type: EngineRuntimeMessageType,
-    pub event: ParseEvent,
+    pub event: EngineEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EngineEvent {
+    Parse(ParseEvent),
+    AgentChat(AgentChatStreamEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2550,12 +2613,20 @@ impl EngineRuntimeFailure {
 }
 
 impl EngineRuntimeEvent {
-    pub fn new(id: Uuid, event: ParseEvent) -> Self {
+    pub fn new(id: Uuid, event: EngineEvent) -> Self {
         Self {
             id,
             message_type: EngineRuntimeMessageType::Event,
             event,
         }
+    }
+
+    pub fn parse(id: Uuid, event: ParseEvent) -> Self {
+        Self::new(id, EngineEvent::Parse(event))
+    }
+
+    pub fn agent_chat(id: Uuid, event: AgentChatStreamEvent) -> Self {
+        Self::new(id, EngineEvent::AgentChat(event))
     }
 }
 
@@ -2801,6 +2872,7 @@ mod tests {
         for field in [
             "schemaVersion",
             "conversationId",
+            "answerMode",
             "assistantMessage",
             "answer",
             "contextPackId",
@@ -2879,7 +2951,7 @@ mod tests {
     #[test]
     fn runtime_event_envelope_round_trip() {
         let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
-        let event = EngineRuntimeEvent::new(id, ParseEvent::Queued);
+        let event = EngineRuntimeEvent::parse(id, ParseEvent::Queued);
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"event\""));
@@ -3052,6 +3124,7 @@ mod tests {
         let request = EngineRequest::AgentChatAsk(AgentChatAskRequest {
             schema_version: AGENT_CHAT_SCHEMA_VERSION.into(),
             conversation_id: "chat-1".into(),
+            assistant_message_id: Some("msg-2".into()),
             scope,
             mode: AgentChatScopeMode::GraphContext,
             selected_node_id: Some("concept-a".into()),
@@ -3078,6 +3151,7 @@ mod tests {
             AgentChatAskResponseData {
                 schema_version: AGENT_CHAT_SCHEMA_VERSION.into(),
                 conversation_id: "chat-1".into(),
+                answer_mode: AgentChatAnswerMode::Evidence,
                 assistant_message: AgentChatMessage {
                     id: "msg-2".into(),
                     role: AgentChatMessageRole::Assistant,
@@ -3128,7 +3202,34 @@ mod tests {
         let decoded: EngineSuccess<AgentChatAskResponseData> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.command, EngineCommand::AgentChatAsk);
         assert_eq!(decoded.data.schema_version, AGENT_CHAT_SCHEMA_VERSION);
+        assert_eq!(decoded.data.answer_mode, AgentChatAnswerMode::Evidence);
         assert_eq!(decoded.data.citations[0].evidence_ref, "ev-1");
+    }
+
+    #[test]
+    fn agent_chat_stream_event_round_trip() {
+        let event = AgentChatStreamEvent::Status {
+            status: AgentChatStreamStatus::RetrievingContext,
+            message: "Retrieving context...".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"status\""));
+        assert!(json.contains("\"status\":\"retrieving_context\""));
+        let decoded: AgentChatStreamEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, event);
+
+        let id = Uuid::parse_str("019e0b95-7f53-7502-8886-e8c01d3aaad4").unwrap();
+        let envelope = EngineRuntimeEvent::agent_chat(
+            id,
+            AgentChatStreamEvent::Delta {
+                text: "hello".into(),
+            },
+        );
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(json.contains("\"type\":\"event\""));
+        assert!(json.contains("\"event\":{\"type\":\"delta\""));
+        let decoded: EngineRuntimeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, envelope);
     }
 
     #[test]

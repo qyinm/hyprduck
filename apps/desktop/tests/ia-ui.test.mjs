@@ -14,6 +14,14 @@ const agentChatSource = readFileSync(
   new URL("../src/features/agent-chat/AgentChatWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const aiElementsMessageSource = readFileSync(
+  new URL("../src/components/ai-elements/message.tsx", import.meta.url),
+  "utf8",
+);
+const aiElementsInlineCitationSource = readFileSync(
+  new URL("../src/components/ai-elements/inline-citation.tsx", import.meta.url),
+  "utf8",
+);
 const appTypesSource = readFileSync(new URL("../src/appTypes.ts", import.meta.url), "utf8");
 const previewSource = readFileSync(
   new URL("../src/features/workspace/buildWorkspacePreview.ts", import.meta.url),
@@ -30,6 +38,7 @@ const modelTaskMatrixSource = readFileSync(
   "utf8",
 );
 const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+const preloadSource = readFileSync(new URL("../preload.cjs", import.meta.url), "utf8");
 
 test("desktop IA is the committed source of truth for Docs, Agent, and Graph", () => {
   expect(iaSource).toMatch(/`Docs \/ Agent \/ Graph` 세 destination/);
@@ -179,28 +188,59 @@ test("Graph workspace centers the canvas with inspector actions", () => {
   expect(graphSource).not.toMatch(/projectionSummary/);
 });
 
-test("Agent page renders chat UI and uses the agent_chat_ask IPC contract", () => {
+test("Agent page renders chat UI and uses the streaming agent chat IPC contract", () => {
   expect(appSource).toMatch(/<AgentChatWorkspace/);
   expect(agentChatSource).toMatch(/STORAGE_KEY = "hyprduck\.agentChatThreads\.v1"/);
   expect(agentChatSource).toMatch(/window\.localStorage/);
   expect(agentChatSource).toMatch(/What should we work on\?/);
-  expect(agentChatSource).toMatch(/All docs/);
-  expect(agentChatSource).toMatch(/Selected source/);
-  expect(agentChatSource).toMatch(/Graph context/);
-  expect(agentChatSource).toMatch(/Thinking with your indexed evidence/);
+  expect(agentChatSource).toMatch(/mode: "auto"/);
+  expect(agentChatSource).not.toMatch(/setScopeMode/);
+  expect(agentChatSource).not.toMatch(/Selected source/);
+  expect(agentChatSource).not.toMatch(/Graph context/);
+  expect(agentChatSource).toMatch(/onStartAgentChat/);
+  expect(agentChatSource).toMatch(/onStopAgentChat/);
+  expect(agentChatSource).toMatch(/onListenAgentChatEvents/);
+  expect(agentChatSource).toMatch(/event\.type === "delta"/);
+  expect(agentChatSource).toMatch(/event\.type === "stopped"/);
   expect(agentChatSource).toMatch(/hasConversation/);
   expect(agentChatSource).toMatch(/Ask a follow-up about your indexed docs/);
   expect(agentChatSource).toMatch(/overflow-hidden px-6 pb-5/);
-  expect(agentChatSource).toMatch(/rounded-xl border border-border bg-background p-3 shadow-sm/);
+  expect(agentChatSource).toMatch(/rounded-2xl border border-border bg-background p-3 shadow-sm/);
+  expect(agentChatSource).toMatch(/MessageResponse/);
+  expect(agentChatSource).toMatch(/components=\{citationComponents\}/);
+  expect(agentChatSource).toMatch(/createCitationComponents/);
+  expect(agentChatSource).toMatch(/InlineCitationMarker/);
+  expect(agentChatSource).toMatch(/linkifyCitationMarkers/);
+  expect(agentChatSource).toMatch(/#citation-\$\{marker\}/);
+  expect(agentChatSource).toMatch(/CitationSources/);
+  expect(agentChatSource).toMatch(/aria-label="Sources"/);
+  expect(agentChatSource).toMatch(/formatAssistantDisplayText/);
+  expect(agentChatSource).toMatch(/ensureCitationMarkers/);
+  expect(agentChatSource).toMatch(/resultsByMessageId: Record<string, AgentChatAskResult>/);
+  expect(agentChatSource).toMatch(/persistThreads\(\{ version: STORAGE_VERSION, threads, activeThreadId, resultsByMessageId \}\)/);
+  expect(agentChatSource).toMatch(/parsed\.resultsByMessageId \?\? \{\}/);
   expect(agentChatSource).not.toMatch(/border-t border-border bg-muted\/20/);
+  expect(agentChatSource).not.toMatch(/<p className="whitespace-pre-wrap">\{message\.text\}<\/p>/);
   expect(agentChatSource).toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background/);
   expect(agentChatSource).toMatch(/border-r border-border bg-muted\/20 px-3 pb-3 pt-14/);
   expect(agentChatSource).not.toMatch(/grid min-h-0 flex-1 grid-cols-\[16rem_minmax\(0,1fr\)\] bg-background pt-12/);
-  expect(appSource).toMatch(/invoke\("agent_chat_ask"/);
+  expect(aiElementsMessageSource).toMatch(/export const MessageResponse/);
+  expect(aiElementsMessageSource).toMatch(/Streamdown/);
+  expect(aiElementsMessageSource).toMatch(/plugins=\{streamdownPlugins\}/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitation/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitationCardTrigger/);
+  expect(aiElementsInlineCitationSource).toMatch(/export const InlineCitationQuote/);
+  expect(aiElementsInlineCitationSource).toMatch(/max-h-72/);
+  expect(appSource).toMatch(/invoke\("agent_chat_start"/);
+  expect(appSource).toMatch(/invoke\("agent_chat_stop"/);
+  expect(appSource).toMatch(/hyprduck:\/\/agent-chat/);
   expect(appTypesSource).toMatch(/interface AgentChatAskPayload/);
   expect(appTypesSource).toMatch(/interface AgentChatAskResult/);
-  expect(mainSource).toMatch(/case "agent_chat_ask"/);
+  expect(appTypesSource).toMatch(/type AgentChatStreamEvent/);
+  expect(mainSource).toMatch(/case "agent_chat_start"/);
+  expect(mainSource).toMatch(/case "agent_chat_stop"/);
   expect(mainSource).toMatch(/command: "agent_chat_ask"/);
+  expect(preloadSource).toMatch(/hyprduck:\/\/agent-chat/);
   expect(graphSource).not.toMatch(/AgentTerminal/);
   expect(graphSource).not.toMatch(/GraphPromptComposer/);
   expect(agentChatSource).not.toMatch(/AgentTerminal/);

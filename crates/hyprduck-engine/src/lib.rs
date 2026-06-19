@@ -224,6 +224,7 @@ fn provider_failure_code(error: &anyhow::Error) -> Option<&'static str> {
     [
         "provider_config",
         "provider_timeout",
+        "provider_unavailable",
         "provider_response_invalid",
         "unsupported_provider",
     ]

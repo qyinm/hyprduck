@@ -7,6 +7,7 @@
   "required": [
     "schemaVersion",
     "conversationId",
+    "answerMode",
     "assistantMessage",
     "answer",
     "contextPackId",
@@ -18,6 +19,7 @@
   "properties": {
     "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
     "conversationId": { "type": "string", "minLength": 1 },
+    "answerMode": { "type": "string", "enum": ["general", "evidence", "blocked"] },
     "assistantMessage": { "$ref": "#/$defs/message" },
     "answer": { "$ref": "#/$defs/answer" },
     "contextPackId": { "type": "string" },
