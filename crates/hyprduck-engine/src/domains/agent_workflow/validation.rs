@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::linking_policy::workspace_linking_relation_is_verified;
 use crate::*;
 
 #[cfg(test)]
@@ -265,6 +266,12 @@ pub(crate) fn validate_provider_workspace_linking_snapshot(
         {
             bail!(
                 "workspace linking relation {} evidence does not cover both endpoint source sides",
+                relation.relation_id
+            );
+        }
+        if !workspace_linking_relation_is_verified(relation, snapshot, source_id) {
+            bail!(
+                "workspace linking relation {} is not verified by candidate policy",
                 relation.relation_id
             );
         }

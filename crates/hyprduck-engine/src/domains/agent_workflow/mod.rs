@@ -1,4 +1,5 @@
 mod artifacts;
+mod linking_policy;
 mod prompt;
 mod reports;
 mod response;

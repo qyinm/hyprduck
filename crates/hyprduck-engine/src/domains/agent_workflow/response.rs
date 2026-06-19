@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use super::linking_policy::workspace_linking_relation_is_verified;
 use crate::*;
 
 const WORKSPACE_LINKING_MAX_RELATIONS: usize = 24;
@@ -241,6 +242,12 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
             relation.updated_at = generated_at;
         }
     }
+    let verified_relation_ids = snapshot
+        .relations
+        .iter()
+        .filter(|relation| workspace_linking_relation_is_verified(relation, snapshot, source_id))
+        .map(|relation| relation.relation_id.clone())
+        .collect::<BTreeSet<_>>();
     snapshot.relations.retain(|relation| {
         node_ids.contains(&relation.source_node_id)
             && node_ids.contains(&relation.target_node_id)
@@ -252,6 +259,7 @@ pub(crate) fn normalize_provider_workspace_linking_snapshot(
                 &node_source_ids,
                 &evidence_source_by_id,
             )
+            && verified_relation_ids.contains(&relation.relation_id)
     });
     cap_workspace_linking_relations(&mut snapshot.relations);
     normalize_supported_records(
