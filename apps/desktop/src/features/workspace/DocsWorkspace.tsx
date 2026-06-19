@@ -1,12 +1,40 @@
-import { type ReactNode, useMemo, useState } from "react";
-import { AlertTriangle, ExternalLink, FileText, FolderOpen, Search, Upload, X } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Copy as CopyIcon,
+  ExternalLink,
+  FileSearch,
+  FileText,
+  FolderOpen,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Plus,
+  RotateCcw,
+  Search,
+  Upload,
+  Waypoints,
+  X,
+} from "lucide-react";
+import { Document, Page, pdfjs } from "react-pdf";
 
+import type { SourceDetailResult } from "@/appTypes";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { fileNameFromPath } from "./pathUtils";
 import type { WorkspaceSourceSummary } from "./types";
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
 
 export interface WorkspaceImportStatus {
   filePath: string;
@@ -23,14 +51,37 @@ interface DocsWorkspaceProps {
   sources: WorkspaceSourceSummary[];
   onChooseFile: () => Promise<void>;
   onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
+  onReadSourceDetail: (source: WorkspaceSourceSummary) => Promise<SourceDetailResult>;
   onRetryFailedPages: () => Promise<void>;
   onViewInGraph: (sourceId: string) => void;
 }
 
+type SourceDetailLoadState =
+  | { status: "idle"; data: null; error: null }
+  | { status: "loading"; data: null; error: null }
+  | { status: "ready"; data: SourceDetailResult; error: null }
+  | { status: "error"; data: null; error: string };
+
+type MarkdownViewMode = "preview" | "raw";
+
 export function DocsWorkspace(props: DocsWorkspaceProps) {
-  const { importStatus, sources, onChooseFile, onOpenArtifact, onRetryFailedPages, onViewInGraph } =
-    props;
+  const {
+    importStatus,
+    sources,
+    onChooseFile,
+    onOpenArtifact,
+    onReadSourceDetail,
+    onRetryFailedPages,
+    onViewInGraph,
+  } = props;
   const [sourceSearch, setSourceSearch] = useState("");
+  const [detailSource, setDetailSource] = useState<WorkspaceSourceSummary | null>(null);
+  const [detailState, setDetailState] = useState<SourceDetailLoadState>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const detailRequestId = useRef(0);
   const visibleSources = useMemo(() => {
     const query = normalizeSearchText(sourceSearch.trim());
     if (!query) {
@@ -49,6 +100,46 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
     });
   }, [sourceSearch, sources]);
   const warnings = sources.filter((source) => source.status === "failed" || source.status === "stale");
+
+  const openSourceDetail = (source: WorkspaceSourceSummary) => {
+    const requestId = detailRequestId.current + 1;
+    detailRequestId.current = requestId;
+    setDetailSource(source);
+    setDetailState({ status: "loading", data: null, error: null });
+    void onReadSourceDetail(source)
+      .then((detail) => {
+        if (detailRequestId.current === requestId) {
+          setDetailState({ status: "ready", data: detail, error: null });
+        }
+      })
+      .catch((error) => {
+        if (detailRequestId.current !== requestId) {
+          return;
+        }
+        setDetailState({
+          status: "error",
+          data: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
+
+  if (detailSource) {
+    return (
+      <SourceDetailWorkspace
+        detailState={detailState}
+        onBack={() => {
+          detailRequestId.current += 1;
+          setDetailSource(null);
+          setDetailState({ status: "idle", data: null, error: null });
+        }}
+        onOpenArtifact={onOpenArtifact}
+        onRetry={() => openSourceDetail(detailSource)}
+        onViewInGraph={onViewInGraph}
+        source={detailSource}
+      />
+    );
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background px-6 pb-8 pt-14">
@@ -175,24 +266,18 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
                   <span className="text-muted-foreground">{source.success_count}</span>
                   <span className="text-muted-foreground">{formatTimestamp(source.updated_at)}</span>
                   <div className="flex justify-end gap-1">
-                    <IconAction label="Open file" onClick={() => void onOpenArtifact(source.original_path, false)}>
-                      <ExternalLink size={15} />
-                    </IconAction>
-                    <IconAction
-                      label="Open extracted text"
-                      onClick={() => void onOpenArtifact(source.markdown_path, false)}
-                    >
-                      <FileText size={15} />
+                    <IconAction label="Details" onClick={() => openSourceDetail(source)}>
+                      <FileSearch size={15} />
                     </IconAction>
                     <IconAction
                       label="Reveal in Finder"
-                      onClick={() => void onOpenArtifact(source.original_path, true)}
+                      onClick={() => void onOpenArtifact(previewableSourcePath(source), true)}
                     >
                       <FolderOpen size={15} />
                     </IconAction>
-                    <Button onClick={() => onViewInGraph(source.source_id)} size="sm" type="button" variant="ghost">
-                      Graph
-                    </Button>
+                    <IconAction label="View in Graph" onClick={() => onViewInGraph(source.source_id)}>
+                      <Waypoints size={15} />
+                    </IconAction>
                   </div>
                 </div>
               ))
@@ -224,6 +309,525 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
   );
 }
 
+function SourceDetailWorkspace({
+  detailState,
+  onBack,
+  onOpenArtifact,
+  onRetry,
+  onViewInGraph,
+  source,
+}: {
+  detailState: SourceDetailLoadState;
+  onBack: () => void;
+  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
+  onRetry: () => void;
+  onViewInGraph: (sourceId: string) => void;
+  source: WorkspaceSourceSummary;
+}) {
+  const originalPath = source.original_path || source.source_path;
+  const sourceArtifactPath = previewableSourcePath(source);
+  const title =
+    detailState.status === "ready"
+      ? detailState.data.fileName
+      : fileNameFromPath(originalPath || source.markdown_path);
+
+  return (
+    <div className="min-h-0 flex-1 bg-background px-5 pb-5 pt-12">
+      <div className="mx-auto flex h-full w-full max-w-[92rem] flex-col gap-3">
+        <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-border bg-background px-1 pb-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Button aria-label="Back to sources" onClick={onBack} size="icon" type="button" variant="ghost">
+              <ArrowLeft size={17} />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-semibold text-foreground">{title}</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <StatusBadge status={source.status} />
+                <span>{source.page_count} pages</span>
+                <span>{source.success_count} evidence</span>
+                <span>{source.format.toUpperCase()}</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <IconAction label="Open original" onClick={() => void onOpenArtifact(sourceArtifactPath, false)}>
+              <ExternalLink size={15} />
+            </IconAction>
+            <IconAction label="Reveal in Finder" onClick={() => void onOpenArtifact(sourceArtifactPath, true)}>
+              <FolderOpen size={15} />
+            </IconAction>
+            <IconAction label="View in Graph" onClick={() => onViewInGraph(source.source_id)}>
+              <Waypoints size={15} />
+            </IconAction>
+          </div>
+        </header>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
+          <OriginalPreviewPanel
+            detailState={detailState}
+            onOpenOriginal={() => void onOpenArtifact(sourceArtifactPath, false)}
+          />
+          <ParsedMarkdownPreviewPanel detailState={detailState} onRetry={onRetry} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SourceDetailPanel({
+  actions,
+  children,
+  className,
+  title,
+}: {
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  title: string;
+}) {
+  return (
+    <section className={cn("flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-background", className)}>
+      <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-4 py-2">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        {actions}
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+    </section>
+  );
+}
+
+function OriginalPreviewPanel({
+  detailState,
+  onOpenOriginal,
+}: {
+  detailState: SourceDetailLoadState;
+  onOpenOriginal: () => void;
+}) {
+  return (
+    <SourceDetailPanel title="Original">
+      <OriginalPreview detailState={detailState} onOpenOriginal={onOpenOriginal} />
+    </SourceDetailPanel>
+  );
+}
+
+function OriginalPreview({
+  detailState,
+  onOpenOriginal,
+}: {
+  detailState: SourceDetailLoadState;
+  onOpenOriginal: () => void;
+}) {
+  if (detailState.status === "loading" || detailState.status === "idle") {
+    return <SourceDetailLoading label="Loading original preview..." />;
+  }
+  if (detailState.status === "error") {
+    return <SourceDetailError message={detailState.error} />;
+  }
+
+  const original = detailState.data.original;
+  if (original.kind === "pdf" && original.previewUrl) {
+    return <PdfOriginalPreview onOpenOriginal={onOpenOriginal} previewUrl={original.previewUrl} />;
+  }
+  if (original.kind === "text" && original.text !== null) {
+    return (
+      <div className="h-full overflow-auto bg-muted/20 p-4">
+        <pre className="min-h-full whitespace-pre-wrap break-words rounded-md bg-background p-4 text-xs leading-6 text-foreground shadow-xs">
+          {original.text}
+        </pre>
+        {original.truncated ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Preview is truncated to the first 2 MB.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  if (original.kind === "missing") {
+    return <SourceDetailError message={original.error ?? "Original file is missing."} />;
+  }
+  return (
+    <UnsupportedOriginalPreview
+      message={original.error ?? "Inline preview is not available for this file type."}
+      onOpenOriginal={onOpenOriginal}
+    />
+  );
+}
+
+function ParsedMarkdownPreviewPanel({
+  detailState,
+  onRetry,
+}: {
+  detailState: SourceDetailLoadState;
+  onRetry: () => void;
+}) {
+  const [viewMode, setViewMode] = useState<MarkdownViewMode>("preview");
+  const [copyLabel, setCopyLabel] = useState("Copy");
+
+  useEffect(() => {
+    if (copyLabel === "Copy") {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setCopyLabel("Copy"), 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyLabel]);
+
+  if (detailState.status === "loading" || detailState.status === "idle") {
+    return (
+      <SourceDetailPanel title="Parsed Markdown">
+        <SourceDetailLoading label="Loading parsed markdown..." />
+      </SourceDetailPanel>
+    );
+  }
+  if (detailState.status === "error") {
+    return (
+      <SourceDetailPanel title="Parsed Markdown">
+        <SourceDetailError actionLabel="Retry" message={detailState.error} onAction={onRetry} />
+      </SourceDetailPanel>
+    );
+  }
+  const markdown = detailState.data.markdown;
+  if (markdown.missing || !markdown.text) {
+    return (
+      <SourceDetailPanel title="Parsed Markdown">
+        <SourceDetailError
+          actionLabel="Retry"
+          message={markdown.error ?? "Parsed markdown not available yet."}
+          onAction={onRetry}
+        />
+      </SourceDetailPanel>
+    );
+  }
+  const markdownText = markdown.text;
+
+  const copyMarkdown = () => {
+    void navigator.clipboard
+      .writeText(markdownText)
+      .then(() => setCopyLabel("Copied"))
+      .catch(() => setCopyLabel("Copy failed"));
+  };
+
+  return (
+    <SourceDetailPanel
+      actions={
+        <div className="flex items-center gap-2">
+          <Button onClick={copyMarkdown} size="sm" type="button" variant="ghost">
+            <CopyIcon className="mr-1.5 size-3.5" />
+            {copyLabel}
+          </Button>
+          <div className="flex rounded-md border border-border bg-muted/20 p-0.5">
+            <SegmentButton active={viewMode === "preview"} onClick={() => setViewMode("preview")}>
+              Preview
+            </SegmentButton>
+            <SegmentButton active={viewMode === "raw"} onClick={() => setViewMode("raw")}>
+              Raw
+            </SegmentButton>
+          </div>
+        </div>
+      }
+      title="Parsed Markdown"
+    >
+      {viewMode === "preview" ? (
+        <div className="source-detail-markdown h-full overflow-auto p-5">
+          <MessageResponse>{markdownText}</MessageResponse>
+        </div>
+      ) : (
+        <div className="h-full overflow-auto bg-muted/20 p-4">
+          <pre className="min-h-full whitespace-pre-wrap break-words rounded-md bg-background p-4 text-xs leading-6 text-foreground shadow-xs">
+            {markdownText}
+          </pre>
+        </div>
+      )}
+    </SourceDetailPanel>
+  );
+}
+
+function PdfOriginalPreview({
+  onOpenOriginal,
+  previewUrl,
+}: {
+  onOpenOriginal: () => void;
+  previewUrl: string;
+}) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [numPages, setNumPages] = useState(0);
+  const [pageWidth, setPageWidth] = useState(720);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(320, Math.min(760, container.clientWidth - 56));
+      setPageWidth(nextWidth);
+    };
+    updateWidth();
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFullscreen]);
+
+  const scrollToPage = (page: number) => {
+    if (numPages === 0) {
+      return;
+    }
+    const targetPage = clamp(page, 1, numPages);
+    setCurrentPage(targetPage);
+    window.requestAnimationFrame(() => {
+      pageRefs.current[targetPage - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  };
+
+  const onScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container || numPages === 0) {
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const viewportCenter = containerRect.top + containerRect.height / 2;
+    let nearestPage = currentPage;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    pageRefs.current.forEach((pageNode, index) => {
+      if (!pageNode) {
+        return;
+      }
+      const pageRect = pageNode.getBoundingClientRect();
+      const pageCenter = pageRect.top + pageRect.height / 2;
+      const distance = Math.abs(pageCenter - viewportCenter);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestPage = index + 1;
+      }
+    });
+
+    if (nearestPage !== currentPage) {
+      setCurrentPage(nearestPage);
+    }
+  };
+
+  const setZoom = (nextZoom: number) => {
+    setZoomPercent(clamp(nextZoom, 50, 180));
+  };
+
+  if (previewError) {
+    return <UnsupportedOriginalPreview message={previewError} onOpenOriginal={onOpenOriginal} />;
+  }
+
+  return (
+    <div
+      data-electron-no-drag
+      className={cn(
+        "flex h-full min-h-0 flex-col bg-muted/20",
+        isFullscreen &&
+          "fixed inset-x-4 bottom-4 top-12 z-[60] overflow-hidden rounded-xl border border-border bg-background shadow-2xl",
+      )}
+    >
+      <div
+        className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2"
+        data-electron-no-drag
+      >
+        <div className="flex items-center gap-1">
+          <IconAction
+            disabled={numPages === 0 || currentPage <= 1}
+            label="Previous page"
+            onClick={() => scrollToPage(currentPage - 1)}
+          >
+            <ChevronLeft size={15} />
+          </IconAction>
+          <label className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className="sr-only">Current page</span>
+            <input
+              aria-label="Current page"
+              className="h-7 w-12 rounded-md border border-border bg-background px-2 text-center text-xs text-foreground"
+              disabled={numPages === 0}
+              max={numPages || 1}
+              min={1}
+              onChange={(event) => {
+                const nextPage = Number.parseInt(event.currentTarget.value, 10);
+                if (Number.isFinite(nextPage)) {
+                  scrollToPage(nextPage);
+                }
+              }}
+              type="number"
+              value={currentPage}
+            />
+            <span>/ {numPages || "..."}</span>
+          </label>
+          <IconAction
+            disabled={numPages === 0 || currentPage >= numPages}
+            label="Next page"
+            onClick={() => scrollToPage(currentPage + 1)}
+          >
+            <ChevronRight size={15} />
+          </IconAction>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <IconAction label="Zoom out" onClick={() => setZoom(zoomPercent - 10)}>
+            <Minus size={15} />
+          </IconAction>
+          <button
+            className="h-7 min-w-12 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+            onClick={() => setZoom(100)}
+            title="Reset zoom"
+            type="button"
+          >
+            {zoomPercent}%
+          </button>
+          <IconAction label="Zoom in" onClick={() => setZoom(zoomPercent + 10)}>
+            <Plus size={15} />
+          </IconAction>
+          <IconAction label="Reset zoom" onClick={() => setZoom(100)}>
+            <RotateCcw size={15} />
+          </IconAction>
+          <IconAction label="Open original" onClick={onOpenOriginal}>
+            <ExternalLink size={15} />
+          </IconAction>
+          <IconAction
+            label={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
+            onClick={() => setIsFullscreen((value) => !value)}
+          >
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </IconAction>
+        </div>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-auto bg-muted/40 px-6 py-5"
+        onScroll={onScroll}
+        ref={scrollContainerRef}
+      >
+        <Document
+          className="flex min-h-full flex-col items-center gap-5"
+          file={previewUrl}
+          loading={<SourceDetailLoading label="Loading PDF pages..." />}
+          onLoadError={(error) => setPreviewError(error.message || "PDF preview could not be loaded.")}
+          onLoadSuccess={({ numPages: loadedPageCount }) => {
+            setPreviewError(null);
+            setNumPages(loadedPageCount);
+            setCurrentPage((page) => clamp(page, 1, loadedPageCount));
+          }}
+        >
+          {Array.from({ length: numPages }, (_, index) => {
+            const pageNumber = index + 1;
+            return (
+              <div
+                className="rounded-sm bg-background shadow-sm"
+                key={pageNumber}
+                ref={(node) => {
+                  pageRefs.current[index] = node;
+                }}
+              >
+                <Page
+                  className="overflow-hidden"
+                  loading={<div className="flex h-64 items-center justify-center text-xs text-muted-foreground">Loading page...</div>}
+                  pageNumber={pageNumber}
+                  renderAnnotationLayer={false}
+                  renderTextLayer={false}
+                  scale={zoomPercent / 100}
+                  width={pageWidth}
+                />
+              </div>
+            );
+          })}
+        </Document>
+      </div>
+    </div>
+  );
+}
+
+function SegmentButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "rounded px-2.5 py-1 text-xs font-medium text-muted-foreground transition",
+        active ? "bg-background text-foreground shadow-xs" : "hover:bg-background/70 hover:text-foreground",
+      )}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+function SourceDetailLoading({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-[20rem] items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="size-4 animate-spin" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function SourceDetailError({
+  actionLabel,
+  message,
+  onAction,
+}: {
+  actionLabel?: string;
+  message: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-[20rem] flex-col items-center justify-center gap-3 px-6 text-center">
+      <p className="max-w-md text-sm text-muted-foreground">{message}</p>
+      {actionLabel && onAction ? (
+        <Button onClick={onAction} size="sm" type="button" variant="outline">
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function UnsupportedOriginalPreview({
+  message,
+  onOpenOriginal,
+}: {
+  message: string;
+  onOpenOriginal: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-[20rem] flex-col items-center justify-center gap-3 px-6 text-center">
+      <FileText className="size-8 text-muted-foreground" />
+      <p className="max-w-md text-sm text-muted-foreground">{message}</p>
+      <Button onClick={onOpenOriginal} size="sm" type="button" variant="outline">
+        Open original
+      </Button>
+    </div>
+  );
+}
+
 function ProgressBar({ value }: { value: number }) {
   return (
     <div className="h-2 rounded-full bg-muted">
@@ -249,15 +853,25 @@ function StatusBadge({ status }: { status: WorkspaceSourceSummary["status"] }) {
 
 function IconAction({
   children,
+  disabled,
   label,
   onClick,
 }: {
   children: ReactNode;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
 }) {
   return (
-    <Button aria-label={label} onClick={onClick} size="icon" title={label} type="button" variant="ghost">
+    <Button
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      size="icon"
+      title={label}
+      type="button"
+      variant="ghost"
+    >
       {children}
     </Button>
   );
@@ -272,6 +886,14 @@ function statusLabel(status: WorkspaceSourceSummary["status"]) {
 
 function normalizeSearchText(value: string) {
   return value.normalize("NFC").toLowerCase();
+}
+
+function previewableSourcePath(source: WorkspaceSourceSummary) {
+  return source.source_path || source.original_path;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function formatTimestamp(value: number) {

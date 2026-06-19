@@ -32,6 +32,7 @@ import {
   type EngineConfigPayload,
   type FileSelection,
   type HyprDuckDesktopApi,
+  type SourceDetailResult,
   type UiSnapshot,
   type ValidateProviderResponseData,
   type RuntimeReadinessResponseData,
@@ -58,6 +59,7 @@ import {
 import type {
   WorkspaceApplyCorrectionRequest,
   WorkspaceProjectEnvelope,
+  WorkspaceSourceSummary,
 } from "@/features/workspace/types";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { TranslationKey } from "@/i18n/locales";
@@ -526,6 +528,17 @@ export function App() {
     await invoke("open_local_artifact", { path, reveal });
   };
 
+  const readSourceDetail = async (
+    source: WorkspaceSourceSummary,
+  ): Promise<SourceDetailResult> =>
+    invoke("read_source_detail", {
+      sourceId: source.source_id,
+      originalPath: source.original_path,
+      sourcePath: source.source_path,
+      markdownPath: source.markdown_path,
+      format: source.format,
+    });
+
   const applyWorkspaceCorrection = async (
     request: WorkspaceApplyCorrectionRequest,
   ) => {
@@ -807,6 +820,7 @@ export function App() {
               importStatus={graphImportStatus}
               onChooseFile={chooseFile}
               onOpenArtifact={openLocalArtifact}
+              onReadSourceDetail={readSourceDetail}
               onRetryFailedPages={retryFailedPages}
               onViewInGraph={viewSourceInGraph}
               sources={workspaceSources}

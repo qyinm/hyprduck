@@ -38,6 +38,7 @@ const modelTaskMatrixSource = readFileSync(
   "utf8",
 );
 const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+const packageSource = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const preloadSource = readFileSync(new URL("../preload.cjs", import.meta.url), "utf8");
 
 test("desktop IA is the committed source of truth for Docs, Agent, and Graph", () => {
@@ -125,13 +126,43 @@ test("Docs page focuses first users on importing source files", () => {
   expect(docsSource).toMatch(/Import Queue/);
   expect(docsSource).toMatch(/Parse Warnings/);
   expect(docsSource).toMatch(/onViewInGraph/);
-  expect(docsSource).toMatch(/Open extracted text/);
+  expect(docsSource).toMatch(/Details/);
+  expect(docsSource).toMatch(/FileSearch/);
+  expect(docsSource).toMatch(/Waypoints/);
+  expect(docsSource).toMatch(/View in Graph/);
+  expect(docsSource).toMatch(/SourceDetailWorkspace/);
+  expect(docsSource).toMatch(/Original/);
+  expect(docsSource).toMatch(/Parsed Markdown/);
+  expect(docsSource).toMatch(/Document/);
+  expect(docsSource).toMatch(/Page/);
+  expect(docsSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
+  expect(packageSource).toMatch(/"react-pdf": "\^10\.4\.1"/);
+  expect(packageSource).toMatch(/"pdfjs-dist": "5\.4\.296"/);
+  expect(docsSource).toMatch(/top-12 z-\[60\]/);
+  expect(docsSource).toMatch(/data-electron-no-drag/);
+  expect(docsSource).not.toMatch(/type="application\/pdf"/);
+  expect(docsSource).toMatch(/Preview/);
+  expect(docsSource).toMatch(/Raw/);
+  expect(docsSource).toMatch(/Copy/);
+  expect(docsSource).toMatch(/MessageResponse/);
+  expect(docsSource).not.toMatch(/Open extracted text/);
   expect(docsSource).toMatch(/Reveal in Finder/);
   expect(docsSource).not.toMatch(/Filter/);
   expect(docsSource).not.toMatch(/readOnly/);
   expect(docsSource).toMatch(/value=\{sourceSearch\}/);
   expect(docsSource).toMatch(/visibleSources\.map/);
   expect(docsSource).toMatch(/normalize\("NFC"\)/);
+  expect(appSource).toMatch(/onReadSourceDetail=\{readSourceDetail\}/);
+  expect(appSource).toMatch(/invoke\("read_source_detail"/);
+  expect(appTypesSource).toMatch(/interface SourceDetailResult/);
+  expect(appTypesSource).toMatch(/read_source_detail/);
+  expect(mainSource).toMatch(/case "read_source_detail"/);
+  expect(mainSource).toMatch(/resolveKnownWorkspacePath\(candidatePath\)/);
+  expect(mainSource).toMatch(/readOriginalPreview\(\[originalPath, sourcePath\]/);
+  expect(mainSource).toMatch(/resolveFirstKnownWorkspacePath/);
+  expect(mainSource).toMatch(/hyprduck-source/);
+  expect(docsSource).toMatch(/previewableSourcePath\(source\)/);
+  expect(previewApiSource).toMatch(/read_source_detail/);
   expect(localesSource).toMatch(/Add private docs/);
   expect(graphSource).not.toMatch(/Add files or ask about your knowledge/);
   expect(graphSource).not.toMatch(/Go to Import/);

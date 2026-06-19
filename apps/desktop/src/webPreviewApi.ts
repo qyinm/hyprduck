@@ -582,6 +582,26 @@ export function createWebMockApi(): HyprDuckDesktopApi {
         window.alert(`Cannot open local artifacts from web preview: ${args.path}`);
       }
     },
+    read_source_detail: (args) => ({
+      sourceId: args.sourceId,
+      fileName: args.originalPath.split(/[\\/]/).pop() ?? "sample.pdf",
+      format: args.format,
+      originalPath: args.originalPath,
+      sourcePath: args.sourcePath,
+      markdownPath: args.markdownPath,
+      original: {
+        kind: "unsupported",
+        previewUrl: null,
+        text: null,
+        truncated: false,
+        error: "Original file preview is only available in the Electron runtime.",
+      },
+      markdown: {
+        text: WEB_MOCK_MARKDOWN,
+        missing: false,
+        error: null,
+      },
+    }),
     apply_workspace_correction: () => {
       const workspace = getWebWorkspaceFromSnapshot();
       if (!workspace.project) {

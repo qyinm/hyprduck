@@ -52,6 +52,37 @@ export interface FileSelection {
   format: string;
 }
 
+export type SourceOriginalPreviewKind = "pdf" | "text" | "unsupported" | "missing";
+
+export interface SourceDetailRequest {
+  sourceId: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  format: string;
+}
+
+export interface SourceDetailResult {
+  sourceId: string;
+  fileName: string;
+  format: string;
+  originalPath: string;
+  sourcePath: string;
+  markdownPath: string;
+  original: {
+    kind: SourceOriginalPreviewKind;
+    previewUrl: string | null;
+    text: string | null;
+    truncated: boolean;
+    error: string | null;
+  };
+  markdown: {
+    text: string | null;
+    missing: boolean;
+    error: string | null;
+  };
+}
+
 export interface ProviderOption {
   id: string;
   label: string;
@@ -448,6 +479,10 @@ export interface DesktopCommandMap {
   open_local_artifact: {
     args: { path: string; reveal: boolean };
     result: void;
+  };
+  read_source_detail: {
+    args: SourceDetailRequest;
+    result: SourceDetailResult;
   };
   apply_workspace_correction: {
     args: { correction: WorkspaceCorrectionPayload };
