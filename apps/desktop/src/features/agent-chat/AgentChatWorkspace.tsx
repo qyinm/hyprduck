@@ -361,31 +361,29 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
 
       <section className="flex min-h-0 flex-col overflow-hidden pt-12">
         {hasConversation ? (
-          <div className="flex min-h-0 flex-1 flex-col items-center overflow-hidden px-6 pb-5">
-            <div className="flex min-h-0 w-full max-w-4xl flex-1 flex-col">
-              <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4">
-                <div className="space-y-6">
-                  {activeThread?.messages.map((message) => (
-                    <MessageBubble
-                      key={message.id}
-                      message={message}
-                      result={resultsByMessageId[message.id]}
-                      status={streamStatusByMessageId[message.id]}
-                      stopped={Boolean(stoppedMessageIds[message.id])}
-                    />
-                  ))}
-                </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-5">
+            <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-4 [scrollbar-gutter:stable]">
+              <div className="mx-auto w-full max-w-4xl space-y-6 pr-4">
+                {activeThread?.messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    result={resultsByMessageId[message.id]}
+                    status={streamStatusByMessageId[message.id]}
+                    stopped={Boolean(stoppedMessageIds[message.id])}
+                  />
+                ))}
               </div>
+            </div>
 
-              <div className="shrink-0 pb-1">
-                {composer("Ask a follow-up about your indexed docs")}
-                {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-                {!providerReady ? (
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    Configure OpenRouter or Ollama in Settings before asking the agent.
-                  </p>
-                ) : null}
-              </div>
+            <div className="mx-auto w-full max-w-4xl shrink-0 pb-1">
+              {composer("Ask a follow-up about your indexed docs")}
+              {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+              {!providerReady ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Configure OpenRouter or Ollama in Settings before asking the agent.
+                </p>
+              ) : null}
             </div>
           </div>
         ) : (

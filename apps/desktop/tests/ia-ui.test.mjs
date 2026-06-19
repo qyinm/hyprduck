@@ -135,6 +135,12 @@ test("Docs page focuses first users on importing source files", () => {
   expect(docsSource).toMatch(/Parsed Markdown/);
   expect(docsSource).toMatch(/Document/);
   expect(docsSource).toMatch(/Page/);
+  expect(docsSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
+  expect(docsSource).toMatch(/visiblePageRange/);
+  expect(docsSource).toMatch(/visiblePageNumbers/);
+  expect(docsSource).toMatch(/pageNumber=\{pageNumber\}/);
+  expect(docsSource).toMatch(/onScroll=\{updateVisiblePages\}/);
+  expect(docsSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
   expect(docsSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
   expect(packageSource).toMatch(/"react-pdf": "\^10\.4\.1"/);
   expect(packageSource).toMatch(/"pdfjs-dist": "5\.4\.296"/);
@@ -236,6 +242,8 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
   expect(agentChatSource).toMatch(/hasConversation/);
   expect(agentChatSource).toMatch(/Ask a follow-up about your indexed docs/);
   expect(agentChatSource).toMatch(/overflow-hidden px-6 pb-5/);
+  expect(agentChatSource).toMatch(/\[scrollbar-gutter:stable\]/);
+  expect(agentChatSource).toMatch(/mx-auto w-full max-w-4xl space-y-6 pr-4/);
   expect(agentChatSource).toMatch(/rounded-2xl border border-border bg-background p-3 shadow-sm/);
   expect(agentChatSource).toMatch(/MessageResponse/);
   expect(agentChatSource).toMatch(/components=\{citationComponents\}/);

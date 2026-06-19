@@ -36,6 +36,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
+const PDF_PAGE_GAP = 20;
+const PDF_PAGE_OVERSCAN = 1;
+const DEFAULT_PDF_PAGE_ASPECT_RATIO = 1.294;
+
 export interface WorkspaceImportStatus {
   filePath: string;
   format: string;
@@ -460,7 +464,7 @@ function ParsedMarkdownPreviewPanel({
   detailState: SourceDetailLoadState;
   onRetry: () => void;
 }) {
-  const [viewMode, setViewMode] = useState<MarkdownViewMode>("preview");
+  const [viewMode, setViewMode] = useState<MarkdownViewMode>("raw");
   const [copyLabel, setCopyLabel] = useState("Copy");
 
   useEffect(() => {
@@ -551,14 +555,59 @@ function PdfOriginalPreview({
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [numPages, setNumPages] = useState(0);
+  const [pageAspectRatio, setPageAspectRatio] = useState(DEFAULT_PDF_PAGE_ASPECT_RATIO);
   const [pageWidth, setPageWidth] = useState(720);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [visiblePageRange, setVisiblePageRange] = useState({ start: 1, end: 1 });
   const [zoomPercent, setZoomPercent] = useState(100);
-  const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const zoomScale = zoomPercent / 100;
+  const pageDisplayWidth = Math.ceil(pageWidth * zoomScale);
+  const pageDisplayHeight = Math.ceil(pageWidth * pageAspectRatio * zoomScale);
+  const pageItemHeight = pageDisplayHeight + PDF_PAGE_GAP;
+  const virtualHeight = numPages > 0 ? numPages * pageItemHeight : 0;
+  const visiblePageNumbers = useMemo(() => {
+    const pages: number[] = [];
+    for (let page = visiblePageRange.start; page <= visiblePageRange.end; page += 1) {
+      pages.push(page);
+    }
+    return pages;
+  }, [visiblePageRange.end, visiblePageRange.start]);
+
+  const updateVisiblePages = () => {
+    const container = previewContainerRef.current;
+    if (!container || numPages === 0 || pageItemHeight <= 0) {
+      return;
+    }
+
+    const scrollTop = container.scrollTop;
+    const viewportHeight = container.clientHeight;
+    const nextStart = clamp(
+      Math.floor(scrollTop / pageItemHeight) + 1 - PDF_PAGE_OVERSCAN,
+      1,
+      numPages,
+    );
+    const nextEnd = clamp(
+      Math.ceil((scrollTop + viewportHeight) / pageItemHeight) + PDF_PAGE_OVERSCAN,
+      nextStart,
+      numPages,
+    );
+    setVisiblePageRange((range) =>
+      range.start === nextStart && range.end === nextEnd
+        ? range
+        : { start: nextStart, end: nextEnd },
+    );
+
+    const nextCurrentPage = clamp(
+      Math.floor((scrollTop + viewportHeight / 2) / pageItemHeight) + 1,
+      1,
+      numPages,
+    );
+    setCurrentPage((page) => (page === nextCurrentPage ? page : nextCurrentPage));
+  };
 
   useEffect(() => {
-    const container = scrollContainerRef.current;
+    const container = previewContainerRef.current;
     if (!container) {
       return;
     }
@@ -586,48 +635,34 @@ function PdfOriginalPreview({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isFullscreen]);
 
-  const scrollToPage = (page: number) => {
+  useEffect(() => {
+    updateVisiblePages();
+  }, [isFullscreen, numPages, pageItemHeight]);
+
+  const goToPage = (page: number) => {
     if (numPages === 0) {
       return;
     }
     const targetPage = clamp(page, 1, numPages);
     setCurrentPage(targetPage);
-    window.requestAnimationFrame(() => {
-      pageRefs.current[targetPage - 1]?.scrollIntoView({ block: "start", behavior: "smooth" });
+    previewContainerRef.current?.scrollTo({
+      behavior: "smooth",
+      top: (targetPage - 1) * pageItemHeight,
     });
-  };
-
-  const onScroll = () => {
-    const container = scrollContainerRef.current;
-    if (!container || numPages === 0) {
-      return;
-    }
-
-    const containerRect = container.getBoundingClientRect();
-    const viewportCenter = containerRect.top + containerRect.height / 2;
-    let nearestPage = currentPage;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-
-    pageRefs.current.forEach((pageNode, index) => {
-      if (!pageNode) {
-        return;
-      }
-      const pageRect = pageNode.getBoundingClientRect();
-      const pageCenter = pageRect.top + pageRect.height / 2;
-      const distance = Math.abs(pageCenter - viewportCenter);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestPage = index + 1;
-      }
-    });
-
-    if (nearestPage !== currentPage) {
-      setCurrentPage(nearestPage);
-    }
   };
 
   const setZoom = (nextZoom: number) => {
-    setZoomPercent(clamp(nextZoom, 50, 180));
+    const nextZoomPercent = clamp(nextZoom, 50, 180);
+    setZoomPercent(nextZoomPercent);
+    const container = previewContainerRef.current;
+    if (container && numPages > 0) {
+      const nextScale = nextZoomPercent / 100;
+      const nextPageItemHeight =
+        Math.ceil(pageWidth * pageAspectRatio * nextScale) + PDF_PAGE_GAP;
+      window.requestAnimationFrame(() => {
+        container.scrollTo({ top: (currentPage - 1) * nextPageItemHeight });
+      });
+    }
   };
 
   if (previewError) {
@@ -651,7 +686,7 @@ function PdfOriginalPreview({
           <IconAction
             disabled={numPages === 0 || currentPage <= 1}
             label="Previous page"
-            onClick={() => scrollToPage(currentPage - 1)}
+            onClick={() => goToPage(currentPage - 1)}
           >
             <ChevronLeft size={15} />
           </IconAction>
@@ -666,7 +701,7 @@ function PdfOriginalPreview({
               onChange={(event) => {
                 const nextPage = Number.parseInt(event.currentTarget.value, 10);
                 if (Number.isFinite(nextPage)) {
-                  scrollToPage(nextPage);
+                  goToPage(nextPage);
                 }
               }}
               type="number"
@@ -677,7 +712,7 @@ function PdfOriginalPreview({
           <IconAction
             disabled={numPages === 0 || currentPage >= numPages}
             label="Next page"
-            onClick={() => scrollToPage(currentPage + 1)}
+            onClick={() => goToPage(currentPage + 1)}
           >
             <ChevronRight size={15} />
           </IconAction>
@@ -715,42 +750,64 @@ function PdfOriginalPreview({
 
       <div
         className="min-h-0 flex-1 overflow-auto bg-muted/40 px-6 py-5"
-        onScroll={onScroll}
-        ref={scrollContainerRef}
+        onScroll={updateVisiblePages}
+        ref={previewContainerRef}
       >
         <Document
-          className="flex min-h-full flex-col items-center gap-5"
+          className="min-h-full"
           file={previewUrl}
           loading={<SourceDetailLoading label="Loading PDF pages..." />}
           onLoadError={(error) => setPreviewError(error.message || "PDF preview could not be loaded.")}
-          onLoadSuccess={({ numPages: loadedPageCount }) => {
+          onLoadSuccess={(pdf) => {
+            const loadedPageCount = pdf.numPages;
             setPreviewError(null);
             setNumPages(loadedPageCount);
             setCurrentPage((page) => clamp(page, 1, loadedPageCount));
+            void pdf
+              .getPage(1)
+              .then((page) => {
+                const viewport = page.getViewport({ scale: 1 });
+                if (viewport.width > 0) {
+                  setPageAspectRatio(viewport.height / viewport.width);
+                }
+              })
+              .catch(() => undefined);
           }}
         >
-          {Array.from({ length: numPages }, (_, index) => {
-            const pageNumber = index + 1;
-            return (
-              <div
-                className="rounded-sm bg-background shadow-sm"
-                key={pageNumber}
-                ref={(node) => {
-                  pageRefs.current[index] = node;
-                }}
-              >
-                <Page
-                  className="overflow-hidden"
-                  loading={<div className="flex h-64 items-center justify-center text-xs text-muted-foreground">Loading page...</div>}
-                  pageNumber={pageNumber}
-                  renderAnnotationLayer={false}
-                  renderTextLayer={false}
-                  scale={zoomPercent / 100}
-                  width={pageWidth}
-                />
-              </div>
-            );
-          })}
+          {numPages > 0 ? (
+            <div
+              className="relative mx-auto"
+              style={{
+                height: virtualHeight,
+                width: pageDisplayWidth,
+              }}
+            >
+              {visiblePageNumbers.map((pageNumber) => (
+                <div
+                  className="absolute left-1/2 rounded-sm bg-background shadow-sm"
+                  key={`${pageNumber}-${pageWidth}-${zoomPercent}`}
+                  style={{
+                    top: (pageNumber - 1) * pageItemHeight,
+                    transform: "translateX(-50%)",
+                  }}
+                >
+                  <Page
+                    className="overflow-hidden"
+                    loading={
+                      <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">
+                        Loading page...
+                      </div>
+                    }
+                    pageNumber={pageNumber}
+                    renderAnnotationLayer={false}
+                    renderTextLayer={false}
+                    scale={zoomScale}
+                    width={pageWidth}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
         </Document>
       </div>
     </div>
