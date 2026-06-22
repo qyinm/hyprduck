@@ -624,7 +624,8 @@ pub(crate) fn load_graph_canvas_nodes(
         .map(graph_canvas_node_from_row)
         .collect::<Result<Vec<_>>>()?;
     nodes.retain(graph_node_is_live);
-    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    nodes.sort_by(graph_canvas_node_projection_order);
+    nodes.dedup_by(|left, right| left.node_id == right.node_id);
     Ok(nodes)
 }
 
@@ -714,8 +715,35 @@ pub(crate) fn load_graph_canvas_relations(
             relations.push(relation);
         }
     }
-    relations.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    relations.sort_by(graph_canvas_relation_projection_order);
+    relations.dedup_by(|left, right| left.relation_id == right.relation_id);
     Ok(relations)
+}
+
+fn graph_canvas_node_projection_order(
+    left: &BrainNodeRecord,
+    right: &BrainNodeRecord,
+) -> std::cmp::Ordering {
+    left.node_id
+        .cmp(&right.node_id)
+        .then_with(|| right.updated_at.cmp(&left.updated_at))
+        .then_with(|| right.valid_from.cmp(&left.valid_from))
+        .then_with(|| right.evidence_ids.len().cmp(&left.evidence_ids.len()))
+        .then_with(|| left.label.cmp(&right.label))
+}
+
+fn graph_canvas_relation_projection_order(
+    left: &BrainRelationRecord,
+    right: &BrainRelationRecord,
+) -> std::cmp::Ordering {
+    left.relation_id
+        .cmp(&right.relation_id)
+        .then_with(|| right.updated_at.cmp(&left.updated_at))
+        .then_with(|| right.valid_from.cmp(&left.valid_from))
+        .then_with(|| right.evidence_ids.len().cmp(&left.evidence_ids.len()))
+        .then_with(|| left.source_node_id.cmp(&right.source_node_id))
+        .then_with(|| left.target_node_id.cmp(&right.target_node_id))
+        .then_with(|| left.label.cmp(&right.label))
 }
 
 fn graph_canvas_relation_from_row(row: &graphqlite::Row) -> Result<BrainRelationRecord> {

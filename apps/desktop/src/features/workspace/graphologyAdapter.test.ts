@@ -107,6 +107,33 @@ describe("buildSigmaGraph", () => {
     expect(graph.getEdgeAttribute("edge-document-concept", "selected")).toBe(true);
   });
 
+  test("skips duplicate graph keys instead of throwing away the graph", () => {
+    const graph = buildSigmaGraph(
+      {
+        ...project,
+        nodes: [...project.nodes, { ...project.nodes[1], label: "Duplicate Concept" }],
+        edges: [
+          ...project.edges,
+          {
+            ...project.edges[0],
+            label: "Duplicate edge",
+          },
+        ],
+      },
+      {
+        selectedNodeId: null,
+        selectedEdgeId: null,
+      },
+    );
+
+    expect(graph.order).toBe(2);
+    expect(graph.size).toBe(1);
+    expect(graph.getNodeAttribute("concept", "label")).toBe("Concept");
+    expect(graph.getEdgeAttribute("edge-document-concept", "label")).toBe(
+      "Ingested from source",
+    );
+  });
+
   test("skips self-loop edges instead of throwing away the graph", () => {
     const graph = buildSigmaGraph(
       {

@@ -77,6 +77,10 @@ export function buildSigmaGraph(
   const layout = buildClusterLayout(visibleProject);
 
   for (const [index, node] of visibleProject.nodes.entries()) {
+    if (graph.hasNode(node.id)) {
+      continue;
+    }
+
     const selected = selection.selectedNodeId === node.id;
     const layoutPosition =
       layout.positions[node.id] ??
@@ -124,6 +128,10 @@ export function buildSigmaGraph(
     }
 
     const selected = selection.selectedEdgeId === edge.id;
+    if (graph.hasEdge(edge.id)) {
+      continue;
+    }
+
     graph.addEdgeWithKey(edge.id, edge.sourceNodeId, edge.targetNodeId, {
       label: edge.label,
       size: selected ? 3 : edge.kind === "source_document" ? 1.8 : 1.4,

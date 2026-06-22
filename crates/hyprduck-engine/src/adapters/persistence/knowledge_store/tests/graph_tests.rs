@@ -135,6 +135,55 @@ fn graph_snapshot_versions_logical_records_and_keeps_live_relation_endpoints() {
 }
 
 #[test]
+fn graph_canvas_projection_dedupes_duplicate_live_relation_ids() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+
+    let mut first_snapshot = single_event_snapshot("event-a", "source-a", "evidence-a", "Alpha");
+    first_snapshot.nodes.push(target_node("Target", 10));
+    let mut first_relation = shared_relation(10);
+    first_relation.label = "old relates".into();
+    first_snapshot.relations = vec![first_relation];
+    store
+        .persist_graph_snapshot(&first_snapshot)
+        .expect("persist first graph snapshot");
+
+    let mut second_snapshot =
+        single_event_snapshot("event-b", "source-a", "evidence-a", "Alpha v2");
+    second_snapshot.generated_at = 20;
+    second_snapshot.sources[0].updated_at = 20;
+    second_snapshot.nodes[0].updated_at = 20;
+    second_snapshot.nodes[0].valid_from = 20;
+    second_snapshot.nodes.push(target_node("Target v2", 20));
+    let mut second_relation = shared_relation(20);
+    second_relation.label = "new relates".into();
+    second_snapshot.relations = vec![second_relation];
+    store
+        .persist_graph_snapshot(&second_snapshot)
+        .expect("persist second graph snapshot");
+
+    force_relation_versions_live(&store, "rel-shared");
+    assert_eq!(
+        live_logical_relation_version_count(&store, "rel-shared"),
+        2,
+        "test fixture should model a stale duplicate live relation"
+    );
+
+    let (_, relations, _) = store
+        .read_graph_canvas_projection_from_db("workspace-default")
+        .expect("read graph canvas projection")
+        .expect("graph canvas projection");
+    let projected = relations
+        .iter()
+        .filter(|relation| relation.relation_id == "rel-shared")
+        .collect::<Vec<_>>();
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].label, "new relates");
+    assert_eq!(projected[0].updated_at, 20);
+}
+
+#[test]
 fn import_job_graph_pending_state_round_trips_for_source_retry() {
     let temp = tempfile::tempdir().expect("temp dir");
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
@@ -427,6 +476,27 @@ fn live_logical_relation_version_count(store: &KnowledgeStore, logical_id: &str)
             |row| row.get(0),
         )
         .expect("count live logical relation versions")
+}
+
+fn force_relation_versions_live(store: &KnowledgeStore, logical_id: &str) {
+    let graph = Graph::open(&store.path).expect("open graph");
+    graph
+        .connection()
+        .sqlite_connection()
+        .execute(
+            "UPDATE edge_props_int
+             SET value = 0
+             WHERE key_id = (SELECT id FROM property_keys WHERE key = 'valid_to')
+               AND edge_id IN (
+                 SELECT relation.edge_id
+                 FROM edge_props_text relation
+                 JOIN property_keys relation_key ON relation_key.id = relation.key_id
+                 WHERE relation_key.key = 'relation_id'
+                   AND relation.value = ?1
+               )",
+            [logical_id],
+        )
+        .expect("force duplicate relation versions live");
 }
 
 fn single_event_snapshot(
