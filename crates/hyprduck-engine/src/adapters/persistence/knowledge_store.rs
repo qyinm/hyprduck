@@ -499,7 +499,15 @@ impl KnowledgeStore {
             &artifact_metadata,
         );
         context_pack.retrieval_trace.strategy = "sqlite-graphqlite-fts5-hybrid".into();
-        attach_context_pack_graph_trails(&graph, workspace_id, &mut context_pack)?;
+        if let Err(error) =
+            attach_context_pack_graph_trails(&graph, workspace_id, &mut context_pack)
+        {
+            context_pack
+                .warnings
+                .push(graph_trail_unavailable_warning(&format!(
+                    "Graph trail unavailable for the selected evidence; citation evidence remains available. {error}"
+                )));
+        }
         if !context_pack.selected_evidence.is_empty()
             && context_pack
                 .selected_evidence

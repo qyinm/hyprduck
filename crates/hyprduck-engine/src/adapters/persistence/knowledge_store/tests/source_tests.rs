@@ -757,6 +757,85 @@ fn db_context_pack_uses_source_page_text_for_topic_hits() {
 }
 
 #[test]
+fn db_context_pack_uses_decomposed_korean_source_filename_to_seed_evidence() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    let decomposed_filename =
+        "\u{1110}\u{1166}\u{1109}\u{1173}\u{1110}\u{1173}_\u{110c}\u{1161}\u{1105}\u{116d}.pdf";
+    sqlite
+        .execute(
+            "INSERT INTO sources (
+                source_id,
+                workspace_id,
+                original_path_redacted,
+                source_path_redacted,
+                markdown_path_redacted,
+                format,
+                status,
+                page_count,
+                provider_route,
+                provider_locality,
+                content_hash
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'pdf', 'ingested', 4, 'test-local', 'local', 'sha256:korean-fixture')",
+            (
+                "source-korean-fixture",
+                "workspace-default",
+                decomposed_filename,
+                decomposed_filename,
+                decomposed_filename.replace(".pdf", ".md"),
+            ),
+        )
+        .expect("insert fixture source");
+    sqlite
+        .execute(
+            "INSERT INTO evidence_items (
+                evidence_id,
+                workspace_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                source_path_redacted,
+                markdown_path_redacted,
+                status
+             ) VALUES (?1, ?2, ?3, 0, 'Page 1', 'text_evidence', ?4, ?5, ?6, 'active')",
+            (
+                "evidence-korean-fixture-title",
+                "workspace-default",
+                "source-korean-fixture",
+                "FixtureParser: 입력 표현 이질성에 대응하는 적응형 문서 파싱 엔진",
+                decomposed_filename,
+                decomposed_filename.replace(".pdf", ".md"),
+            ),
+        )
+        .expect("insert fixture evidence");
+
+    let (_, context_pack) = store
+        .assemble_context_pack_v1_from_db(
+            "workspace-default",
+            "테스트 자료",
+            8_000,
+            "ctx_korean_filename".into(),
+            "2026-06-19T00:00:00Z".into(),
+        )
+        .expect("assemble context pack");
+
+    assert!(
+        context_pack
+            .selected_evidence
+            .iter()
+            .any(|evidence| evidence.source_id == "source-korean-fixture"
+                && evidence.quoted_text.contains("FixtureParser")),
+        "{:#?}",
+        context_pack.selected_evidence
+    );
+}
+
+#[test]
 fn hybrid_retrieve_fallback_stays_within_requested_workspace() {
     let temp = tempfile::tempdir().expect("temp dir");
     let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
@@ -796,6 +875,53 @@ fn hybrid_retrieve_fallback_stays_within_requested_workspace() {
         .expect("fallback retrieval should stay scoped");
 
     assert!(hits.is_empty(), "{hits:#?}");
+}
+
+#[test]
+fn hybrid_retrieve_fallback_matches_cleaned_query_terms() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(temp.path()))
+        .expect("open knowledge store");
+    let graph = Graph::open(store.path()).expect("open graph");
+    let sqlite = graph.connection().sqlite_connection();
+    sqlite
+        .execute(
+            "INSERT INTO sources (source_id, workspace_id, format, status, page_count)
+             VALUES (?1, ?2, 'pdf', 'ingested', 1)",
+            ("source-fixture-parser", "workspace-default"),
+        )
+        .expect("insert source");
+    sqlite
+        .execute(
+            "INSERT INTO evidence_items (
+                evidence_id,
+                workspace_id,
+                source_id,
+                page_index,
+                page_label,
+                evidence_type,
+                snippet,
+                status
+             ) VALUES (?1, ?2, ?3, 0, 'Page 1', 'text_evidence', ?4, 'active')",
+            (
+                "evidence-fixture-parser",
+                "workspace-default",
+                "source-fixture-parser",
+                "The fixture parser explains adaptive document parsing route selection.",
+            ),
+        )
+        .expect("insert evidence without fts row");
+
+    let hits = store
+        .hybrid_retrieve("workspace-default", "fixture parser please", 5)
+        .expect("fallback retrieval should use cleaned terms");
+
+    assert!(
+        hits.iter()
+            .any(|hit| hit.evidence_id == "evidence-fixture-parser"
+                && hit.snippet.contains("fixture parser")),
+        "{hits:#?}"
+    );
 }
 
 fn assert_wiki_relational_content(store: &KnowledgeStore, wiki_page_id: &str) {

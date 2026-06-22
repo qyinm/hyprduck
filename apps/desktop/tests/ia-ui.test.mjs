@@ -228,7 +228,7 @@ test("Graph workspace centers the canvas with inspector actions", () => {
 
 test("Agent page renders chat UI and uses the streaming agent chat IPC contract", () => {
   expect(appSource).toMatch(/<AgentChatWorkspace/);
-  expect(agentChatSource).toMatch(/STORAGE_KEY = "hyprduck\.agentChatThreads\.v1"/);
+  expect(agentChatSource).toMatch(/STORAGE_KEY = "hyprduck\.agentChatThreads\.v4"/);
   expect(agentChatSource).toMatch(/window\.localStorage/);
   expect(agentChatSource).toMatch(/What should we work on\?/);
   expect(agentChatSource).toMatch(/mode: "auto"/);
@@ -238,6 +238,13 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
   expect(agentChatSource).toMatch(/onStartAgentChat/);
   expect(agentChatSource).toMatch(/onStopAgentChat/);
   expect(agentChatSource).toMatch(/onListenAgentChatEvents/);
+  expect(agentChatSource).not.toMatch(/graph_context/);
+  expect(agentChatSource).toMatch(/selectedNodeId: null/);
+  expect(agentChatSource).not.toMatch(/selectedNodeId \?/);
+  expect(agentChatSource).toMatch(/Trash2/);
+  expect(agentChatSource).toMatch(/deleteThread/);
+  expect(agentChatSource).toMatch(/Delete chat \$\{thread\.title\}/);
+  expect(agentChatSource).toMatch(/removeKeys/);
   expect(agentChatSource).toMatch(/event\.type === "delta"/);
   expect(agentChatSource).toMatch(/event\.type === "stopped"/);
   expect(agentChatSource).toMatch(/hasConversation/);

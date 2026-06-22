@@ -9,6 +9,7 @@ import {
   Search,
   Sparkles,
   Square,
+  Trash2,
 } from "lucide-react";
 
 import type {
@@ -41,8 +42,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { WorkspaceProject, WorkspaceSourceSummary } from "@/features/workspace/types";
 
-const STORAGE_KEY = "hyprduck.agentChatThreads.v1";
-const STORAGE_VERSION = 1;
+const STORAGE_KEY = "hyprduck.agentChatThreads.v4";
+const STORAGE_EPOCH_KEY = "hyprduck.agentChatThreads.currentVersion";
+const STORAGE_VERSION = 4;
 const AGENT_CHAT_SCHEMA_VERSION = "hyprduck.agent_chat.v1";
 
 interface AgentThread {
@@ -63,7 +65,6 @@ interface StoredThreads {
 interface AgentChatWorkspaceProps {
   project: WorkspaceProject | null;
   sources: WorkspaceSourceSummary[];
-  selectedNodeId: string | null;
   workspaceId: string;
   providerReady: boolean;
   onListenAgentChatEvents: (
@@ -96,7 +97,10 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
     onStartAgentChat,
     onStopAgentChat,
   } = props;
-  const [storedThreads] = useState<StoredThreads>(() => loadStoredThreads());
+  const [storageReady, setStorageReady] = useState(() => isStorageEpochCurrent());
+  const [storedThreads] = useState<StoredThreads>(() =>
+    isStorageEpochCurrent() ? loadStoredThreads() : emptyStorage(),
+  );
   const [threads, setThreads] = useState<AgentThread[]>(() => storedThreads.threads);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(
     () => storedThreads.activeThreadId,
@@ -119,8 +123,29 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
   }, [activeStream]);
 
   useEffect(() => {
+    if (isStorageEpochCurrent()) {
+      setStorageReady(true);
+      return;
+    }
+    window.localStorage.removeItem("hyprduck.agentChatThreads.v1");
+    window.localStorage.removeItem("hyprduck.agentChatThreads.v2");
+    window.localStorage.removeItem("hyprduck.agentChatThreads.v3");
+    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.setItem(STORAGE_EPOCH_KEY, String(STORAGE_VERSION));
+    setThreads([]);
+    setActiveThreadId(null);
+    setResultsByMessageId({});
+    setStreamStatusByMessageId({});
+    setStoppedMessageIds({});
+    setStorageReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) {
+      return;
+    }
     persistThreads({ version: STORAGE_VERSION, threads, activeThreadId, resultsByMessageId });
-  }, [activeThreadId, resultsByMessageId, threads]);
+  }, [activeThreadId, resultsByMessageId, storageReady, threads]);
 
   useEffect(() => {
     return onListenAgentChatEvents((message) => {
@@ -218,6 +243,33 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
     setError(null);
   };
 
+  const deleteThread = (threadToDelete: AgentThread) => {
+    const deletedMessageIds = threadToDelete.messages.map((message) => message.id);
+    const nextThreads = threads.filter((thread) => thread.id !== threadToDelete.id);
+    const stream = activeStreamRef.current;
+
+    if (stream?.threadId === threadToDelete.id) {
+      activeStreamRef.current = null;
+      setActiveStream(null);
+      setStarting(false);
+      void onStopAgentChat(stream.requestId).catch((stopError) => {
+        setError(`Agent chat stop failed: ${String(stopError)}`);
+      });
+    }
+
+    setThreads((current) => current.filter((thread) => thread.id !== threadToDelete.id));
+    setActiveThreadId((current) =>
+      current === threadToDelete.id ? nextThreads[0]?.id ?? null : current,
+    );
+    setResultsByMessageId((current) => removeKeys(current, deletedMessageIds));
+    setStreamStatusByMessageId((current) => removeKeys(current, deletedMessageIds));
+    setStoppedMessageIds((current) => removeKeys(current, deletedMessageIds));
+
+    if (activeThread?.id === threadToDelete.id) {
+      setError(null);
+    }
+  };
+
   const send = async () => {
     const question = input.trim();
     if (!canSend || !question) {
@@ -254,6 +306,8 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
         conversationId: thread.id,
         assistantMessageId: assistantMessage.id,
         scope: { workspaceId },
+        // Graph selection is an inspection state. Agent chat should search the workspace
+        // unless an explicit scope UI exists.
         mode: "auto",
         selectedNodeId: null,
         sourceIds: sources.map((source) => source.source_id),
@@ -339,20 +393,37 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
           ) : (
             <div className="space-y-1">
               {threads.map((thread) => (
-                <button
+                <div
                   className={cn(
-                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm",
+                    "group/thread flex w-full items-center rounded-md text-sm",
                     activeThread?.id === thread.id
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:bg-background hover:text-foreground",
                   )}
                   key={thread.id}
-                  onClick={() => setActiveThreadId(thread.id)}
-                  type="button"
                 >
-                  <span className="min-w-0 truncate">{thread.title}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{relativeAge(thread.updatedAt)}</span>
-                </button>
+                  <button
+                    className="flex min-w-0 flex-1 items-center justify-between gap-2 px-2 py-2 text-left"
+                    onClick={() => setActiveThreadId(thread.id)}
+                    type="button"
+                  >
+                    <span className="min-w-0 truncate">{thread.title}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {relativeAge(thread.updatedAt)}
+                    </span>
+                  </button>
+                  <Button
+                    aria-label={`Delete chat ${thread.title}`}
+                    className="mr-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => deleteThread(thread)}
+                    size="icon-xs"
+                    title="Delete chat"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Trash2 size={13} />
+                  </Button>
+                </div>
               ))}
             </div>
           )}
@@ -682,6 +753,13 @@ function persistThreads(value: StoredThreads) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
 }
 
+function isStorageEpochCurrent(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  return window.localStorage.getItem(STORAGE_EPOCH_KEY) === String(STORAGE_VERSION);
+}
+
 function emptyStorage(): StoredThreads {
   return { version: STORAGE_VERSION, threads: [], activeThreadId: null, resultsByMessageId: {} };
 }
@@ -737,6 +815,17 @@ function removeKey<T>(record: Record<string, T>, key: string): Record<string, T>
   }
   const next = { ...record };
   delete next[key];
+  return next;
+}
+
+function removeKeys<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
+  let next = record;
+  for (const key of keys) {
+    if (key in next) {
+      next = next === record ? { ...record } : next;
+      delete next[key];
+    }
+  }
   return next;
 }
 

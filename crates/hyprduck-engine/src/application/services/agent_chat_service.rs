@@ -16,6 +16,7 @@ use rig_core::client::{CompletionClient, Nothing};
 use rig_core::completion::Prompt;
 use rig_core::providers::{ollama, openrouter};
 use rig_core::streaming::{StreamedAssistantContent, StreamingPrompt};
+use serde_json::Value;
 
 use crate::application::services::context_pack_service;
 use crate::domains::retrieval::brain_search::db_search_terms;
@@ -26,6 +27,8 @@ const MAX_HISTORY_MESSAGES: usize = 24;
 const MAX_HISTORY_CHARS: usize = 16_000;
 const DEFAULT_CONTEXT_BUDGET: usize = 8_000;
 const DEFAULT_MAX_TOKENS: u64 = 1_200;
+const MAX_CONTEXT_RETRIEVAL_ATTEMPTS: usize = 4;
+const MAX_GENERATION_ATTEMPTS: usize = 2;
 const EVIDENCE_AGENT_PREAMBLE: &str = r#"You are HyprDuck's local document evidence agent.
 Answer only from the supplied context pack.
 When you use evidence, cite the exact evidenceRef in square brackets, for example [ev_abc123].
@@ -35,8 +38,109 @@ const GENERAL_AGENT_PREAMBLE: &str = r#"You are HyprDuck's agent chat assistant.
 Answer the user's general question directly.
 No citation-ready HyprDuck document context was supplied for this turn, so do not invent citations or evidence references.
 Do not expose local filesystem paths."#;
+const CONTEXT_QUERY_PLANNER_PREAMBLE: &str = r#"You are HyprDuck's retrieval query planner.
+You do not answer the user.
+Convert the latest user request into concise search queries for local document evidence.
+Use the user's language. Preserve concrete entities, filenames, graph/source hints, and topic nouns.
+Drop conversational or command wording. If a topic and request wording are glued together, infer the likely searchable topic phrase.
+Return JSON only as {"queries":["..."]}. Do not include markdown."#;
+const MAX_PLANNED_CONTEXT_QUERIES: usize = 5;
+const MAX_PLANNED_CONTEXT_QUERY_CHARS: usize = 160;
 
 type AgentChatEventSink<'a> = &'a mut dyn FnMut(AgentChatStreamEvent) -> Result<()>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentChatWorkflowStep {
+    ClassifyQuestion,
+    RetrieveContext,
+    AssessContext,
+    PlanContextQueries,
+    ConnectProvider,
+    Generate,
+    ValidateCitations,
+    RepairCitations,
+    Block,
+    Finalize,
+}
+
+struct AgentChatRunState {
+    provider: AgentChatProviderSummary,
+    general_intent: bool,
+    should_retrieve_context: bool,
+    context_query: String,
+    context_query_candidates: Vec<String>,
+    next_context_query_index: usize,
+    context_query_planning_attempted: bool,
+    retrieval_attempts: usize,
+    generation_attempts: usize,
+    started: bool,
+    context_pack: ContextPackV1,
+    persisted_context_pack_path: Option<String>,
+    answer_mode: AgentChatAnswerMode,
+    model_text: String,
+    citations: Vec<ContextPackEvidenceV1>,
+    answer_status: AnswerStatus,
+    warnings: Vec<String>,
+    explanation: String,
+}
+
+impl AgentChatRunState {
+    fn new(request: &AgentChatAskRequest, provider: AgentChatProviderSummary) -> Self {
+        Self {
+            provider,
+            general_intent: false,
+            should_retrieve_context: false,
+            context_query: request.question.trim().into(),
+            context_query_candidates: Vec::new(),
+            next_context_query_index: 0,
+            context_query_planning_attempted: false,
+            retrieval_attempts: 0,
+            generation_attempts: 0,
+            started: false,
+            context_pack: empty_context_pack(request),
+            persisted_context_pack_path: None,
+            answer_mode: AgentChatAnswerMode::General,
+            model_text: String::new(),
+            citations: Vec::new(),
+            answer_status: AnswerStatus::LowConfidence,
+            warnings: Vec::new(),
+            explanation: String::new(),
+        }
+    }
+
+    fn set_context_query_candidates(&mut self, candidates: Vec<String>) {
+        self.context_query_candidates = candidates;
+        self.context_query = self
+            .context_query_candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(String::new);
+        self.next_context_query_index = usize::from(!self.context_query_candidates.is_empty());
+    }
+
+    fn advance_context_query(&mut self) -> bool {
+        if self.retrieval_attempts >= MAX_CONTEXT_RETRIEVAL_ATTEMPTS {
+            return false;
+        }
+        while self.next_context_query_index < self.context_query_candidates.len() {
+            let query = self.context_query_candidates[self.next_context_query_index].clone();
+            self.next_context_query_index += 1;
+            if query != self.context_query {
+                self.context_query = query;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn extend_context_query_candidates(&mut self, candidates: Vec<String>) -> bool {
+        let before = self.context_query_candidates.len();
+        for candidate in candidates {
+            push_unique_context_query(&mut self.context_query_candidates, candidate);
+        }
+        self.context_query_candidates.len() > before
+    }
+}
 
 pub(crate) fn handle_agent_chat_ask(
     request: AgentChatAskRequest,
@@ -65,197 +169,203 @@ fn execute_agent_chat(
     )?;
     validate_agent_chat_request(&request)?;
     let provider = provider_summary(config);
+    let streaming = emit.is_some();
+    let mut run = AgentChatRunState::new(&request, provider);
+    let mut step = AgentChatWorkflowStep::ClassifyQuestion;
 
-    emit_status(
-        &mut emit,
-        AgentChatStreamStatus::ClassifyingQuestion,
-        "Classifying question...",
-    )?;
-    let general_intent = should_answer_as_general_chat(&request);
-    let should_retrieve_context = should_retrieve_context(&request, general_intent);
-    let context_query = build_context_query(&request);
-
-    let (context_pack, persisted_context_pack_path) = if should_retrieve_context {
-        emit_status(
-            &mut emit,
-            AgentChatStreamStatus::RetrievingContext,
-            "Retrieving context...",
-        )?;
-        let selected_node_id = match request.mode {
-            AgentChatScopeMode::GraphContext => request.selected_node_id.clone(),
-            AgentChatScopeMode::Auto
-            | AgentChatScopeMode::AllDocs
-            | AgentChatScopeMode::SelectedSource => None,
+    loop {
+        step = match step {
+            AgentChatWorkflowStep::ClassifyQuestion => {
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::ClassifyingQuestion,
+                    "Classifying question...",
+                )?;
+                run.general_intent = should_answer_as_general_chat(&request);
+                run.should_retrieve_context = should_retrieve_context(&request, run.general_intent);
+                run.set_context_query_candidates(build_context_query_candidates(&request));
+                if run.should_retrieve_context {
+                    AgentChatWorkflowStep::RetrieveContext
+                } else {
+                    AgentChatWorkflowStep::AssessContext
+                }
+            }
+            AgentChatWorkflowStep::RetrieveContext => {
+                run.retrieval_attempts += 1;
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::RetrievingContext,
+                    if run.retrieval_attempts == 1 {
+                        "Retrieving context..."
+                    } else {
+                        "Retrieving more context..."
+                    },
+                )?;
+                run.context_pack = retrieve_context_pack_for_agent(&request, &run.context_query)?;
+                run.warnings = run
+                    .context_pack
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.message.clone())
+                    .collect::<Vec<_>>();
+                AgentChatWorkflowStep::AssessContext
+            }
+            AgentChatWorkflowStep::AssessContext => {
+                let has_context = has_citation_ready_context(&run.context_pack);
+                run.answer_mode = classify_answer_mode(&request, run.general_intent, has_context);
+                if matches!(run.answer_mode, AgentChatAnswerMode::Blocked)
+                    && run.advance_context_query()
+                {
+                    AgentChatWorkflowStep::RetrieveContext
+                } else if matches!(run.answer_mode, AgentChatAnswerMode::Blocked)
+                    && !run.context_query_planning_attempted
+                {
+                    AgentChatWorkflowStep::PlanContextQueries
+                } else if matches!(run.answer_mode, AgentChatAnswerMode::Blocked) {
+                    AgentChatWorkflowStep::Block
+                } else {
+                    emit_started_once(&request, &mut emit, &mut run)?;
+                    AgentChatWorkflowStep::ConnectProvider
+                }
+            }
+            AgentChatWorkflowStep::PlanContextQueries => {
+                run.context_query_planning_attempted = true;
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::RetrievingContext,
+                    "Planning retrieval queries...",
+                )?;
+                match plan_context_query_candidates(config, &request, &run.context_query_candidates)
+                {
+                    Ok(candidates) => {
+                        let added = run.extend_context_query_candidates(candidates);
+                        if added && run.advance_context_query() {
+                            AgentChatWorkflowStep::RetrieveContext
+                        } else {
+                            AgentChatWorkflowStep::Block
+                        }
+                    }
+                    Err(error) => {
+                        run.warnings.push(format!(
+                            "Context query planning failed before retrieval retry: {error:#}"
+                        ));
+                        AgentChatWorkflowStep::Block
+                    }
+                }
+            }
+            AgentChatWorkflowStep::ConnectProvider => {
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::ConnectingProvider,
+                    "Connecting provider...",
+                )?;
+                AgentChatWorkflowStep::Generate
+            }
+            AgentChatWorkflowStep::Generate => {
+                run.generation_attempts += 1;
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::Generating,
+                    if run.generation_attempts == 1 {
+                        "Generating..."
+                    } else {
+                        "Regenerating with citation checks..."
+                    },
+                )?;
+                let (preamble, context, prompt) = build_agent_turn_prompt(&request, &run);
+                run.model_text = if let Some(sink) = emit.as_deref_mut() {
+                    run_rig_agent_stream(config, preamble, &context, &prompt, sink)?
+                } else {
+                    run_rig_agent(config, preamble, &context, &prompt)?
+                };
+                AgentChatWorkflowStep::ValidateCitations
+            }
+            AgentChatWorkflowStep::ValidateCitations => {
+                emit_status(
+                    &mut emit,
+                    AgentChatStreamStatus::ValidatingCitations,
+                    "Validating citations...",
+                )?;
+                run.citations = if matches!(run.answer_mode, AgentChatAnswerMode::Evidence) {
+                    validate_model_citations(&run.model_text, &run.context_pack)
+                } else {
+                    Vec::new()
+                };
+                run.answer_status = answer_status_for_run(&run);
+                if matches!(run.answer_mode, AgentChatAnswerMode::Evidence)
+                    && run.citations.is_empty()
+                    && !streaming
+                    && run.generation_attempts < MAX_GENERATION_ATTEMPTS
+                {
+                    AgentChatWorkflowStep::RepairCitations
+                } else {
+                    attach_fallback_citations_if_needed(&mut run);
+                    if !run.citations.is_empty() {
+                        emit_agent_event(
+                            &mut emit,
+                            AgentChatStreamEvent::CitationUpdate {
+                                citations: run.citations.clone(),
+                            },
+                        )?;
+                    }
+                    AgentChatWorkflowStep::Finalize
+                }
+            }
+            AgentChatWorkflowStep::RepairCitations => {
+                run.warnings.push(
+                    "The first draft omitted valid evidenceRefs; HyprDuck asked the agent to rewrite with citations."
+                        .into(),
+                );
+                AgentChatWorkflowStep::Generate
+            }
+            AgentChatWorkflowStep::Block => {
+                emit_started_once(&request, &mut emit, &mut run)?;
+                run.model_text =
+                    "I could not find citation-ready document context for this question."
+                        .to_string();
+                run.answer_status = AnswerStatus::Blocked;
+                run.explanation = "The question asks for document or graph-grounded facts, but no citation-ready context matched.".into();
+                AgentChatWorkflowStep::Finalize
+            }
+            AgentChatWorkflowStep::Finalize => {
+                if request.persist_context_pack && run.persisted_context_pack_path.is_none() {
+                    run.persisted_context_pack_path =
+                        Some(context_pack_service::persist_context_pack_v1(
+                            &request.scope,
+                            &run.context_pack,
+                        )?);
+                }
+                let response = build_response(
+                    &request,
+                    &run.context_pack,
+                    run.answer_mode,
+                    run.provider,
+                    run.persisted_context_pack_path,
+                    run.model_text,
+                    run.answer_status,
+                    run.citations,
+                    run.warnings,
+                    if run.explanation.is_empty() {
+                        if matches!(run.answer_mode, AgentChatAnswerMode::General) {
+                            "Answered as general chat without document citations."
+                        } else {
+                            "Answered with the selected context pack evidence."
+                        }
+                    } else {
+                        run.explanation.as_str()
+                    },
+                );
+                emit_status(&mut emit, AgentChatStreamStatus::Complete, "Complete.")?;
+                emit_agent_event(
+                    &mut emit,
+                    AgentChatStreamEvent::Final {
+                        result: response.clone(),
+                    },
+                )?;
+                return Ok(response);
+            }
         };
-        let context_response =
-            context_pack_service::handle_get_context_pack(GetContextPackRequest {
-                scope: request.scope.clone(),
-                query: context_query.clone(),
-                selected_node_id,
-                budget: request.budget.or(Some(DEFAULT_CONTEXT_BUDGET)),
-                persist: false,
-            })?;
-        let filtered_context_pack =
-            filter_context_pack_for_scope(&context_response.context_pack_v1, &request);
-        let persisted_context_pack_path = if request.persist_context_pack {
-            Some(context_pack_service::persist_context_pack_v1(
-                &request.scope,
-                &filtered_context_pack,
-            )?)
-        } else {
-            None
-        };
-        (filtered_context_pack, persisted_context_pack_path)
-    } else {
-        (empty_context_pack(&request), None)
-    };
-
-    let has_context = has_citation_ready_context(&context_pack);
-    let answer_mode = classify_answer_mode(&request, general_intent, has_context);
-    emit_agent_event(
-        &mut emit,
-        AgentChatStreamEvent::Started {
-            conversation_id: request.conversation_id.clone(),
-            assistant_message_id: assistant_message_id(&request),
-            provider: provider.clone(),
-            answer_mode: Some(answer_mode),
-        },
-    )?;
-
-    let mut warnings = context_pack
-        .warnings
-        .iter()
-        .map(|warning| warning.message.clone())
-        .collect::<Vec<_>>();
-
-    if matches!(answer_mode, AgentChatAnswerMode::Blocked) {
-        let text =
-            "I could not find citation-ready document context for this question.".to_string();
-        let response = build_response(
-            &request,
-            &context_pack,
-            AgentChatAnswerMode::Blocked,
-            provider,
-            persisted_context_pack_path,
-            text,
-            AnswerStatus::Blocked,
-            Vec::new(),
-            warnings,
-            "The question asks for document or graph-grounded facts, but no citation-ready context matched.",
-        );
-        emit_status(&mut emit, AgentChatStreamStatus::Complete, "Complete.")?;
-        emit_agent_event(
-            &mut emit,
-            AgentChatStreamEvent::Final {
-                result: response.clone(),
-            },
-        )?;
-        return Ok(response);
     }
-
-    let (preamble, context, prompt) = match answer_mode {
-        AgentChatAnswerMode::Evidence => (
-            EVIDENCE_AGENT_PREAMBLE,
-            build_context_document(&context_pack),
-            build_evidence_user_prompt(&request, &context_pack),
-        ),
-        AgentChatAnswerMode::General => {
-            warnings
-                .push("Answered as general chat without citation-ready document context.".into());
-            (
-                GENERAL_AGENT_PREAMBLE,
-                "No citation-ready HyprDuck document context was retrieved for this turn."
-                    .to_string(),
-                build_general_user_prompt(&request),
-            )
-        }
-        AgentChatAnswerMode::Blocked => unreachable!("blocked mode is returned above"),
-    };
-
-    emit_status(
-        &mut emit,
-        AgentChatStreamStatus::ConnectingProvider,
-        "Connecting provider...",
-    )?;
-    emit_status(
-        &mut emit,
-        AgentChatStreamStatus::Generating,
-        "Generating...",
-    )?;
-
-    let model_text = if let Some(sink) = emit.as_deref_mut() {
-        run_rig_agent_stream(config, preamble, &context, &prompt, sink)?
-    } else {
-        run_rig_agent(config, preamble, &context, &prompt)?
-    };
-
-    emit_status(
-        &mut emit,
-        AgentChatStreamStatus::ValidatingCitations,
-        "Validating citations...",
-    )?;
-    let mut citations = if matches!(answer_mode, AgentChatAnswerMode::Evidence) {
-        validate_model_citations(&model_text, &context_pack)
-    } else {
-        Vec::new()
-    };
-    let mut answer_status = if matches!(answer_mode, AgentChatAnswerMode::General) {
-        AnswerStatus::LowConfidence
-    } else if citations.is_empty() {
-        AnswerStatus::LowConfidence
-    } else {
-        AnswerStatus::Grounded
-    };
-
-    if citations.is_empty()
-        && matches!(answer_mode, AgentChatAnswerMode::Evidence)
-        && !context_pack.selected_evidence.is_empty()
-    {
-        citations = context_pack
-            .selected_evidence
-            .iter()
-            .take(3)
-            .cloned()
-            .collect();
-        warnings.push(
-            "The model did not cite evidenceRefs; HyprDuck attached top context evidence as fallback."
-                .into(),
-        );
-        answer_status = AnswerStatus::LowConfidence;
-    }
-    if !citations.is_empty() {
-        emit_agent_event(
-            &mut emit,
-            AgentChatStreamEvent::CitationUpdate {
-                citations: citations.clone(),
-            },
-        )?;
-    }
-
-    let response = build_response(
-        &request,
-        &context_pack,
-        answer_mode,
-        provider,
-        persisted_context_pack_path,
-        model_text,
-        answer_status,
-        citations,
-        warnings,
-        if matches!(answer_mode, AgentChatAnswerMode::General) {
-            "Answered as general chat without document citations."
-        } else {
-            "Answered with the selected context pack evidence."
-        },
-    );
-    emit_status(&mut emit, AgentChatStreamStatus::Complete, "Complete.")?;
-    emit_agent_event(
-        &mut emit,
-        AgentChatStreamEvent::Final {
-            result: response.clone(),
-        },
-    )?;
-    Ok(response)
 }
 
 fn validate_agent_chat_request(request: &AgentChatAskRequest) -> Result<()> {
@@ -331,6 +441,29 @@ fn filter_context_pack_for_scope(
     }
 }
 
+fn retrieve_context_pack_for_agent(
+    request: &AgentChatAskRequest,
+    query: &str,
+) -> Result<ContextPackV1> {
+    let selected_node_id = match request.mode {
+        AgentChatScopeMode::GraphContext => request.selected_node_id.clone(),
+        AgentChatScopeMode::Auto
+        | AgentChatScopeMode::AllDocs
+        | AgentChatScopeMode::SelectedSource => None,
+    };
+    let context_response = context_pack_service::handle_get_context_pack(GetContextPackRequest {
+        scope: request.scope.clone(),
+        query: query.into(),
+        selected_node_id,
+        budget: request.budget.or(Some(DEFAULT_CONTEXT_BUDGET)),
+        persist: false,
+    })?;
+    Ok(filter_context_pack_for_scope(
+        &context_response.context_pack_v1,
+        request,
+    ))
+}
+
 fn provider_summary(config: &EngineConfig) -> AgentChatProviderSummary {
     AgentChatProviderSummary {
         id: config.provider.id_slug().into(),
@@ -364,8 +497,28 @@ fn emit_agent_event(
     Ok(())
 }
 
+fn emit_started_once(
+    request: &AgentChatAskRequest,
+    emit: &mut Option<AgentChatEventSink<'_>>,
+    run: &mut AgentChatRunState,
+) -> Result<()> {
+    if run.started {
+        return Ok(());
+    }
+    run.started = true;
+    emit_agent_event(
+        emit,
+        AgentChatStreamEvent::Started {
+            conversation_id: request.conversation_id.clone(),
+            assistant_message_id: assistant_message_id(request),
+            provider: run.provider.clone(),
+            answer_mode: Some(run.answer_mode),
+        },
+    )
+}
+
 fn has_citation_ready_context(context_pack: &ContextPackV1) -> bool {
-    !context_pack.selected_evidence.is_empty() || !context_pack.source_set.is_empty()
+    !context_pack.selected_evidence.is_empty()
 }
 
 fn should_answer_as_general_chat(request: &AgentChatAskRequest) -> bool {
@@ -412,10 +565,42 @@ fn classify_answer_mode(
 
 fn build_context_query(request: &AgentChatAskRequest) -> String {
     let question = request.question.trim();
-    if !db_search_terms(question).is_empty() {
-        return question.into();
+    if should_reuse_previous_topic_for_context(question) {
+        if let Some(query) = build_history_augmented_context_query(request) {
+            return query;
+        }
     }
+    question.into()
+}
 
+fn build_context_query_candidates(request: &AgentChatAskRequest) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_context_query(&mut candidates, build_context_query(request));
+    if let Some(query) = build_history_augmented_context_query(request) {
+        push_unique_context_query(&mut candidates, query);
+    }
+    if let Some(query) = build_cleaned_context_query(request.question.trim()) {
+        push_unique_context_query(&mut candidates, query);
+    }
+    if let Some(query) = build_history_augmented_clean_context_query(request) {
+        push_unique_context_query(&mut candidates, query);
+    }
+    if candidates.is_empty() {
+        push_unique_context_query(&mut candidates, request.question.trim().into());
+    }
+    candidates
+}
+
+fn push_unique_context_query(candidates: &mut Vec<String>, query: String) {
+    let query = query.trim();
+    if query.is_empty() || candidates.iter().any(|candidate| candidate == query) {
+        return;
+    }
+    candidates.push(query.into());
+}
+
+fn build_history_augmented_context_query(request: &AgentChatAskRequest) -> Option<String> {
+    let question = request.question.trim();
     request
         .history
         .iter()
@@ -424,7 +609,225 @@ fn build_context_query(request: &AgentChatAskRequest) -> String {
         .map(|message| message.text.trim())
         .find(|text| !text.is_empty() && !db_search_terms(text).is_empty())
         .map(|previous_question| format!("{previous_question} {question}"))
-        .unwrap_or_else(|| question.into())
+}
+
+fn build_cleaned_context_query(text: &str) -> Option<String> {
+    let query = db_search_terms(text).join(" ");
+    (!query.is_empty()).then_some(query)
+}
+
+fn build_history_augmented_clean_context_query(request: &AgentChatAskRequest) -> Option<String> {
+    let question = build_cleaned_context_query(request.question.trim());
+    request
+        .history
+        .iter()
+        .rev()
+        .filter(|message| matches!(message.role, AgentChatMessageRole::User))
+        .filter_map(|message| build_cleaned_context_query(message.text.trim()))
+        .next()
+        .map(|previous_question| match &question {
+            Some(question) if !question.is_empty() => format!("{previous_question} {question}"),
+            _ => previous_question,
+        })
+}
+
+fn plan_context_query_candidates(
+    config: &EngineConfig,
+    request: &AgentChatAskRequest,
+    attempted_queries: &[String],
+) -> Result<Vec<String>> {
+    let prompt = build_context_query_planner_prompt(request, attempted_queries);
+    let output = run_rig_agent(config, CONTEXT_QUERY_PLANNER_PREAMBLE, "", &prompt)?;
+    Ok(parse_context_query_plan(&output))
+}
+
+fn build_context_query_planner_prompt(
+    request: &AgentChatAskRequest,
+    attempted_queries: &[String],
+) -> String {
+    let recent_user_messages = format_recent_user_messages(&request.history);
+    let attempted = if attempted_queries.is_empty() {
+        "(none)".to_string()
+    } else {
+        attempted_queries
+            .iter()
+            .map(|query| format!("- {query}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "Latest user question:\n{}\n\nRecent user messages:\n{}\n\nAlready attempted retrieval queries:\n{}\n\nReturn 1 to {} concise search queries that should be tried against indexed document text, filenames, graph labels, and source metadata. Prefer evidence-bearing topic/entity phrases over full chat commands. JSON only.",
+        request.question.trim(),
+        if recent_user_messages.is_empty() {
+            "(none)"
+        } else {
+            recent_user_messages.as_str()
+        },
+        attempted,
+        MAX_PLANNED_CONTEXT_QUERIES,
+    )
+}
+
+fn format_recent_user_messages(history: &[AgentChatMessage]) -> String {
+    history
+        .iter()
+        .rev()
+        .filter(|message| matches!(message.role, AgentChatMessageRole::User))
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| message.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_context_query_plan(output: &str) -> Vec<String> {
+    let Some(value) = parse_json_value_from_text(output) else {
+        return Vec::new();
+    };
+    let queries = match value {
+        Value::Object(map) => map
+            .get("queries")
+            .and_then(Value::as_array)
+            .map(|values| query_strings_from_json_array(values))
+            .unwrap_or_default(),
+        Value::Array(values) => query_strings_from_json_array(&values),
+        _ => Vec::new(),
+    };
+    sanitize_planned_context_queries(queries)
+}
+
+fn query_strings_from_json_array(values: &[Value]) -> Vec<String> {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn sanitize_planned_context_queries(queries: Vec<String>) -> Vec<String> {
+    let mut sanitized = Vec::new();
+    for query in queries {
+        let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+        let query = query
+            .trim()
+            .chars()
+            .take(MAX_PLANNED_CONTEXT_QUERY_CHARS)
+            .collect::<String>();
+        if query.is_empty() || sanitized.iter().any(|candidate| candidate == &query) {
+            continue;
+        }
+        sanitized.push(query);
+        if sanitized.len() >= MAX_PLANNED_CONTEXT_QUERIES {
+            break;
+        }
+    }
+    sanitized
+}
+
+fn parse_json_value_from_text(output: &str) -> Option<Value> {
+    let trimmed = output.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Some(value);
+    }
+    for (start, _) in output
+        .char_indices()
+        .filter(|(_, ch)| matches!(ch, '{' | '['))
+    {
+        let Some(end) = json_value_end(&output[start..]) else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(&output[start..start + end]) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn json_value_end(text: &str) -> Option<usize> {
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' => {
+                if stack.pop() != Some(ch) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    return Some(index + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn should_reuse_previous_topic_for_context(question: &str) -> bool {
+    let terms = db_search_terms(question);
+    terms.is_empty()
+        || (terms.len() <= 1 && looks_like_evidence_question(question))
+        || terms.iter().all(|term| is_generic_evidence_term(term))
+}
+
+fn is_generic_evidence_term(term: &str) -> bool {
+    matches!(
+        term,
+        "document"
+            | "documents"
+            | "doc"
+            | "docs"
+            | "source"
+            | "sources"
+            | "citation"
+            | "citations"
+            | "evidence"
+            | "graph"
+            | "node"
+            | "context"
+            | "pdf"
+            | "docx"
+            | "file"
+            | "files"
+            | "paper"
+            | "papers"
+            | "article"
+            | "articles"
+            | "research"
+            | "page"
+            | "pages"
+            | "summarize"
+            | "summary"
+            | "문서"
+            | "자료"
+            | "파일"
+            | "논문"
+            | "연구"
+            | "출처"
+            | "근거"
+            | "인용"
+            | "그래프"
+            | "노드"
+            | "페이지"
+            | "요약"
+            | "정리"
+    )
 }
 
 fn looks_like_evidence_question(question: &str) -> bool {
@@ -446,6 +849,11 @@ fn looks_like_evidence_question(question: &str) -> bool {
         "docx",
         "file",
         "files",
+        "paper",
+        "papers",
+        "article",
+        "articles",
+        "research",
         "page",
         "pages",
         "summarize",
@@ -453,6 +861,8 @@ fn looks_like_evidence_question(question: &str) -> bool {
         "문서",
         "자료",
         "파일",
+        "논문",
+        "연구",
         "출처",
         "근거",
         "인용",
@@ -577,7 +987,7 @@ fn run_openrouter_agent(
         .temperature(0.2)
         .max_tokens(DEFAULT_MAX_TOKENS)
         .build();
-    block_on_prompt(agent.prompt(prompt))
+    block_on_prompt(agent.prompt(prompt).max_turns(2).with_tool_concurrency(2))
 }
 
 fn run_openrouter_agent_stream(
@@ -602,7 +1012,7 @@ fn run_openrouter_agent_stream(
         .temperature(0.2)
         .max_tokens(DEFAULT_MAX_TOKENS)
         .build();
-    block_on_stream(agent.stream_prompt(prompt.to_string()), emit)
+    block_on_stream(agent.stream_prompt(prompt.to_string()).multi_turn(2), emit)
 }
 
 fn run_ollama_agent(
@@ -625,7 +1035,13 @@ fn run_ollama_agent(
         .temperature(0.2)
         .max_tokens(DEFAULT_MAX_TOKENS)
         .build();
-    block_on_prompt(agent.prompt(prompt)).map_err(|error| {
+    block_on_prompt(
+        agent
+            .prompt(prompt)
+            .max_turns(2)
+            .with_tool_concurrency(2),
+    )
+    .map_err(|error| {
         anyhow!(
             "provider_unavailable: Ollama is not available for Agent chat. Confirm Ollama is running and model `{}` is pulled. {error}",
             config.model_id
@@ -654,7 +1070,7 @@ fn run_ollama_agent_stream(
         .temperature(0.2)
         .max_tokens(DEFAULT_MAX_TOKENS)
         .build();
-    block_on_stream(agent.stream_prompt(prompt.to_string()), emit).map_err(|error| {
+    block_on_stream(agent.stream_prompt(prompt.to_string()).multi_turn(2), emit).map_err(|error| {
         anyhow!(
             "provider_unavailable: Ollama is not available for Agent chat. Confirm Ollama is running and model `{}` is pulled. {error}",
             config.model_id
@@ -739,11 +1155,45 @@ fn normalized_ollama_base_url(value: Option<&str>) -> Option<String> {
     )
 }
 
+fn build_agent_turn_prompt(
+    request: &AgentChatAskRequest,
+    run: &AgentChatRunState,
+) -> (&'static str, String, String) {
+    match run.answer_mode {
+        AgentChatAnswerMode::Evidence => {
+            let prompt = if run.generation_attempts > 1 {
+                build_citation_repair_user_prompt(
+                    request,
+                    &run.context_pack,
+                    run.model_text.as_str(),
+                )
+            } else {
+                build_evidence_user_prompt(request, &run.context_pack)
+            };
+            (
+                EVIDENCE_AGENT_PREAMBLE,
+                build_context_document(&run.context_pack),
+                prompt,
+            )
+        }
+        AgentChatAnswerMode::General => (
+            GENERAL_AGENT_PREAMBLE,
+            "No citation-ready HyprDuck document context was retrieved for this turn.".to_string(),
+            build_general_user_prompt(request),
+        ),
+        AgentChatAnswerMode::Blocked => (
+            GENERAL_AGENT_PREAMBLE,
+            String::new(),
+            build_general_user_prompt(request),
+        ),
+    }
+}
+
 fn build_evidence_user_prompt(
     request: &AgentChatAskRequest,
     context_pack: &ContextPackV1,
 ) -> String {
-    let history = format_recent_history(&request.history);
+    let recent_user_requests = format_recent_user_messages(&request.history);
     let scope_line = match request.mode {
         AgentChatScopeMode::Auto => {
             "Scope: automatically selected indexed document evidence".to_string()
@@ -758,14 +1208,33 @@ fn build_evidence_user_prompt(
         ),
     };
     format!(
-        "{scope_line}\nContext pack: {}\nConversation history:\n{}\n\nQuestion:\n{}",
+        "{scope_line}\nContext pack: {}\nRecent user requests for topic continuity only:\n{}\n\nCurrent context pack overrides prior chat text. Do not treat previous assistant messages as evidence.\n\nQuestion:\n{}",
         context_pack.pack_id,
-        if history.is_empty() {
+        if recent_user_requests.is_empty() {
             "(no prior messages)"
         } else {
-            history.as_str()
+            recent_user_requests.as_str()
         },
         request.question.trim()
+    )
+}
+
+fn build_citation_repair_user_prompt(
+    request: &AgentChatAskRequest,
+    context_pack: &ContextPackV1,
+    previous_draft: &str,
+) -> String {
+    let valid_refs = context_pack
+        .selected_evidence
+        .iter()
+        .map(|evidence| evidence.evidence_ref.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{}\n\nThe previous draft did not cite valid evidenceRefs from the context pack. Rewrite the answer using only the supplied evidence. Include at least one valid evidenceRef in square brackets for every factual paragraph. Valid evidenceRefs: {}.\n\nPrevious draft:\n{}",
+        build_evidence_user_prompt(request, context_pack),
+        valid_refs,
+        previous_draft.trim()
     )
 }
 
@@ -858,6 +1327,37 @@ fn validate_model_citations(
                 .cloned()
         })
         .collect()
+}
+
+fn answer_status_for_run(run: &AgentChatRunState) -> AnswerStatus {
+    if matches!(run.answer_mode, AgentChatAnswerMode::General) {
+        AnswerStatus::LowConfidence
+    } else if run.citations.is_empty() {
+        AnswerStatus::LowConfidence
+    } else {
+        AnswerStatus::Grounded
+    }
+}
+
+fn attach_fallback_citations_if_needed(run: &mut AgentChatRunState) {
+    if !run.citations.is_empty()
+        || !matches!(run.answer_mode, AgentChatAnswerMode::Evidence)
+        || run.context_pack.selected_evidence.is_empty()
+    {
+        return;
+    }
+    run.citations = run
+        .context_pack
+        .selected_evidence
+        .iter()
+        .take(3)
+        .cloned()
+        .collect();
+    run.warnings.push(
+        "The model did not cite evidenceRefs; HyprDuck attached top context evidence as fallback."
+            .into(),
+    );
+    run.answer_status = AnswerStatus::LowConfidence;
 }
 
 fn build_response(
@@ -1035,6 +1535,57 @@ mod tests {
     }
 
     #[test]
+    fn source_set_without_selected_evidence_is_not_citation_ready() {
+        let mut pack = context_pack();
+        pack.selected_evidence.clear();
+
+        assert!(!has_citation_ready_context(&pack));
+        assert_eq!(
+            classify_answer_mode(&request(AgentChatScopeMode::Auto), false, false),
+            AgentChatAnswerMode::General
+        );
+        assert_eq!(
+            classify_answer_mode(&request(AgentChatScopeMode::AllDocs), false, false),
+            AgentChatAnswerMode::Blocked
+        );
+    }
+
+    #[test]
+    fn citation_repair_prompt_names_valid_evidence_refs() {
+        let request = request(AgentChatScopeMode::Auto);
+        let pack = context_pack();
+        let prompt = build_citation_repair_user_prompt(&request, &pack, "draft without refs");
+
+        assert!(prompt.contains("Valid evidenceRefs: ev_a"));
+        assert!(prompt.contains("Previous draft:"));
+        assert!(prompt.contains("draft without refs"));
+    }
+
+    #[test]
+    fn evidence_prompt_excludes_stale_assistant_history() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.history = vec![
+            AgentChatMessage {
+                id: "msg_user_1".into(),
+                role: AgentChatMessageRole::User,
+                text: "summarize the parser fixture".into(),
+                created_at: 1,
+            },
+            AgentChatMessage {
+                id: "msg_assistant_1".into(),
+                role: AgentChatMessageRole::Assistant,
+                text: "The context pack only contains unrelated queue content.".into(),
+                created_at: 2,
+            },
+        ];
+        let prompt = build_evidence_user_prompt(&request, &context_pack());
+
+        assert!(prompt.contains("summarize the parser fixture"));
+        assert!(prompt.contains("Do not treat previous assistant messages as evidence."));
+        assert!(!prompt.contains("unrelated queue content"));
+    }
+
+    #[test]
     fn selected_source_filters_context_pack() {
         let mut pack = context_pack();
         pack.selected_evidence.push(ContextPackEvidenceV1 {
@@ -1107,10 +1658,125 @@ mod tests {
     }
 
     #[test]
+    fn generic_evidence_follow_up_context_query_reuses_previous_user_topic() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.history = vec![AgentChatMessage {
+            id: "msg_user_1".into(),
+            role: AgentChatMessageRole::User,
+            text: "graph contains parser fixture evidence".into(),
+            created_at: 1,
+        }];
+        request.question = "source summary".into();
+
+        let candidates = build_context_query_candidates(&request);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate
+                    == "graph contains parser fixture evidence source summary"),
+            "{candidates:#?}"
+        );
+    }
+
+    #[test]
+    fn context_query_candidates_keep_raw_question_first() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.history.clear();
+        request.question = "source summary".into();
+
+        let candidates = build_context_query_candidates(&request);
+
+        assert_eq!(
+            candidates.first().map(String::as_str),
+            Some("source summary")
+        );
+    }
+
+    #[test]
+    fn blocked_retrieval_can_advance_to_cleaned_query_candidate() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.history.clear();
+        request.question = "dynamic hashing 내용".into();
+        let mut run = AgentChatRunState::new(
+            &request,
+            AgentChatProviderSummary {
+                id: "test".into(),
+                label: "Test".into(),
+                model_id: "test-model".into(),
+                hosted: false,
+            },
+        );
+        run.set_context_query_candidates(build_context_query_candidates(&request));
+        run.retrieval_attempts = 1;
+
+        assert_eq!(run.context_query, "dynamic hashing 내용");
+        assert!(run.advance_context_query());
+        assert_eq!(run.context_query, "dynamic hashing");
+    }
+
+    #[test]
+    fn planned_context_queries_are_appended_for_retrieval_retry() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.history.clear();
+        request.question = "source summary".into();
+        let mut run = AgentChatRunState::new(
+            &request,
+            AgentChatProviderSummary {
+                id: "test".into(),
+                label: "Test".into(),
+                model_id: "test-model".into(),
+                hosted: false,
+            },
+        );
+        run.set_context_query_candidates(build_context_query_candidates(&request));
+        run.retrieval_attempts = 1;
+
+        assert_eq!(run.context_query, "source summary");
+        assert!(!run.advance_context_query());
+        assert!(run.extend_context_query_candidates(vec![
+            "parser fixture".into(),
+            "source summary".into()
+        ]));
+        assert!(run.advance_context_query());
+        assert_eq!(run.context_query, "parser fixture");
+    }
+
+    #[test]
+    fn context_query_plan_parser_accepts_json_object() {
+        let queries =
+            parse_context_query_plan(r#"{"queries":["parser fixture","indexed source"]}"#);
+
+        assert_eq!(queries, vec!["parser fixture", "indexed source"]);
+    }
+
+    #[test]
+    fn context_query_plan_parser_accepts_embedded_json_array() {
+        let queries = parse_context_query_plan(
+            "Plan:\n```json\n[\"fixture parser\", \"metadata source\"]\n```",
+        );
+
+        assert_eq!(queries, vec!["fixture parser", "metadata source"]);
+    }
+
+    #[test]
     fn evidence_question_without_context_is_blocked() {
         let mut request = request(AgentChatScopeMode::AllDocs);
         request.question = "Summarize the source evidence".into();
         assert!(!should_answer_as_general_chat(&request));
+        assert_eq!(
+            classify_answer_mode(&request, false, false),
+            AgentChatAnswerMode::Blocked
+        );
+    }
+
+    #[test]
+    fn evidence_question_without_context_is_blocked_instead_of_general_chat() {
+        let mut request = request(AgentChatScopeMode::Auto);
+        request.question = "source summary".into();
+
+        assert!(!should_answer_as_general_chat(&request));
+        assert!(looks_like_evidence_question(&request.question));
         assert_eq!(
             classify_answer_mode(&request, false, false),
             AgentChatAnswerMode::Blocked

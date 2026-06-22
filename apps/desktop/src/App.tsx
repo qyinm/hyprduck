@@ -833,7 +833,6 @@ export function App() {
               onStopAgentChat={stopAgentChat}
               project={workspaceProject}
               providerReady={agentReady}
-              selectedNodeId={workspaceUiState.selectedNodeId}
               sources={workspaceSources}
               workspaceId={loadedWorkspaceEnvelope?.workspace_id ?? snapshot.lastWorkspaceId ?? "default"}
             />

@@ -53,6 +53,7 @@ const snapshot = {
 
 let mainWindow = null;
 let engineRuntime = null;
+let engineRuntimeBinarySignature = null;
 let providerModelCatalogPromise = null;
 let graphRebuildQueue = Promise.resolve();
 let agentTerminalSessions = null;
@@ -126,10 +127,7 @@ app.on("activate", () => {
 });
 
 app.on("will-quit", () => {
-  if (engineRuntime) {
-    engineRuntime.stop();
-    engineRuntime = null;
-  }
+  resetEngineRuntime();
 });
 
 async function registerIpcHandlers() {
@@ -352,10 +350,7 @@ function stopAgentChat(requestId) {
   }
   const active = activeAgentChatStreams.get(requestId);
   active.stopped = true;
-  if (engineRuntime) {
-    engineRuntime.stop();
-    engineRuntime = null;
-  }
+  resetEngineRuntime();
   publishAgentChatEvent({
     requestId,
     type: "stopped",
@@ -739,10 +734,7 @@ async function cancelParse() {
   if (!snapshot.activeJob) {
     return;
   }
-  if (engineRuntime) {
-    engineRuntime.stop();
-    engineRuntime = null;
-  }
+  resetEngineRuntime();
   markFailed("Parse canceled");
 }
 
@@ -1143,10 +1135,37 @@ function graphGenerationNonBlockingMessage(project) {
 }
 
 function runEngineCommand(expectedCommand, request, options = {}) {
+  const binarySignature = engineBinarySignature();
+  if (
+    engineRuntime &&
+    engineRuntimeBinarySignature &&
+    binarySignature !== engineRuntimeBinarySignature
+  ) {
+    resetEngineRuntime();
+  }
   if (!engineRuntime) {
     engineRuntime = new EngineRuntime({ spawnEngine: spawnEngineProcess });
+    engineRuntimeBinarySignature = binarySignature;
   }
   return engineRuntime.run(expectedCommand, request, options);
+}
+
+function resetEngineRuntime() {
+  if (engineRuntime) {
+    engineRuntime.stop();
+    engineRuntime = null;
+  }
+  engineRuntimeBinarySignature = null;
+}
+
+function engineBinarySignature() {
+  const enginePath = resolveEnginePath();
+  try {
+    const stat = fs.statSync(enginePath);
+    return `${enginePath}:${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return enginePath;
+  }
 }
 
 function runOneShotEngineCommand(expectedCommand, request) {

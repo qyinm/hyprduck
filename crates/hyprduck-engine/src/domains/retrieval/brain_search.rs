@@ -32,11 +32,28 @@ pub(crate) struct HybridRetrievalHit {
 }
 
 pub(crate) fn db_search_terms(query: &str) -> Vec<String> {
-    query
+    let mut terms = Vec::new();
+    for term in query
         .split(|ch: char| !ch.is_alphanumeric())
-        .map(|term| term.trim().to_lowercase())
-        .filter(|term| !term.is_empty() && !is_query_stopword(term))
-        .collect()
+        .map(|term| normalize_search_text(term.trim()))
+    {
+        for candidate in query_term_candidates(&term) {
+            if !candidate.is_empty()
+                && !is_query_stopword(&candidate)
+                && !terms.contains(&candidate)
+            {
+                terms.push(candidate);
+            }
+        }
+    }
+    terms
+}
+
+fn query_term_candidates(term: &str) -> Vec<String> {
+    if term.is_empty() || is_query_stopword(term) {
+        return Vec::new();
+    }
+    vec![term.into()]
 }
 
 fn is_query_stopword(term: &str) -> bool {
@@ -62,24 +79,132 @@ fn is_query_stopword(term: &str) -> bool {
             | "있나요"
             | "없어"
             | "없나요"
-            | "알려줘"
-            | "알려주세요"
-            | "설명해"
-            | "설명해봐"
-            | "설명해줘"
-            | "설명해주세요"
-    ) || term.ends_with("알려줘")
-        || term.ends_with("알려주세요")
-        || term.ends_with("설명해")
-        || term.ends_with("설명해봐")
-        || term.ends_with("설명해줘")
-        || term.ends_with("설명해주세요")
+    )
 }
 
 pub(crate) fn db_match_score(terms: &[String], haystack: &str) -> Option<usize> {
-    let lower = haystack.to_lowercase();
+    let lower = normalize_search_text(haystack);
     let matched = terms.iter().filter(|term| lower.contains(*term)).count();
     (matched > 0).then(|| matched * 100)
+}
+
+fn db_source_metadata_match_score(terms: &[String], haystack: &str) -> Option<usize> {
+    let lower = normalize_search_text(haystack);
+    let mut matched = 0usize;
+    let mut specific_matched = 0usize;
+    for term in terms {
+        if lower.contains(term.as_str()) {
+            matched += 1;
+            if !is_generic_source_metadata_term(term) {
+                specific_matched += 1;
+            }
+        }
+    }
+    (specific_matched > 0).then(|| matched * 100 + specific_matched * 200)
+}
+
+fn is_generic_source_metadata_term(term: &str) -> bool {
+    matches!(
+        term,
+        "document"
+            | "documents"
+            | "doc"
+            | "docs"
+            | "source"
+            | "sources"
+            | "citation"
+            | "citations"
+            | "evidence"
+            | "graph"
+            | "node"
+            | "context"
+            | "pdf"
+            | "docx"
+            | "file"
+            | "files"
+            | "paper"
+            | "papers"
+            | "article"
+            | "articles"
+            | "research"
+            | "page"
+            | "pages"
+            | "summarize"
+            | "summary"
+            | "문서"
+            | "자료"
+            | "파일"
+            | "논문"
+            | "연구"
+            | "출처"
+            | "근거"
+            | "인용"
+            | "그래프"
+            | "노드"
+            | "페이지"
+            | "요약"
+            | "정리"
+    )
+}
+
+fn normalize_search_text(text: &str) -> String {
+    compose_hangul_jamo(text).to_lowercase()
+}
+
+fn compose_hangul_jamo(text: &str) -> String {
+    const S_BASE: u32 = 0xAC00;
+    const L_BASE: u32 = 0x1100;
+    const V_BASE: u32 = 0x1161;
+    const T_BASE: u32 = 0x11A7;
+    const L_COUNT: u32 = 19;
+    const V_COUNT: u32 = 21;
+    const T_COUNT: u32 = 28;
+    const N_COUNT: u32 = V_COUNT * T_COUNT;
+
+    fn l_index(ch: char) -> Option<u32> {
+        let value = ch as u32;
+        (L_BASE..L_BASE + L_COUNT)
+            .contains(&value)
+            .then(|| value - L_BASE)
+    }
+    fn v_index(ch: char) -> Option<u32> {
+        let value = ch as u32;
+        (V_BASE..V_BASE + V_COUNT)
+            .contains(&value)
+            .then(|| value - V_BASE)
+    }
+    fn t_index(ch: char) -> Option<u32> {
+        let value = ch as u32;
+        (T_BASE + 1..T_BASE + T_COUNT)
+            .contains(&value)
+            .then(|| value - T_BASE)
+    }
+
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if let (Some(l), Some(v)) = (
+            l_index(chars[index]),
+            chars.get(index + 1).and_then(|ch| v_index(*ch)),
+        ) {
+            let mut consumed = 2;
+            let t = chars
+                .get(index + 2)
+                .and_then(|ch| t_index(*ch))
+                .inspect(|_| consumed = 3)
+                .unwrap_or(0);
+            let syllable = S_BASE + (l * N_COUNT) + (v * T_COUNT) + t;
+            if let Some(ch) = char::from_u32(syllable) {
+                output.push(ch);
+                index += consumed;
+                continue;
+            }
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+    output
 }
 
 pub(crate) fn db_best_snippet(text: &str, terms: &[String]) -> String {
@@ -141,15 +266,24 @@ fn db_context_candidate_indices(lower: &str, terms: &[String]) -> Vec<usize> {
 }
 
 fn db_context_window_start(text: &str, match_index: usize) -> usize {
+    let match_index = previous_char_boundary(text, match_index.min(text.len()));
     let mut start = text[..match_index]
         .rfind("\n\n")
         .map(|index| index + 2)
         .or_else(|| text[..match_index].rfind('\n').map(|index| index + 1))
         .unwrap_or(0);
     if match_index.saturating_sub(start) > 240 {
-        start = match_index.saturating_sub(120);
+        start = previous_char_boundary(text, match_index.saturating_sub(120));
     }
     start
+}
+
+fn previous_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 fn db_context_candidate_score(window_lower: &str, match_index: usize, terms: &[String]) -> i64 {
@@ -637,6 +771,136 @@ pub(crate) fn append_source_page_fts_hits(
 }
 
 #[allow(dead_code)]
+pub(crate) fn append_source_metadata_hits(
+    graph: &Graph,
+    workspace_id: &str,
+    terms: &[String],
+    limit: usize,
+    graph_neighbor_counts: &BTreeMap<String, i64>,
+    evidence_intent: &EvidenceQueryIntent,
+    hits: &mut Vec<HybridRetrievalHit>,
+) -> Result<()> {
+    if terms.is_empty() || limit == 0 {
+        return Ok(());
+    }
+
+    let sqlite = graph.connection().sqlite_connection();
+    let mut source_statement = sqlite
+        .prepare(
+            "SELECT source_id, title, original_path_redacted, source_path_redacted, markdown_path_redacted
+             FROM sources
+             WHERE workspace_id = ?1
+               AND status NOT IN ('failed', 'stale', 'hash_mismatched', 'unapproved')
+             ORDER BY updated_at DESC
+             LIMIT 200",
+        )
+        .context("failed preparing source metadata retrieval query")?;
+    let mut source_rows = source_statement
+        .query([workspace_id])
+        .context("failed running source metadata retrieval query")?;
+    let per_source_limit = limit.min(4).max(1) as i64;
+    let mut additions = 0usize;
+    while let Some(row) = source_rows
+        .next()
+        .context("failed reading source metadata retrieval row")?
+    {
+        if additions >= limit {
+            break;
+        }
+        let source_id: String = row.get(0).context("failed reading source id")?;
+        let title: String = row.get(1).context("failed reading source title")?;
+        let original_path_redacted: String =
+            row.get(2).context("failed reading source original path")?;
+        let source_path_redacted: String = row.get(3).context("failed reading source path")?;
+        let markdown_path_redacted: String =
+            row.get(4).context("failed reading source markdown path")?;
+        let haystack = format!(
+            "{source_id} {title} {original_path_redacted} {source_path_redacted} {markdown_path_redacted}"
+        );
+        let Some(metadata_score) = db_source_metadata_match_score(terms, &haystack) else {
+            continue;
+        };
+        let source_boost = 0.75 + (metadata_score as f64 / 100.0) * 0.35;
+        let mut evidence_statement = sqlite
+            .prepare(
+                "SELECT
+                    e.evidence_id,
+                    e.source_id,
+                    e.evidence_type,
+                    e.snippet,
+                    e.page_index,
+                    sp.plain_text
+                 FROM evidence_items e
+                 LEFT JOIN source_pages sp
+                   ON sp.source_id = e.source_id
+                  AND sp.page_index = e.page_index
+                 WHERE e.workspace_id = ?1
+                   AND e.source_id = ?2
+                   AND e.status = 'active'
+                 ORDER BY
+                   CASE WHEN e.page_index IS NULL THEN 1 ELSE 0 END ASC,
+                   e.page_index ASC,
+                   CASE e.evidence_type
+                     WHEN 'summary_evidence' THEN 0
+                     WHEN 'text_evidence' THEN 1
+                     ELSE 2
+                   END ASC,
+                   e.evidence_id ASC
+                 LIMIT ?3",
+            )
+            .context("failed preparing source metadata evidence query")?;
+        let mut evidence_rows = evidence_statement
+            .query((workspace_id, source_id.as_str(), per_source_limit))
+            .context("failed running source metadata evidence query")?;
+        while let Some(row) = evidence_rows
+            .next()
+            .context("failed reading source metadata evidence row")?
+        {
+            let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+            let source_id: String = row.get(1).context("failed reading source id")?;
+            let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+            let snippet: String = row.get(3).context("failed reading evidence snippet")?;
+            let page_index: Option<i64> =
+                row.get(4).context("failed reading evidence page index")?;
+            let page_text: Option<String> =
+                row.get(5).context("failed reading source page text")?;
+            let quoted_text = page_text
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| db_context_window(&text, terms, 1_600));
+            let snippet = quoted_text.clone().unwrap_or(snippet);
+            let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+            let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
+            let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+            let page_boost = page_index.map(|_| 0.08).unwrap_or(0.0);
+            let score = source_boost + typed_evidence_boost + graph_boost + page_boost;
+            if let Some(existing) = hits.iter_mut().find(|hit| hit.evidence_id == evidence_id) {
+                existing.score += source_boost;
+                if existing.quoted_text.is_none() {
+                    existing.quoted_text = quoted_text;
+                    existing.snippet = snippet;
+                }
+                continue;
+            }
+            hits.push(HybridRetrievalHit {
+                evidence_id,
+                source_id,
+                evidence_type,
+                snippet,
+                quoted_text,
+                lexical_rank: 0.0,
+                graph_neighbor_count,
+                score,
+            });
+            additions += 1;
+            if additions >= limit {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn append_wiki_fts_hits(
     graph: &Graph,
     workspace_id: &str,
@@ -788,14 +1052,28 @@ pub(crate) fn hybrid_retrieve_from_db(
         &evidence_intent,
         &mut hits,
     )?;
-    append_graph_neighbor_hits(
+    append_source_metadata_hits(
+        &graph,
+        workspace_id,
+        &terms,
+        expanded_limit,
+        &graph_neighbor_counts,
+        &evidence_intent,
+        &mut hits,
+    )?;
+    if append_graph_neighbor_hits(
         &graph,
         workspace_id,
         expanded_limit,
         &graph_neighbor_counts,
         &evidence_intent,
         &mut hits,
-    )?;
+    )
+    .is_err()
+    {
+        // Graph expansion is an enrichment stage. Keep lexical/source evidence
+        // usable when GraphQLite projection rows are incomplete or stale.
+    }
     append_wiki_fts_hits(
         &graph,
         workspace_id,
@@ -821,30 +1099,42 @@ pub(crate) fn hybrid_retrieve_from_db(
                      LIMIT ?3",
             )
             .context("failed preparing hybrid retrieval fallback query")?;
-        let mut fallback_rows = fallback_statement
-            .query((workspace_id, query, limit as i64))
-            .context("failed running hybrid retrieval fallback query")?;
-        while let Some(row) = fallback_rows
-            .next()
-            .context("failed reading hybrid retrieval fallback row")?
-        {
-            let evidence_id: String = row.get(0).context("failed reading evidence id")?;
-            let source_id: String = row.get(1).context("failed reading source id")?;
-            let evidence_type: String = row.get(2).context("failed reading evidence type")?;
-            let snippet: String = row.get(3).context("failed reading evidence text")?;
-            let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
-            let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
-            let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
-            hits.push(HybridRetrievalHit {
-                evidence_id,
-                source_id,
-                evidence_type,
-                snippet,
-                quoted_text: None,
-                lexical_rank: 0.0,
-                graph_neighbor_count,
-                score: typed_evidence_boost + graph_boost,
-            });
+        for term in &terms {
+            if hits.len() >= limit {
+                break;
+            }
+            let mut fallback_rows = fallback_statement
+                .query((workspace_id, term.as_str(), limit as i64))
+                .context("failed running hybrid retrieval fallback query")?;
+            while let Some(row) = fallback_rows
+                .next()
+                .context("failed reading hybrid retrieval fallback row")?
+            {
+                if hits.len() >= limit {
+                    break;
+                }
+                let evidence_id: String = row.get(0).context("failed reading evidence id")?;
+                if hits.iter().any(|hit| hit.evidence_id == evidence_id) {
+                    continue;
+                }
+                let source_id: String = row.get(1).context("failed reading source id")?;
+                let evidence_type: String = row.get(2).context("failed reading evidence type")?;
+                let snippet: String = row.get(3).context("failed reading evidence text")?;
+                let context = db_context_window(&snippet, &terms, 1_600);
+                let graph_neighbor_count = *graph_neighbor_counts.get(&evidence_id).unwrap_or(&1);
+                let typed_evidence_boost = evidence_intent.boost(evidence_type.as_str());
+                let graph_boost = (graph_neighbor_count as f64).min(10.0) * 0.01;
+                hits.push(HybridRetrievalHit {
+                    evidence_id,
+                    source_id,
+                    evidence_type,
+                    snippet: context.clone(),
+                    quoted_text: Some(context),
+                    lexical_rank: 0.0,
+                    graph_neighbor_count,
+                    score: typed_evidence_boost + graph_boost,
+                });
+            }
         }
     }
     hits.sort_by(|left, right| {
@@ -992,5 +1282,19 @@ mod tests {
         assert!(window.contains("fixed size hash table"));
         assert!(window.contains("collision chains handle overflow"));
         assert!(!window.starts_with("Hashing\nChapter 8\nContents"));
+    }
+
+    #[test]
+    fn context_window_handles_multibyte_text_when_backing_up_from_match() {
+        let prefix = "가".repeat(90);
+        let text = format!(
+            "{prefix}x needle section explains 입력 문서는 먼저 점검 단계를 거쳐 텍스트 레이어 상태를 분석한다."
+        );
+        let terms = vec!["needle".to_string()];
+
+        let window = db_context_window(&text, &terms, 240);
+
+        assert!(window.contains("needle section"));
+        assert!(window.contains("입력 문서는"));
     }
 }
