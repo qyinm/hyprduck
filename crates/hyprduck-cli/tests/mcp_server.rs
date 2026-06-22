@@ -139,9 +139,49 @@ fn mcp_server_exposes_read_and_agent_session_write_brain_tools() {
     ] {
         assert_eq!(read_only_by_name[name], false, "{name} should mutate state");
     }
-    assert!(tools
+    let destructive_by_name = tools
         .iter()
-        .all(|tool| tool["annotations"]["destructiveHint"] == false));
+        .map(|tool| {
+            (
+                tool["name"].as_str().expect("tool name"),
+                tool["annotations"]["destructiveHint"]
+                    .as_bool()
+                    .expect("destructiveHint"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for name in [
+        "import_source",
+        "import_status",
+        "import_cancel",
+        "import_retry_graph",
+        "get_context_pack",
+        "read_context_pack",
+        "search_documents",
+        "search_brain",
+        "read_source",
+        "read_page_evidence",
+        "read_wiki_page",
+        "read_node",
+        "read_recent_events",
+        "read_graph_history",
+        "read_graph_snapshot",
+        "read_health",
+        "graph_patch_apply",
+        "write_propose",
+        "write_commit",
+        "write_commit_all",
+        "write_list",
+    ] {
+        assert_eq!(
+            destructive_by_name[name], false,
+            "{name} should not be destructive"
+        );
+    }
+    assert_eq!(
+        destructive_by_name["write_reject"], true,
+        "write_reject should advertise its destructive approval boundary"
+    );
     let retired_surface_terms = ["trust console", "review queue", "governance", "rollback"];
     for tool in tools {
         let text = format!(
