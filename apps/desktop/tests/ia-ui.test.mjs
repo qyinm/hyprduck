@@ -2,6 +2,14 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const desktopApiSource = readFileSync(
+  new URL("../src/desktopApi.ts", import.meta.url),
+  "utf8",
+);
+const workspaceLoadSource = readFileSync(
+  new URL("../src/features/workspace/loadWorkspaceEnvelope.ts", import.meta.url),
+  "utf8",
+);
 const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
@@ -303,11 +311,17 @@ test("evidence is rendered as UI content instead of raw markdown", () => {
 test("workspace graph reader loads the latest materialized snapshot first", () => {
   expect(mainSource).toMatch(/case "load_materialized_graph_snapshot"/);
   expect(mainSource).toMatch(/command: "read_graph_snapshot"/);
-  expect(appSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
-  expect(appSource).toMatch(/loadGraphWorkspaceEnvelope/);
-  expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
-  expect(appSource).toMatch(/load_materialized_graph_snapshot/);
-  expect(appSource).toMatch(/load_workspace_project/);
+  expect(desktopApiSource).toMatch(/export function getDesktopApi/);
+  expect(desktopApiSource).toMatch(/export async function invoke/);
+  expect(workspaceLoadSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
+  expect(workspaceLoadSource).toMatch(/loadGraphWorkspaceEnvelope/);
+  expect(workspaceLoadSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
+  expect(workspaceLoadSource).toMatch(/load_materialized_graph_snapshot/);
+  expect(workspaceLoadSource).toMatch(/load_workspace_project/);
+  expect(workspaceLoadSource).toMatch(/source: "materialized"/);
+  expect(workspaceLoadSource).toMatch(/source: "legacy"/);
+  expect(appSource).toMatch(/from "@\/features\/workspace\/loadWorkspaceEnvelope"/);
+  expect(appSource).toMatch(/from "@\/desktopApi"/);
   expect(appSource).toMatch(/const nextLoad = await loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setLoadedWorkspaceEnvelope\(nextLoad\.envelope\)/);
   expect(appSource).toMatch(/\}, \[workspaceProject\]\);/);
@@ -365,11 +379,13 @@ test("desktop provider validation preserves issue codes", () => {
 
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
   expect(appTypesSource).toMatch(/type WorkspaceLoadStatus =\s*\|\s*"idle"\s*\|\s*"loading"\s*\|\s*"ready"\s*\|\s*"fallback"\s*\|\s*"error"/);
+  expect(workspaceLoadSource).toMatch(/workspaceLoadStateFromResult/);
+  expect(workspaceLoadSource).toMatch(/status: "ready"/);
+  expect(workspaceLoadSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
   expect(appSource).toMatch(/workspaceLoadStateFromResult\(result, t\)/);
   expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad, t\)/);
-  expect(appSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/status: "error"/);
   expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
   expect(appSource).toMatch(/workspace\.status\.refreshingTitle/);

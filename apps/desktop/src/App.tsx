@@ -24,19 +24,14 @@ import {
   type AgentChatAskPayload,
   type AgentChatStartResult,
   type AgentChatStreamEvent,
-  type DesktopCommand,
-  type DesktopCommandParameters,
-  type DesktopCommandResult,
   type DesktopMessage,
   type DesktopUnlisten,
   type EngineConfigPayload,
   type FileSelection,
-  type HyprDuckDesktopApi,
   type SourceDetailResult,
   type UiSnapshot,
   type ValidateProviderResponseData,
   type RuntimeReadinessResponseData,
-  type WorkspaceLoadResult,
   type WorkspaceLoadState,
 } from "@/appTypes";
 import {
@@ -47,11 +42,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { getDesktopApi, invoke } from "@/desktopApi";
 import { AgentChatWorkspace } from "@/features/agent-chat/AgentChatWorkspace";
 import { DocsWorkspace } from "@/features/workspace/DocsWorkspace";
 import { GraphWorkspace } from "@/features/workspace/GraphWorkspace";
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
-import { materializedGraphSnapshotToWorkspaceEnvelope } from "@/features/workspace/materializedGraphSnapshot";
+import {
+  loadGraphWorkspaceEnvelopeResult,
+  workspaceLoadStateFromResult,
+} from "@/features/workspace/loadWorkspaceEnvelope";
 import {
   createInitialWorkspaceUiState,
   workspaceUiStateReducer,
@@ -65,7 +64,6 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { TranslationKey } from "@/i18n/locales";
 import { cn } from "@/lib/utils";
 import { SettingsPanel, type SettingsTab } from "@/SettingsPanel";
-import { createWebMockApi } from "@/webPreviewApi";
 import {
   createEmptyWorkspaceProject,
   hydrateWorkspaceProjectWithSources,
@@ -73,16 +71,6 @@ import {
 
 type MainPanel = "docs" | "agent" | "graph";
 type ActivePanel = MainPanel | "settings";
-
-declare global {
-  interface Window {
-    hyprduck?: HyprDuckDesktopApi;
-  }
-}
-
-const IS_WEB_PREVIEW = import.meta.env.VITE_PLATFORM === "web";
-
-const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
 const MAIN_NAV_ITEMS: { id: MainPanel; labelKey: TranslationKey; icon: ReactNode }[] = [
   {
@@ -176,83 +164,6 @@ class WorkspaceErrorBoundary extends Component<
 
     return this.props.children;
   }
-}
-
-function getDesktopApi(): HyprDuckDesktopApi {
-  if (IS_WEB_PREVIEW) {
-    return webPreviewApi as HyprDuckDesktopApi;
-  }
-  const api = window.hyprduck;
-  if (!api) {
-    throw new Error("HyprDuck desktop UI requires Electron preload APIs.");
-  }
-  return api;
-}
-
-async function invoke<K extends DesktopCommand>(
-  command: K,
-  ...args: DesktopCommandParameters<K>
-): Promise<DesktopCommandResult<K>> {
-  return getDesktopApi().invoke(command, ...args);
-}
-
-async function loadGraphWorkspaceEnvelope(
-  workspaceId?: string | null,
-  projectId?: string | null,
-): Promise<WorkspaceProjectEnvelope> {
-  return (await loadGraphWorkspaceEnvelopeResult(workspaceId, projectId)).envelope;
-}
-
-async function loadGraphWorkspaceEnvelopeResult(
-  workspaceId?: string | null,
-  projectId?: string | null,
-): Promise<WorkspaceLoadResult> {
-  try {
-    const materializedSnapshot = await invoke("load_materialized_graph_snapshot", {
-      workspace_id: workspaceId ?? undefined,
-    });
-    return {
-      envelope: materializedGraphSnapshotToWorkspaceEnvelope(materializedSnapshot),
-      source: "materialized",
-    };
-  } catch (materializedError) {
-    try {
-      return {
-        envelope: await invoke("load_workspace_project", {
-          project_id: projectId ?? null,
-          workspace_id: workspaceId ?? null,
-        }),
-        source: "legacy",
-        fallbackReason: String(materializedError),
-      };
-    } catch (legacyError) {
-      throw new Error(
-        `Failed to refresh latest workspace snapshot. Materialized read failed: ${String(
-          materializedError,
-        )}. Legacy project read failed: ${String(legacyError)}.`,
-      );
-    }
-  }
-}
-
-function workspaceLoadStateFromResult(
-  result: WorkspaceLoadResult,
-  t: ReturnType<typeof useI18n>["t"],
-): WorkspaceLoadState {
-  if (result.source === "materialized") {
-    const snapshotPath =
-      result.envelope.project?.summary.summary.match(/from (.+)\.$/)?.[1] ??
-      "state/latest-readable-snapshot.json";
-    return {
-      status: "ready",
-      message: t("workspace.status.materializedPrefix", { path: snapshotPath }),
-    };
-  }
-
-  return {
-    status: "fallback",
-    message: t("workspace.status.legacyFallback"),
-  };
 }
 
 function WorkspaceSnapshotStatusBanner({
