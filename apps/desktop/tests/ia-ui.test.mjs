@@ -14,8 +14,24 @@ const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const graphNodeInspectorSource = readFileSync(
+  new URL("../src/features/workspace/GraphNodeInspector.tsx", import.meta.url),
+  "utf8",
+);
 const docsSource = readFileSync(
   new URL("../src/features/workspace/DocsWorkspace.tsx", import.meta.url),
+  "utf8",
+);
+const docsPdfPreviewSource = readFileSync(
+  new URL("../src/features/workspace/docs/PdfOriginalPreview.tsx", import.meta.url),
+  "utf8",
+);
+const docsMarkdownPreviewSource = readFileSync(
+  new URL("../src/features/workspace/docs/ParsedMarkdownPreview.tsx", import.meta.url),
+  "utf8",
+);
+const graphEvidenceSource = readFileSync(
+  new URL("../src/features/workspace/GraphEvidence.tsx", import.meta.url),
   "utf8",
 );
 const agentChatSource = readFileSync(
@@ -151,25 +167,26 @@ test("Docs page focuses first users on importing source files", () => {
   expect(docsSource).toMatch(/View in Graph/);
   expect(docsSource).toMatch(/SourceDetailWorkspace/);
   expect(docsSource).toMatch(/Original/);
-  expect(docsSource).toMatch(/Parsed Markdown/);
-  expect(docsSource).toMatch(/Document/);
-  expect(docsSource).toMatch(/Page/);
-  expect(docsSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
-  expect(docsSource).toMatch(/visiblePageRange/);
-  expect(docsSource).toMatch(/visiblePageNumbers/);
-  expect(docsSource).toMatch(/pageNumber=\{pageNumber\}/);
-  expect(docsSource).toMatch(/onScroll=\{updateVisiblePages\}/);
-  expect(docsSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
-  expect(docsSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
+  expect(docsSource).toMatch(/ParsedMarkdownPreview/);
+  expect(docsMarkdownPreviewSource).toMatch(/Parsed Markdown/);
+  expect(docsPdfPreviewSource).toMatch(/Document/);
+  expect(docsPdfPreviewSource).toMatch(/Page/);
+  expect(docsMarkdownPreviewSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
+  expect(docsPdfPreviewSource).toMatch(/visiblePageRange/);
+  expect(docsPdfPreviewSource).toMatch(/visiblePageNumbers/);
+  expect(docsPdfPreviewSource).toMatch(/pageNumber=\{pageNumber\}/);
+  expect(docsPdfPreviewSource).toMatch(/onScroll=\{updateVisiblePages\}/);
+  expect(docsPdfPreviewSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
+  expect(docsPdfPreviewSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
   expect(packageSource).toMatch(/"react-pdf": "\^10\.4\.1"/);
   expect(packageSource).toMatch(/"pdfjs-dist": "5\.4\.296"/);
-  expect(docsSource).toMatch(/top-12 z-\[60\]/);
-  expect(docsSource).toMatch(/data-electron-no-drag/);
-  expect(docsSource).not.toMatch(/type="application\/pdf"/);
-  expect(docsSource).toMatch(/Preview/);
-  expect(docsSource).toMatch(/Raw/);
-  expect(docsSource).toMatch(/Copy/);
-  expect(docsSource).toMatch(/MessageResponse/);
+  expect(docsPdfPreviewSource).toMatch(/top-12 z-\[60\]/);
+  expect(docsPdfPreviewSource).toMatch(/data-electron-no-drag/);
+  expect(docsPdfPreviewSource).not.toMatch(/type="application\/pdf"/);
+  expect(docsMarkdownPreviewSource).toMatch(/Preview/);
+  expect(docsMarkdownPreviewSource).toMatch(/Raw/);
+  expect(docsMarkdownPreviewSource).toMatch(/Copy/);
+  expect(docsMarkdownPreviewSource).toMatch(/MessageResponse/);
   expect(docsSource).not.toMatch(/Open extracted text/);
   expect(docsSource).toMatch(/Reveal in Finder/);
   expect(docsSource).not.toMatch(/Filter/);
@@ -212,7 +229,7 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
 });
 
 test("Graph workspace keeps the graph canvas and removes chat/import chrome", () => {
-  expect(graphSource).toMatch(/SigmaGraphCanvas/);
+  expect(graphSource).toMatch(/WorkspaceGraphCanvas/);
   expect(graphSource).toMatch(/onOpenDocs/);
   expect(graphSource).not.toMatch(/AgentTerminal/);
   expect(graphSource).not.toMatch(/GraphPromptComposer/);
@@ -226,21 +243,23 @@ test("Graph workspace keeps the graph canvas and removes chat/import chrome", ()
 });
 
 test("Graph workspace centers the canvas with inspector actions", () => {
-  expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/Document/);
-  expect(graphSource).toMatch(/File/);
-  expect(graphSource).toMatch(/workspace\.inspector\.openFile/);
-  expect(graphSource).toMatch(/workspace\.inspector\.openExtractedText/);
-  expect(graphSource).toMatch(/workspace\.inspector\.revealInFinder/);
-  expect(graphSource).toMatch(/ExternalLink/);
-  expect(graphSource).toMatch(/FileText/);
-  expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/Trash2/);
+  expect(graphSource).toMatch(/WorkspaceGraphCanvas/);
+  expect(graphSource).toMatch(/GraphNodeInspector/);
+  expect(graphNodeInspectorSource).toMatch(/Document/);
+  expect(graphNodeInspectorSource).toMatch(/File/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.openFile/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.openExtractedText/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.revealInFinder/);
+  expect(graphNodeInspectorSource).toMatch(/ExternalLink/);
+  expect(graphNodeInspectorSource).toMatch(/FileText/);
+  expect(graphNodeInspectorSource).toMatch(/FolderOpen/);
+  expect(graphNodeInspectorSource).toMatch(/Trash2/);
   expect(graphSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
-  expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
-  expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
-  expect(graphSource).toMatch(/customerVisibleDescription/);
-  expect(graphSource).not.toMatch(/<Badge variant="outline">\{selectedNode\.node\.kind\}<\/Badge>/);
+  expect(graphNodeInspectorSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
+  expect(graphNodeInspectorSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
+  expect(graphNodeInspectorSource).toMatch(/workspaceSelectionKindLabel/);
+  expect(graphNodeInspectorSource).toMatch(/customerVisibleDescription/);
+  expect(graphNodeInspectorSource).not.toMatch(/<Badge variant="outline">\{selectedNode\.node\.kind\}<\/Badge>/);
   expect(graphSource).not.toMatch(/graphMaterializationSummary/);
   expect(graphSource).not.toMatch(/projectionSummary/);
 });
@@ -315,8 +334,9 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
 
 test("evidence is rendered as UI content instead of raw markdown", () => {
   expect(graphSource).toMatch(/formatEvidenceSnippet/);
-  expect(graphSource).toMatch(/extractMarkdownImageLabel/);
-  expect(graphSource).toMatch(/Page image:/);
+  expect(graphEvidenceSource).toMatch(/formatEvidenceSnippet/);
+  expect(graphEvidenceSource).toMatch(/extractMarkdownImageLabel/);
+  expect(graphEvidenceSource).toMatch(/Page image:/);
 });
 
 test("workspace graph reader loads the latest materialized snapshot first", () => {

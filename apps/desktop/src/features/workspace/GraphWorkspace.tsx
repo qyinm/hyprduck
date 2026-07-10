@@ -11,23 +11,22 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import {
   Check,
-  ExternalLink,
-  FileText,
-  FolderOpen,
   LoaderCircle,
   Share2,
-  Trash2,
   X,
 } from "lucide-react";
 
-import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
+import { GraphEdgeInspector } from "./GraphEdgeInspector";
+import { formatEvidenceSnippet } from "./GraphEvidence";
+import { GraphNodeInspector } from "./GraphNodeInspector";
 import { fileNameFromPath } from "./pathUtils";
-import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
+import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import type {
   WorkspaceApplyCorrectionRequest,
   WorkspaceEvidenceRef,
   WorkspaceProject,
 } from "./types";
+import { WorkspaceGraphCanvas } from "./WorkspaceGraphCanvas";
 
 interface GraphWorkspaceProps {
   project: WorkspaceProject | null;
@@ -54,7 +53,7 @@ interface GraphImportStatus {
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
     project,
-    workspaceId,
+    workspaceId: _workspaceId,
     uiState,
     importStatus,
     dispatch,
@@ -81,11 +80,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0]));
     return Object.fromEntries(entries);
   }, [project?.detailsByNodeId]);
-  const [pendingCorrectionKind, setPendingCorrectionKind] = useState<
-    WorkspaceApplyCorrectionRequest["kind"] | null
-  >(null);
-  const [correctionError, setCorrectionError] = useState<string | null>(null);
-  const [deleteConfirmNodeId, setDeleteConfirmNodeId] = useState<string | null>(null);
   const defaultAnswerNodeId =
     selectedNode?.node.id ??
     projectNodes.find((node) => node.kind === "source")?.id ??
@@ -113,23 +107,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       : answer?.status === "blocked"
       ? t("workspace.answer.blocked")
       : t("workspace.answer.preview");
-  const selectedSourcePath =
-    selectedNode?.source?.sourcePath ?? selectedNode?.evidence[0]?.sourcePath ?? null;
-  const selectedMarkdownPath = selectedNode?.source?.markdownPath ?? null;
-  const selectedDeleteAction =
-    selectedNode?.actions.find((action) => action.kind === "delete") ?? null;
-  const deleteArmed = selectedNode
-    ? deleteConfirmNodeId === selectedNode.node.id
-    : false;
-  const deleteDisabled =
-    Boolean(selectedDeleteAction?.disabledReason) || pendingCorrectionKind !== null;
-  const isSourceDelete =
-    selectedNode?.node.kind === "source" || selectedNode?.node.kind === "document";
-  useEffect(() => {
-    setPendingCorrectionKind(null);
-    setCorrectionError(null);
-    setDeleteConfirmNodeId(null);
-  }, [selectedNode?.node.id]);
 
   useEffect(() => {
     setLiveAnswer(null);
@@ -160,33 +137,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     );
   }
 
-  async function handleApplyCorrection(
-    request: Omit<WorkspaceApplyCorrectionRequest, "projectId" | "nodeId">,
-  ) {
-    if (!project || !selectedNode) {
-      return;
-    }
-
-    setPendingCorrectionKind(request.kind);
-    setCorrectionError(null);
-    try {
-      await onApplyCorrection({
-        projectId: project.summary.projectId,
-        nodeId: selectedNode.node.id,
-        ...request,
-      });
-      setDeleteConfirmNodeId(null);
-    } catch (error) {
-      setCorrectionError(String(error));
-    } finally {
-      setPendingCorrectionKind(null);
-    }
-  }
-
-  async function handleOpenArtifact(path: string | null | undefined, reveal: boolean) {
-    if (!path) {
-      return;
-    }
+  async function handleOpenArtifact(path: string, reveal: boolean) {
     try {
       await onOpenArtifact(path, reveal);
     } catch (error) {
@@ -219,7 +170,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               status={importStatus}
             />
           )}
-          <SigmaGraphCanvas
+          <WorkspaceGraphCanvas
             className="flex-1"
             dispatch={dispatch}
             project={project}
@@ -236,7 +187,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 close: t("workspace.answer.close"),
               }}
               onClose={() => dispatch({ type: "close_answer_dock" })}
-              onOpenArtifact={onOpenArtifact}
+              onOpenArtifact={handleOpenArtifact}
               question={uiState.answerInput.trim()}
             />
           )}
@@ -249,271 +200,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             style={{ width: "clamp(18rem, 28vw, 24rem)" }}
           >
             {selectedEdge ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
-                <section className="space-y-2 border-b border-border/70 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{t("workspace.inspector.connection")}</Badge>
-                    <Badge variant="secondary">
-                      {selectedEdge.edge.confidence === null
-                        ? t("workspace.inspector.evidenceBacked")
-                        : t("workspace.inspector.confidence", {
-                            percent: Math.round(selectedEdge.edge.confidence * 100),
-                          })}
-                    </Badge>
-                  </div>
-                  <div>
-                    <h4 className="text-base font-semibold leading-6 tracking-tight">
-                      {t("workspace.inspector.connectsTo", {
-                        source:
-                          nodeById[selectedEdge.edge.sourceNodeId]?.label ??
-                          selectedEdge.edge.sourceNodeId,
-                        target:
-                          nodeById[selectedEdge.edge.targetNodeId]?.label ??
-                          selectedEdge.edge.targetNodeId,
-                      })}
-                    </h4>
-                    <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
-                      {selectedEdge.explanation}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
-                      {selectedEdge.edge.label}
-                    </span>
-                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground">
-                      {selectedEdge.edge.evidenceCount} evidence
-                    </span>
-                  </div>
-                </section>
-
-                <section className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h5 className="text-sm font-semibold">Why these are connected</h5>
-                    <span className="text-xs text-muted-foreground">
-                      {selectedEdge.evidence.length} evidence
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {selectedEdge.evidence.slice(0, 3).map((evidence) => (
-                      <EvidenceCard
-                        evidence={evidence}
-                        key={evidence.id}
-                      />
-                    ))}
-                  </div>
-                </section>
-              </div>
+              <GraphEdgeInspector nodeById={nodeById} selectedEdge={selectedEdge} />
             ) : selectedNode ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
-                <section className="space-y-2 border-b border-border/70 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{workspaceSelectionKindLabel(selectedNode.node.kind)}</Badge>
-                    <Badge variant="secondary">
-                      {selectedNode.node.confidence === null
-                        ? t("workspace.inspector.evidenceBacked")
-                        : t("workspace.inspector.confidence", {
-                            percent: Math.round(selectedNode.node.confidence * 100),
-                          })}
-                    </Badge>
-                  </div>
-                  <div>
-                    <h4 className="text-base font-semibold leading-6 tracking-tight">
-                      {selectedNode.canonicalName}
-                    </h4>
-                    {customerVisibleDescription(selectedNode.description) ? (
-                      <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
-                        {customerVisibleDescription(selectedNode.description)}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedNode.aliases.map((alias) => (
-                      <span
-                        key={alias}
-                        className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-secondary-foreground"
-                      >
-                        {alias}
-                      </span>
-                    ))}
-                  </div>
-                </section>
-
-                {selectedNode.source ||
-                selectedNode.node.kind === "source" ||
-                selectedNode.node.kind === "document" ? (
-                  <section className="space-y-2 rounded-lg border border-border/70 bg-muted/10 px-3 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h5 className="text-sm font-semibold">Document</h5>
-                      <div className="flex shrink-0 items-center gap-1">
-                        {selectedNode.source?.format ? (
-                          <span className="rounded-full bg-background px-2 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
-                            {selectedNode.source.format}
-                          </span>
-                        ) : null}
-                        <Button
-                          aria-label={t("workspace.inspector.openFile")}
-                          className="size-7 rounded-full"
-                          disabled={!selectedSourcePath}
-                          onClick={() =>
-                            void handleOpenArtifact(selectedSourcePath, false)
-                          }
-                          size="icon"
-                          title={t("workspace.inspector.openFile")}
-                          type="button"
-                          variant="ghost"
-                        >
-                          <ExternalLink size={14} />
-                        </Button>
-                        <Button
-                          aria-label={t("workspace.inspector.openExtractedText")}
-                          className="size-7 rounded-full"
-                          disabled={!selectedMarkdownPath}
-                          onClick={() =>
-                            void handleOpenArtifact(selectedMarkdownPath, false)
-                          }
-                          size="icon"
-                          title={t("workspace.inspector.openExtractedText")}
-                          type="button"
-                          variant="ghost"
-                        >
-                          <FileText size={14} />
-                        </Button>
-                        <Button
-                          aria-label={t("workspace.inspector.revealInFinder")}
-                          className="size-7 rounded-full"
-                          disabled={!selectedSourcePath}
-                          onClick={() =>
-                            void handleOpenArtifact(selectedSourcePath, true)
-                          }
-                          size="icon"
-                          title={t("workspace.inspector.revealInFinder")}
-                          type="button"
-                          variant="ghost"
-                        >
-                          <FolderOpen size={14} />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="grid gap-1.5 text-xs">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">File</span>
-                        <span className="truncate font-medium text-foreground">
-                          {fileNameFromPath(
-                            selectedNode.source?.sourcePath ??
-                              selectedNode.evidence[0]?.sourcePath ??
-                              selectedNode.canonicalName,
-                          )}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Status</span>
-                        <span className="font-medium text-foreground">
-                          {selectedNode.source?.status ?? "preview"}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Pages</span>
-                        <span className="font-medium text-foreground">
-                          {selectedNode.source
-                            ? `${selectedNode.source.successCount}/${selectedNode.source.pageCount} parsed`
-                            : `${selectedNode.evidence.length} evidence`}
-                        </span>
-                      </div>
-                    </div>
-                  </section>
-                ) : null}
-
-                <section className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h5 className="text-sm font-semibold">Evidence</h5>
-                    <span className="text-xs text-muted-foreground">
-                      {selectedNode.evidence.length} evidence
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {selectedNode.evidence.slice(0, 3).map((evidence) => (
-                      <EvidenceCard
-                        evidence={evidence}
-                        key={evidence.id}
-                      />
-                    ))}
-                  </div>
-                </section>
-
-                {selectedDeleteAction ? (
-                  <section className="space-y-2 border-t border-border/70 pt-3">
-                    <div className="rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-medium text-destructive">
-                          {selectedDeleteAction.label}
-                        </span>
-                        <Button
-                          className="gap-1.5"
-                          disabled={deleteDisabled}
-                          onClick={() => {
-                            if (!deleteArmed) {
-                              setDeleteConfirmNodeId(selectedNode.node.id);
-                              return;
-                            }
-                            void handleApplyCorrection({
-                              kind: "delete",
-                            });
-                          }}
-                          size="xs"
-                          type="button"
-                          variant={deleteArmed ? "destructive" : "outline"}
-                        >
-                          <Trash2 size={13} />
-                          {pendingCorrectionKind === "delete"
-                            ? "Deleting..."
-                            : deleteArmed
-                              ? "Confirm"
-                              : "Delete"}
-                        </Button>
-                      </div>
-                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                        {selectedDeleteAction.disabledReason ??
-                          (isSourceDelete
-                            ? "Remove this document and the knowledge items it created."
-                            : "Remove this knowledge item and its connected links.")}
-                      </p>
-                    </div>
-                    {correctionError ? (
-                      <p className="text-xs leading-5 text-destructive">{correctionError}</p>
-                    ) : null}
-                  </section>
-                ) : null}
-
-                {selectedNode.node.kind !== "source" &&
-                selectedNode.node.kind !== "document" &&
-                selectedNode.evidence.some((evidence) => evidence.sourceId || evidence.sourcePath) ? (
-                  <section className="space-y-2 border-t border-border/70 pt-3">
-                    <h5 className="text-xs font-medium text-muted-foreground">From documents</h5>
-                    <div className="flex flex-wrap gap-1.5">
-                      {uniqueSourceProvenance(selectedNode.evidence).map((source) => {
-                        const sourceNodeId =
-                          source.sourceId && sourceNodeBySourceId[source.sourceId];
-                        return (
-                          <Button
-                            className="h-7 max-w-full justify-start truncate px-2 text-xs"
-                            disabled={!sourceNodeId}
-                            key={`${source.sourceId ?? "path"}:${source.sourcePath ?? ""}`}
-                            onClick={() =>
-                              sourceNodeId &&
-                              dispatch({ type: "select_node", nodeId: sourceNodeId })
-                            }
-                            size="sm"
-                            type="button"
-                            variant="outline"
-                          >
-                            {fileNameFromPath(source.sourcePath ?? source.sourceId ?? "Source")}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ) : null}
-              </div>
+              <GraphNodeInspector
+                dispatch={dispatch}
+                onApplyCorrection={onApplyCorrection}
+                onOpenArtifact={handleOpenArtifact}
+                projectId={project.summary.projectId}
+                selectedNode={selectedNode}
+                sourceNodeBySourceId={sourceNodeBySourceId}
+              />
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
                 Select an item or connection to inspect its evidence.
@@ -653,34 +349,6 @@ function CompactEvidenceRow(props: CompactEvidenceRowProps) {
   );
 }
 
-function workspaceSelectionKindLabel(kind: WorkspaceProject["nodes"][number]["kind"]): string {
-  switch (kind) {
-    case "source":
-    case "document":
-      return "Document";
-    case "page":
-      return "Page";
-    case "concept":
-      return "Concept";
-    default:
-      return "Item";
-  }
-}
-
-function customerVisibleDescription(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (/^Node\s+\S+\s+is materialized in snapshot\b/.test(trimmed)) {
-    return null;
-  }
-  if (/\bSource refs?:\s*/.test(trimmed)) {
-    return null;
-  }
-  return trimmed;
-}
-
 function formatImportLifecycleTitle(status: string): string {
   switch (status) {
     case "imported":
@@ -812,67 +480,4 @@ function ImportStatusIndicator(props: { failed: boolean; ready: boolean; progres
       <span className="text-[10px] font-medium tabular-nums">{progress}%</span>
     </div>
   );
-}
-
-interface EvidenceCardProps {
-  evidence: WorkspaceEvidenceRef;
-}
-
-function EvidenceCard(props: EvidenceCardProps) {
-  const { evidence } = props;
-  const imageLabel = evidence.imagePath
-    ? fileNameFromPath(evidence.imagePath)
-    : extractMarkdownImageLabel(evidence.snippet);
-
-  return (
-    <article className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2.5">
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>
-          {evidence.pageLabel}
-          {typeof evidence.pageIndex === "number"
-            ? ` · page index ${evidence.pageIndex + 1}`
-            : ""}
-        </span>
-        <span className="truncate">
-          {fileNameFromPath(evidence.sourcePath ?? evidence.sourceId ?? "Imported document")}
-        </span>
-      </div>
-      <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-foreground">
-        {formatEvidenceSnippet(evidence.snippet)}
-      </p>
-      {imageLabel ? (
-        <div className="mt-2 truncate rounded-md bg-background px-2 py-1 text-xs text-muted-foreground">
-          Page image: {imageLabel}
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function extractMarkdownImageLabel(value: string): string | null {
-  return value.match(/!\[([^\]]*)\]\(([^)]+)\)/)?.[1]?.trim() || null;
-}
-
-function formatEvidenceSnippet(value: string): string {
-  return value
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-    .replace(/\s+/g, " ")
-    .trim() || "No text evidence is available for this page yet.";
-}
-
-function uniqueSourceProvenance(evidenceRefs: WorkspaceEvidenceRef[]) {
-  const seen = new Set<string>();
-  return evidenceRefs
-    .map((evidence) => ({
-      sourceId: evidence.sourceId ?? null,
-      sourcePath: evidence.sourcePath ?? null,
-    }))
-    .filter((source) => {
-      const key = source.sourceId ?? source.sourcePath;
-      if (!key || seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
 }

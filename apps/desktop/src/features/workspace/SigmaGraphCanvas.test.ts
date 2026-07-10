@@ -11,7 +11,7 @@ import {
   sigmaGraphScopeFromUiState,
   sigmaGraphSelectionFromUiState,
   sigmaGraphTopologySelectionFromUiState,
-} from "./SigmaGraphCanvas";
+} from "./WorkspaceGraphCanvas";
 import type { WorkspaceUiState } from "./state";
 
 const baseUiState: WorkspaceUiState = {
