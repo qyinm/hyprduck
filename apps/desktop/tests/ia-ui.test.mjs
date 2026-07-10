@@ -53,7 +53,11 @@ const previewSource = readFileSync(
 );
 const settingsSource = readFileSync(new URL("../src/SettingsPanel.tsx", import.meta.url), "utf8");
 const localesSource = readFileSync(new URL("../src/i18n/locales.ts", import.meta.url), "utf8");
-const previewApiSource = readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8");
+const previewApiSource = [
+  readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/webPreview/handlers/config.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/webPreview/handlers/graph.ts", import.meta.url), "utf8"),
+].join("\n");
 const cliShimSource = readFileSync(new URL("../main/cli-shim.cjs", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
