@@ -18,8 +18,6 @@ const baseUiState: WorkspaceUiState = {
   selectedNodeId: null,
   selectedEdgeId: null,
   inspectorOpen: true,
-  answerDockOpen: false,
-  answerInput: "",
 };
 
 describe("graph viewport controls", () => {

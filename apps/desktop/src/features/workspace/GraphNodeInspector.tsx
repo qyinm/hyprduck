@@ -87,7 +87,7 @@ export function GraphNodeInspector(props: GraphNodeInspectorProps) {
     try {
       await onOpenArtifact(path, reveal);
     } catch {
-      // Parent surfaces open failures via answer error paths when dock is present.
+      // Open failures are non-fatal for inspector actions.
     }
   }
 

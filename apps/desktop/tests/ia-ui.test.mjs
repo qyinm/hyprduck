@@ -333,7 +333,6 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
 });
 
 test("evidence is rendered as UI content instead of raw markdown", () => {
-  expect(graphSource).toMatch(/formatEvidenceSnippet/);
   expect(graphEvidenceSource).toMatch(/formatEvidenceSnippet/);
   expect(graphEvidenceSource).toMatch(/extractMarkdownImageLabel/);
   expect(graphEvidenceSource).toMatch(/Page image:/);

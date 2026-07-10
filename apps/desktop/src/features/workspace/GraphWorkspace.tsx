@@ -1,11 +1,5 @@
-import {
-  type Dispatch,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { type Dispatch, useMemo } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
@@ -17,13 +11,11 @@ import {
 } from "lucide-react";
 
 import { GraphEdgeInspector } from "./GraphEdgeInspector";
-import { formatEvidenceSnippet } from "./GraphEvidence";
 import { GraphNodeInspector } from "./GraphNodeInspector";
 import { fileNameFromPath } from "./pathUtils";
 import type { WorkspaceUiAction, WorkspaceUiState } from "./state";
 import type {
   WorkspaceApplyCorrectionRequest,
-  WorkspaceEvidenceRef,
   WorkspaceProject,
 } from "./types";
 import { WorkspaceGraphCanvas } from "./WorkspaceGraphCanvas";
@@ -80,39 +72,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0]));
     return Object.fromEntries(entries);
   }, [project?.detailsByNodeId]);
-  const defaultAnswerNodeId =
-    selectedNode?.node.id ??
-    projectNodes.find((node) => node.kind === "source")?.id ??
-    projectNodes.find((node) => node.kind === "document")?.id ??
-    null;
-  const baseAnswer =
-    (defaultAnswerNodeId &&
-      project?.answerByNodeId[defaultAnswerNodeId]) ||
-    null;
-  const [liveAnswer, setLiveAnswer] =
-    useState<WorkspaceProject["answerByNodeId"][string] | null>(null);
-  const [answerError, setAnswerError] = useState<string | null>(null);
-  const [answerPending, setAnswerPending] = useState(false);
-  const answer = liveAnswer ?? baseAnswer;
   const graphPaneClass = project?.summary.stale
     ? "border-amber-300/70"
     : "border-border/80";
-  const answerBadgeLabel =
-    answer?.status === "stale"
-      ? t("workspace.answer.stale")
-      : answer?.status === "low_confidence"
-      ? t("workspace.answer.lowConfidence")
-      : answer?.status === "grounded"
-      ? t("workspace.answer.grounded")
-      : answer?.status === "blocked"
-      ? t("workspace.answer.blocked")
-      : t("workspace.answer.preview");
-
-  useEffect(() => {
-    setLiveAnswer(null);
-    setAnswerError(null);
-    setAnswerPending(false);
-  }, [project?.summary.projectId, selectedNode?.node.id, uiState.selectedEdgeId]);
 
   if (!project) {
     return (
@@ -135,14 +97,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </div>
       </div>
     );
-  }
-
-  async function handleOpenArtifact(path: string, reveal: boolean) {
-    try {
-      await onOpenArtifact(path, reveal);
-    } catch (error) {
-      setAnswerError(String(error));
-    }
   }
 
   return (
@@ -176,21 +130,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             project={project}
             uiState={uiState}
           />
-          {uiState.answerDockOpen && (
-            <GraphAnswerWindow
-              answer={answer}
-              answerBadgeLabel={answerBadgeLabel}
-              answerError={answerError}
-              answerPending={answerPending}
-              copy={{
-                answering: t("workspace.answer.answering"),
-                close: t("workspace.answer.close"),
-              }}
-              onClose={() => dispatch({ type: "close_answer_dock" })}
-              onOpenArtifact={handleOpenArtifact}
-              question={uiState.answerInput.trim()}
-            />
-          )}
         </section>
 
         {uiState.inspectorOpen && (
@@ -205,7 +144,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <GraphNodeInspector
                 dispatch={dispatch}
                 onApplyCorrection={onApplyCorrection}
-                onOpenArtifact={handleOpenArtifact}
+                onOpenArtifact={onOpenArtifact}
                 projectId={project.summary.projectId}
                 selectedNode={selectedNode}
                 sourceNodeBySourceId={sourceNodeBySourceId}
@@ -220,132 +159,6 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </div>
 
     </div>
-  );
-}
-
-interface GraphAnswerWindowProps {
-  answer: WorkspaceProject["answerByNodeId"][string] | null;
-  answerBadgeLabel: string;
-  answerError: string | null;
-  answerPending: boolean;
-  copy: {
-    answering: string;
-    close: string;
-  };
-  onClose: () => void;
-  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
-  question: string;
-}
-
-function GraphAnswerWindow(props: GraphAnswerWindowProps) {
-  const {
-    answer,
-    answerBadgeLabel,
-    answerError,
-    answerPending,
-    copy,
-    onClose,
-    onOpenArtifact,
-    question,
-  } = props;
-
-  return (
-    <section className="pointer-events-auto absolute inset-x-6 bottom-24 z-30 mx-auto max-h-[min(34rem,calc(100%-9rem))] w-[min(50rem,calc(100%-3rem))] overflow-y-auto rounded-2xl border border-border/80 bg-background/95 px-4 py-4 shadow-[0_18px_80px_rgba(15,23,42,0.16)] backdrop-blur">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground">Answer</h3>
-            <Badge
-              variant="outline"
-              className={cn(
-                answer?.status === "stale" || answer?.status === "low_confidence"
-                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                  : "border-border bg-secondary text-foreground",
-              )}
-            >
-              {answerBadgeLabel}
-            </Badge>
-          </div>
-          {question ? (
-            <p className="mt-1 truncate text-xs text-muted-foreground">{question}</p>
-          ) : null}
-        </div>
-        <Button
-          aria-label={copy.close}
-          className="size-8 shrink-0"
-          onClick={onClose}
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          <X size={16} />
-        </Button>
-      </div>
-
-      <div className="mt-4">
-        {answerPending ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle size={15} className="animate-spin" />
-            <span>{copy.answering}</span>
-          </div>
-        ) : answerError ? (
-          <p className="text-sm leading-6 text-destructive">{answerError}</p>
-        ) : (
-          <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">
-            {answer?.text ??
-              answer?.explanation ??
-              "Ask a question from the prompt below."}
-          </p>
-        )}
-      </div>
-
-      {answer?.citations.length ? (
-        <div className="mt-4 border-t border-border/70 pt-3">
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Sources
-          </p>
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
-            {answer.citations.slice(0, 4).map((citation) => (
-              <CompactEvidenceRow
-                evidence={citation}
-                key={citation.id}
-                onOpenArtifact={onOpenArtifact}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-interface CompactEvidenceRowProps {
-  evidence: WorkspaceEvidenceRef;
-  onOpenArtifact: (path: string, reveal: boolean) => Promise<void>;
-}
-
-function CompactEvidenceRow(props: CompactEvidenceRowProps) {
-  const { evidence, onOpenArtifact } = props;
-  const primaryPath = evidence.markdownPath ?? evidence.sourcePath ?? evidence.imagePath;
-  const sourceLabel = fileNameFromPath(
-    evidence.sourcePath ?? evidence.markdownPath ?? evidence.sourceId ?? "Document",
-  );
-
-  return (
-    <button
-      className="min-w-0 rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-left disabled:cursor-default"
-      disabled={!primaryPath}
-      onClick={() => primaryPath && void onOpenArtifact(primaryPath, false)}
-      type="button"
-    >
-      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span className="truncate">{sourceLabel}</span>
-        <span className="shrink-0">{evidence.pageLabel}</span>
-      </div>
-      <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">
-        {formatEvidenceSnippet(evidence.snippet)}
-      </p>
-    </button>
   );
 }
 

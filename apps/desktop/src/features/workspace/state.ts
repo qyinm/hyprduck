@@ -4,18 +4,13 @@ export interface WorkspaceUiState {
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   inspectorOpen: boolean;
-  answerDockOpen: boolean;
-  answerInput: string;
 }
 
 export type WorkspaceUiAction =
   | { type: "sync_project"; project: WorkspaceProject | null }
   | { type: "select_node"; nodeId: string }
   | { type: "select_edge"; edgeId: string }
-  | { type: "toggle_inspector" }
-  | { type: "open_answer_dock" }
-  | { type: "close_answer_dock" }
-  | { type: "set_answer_input"; value: string };
+  | { type: "toggle_inspector" };
 
 export function createInitialWorkspaceUiState(
   project: WorkspaceProject | null,
@@ -24,8 +19,6 @@ export function createInitialWorkspaceUiState(
     selectedNodeId: defaultSelectedNodeId(project),
     selectedEdgeId: null,
     inspectorOpen: false,
-    answerDockOpen: false,
-    answerInput: "",
   };
 }
 
@@ -71,21 +64,6 @@ export function workspaceUiStateReducer(
       return {
         ...state,
         inspectorOpen: !state.inspectorOpen,
-      };
-    case "open_answer_dock":
-      return {
-        ...state,
-        answerDockOpen: true,
-      };
-    case "close_answer_dock":
-      return {
-        ...state,
-        answerDockOpen: false,
-      };
-    case "set_answer_input":
-      return {
-        ...state,
-        answerInput: action.value,
       };
     default:
       return state;

@@ -1,7 +1,6 @@
 import { buildWorkspacePreview } from "@/features/workspace/buildWorkspacePreview";
 import type {
   MaterializedGraphSnapshot,
-  WorkspaceAnswerProjectRequest,
   WorkspaceProjectEnvelope,
 } from "@/features/workspace/types";
 import type {
@@ -11,8 +10,6 @@ import type {
   AgentChatStreamEvent,
   AgentTerminalListResult,
   AgentTerminalSession,
-  BrainEvent,
-  BrainHealthResponseData,
   DesktopCommand,
   DesktopCommandArgs,
   DesktopCommandParameters,
@@ -166,23 +163,6 @@ const WEB_MOCK_AGENT_LIST: AgentTerminalListResult = {
     reason: "Web preview cannot host native terminal sessions.",
   },
 };
-let webMockRecentEvents: BrainEvent[] = [
-  {
-    eventId: "evt-web-source-imported",
-    workspaceId: "web-preview",
-    eventType: "source_imported",
-    actor: { actorType: "system", actorId: "web-preview" },
-    sourceRefs: ["preview"],
-    nodeRefs: ["source:preview"],
-    relationRefs: [],
-    evidenceRefs: ["ev-page-1"],
-    payloadJson: "{}",
-    confidence: null,
-    policyResult: "applied",
-    createdAt: WEB_MOCK_NOW_SECONDS - 300,
-  },
-];
-
 let webMockSnapshot = WEB_MOCK_BASE_SNAPSHOT;
 let webMockConfig: EngineConfigPayload = WEB_MOCK_CONFIG;
 let webMockValidation: ValidateProviderResponseData = { ready: false, issues: [] };
@@ -250,18 +230,6 @@ function deriveWebReadiness(): RuntimeReadinessResponseData {
     model_id: webMockConfig.model_id,
     checks,
   };
-}
-
-function createWebBrainHealth(): BrainHealthResponseData {
-  return {
-    status: "clean",
-    attentionCount: 0,
-    recentEvents: webMockRecentEvents.map((event) => ({ ...event })),
-  };
-}
-
-function appendWebBrainEvent(event: BrainEvent) {
-  webMockRecentEvents = [event, ...webMockRecentEvents].slice(0, 12);
 }
 
 function emitWebSnapshot(snapshot: UiSnapshot) {
@@ -463,7 +431,6 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       return { ...next };
     },
     engine_readiness: () => deriveWebReadiness(),
-    brain_health: () => createWebBrainHealth(),
     get_models_for_provider: (args) => {
       const key = args.providerSlug ?? webMockConfig.provider ?? "ollama";
       return [...(WEB_MOCK_PROVIDER_MODELS[key] ?? WEB_MOCK_PROVIDER_MODELS.ollama)];
@@ -608,47 +575,6 @@ export function createWebMockApi(): HyprDuckDesktopApi {
         throw new Error("No workspace available in preview mode.");
       }
       return { ...workspace.project };
-    },
-    answer_workspace_project: (args) => {
-      const workspace = getWebWorkspaceFromSnapshot();
-      if (!workspace.project) {
-        throw new Error("No workspace available in preview mode.");
-      }
-      const terms = args.request.question
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((term) => term.length > 1);
-      const answerEntries = Object.entries(workspace.project.answerByNodeId);
-      const scoredAnswers = answerEntries
-        .map(([nodeId, answer]) => {
-          const detail = workspace.project?.detailsByNodeId[nodeId];
-          const haystack = [
-            detail?.canonicalName,
-            detail?.description,
-            answer.text,
-            answer.explanation,
-            ...(answer.citations ?? []).map((citation) => citation.snippet),
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
-          const queryScore = terms.filter((term) => haystack.includes(term)).length;
-          const selectedBias = args.request.nodeId === nodeId ? 1 : 0;
-          return { answer, queryScore, selectedBias };
-        })
-        .sort(
-          (left, right) =>
-            right.queryScore - left.queryScore ||
-            right.selectedBias - left.selectedBias,
-        );
-      const answer =
-        scoredAnswers.find((entry) => entry.queryScore > 0)?.answer ??
-        workspace.project.answerByNodeId["source:preview"] ??
-        scoredAnswers[0]?.answer;
-      if (!answer) {
-        throw new Error("No answer available for this workspace in preview mode.");
-      }
-      return { ...answer };
     },
     agent_chat_ask: (args) => createWebAgentChatResult(args.request),
     agent_chat_start: (args) => {

@@ -93,15 +93,6 @@ async function registerIpcHandlers({
           command: "check_readiness",
           payload: {},
         }).then((response) => response.data);
-      case "brain_health": {
-        const workspaceId = args.workspace_id ?? snapshot.lastWorkspaceId ?? "default";
-        return runEngineCommand("get_brain_health", {
-          command: "get_brain_health",
-          payload: {
-            scope: brainReadScope(workspaceId),
-          },
-        }).then((response) => response.data);
-      }
       case "get_models_for_provider":
         return getModelsForProvider(args.providerSlug);
       case "load_workspace_project":
@@ -124,11 +115,6 @@ async function registerIpcHandlers({
       }
       case "apply_workspace_correction":
         return applyWorkspaceCorrection(args.correction);
-      case "answer_workspace_project":
-        return runEngineCommand("answer_project", {
-          command: "answer_project",
-          payload: args.request,
-        }).then((response) => response.data.answer);
       case "agent_chat_ask": {
         const request = args.request ?? {};
         const workspaceId =
