@@ -45,7 +45,18 @@ const modelTaskMatrixSource = readFileSync(
   new URL("../../../docs/model-task-matrix.md", import.meta.url),
   "utf8",
 );
-const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+// Domain logic was split out of main.cjs; concatenate for source-level contracts.
+const mainSource = [
+  "../main.cjs",
+  "../main/snapshot-state.cjs",
+  "../main/engine-rpc.cjs",
+  "../main/import-pipeline.cjs",
+  "../main/source-preview.cjs",
+  "../main/agent-chat-stream.cjs",
+  "../main/ipc-handlers.cjs",
+]
+  .map((relativePath) => readFileSync(new URL(relativePath, import.meta.url), "utf8"))
+  .join("\n");
 const packageSource = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const preloadSource = readFileSync(new URL("../preload.cjs", import.meta.url), "utf8");
 
@@ -405,9 +416,8 @@ test("partial import failures expose failed-page retry affordance", () => {
   expect(graphSource).toMatch(/failedPageCount === 1 \? "page" : "pages"/);
   expect(graphSource).toMatch(/onRetryFailedPages/);
   expect(appSource).toMatch(/invoke\("retry_failed_pages"\)/);
-  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
   expect(mainSource).toMatch(/case "retry_failed_pages"/);
-  expect(mainSource).toMatch(/function retryFailedPages/);
+  expect(mainSource).toMatch(/async function retryFailedPages/);
   expect(mainSource).toMatch(/command: "retry_failed_pages"/);
   expect(mainSource).toMatch(/sourceManifestPath: manifestPath/);
   expect(mainSource).not.toMatch(/onRetryFailedPages=\{startParse\}/);
