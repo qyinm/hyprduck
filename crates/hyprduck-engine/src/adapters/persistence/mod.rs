@@ -4,6 +4,7 @@ mod context_pack_assemble;
 pub(crate) mod context_pack_store;
 mod graph_snapshot_store;
 mod graph_trail_store;
+pub(crate) mod graph_version_store;
 mod import_job_store;
 pub(crate) mod read_projection_store;
 pub(crate) mod row_decode;
