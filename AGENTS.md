@@ -32,6 +32,7 @@ Etyma/
 | Engine command and artifact DTOs | `crates/etyma-engine-types/src/lib.rs`, `schemas/` | Keep Rust types and JSON schemas aligned. |
 | Build/test commands | `docs/agents/commands.md`, `justfile` | Commands belong in `docs/agents/`, not root instruction files. |
 | Prior fixes and reusable patterns | `docs/solutions/` | Check before re-solving integration or architecture issues. |
+| Cloud multi-plane storage (frozen target) | `docs/storage-planes.md` | Cloud: Postgres control/knowledge/graph + blob. Local remains SQLite + GraphQLite. |
 | Public PR wording | `.github/PULL_REQUEST_TEMPLATE.md` | Keep public text to shipped code and verified behavior. |
 
 ## PRODUCT DIRECTION
@@ -47,7 +48,7 @@ Etyma/
 - Keep the active desktop shell in `apps/desktop`.
 - Keep Electron main/preload as shell, window, and IPC glue.
 - Keep parsing, artifact generation, provider execution, and output packaging in the Rust engine.
-- Treat SQLite + GraphQLite as the authoritative knowledge/graph store direction; do not revive file artifacts as primary persistence.
+- Treat SQLite + GraphQLite as the authoritative **local** knowledge/graph store direction; do not revive file artifacts as primary persistence. Cloud multi-plane storage (Postgres control/knowledge/graph + blob) is frozen in `docs/storage-planes.md`.
 - Do not reintroduce frontend-owned output packaging or provider persistence.
 - Do not block document import behind Screen Recording or Accessibility permissions; those apply only to optional legacy capture code.
 

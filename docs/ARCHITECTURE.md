@@ -176,6 +176,17 @@ wiki files are read models rebuilt from materialization and correction events.
 `state/latest-readable-snapshot.json` is the stable loading marker for desktop,
 MCP, and resource reads.
 
+## Storage
+
+**Local** desktop and engine knowledge storage remain SQLite + GraphQLite as
+described above (`knowledge.sqlite3` and GraphQLite graph state). That path is
+unchanged by cloud planning.
+
+**Cloud** primary storage planes are frozen separately: Postgres for control,
+knowledge, and graph projection, plus a blob plane for original bytes. See
+[`docs/storage-planes.md`](./storage-planes.md). That ADR does not change local
+runtime behavior and does not imply Postgres is implemented yet.
+
 ## Refactor Pattern Criteria
 
 Etyma uses named boundaries only when they protect a real contract.
