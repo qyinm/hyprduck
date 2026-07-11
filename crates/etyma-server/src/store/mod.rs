@@ -17,13 +17,17 @@ pub struct WorkspaceRow {
     pub org_id: String,
 }
 
+/// Source metadata only — original bytes live in the blob backend.
 #[derive(Debug, Clone)]
 pub struct SourceRow {
     pub id: String,
     pub workspace_id: String,
     pub kind: String,
     pub title: String,
-    pub body: String,
+    pub blob_key: String,
+    pub content_hash: String,
+    pub byte_size: i64,
+    pub content_type: String,
     pub external_id: Option<String>,
 }
 
@@ -68,6 +72,7 @@ impl Store {
             StoreError::Internal(format!("failed opening server db {}: {e}", path.display()))
         })?;
         // Spike metadata: Org → Workspace hierarchy. Wipe local DB if schema conflicts.
+        // Source bodies are NOT stored here — only blob_key + content_hash + size/type.
         conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
@@ -92,7 +97,10 @@ impl Store {
               workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
               kind TEXT NOT NULL,
               title TEXT NOT NULL,
-              body TEXT NOT NULL,
+              blob_key TEXT NOT NULL,
+              content_hash TEXT NOT NULL,
+              byte_size INTEGER NOT NULL,
+              content_type TEXT NOT NULL,
               external_id TEXT,
               created_at INTEGER NOT NULL
             );
@@ -296,21 +304,37 @@ impl Store {
         }
     }
 
+    /// Insert source metadata only. Caller must write blob bytes first (B3).
     pub fn insert_source(
         &self,
         workspace_id: &str,
         kind: &str,
         title: &str,
-        body: &str,
+        blob_key: &str,
+        content_hash: &str,
+        byte_size: i64,
+        content_type: &str,
         external_id: Option<&str>,
     ) -> StoreResult<SourceRow> {
         let id = format!("src_{}", Uuid::now_v7().simple());
         let now = unix_now();
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO sources (id, workspace_id, kind, title, body, external_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, workspace_id, kind, title, body, external_id, now],
+            "INSERT INTO sources (
+               id, workspace_id, kind, title, blob_key, content_hash, byte_size, content_type, external_id, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id,
+                workspace_id,
+                kind,
+                title,
+                blob_key,
+                content_hash,
+                byte_size,
+                content_type,
+                external_id,
+                now
+            ],
         )
         .map_err(db_err)?;
         Ok(SourceRow {
@@ -318,7 +342,10 @@ impl Store {
             workspace_id: workspace_id.to_string(),
             kind: kind.to_string(),
             title: title.to_string(),
-            body: body.to_string(),
+            blob_key: blob_key.to_string(),
+            content_hash: content_hash.to_string(),
+            byte_size,
+            content_type: content_type.to_string(),
             external_id: external_id.map(str::to_string),
         })
     }
@@ -354,8 +381,9 @@ impl Store {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
-            "SELECT id, workspace_id, kind, title, body, external_id FROM sources WHERE workspace_id = ?1 ORDER BY created_at",
-        )
+                "SELECT id, workspace_id, kind, title, blob_key, content_hash, byte_size, content_type, external_id
+                 FROM sources WHERE workspace_id = ?1 ORDER BY created_at",
+            )
             .map_err(db_err)?;
         let rows = stmt
             .query_map(params![workspace_id], |row| {
@@ -364,8 +392,11 @@ impl Store {
                     workspace_id: row.get(1)?,
                     kind: row.get(2)?,
                     title: row.get(3)?,
-                    body: row.get(4)?,
-                    external_id: row.get(5)?,
+                    blob_key: row.get(4)?,
+                    content_hash: row.get(5)?,
+                    byte_size: row.get(6)?,
+                    content_type: row.get(7)?,
+                    external_id: row.get(8)?,
                 })
             })
             .map_err(db_err)?;
@@ -475,5 +506,31 @@ mod tests {
             store.create_org("org1", "Dup"),
             Err(StoreError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn source_meta_stores_blob_key_not_body() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.sqlite3")).unwrap();
+        store.create_org("org1", "Acme").unwrap();
+        store.create_workspace("org1", "ws1").unwrap();
+        let src = store
+            .insert_source(
+                "ws1",
+                "document",
+                "spec.md",
+                "w/ws1/sha256/abc",
+                "sha256:abc",
+                42,
+                "text/markdown",
+                None,
+            )
+            .unwrap();
+        assert_eq!(src.blob_key, "w/ws1/sha256/abc");
+        assert_eq!(src.content_hash, "sha256:abc");
+        assert_eq!(src.byte_size, 42);
+        let listed = store.list_sources("ws1").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].content_type, "text/markdown");
     }
 }
