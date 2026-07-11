@@ -376,7 +376,11 @@ impl KnowledgeStore {
         sqlx::query_as::<_, ImportJobRow>(
             r#"
             UPDATE knowledge.import_jobs
-            SET status = 'queued', lease_owner = NULL,
+            SET status = CASE
+                  WHEN attempts >= max_attempts THEN 'failed'
+                  ELSE 'queued'
+                END,
+                lease_owner = NULL,
                 lease_expires_at = NULL, last_error = $4,
                 available_at = $5, updated_at = $6
             WHERE workspace_id = $1 AND id = $2
@@ -762,5 +766,33 @@ mod tests {
             exhausted.last_error.as_deref(),
             Some("maximum attempts exhausted after lease expiry")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn import_job_retry_on_final_attempt_becomes_failed() {
+        let pool = crate::db::connect_and_migrate(&require_database_url())
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_final_retry")).await;
+        let store = KnowledgeStore::new(pool);
+        let job = store
+            .create_import_job(&workspace, None, "upload", 1, 10)
+            .await
+            .expect("create job");
+        store
+            .claim_import_job(&workspace, "worker-a", 10, 20)
+            .await
+            .expect("claim")
+            .expect("job claimed");
+
+        let exhausted = store
+            .retry_import_job(&workspace, &job.id, "worker-a", "still broken", 30)
+            .await
+            .expect("record final retry failure");
+        assert_eq!(exhausted.status, ImportJobStatus::Failed);
+        assert_eq!(exhausted.last_error.as_deref(), Some("still broken"));
+        assert!(exhausted.lease_owner.is_none());
     }
 }
