@@ -44,4 +44,5 @@ jobs:
         with:
           workspaces: ". -> target"
       - name: cargo test etyma-server (with Postgres)
-        run: cargo test -p etyma-server -- --nocapture
+        # Default suite + ignored PG foundation tests (require ETYMA_DATABASE_URL).
+        run: cargo test -p etyma-server -- --include-ignored --nocapture

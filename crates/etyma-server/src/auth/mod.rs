@@ -1,4 +1,5 @@
 use crate::blob::BlobStore;
+use crate::config::HostMode;
 use crate::store::Store;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -10,7 +11,9 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub blobs: Arc<dyn BlobStore>,
     pub spike_admin_token: Option<String>,
-    /// Postgres pool when `ETYMA_DATABASE_URL` is set; `None` keeps the spike SQLite path.
+    /// Process host mode (spike vs cloud foundation).
+    pub host_mode: HostMode,
+    /// Postgres pool in cloud-foundation mode; `None` for spike SQLite-only boot.
     pub pg_pool: Option<sqlx::PgPool>,
 }
 

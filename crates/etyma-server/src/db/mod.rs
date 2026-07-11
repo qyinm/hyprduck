@@ -5,6 +5,10 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::time::Duration;
+
+const DEFAULT_PG_MAX_CONNECTIONS: u32 = 5;
+const DEFAULT_PG_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Connect to Postgres and apply embedded migrations.
 ///
@@ -12,7 +16,8 @@ use sqlx::PgPool;
 /// versions; schema DDL uses `IF NOT EXISTS`).
 pub async fn connect_and_migrate(database_url: &str) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(DEFAULT_PG_MAX_CONNECTIONS)
+        .acquire_timeout(DEFAULT_PG_ACQUIRE_TIMEOUT)
         .connect(database_url)
         .await
         .context("connect postgres")?;
@@ -23,7 +28,7 @@ pub async fn connect_and_migrate(database_url: &str) -> Result<PgPool> {
     Ok(pool)
 }
 
-/// Cheap liveness probe (`SELECT 1`) for health endpoints and tests.
+/// Cheap readiness probe (`SELECT 1`) for health endpoints and tests.
 pub async fn health_check(pool: &PgPool) -> Result<()> {
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(pool)
@@ -35,21 +40,22 @@ pub async fn health_check(pool: &PgPool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
-    fn database_url() -> Option<String> {
+    fn require_database_url() -> String {
         std::env::var("ETYMA_DATABASE_URL")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
+            .expect(
+                "ETYMA_DATABASE_URL required for ignored Postgres tests \
+                 (run: docker compose up -d && cargo test -p etyma-server -- --include-ignored)",
+            )
     }
 
     #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
     async fn connect_and_migrate_is_idempotent_and_creates_plane_schemas() {
-        let Some(url) = database_url() else {
-            eprintln!("skipping: ETYMA_DATABASE_URL unset");
-            return;
-        };
+        let url = require_database_url();
 
         let pool = connect_and_migrate(&url)
             .await
@@ -75,10 +81,10 @@ mod tests {
         .await
         .expect("list plane schemas");
 
-        let found: HashSet<&str> = schemas.iter().map(String::as_str).collect();
-        assert!(
-            found.contains("control") && found.contains("knowledge") && found.contains("graph"),
-            "expected control/knowledge/graph schemas, got {schemas:?}"
+        assert_eq!(
+            schemas,
+            vec!["control", "graph", "knowledge"],
+            "expected ordered plane schemas"
         );
 
         // No product tables in these schemas yet (S-PG2/3/4).

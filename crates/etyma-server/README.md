@@ -67,7 +67,7 @@ cargo run -p etyma-server
 curl -sS http://127.0.0.1:8787/health
 ```
 
-With a DSN, health reports `postgres: "up"` after migrate. Product metadata still uses the spike SQLite `Store` until S-PG2+.
+With a DSN, health reports `postgres: "up"` and `mode: "cloud-foundation"` after migrate. Product metadata still uses the spike SQLite `Store` until S-PG2+.
 
 ### Spike SQLite path (transitional, no DSN)
 
@@ -80,7 +80,7 @@ export ETYMA_SPIKE_ADMIN_TOKEN=dev-admin
 cargo run -p etyma-server
 ```
 
-Health reports `postgres: "skipped"`. Do not use this path as the cloud primary.
+Health reports `postgres: "skipped"` and `mode: "spike"`. Do not use this path as the cloud primary.
 
 Default bind: `127.0.0.1:8787` (`ETYMA_SERVER_BIND` to override).
 
@@ -132,16 +132,16 @@ Flat `POST /v1/spike/workspaces` (no org) is **removed**.
 ## Tests
 
 ```bash
-# SQLite path; Postgres-backed tests skip without a DSN
+# Default suite (Postgres foundation tests are #[ignore]d)
 cargo test -p etyma-server
 
 # Full suite including Postgres foundation (pool, migrate, plane schemas, health)
-ETYMA_DATABASE_URL=postgres://etyma:etyma@127.0.0.1:5432/etyma cargo test -p etyma-server
+docker compose up -d
+export ETYMA_DATABASE_URL=postgres://etyma:etyma@127.0.0.1:5432/etyma
+cargo test -p etyma-server -- --include-ignored
 ```
 
-Start local Postgres first with `docker compose up -d` at the repo root.
-
-**CI:** [`.github/workflows/etyma-server-pg.yml`](../../.github/workflows/etyma-server-pg.yml) runs `cargo test -p etyma-server` against Postgres 16 with `ETYMA_DATABASE_URL` set.
+**CI:** [`.github/workflows/etyma-server-pg.yml`](../../.github/workflows/etyma-server-pg.yml) runs `cargo test -p etyma-server -- --include-ignored` against Postgres 16 with `ETYMA_DATABASE_URL` set.
 
 ## Out of scope (intentionally)
 
