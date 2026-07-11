@@ -1,6 +1,7 @@
 use etyma_server::auth::AppState;
 use etyma_server::blob::{BlobStore, LocalFsBlobStore};
 use etyma_server::config::HostMode;
+use etyma_server::knowledge::KnowledgeStore;
 use etyma_server::seed::seed_multi_source_workspace;
 use etyma_server::store::Store;
 use std::sync::Arc;
@@ -35,9 +36,10 @@ fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
 /// Full workspace isolation + spike operator flow against an already-open store.
 async fn run_isolation_suite(
     store: Arc<Store>,
+    knowledge: KnowledgeStore,
     blobs: Arc<LocalFsBlobStore>,
     host_mode: HostMode,
-    pg_pool: Option<sqlx::PgPool>,
+    pg_pool: sqlx::PgPool,
     id_prefix: &str,
 ) {
     let org = format!("{id_prefix}_org_demo");
@@ -49,15 +51,15 @@ async fn run_isolation_suite(
     store.create_org(&org, "Demo Org").await.unwrap();
     store.create_workspace(&org, &w1).await.unwrap();
     store.create_workspace(&org, &w2).await.unwrap();
-    seed_multi_source_workspace(&store, blobs.as_ref(), &w1)
+    seed_multi_source_workspace(&store, &knowledge, blobs.as_ref(), &w1)
         .await
         .unwrap();
-    seed_multi_source_workspace(&store, blobs.as_ref(), &w2)
+    seed_multi_source_workspace(&store, &knowledge, blobs.as_ref(), &w2)
         .await
         .unwrap();
 
     // Seed created real blob objects on disk.
-    let w1_sources = store.list_sources(&w1).await.unwrap();
+    let w1_sources = knowledge.list_sources(&w1).await.unwrap();
     assert_eq!(w1_sources.len(), 2);
     for src in &w1_sources {
         assert!(blobs.exists(&src.blob_key).unwrap());
@@ -70,6 +72,7 @@ async fn run_isolation_suite(
     let app = {
         let state = AppState {
             store: store.clone(),
+            knowledge: knowledge.clone(),
             blobs: blobs.clone(),
             spike_admin_token: Some("admin-secret".into()),
             host_mode,
@@ -132,15 +135,14 @@ async fn run_isolation_suite(
     assert_eq!(seed_res.status(), 200);
     let seed_body: serde_json::Value = seed_res.json().await.unwrap();
     assert_eq!(seed_body["sourceCount"], 2);
-    let seed_blobs = seed_body["blobs"].as_array().expect("seed returns blob meta");
+    let seed_blobs = seed_body["blobs"]
+        .as_array()
+        .expect("seed returns blob meta");
     assert_eq!(seed_blobs.len(), 2);
     for b in seed_blobs {
         let key = b["blobKey"].as_str().unwrap();
         assert!(blobs.exists(key).unwrap(), "missing blob {key}");
-        assert!(b["contentHash"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
+        assert!(b["contentHash"].as_str().unwrap().starts_with("sha256:"));
     }
 
     let pack_http = client
@@ -174,10 +176,7 @@ async fn run_isolation_suite(
     assert!(!w1_source_ids.is_empty());
     // Pack source hashes come from blob-backed metadata.
     for s in pack["sourceSet"].as_array().unwrap() {
-        assert!(s["contentHash"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
+        assert!(s["contentHash"].as_str().unwrap().starts_with("sha256:"));
     }
 
     // AE2: same org sibling isolation
@@ -300,17 +299,8 @@ async fn run_isolation_suite(
 }
 
 #[tokio::test]
-async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join("server.sqlite3");
-    let store = Arc::new(Store::open(&db).unwrap());
-    let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
-    run_isolation_suite(store, blobs, HostMode::Spike, None, "sq").await;
-}
-
-#[tokio::test]
 #[ignore = "requires ETYMA_DATABASE_URL"]
-async fn org_hierarchy_sibling_isolation_on_postgres_control() {
+async fn org_hierarchy_sibling_isolation_on_postgres_control_and_knowledge() {
     let url = std::env::var("ETYMA_DATABASE_URL")
         .ok()
         .map(|s| s.trim().to_string())
@@ -324,17 +314,10 @@ async fn org_hierarchy_sibling_isolation_on_postgres_control() {
         .await
         .expect("connect_and_migrate");
     let dir = tempdir().unwrap();
-    let knowledge = dir.path().join("knowledge.sqlite3");
-    let store = Arc::new(Store::open_hybrid(pool.clone(), &knowledge).unwrap());
+    let store = Arc::new(Store::new(pool.clone()));
+    let knowledge = KnowledgeStore::new(pool.clone());
     let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
     // Unique prefix so shared CI/dev Postgres DBs do not collide on fixed org ids.
     let prefix = format!("pg_{}", Uuid::now_v7().simple());
-    run_isolation_suite(
-        store,
-        blobs,
-        HostMode::CloudFoundation,
-        Some(pool),
-        &prefix,
-    )
-    .await;
+    run_isolation_suite(store, knowledge, blobs, HostMode::Saas, pool, &prefix).await;
 }

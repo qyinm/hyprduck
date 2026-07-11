@@ -1,18 +1,20 @@
 //! Source ingest: write original bytes to the blob backend, then insert metadata.
 //!
-//! # Atomicity (spike)
+//! # Atomicity
 //!
-//! Blob put and SQLite meta insert are **not** a single transaction. If meta insert
+//! Blob put and Postgres meta insert are **not** a single transaction. If meta insert
 //! fails after a successful put, an orphan blob object may remain under the blob root.
-//! Spike recovery: wipe the data dir (DB + blobs) or re-seed after fixing the failure.
+//! Recovery requires orphan-object cleanup or re-ingest after fixing the failure.
 //! GC of orphan blobs is out of scope.
 
 use crate::blob::{blob_key_for, put_bytes, BlobStore};
-use crate::store::{SourceRow, Store, StoreResult};
+use crate::knowledge::{KnowledgeStore, SourceRow};
+use crate::store::{Store, StoreResult};
 
 /// Write original bytes to the blob backend, then insert source metadata.
 pub async fn ingest_source(
     store: &Store,
+    knowledge: &KnowledgeStore,
     blobs: &dyn BlobStore,
     workspace_id: &str,
     kind: &str,
@@ -31,14 +33,8 @@ pub async fn ingest_source(
             meta.blob_key, meta.content_hash
         )));
     }
-    store
-        .insert_source(
-            workspace_id,
-            kind,
-            title,
-            &meta,
-            content_type,
-            external_id,
-        )
+    knowledge
+        .insert_source(workspace_id, kind, title, &meta, content_type, external_id)
         .await
+        .map_err(Into::into)
 }

@@ -72,6 +72,16 @@ impl fmt::Display for KnowledgeError {
 
 impl std::error::Error for KnowledgeError {}
 
+impl From<KnowledgeError> for crate::store::StoreError {
+    fn from(error: KnowledgeError) -> Self {
+        match error {
+            KnowledgeError::NotFound { entity, id } => Self::NotFound { entity, id },
+            KnowledgeError::Conflict(message) => Self::Conflict(message),
+            KnowledgeError::Internal(message) => Self::Internal(message),
+        }
+    }
+}
+
 pub type KnowledgeResult<T> = Result<T, KnowledgeError>;
 
 #[derive(Clone)]
@@ -166,6 +176,19 @@ impl KnowledgeStore {
         .ok_or_else(|| KnowledgeError::Conflict(format!("evidence identity conflict: {id}")))
     }
 
+    pub async fn insert_evidence(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+        source_kind: &str,
+        quote: &str,
+        locator: &str,
+    ) -> KnowledgeResult<EvidenceRow> {
+        let id = format!("ev_{}", Uuid::now_v7().simple());
+        self.upsert_evidence(workspace_id, &id, source_id, source_kind, quote, locator)
+            .await
+    }
+
     pub async fn list_sources(&self, workspace_id: &str) -> KnowledgeResult<Vec<SourceRow>> {
         sqlx::query_as::<_, SourceRow>(
             r#"
@@ -250,7 +273,28 @@ impl KnowledgeStore {
         now: i64,
         lease_expires_at: i64,
     ) -> KnowledgeResult<Option<ImportJobRow>> {
-        sqlx::query_as::<_, ImportJobRow>(
+        let mut transaction = self.pool.begin().await.map_err(map_read)?;
+        sqlx::query(
+            r#"
+            UPDATE knowledge.import_jobs
+            SET status = 'failed',
+                last_error = 'maximum attempts exhausted after lease expiry',
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = $2
+            WHERE workspace_id = $1
+              AND status = 'running'
+              AND lease_expires_at <= $2
+              AND attempts >= max_attempts
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_read)?;
+
+        let claimed = sqlx::query_as::<_, ImportJobRow>(
             r#"
             WITH candidate AS (
               SELECT id
@@ -284,9 +328,11 @@ impl KnowledgeStore {
         .bind(lease_owner)
         .bind(now)
         .bind(lease_expires_at)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(map_read)
+        .map_err(map_read)?;
+        transaction.commit().await.map_err(map_read)?;
+        Ok(claimed)
     }
 
     pub async fn succeed_import_job(
@@ -424,7 +470,8 @@ fn bounded_error(error: &str) -> String {
 }
 
 fn map_read(error: sqlx::Error) -> KnowledgeError {
-    KnowledgeError::Internal(format!("knowledge database read failed: {error}"))
+    tracing::warn!(%error, "knowledge database read failed");
+    KnowledgeError::Internal("knowledge database read failed".into())
 }
 
 fn map_write(error: sqlx::Error, entity: &str) -> KnowledgeError {
@@ -432,10 +479,14 @@ fn map_write(error: sqlx::Error, entity: &str) -> KnowledgeError {
         return match database_error.code().as_deref() {
             Some("23503") => KnowledgeError::Conflict(format!("invalid {entity} relationship")),
             Some("23505") => KnowledgeError::Conflict(format!("{entity} already exists")),
-            _ => KnowledgeError::Internal(format!("knowledge database write failed: {error}")),
+            _ => {
+                tracing::warn!(%error, entity, "knowledge database write failed");
+                KnowledgeError::Internal("knowledge database write failed".into())
+            }
         };
     }
-    KnowledgeError::Internal(format!("knowledge database write failed: {error}"))
+    tracing::warn!(%error, entity, "knowledge database write failed");
+    KnowledgeError::Internal("knowledge database write failed".into())
 }
 
 #[cfg(test)]
@@ -461,15 +512,13 @@ mod tests {
             .execute(pool)
             .await
             .expect("insert org");
-        sqlx::query(
-            "INSERT INTO control.workspaces (id, org_id, created_at) VALUES ($1, $2, $3)",
-        )
-        .bind(&workspace_id)
-        .bind(&org_id)
-        .bind(now)
-        .execute(pool)
-        .await
-        .expect("insert workspace");
+        sqlx::query("INSERT INTO control.workspaces (id, org_id, created_at) VALUES ($1, $2, $3)")
+            .bind(&workspace_id)
+            .bind(&org_id)
+            .bind(now)
+            .execute(pool)
+            .await
+            .expect("insert workspace");
         workspace_id
     }
 
@@ -482,6 +531,8 @@ mod tests {
         let suffix = uuid::Uuid::now_v7().simple().to_string();
         let workspace_a = create_workspace(&pool, &format!("{suffix}_a")).await;
         let workspace_b = create_workspace(&pool, &format!("{suffix}_b")).await;
+        let evidence_id = format!("ev_{suffix}_materialized");
+        let cross_evidence_id = format!("ev_{suffix}_cross_workspace");
         let store = KnowledgeStore::new(pool);
         let blob = BlobPutMeta {
             blob_key: format!("w/{workspace_a}/sha256/abc"),
@@ -500,10 +551,14 @@ mod tests {
             )
             .await
             .expect("insert source");
+        let cross_workspace_job = store
+            .create_import_job(&workspace_b, Some(&source.id), "upload", 3, 1)
+            .await;
+        assert!(cross_workspace_job.is_err());
         store
             .upsert_evidence(
                 &workspace_a,
-                "ev_materialized",
+                &evidence_id,
                 &source.id,
                 "document",
                 "Durable quoted evidence",
@@ -514,7 +569,7 @@ mod tests {
         store
             .upsert_evidence(
                 &workspace_a,
-                "ev_materialized",
+                &evidence_id,
                 &source.id,
                 "document",
                 "Updated durable quote",
@@ -535,7 +590,7 @@ mod tests {
         let cross_workspace = store
             .upsert_evidence(
                 &workspace_b,
-                "ev_cross_workspace",
+                &cross_evidence_id,
                 &source.id,
                 "document",
                 "Must be rejected",
@@ -649,7 +704,10 @@ mod tests {
             .await
             .expect("terminal failure");
         assert_eq!(failed.status, ImportJobStatus::Failed);
-        assert_eq!(failed.last_error.as_ref().map(|e| e.chars().count()), Some(4096));
+        assert_eq!(
+            failed.last_error.as_ref().map(|e| e.chars().count()),
+            Some(4096)
+        );
         assert!(failed.lease_owner.is_none());
 
         let reconnected = KnowledgeStore::new(
@@ -664,6 +722,45 @@ mod tests {
             .expect("job exists");
         assert_eq!(persisted.status, ImportJobStatus::Failed);
         assert_eq!(persisted.attempts, 2);
-        assert_eq!(persisted.last_error.as_ref().map(|e| e.chars().count()), Some(4096));
+        assert_eq!(
+            persisted.last_error.as_ref().map(|e| e.chars().count()),
+            Some(4096)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn import_job_expired_final_attempt_becomes_failed() {
+        let pool = crate::db::connect_and_migrate(&require_database_url())
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_exhausted")).await;
+        let store = KnowledgeStore::new(pool);
+        let job = store
+            .create_import_job(&workspace, None, "upload", 1, 10)
+            .await
+            .expect("create job");
+        store
+            .claim_import_job(&workspace, "worker-a", 10, 20)
+            .await
+            .expect("claim")
+            .expect("job claimed");
+
+        assert!(store
+            .claim_import_job(&workspace, "worker-b", 21, 31)
+            .await
+            .expect("claim after final lease")
+            .is_none());
+        let exhausted = store
+            .get_import_job(&workspace, &job.id)
+            .await
+            .expect("read exhausted job")
+            .expect("job exists");
+        assert_eq!(exhausted.status, ImportJobStatus::Failed);
+        assert_eq!(
+            exhausted.last_error.as_deref(),
+            Some("maximum attempts exhausted after lease expiry")
+        );
     }
 }

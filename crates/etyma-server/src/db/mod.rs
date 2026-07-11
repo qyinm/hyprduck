@@ -60,7 +60,9 @@ mod tests {
         let pool = connect_and_migrate(&url)
             .await
             .expect("first connect_and_migrate");
-        health_check(&pool).await.expect("health after first migrate");
+        health_check(&pool)
+            .await
+            .expect("health after first migrate");
 
         let pool2 = connect_and_migrate(&url)
             .await
@@ -131,6 +133,31 @@ mod tests {
             "expected S-PG3 knowledge product tables"
         );
 
+        let knowledge_indexes: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'knowledge'
+              AND indexname LIKE 'idx_knowledge_%'
+            ORDER BY indexname
+            "#,
+        )
+        .fetch_all(&pool2)
+        .await
+        .expect("list knowledge indexes");
+        assert_eq!(
+            knowledge_indexes,
+            vec![
+                "idx_knowledge_evidence_workspace_created",
+                "idx_knowledge_evidence_workspace_source_created",
+                "idx_knowledge_import_jobs_claimable",
+                "idx_knowledge_import_jobs_workspace_created",
+                "idx_knowledge_import_jobs_workspace_source",
+                "idx_knowledge_sources_workspace_created",
+                "idx_knowledge_sources_workspace_external_id",
+            ]
+        );
+
         let graph_tables: Vec<String> = sqlx::query_scalar(
             r#"
             SELECT table_name
@@ -143,6 +170,9 @@ mod tests {
         .fetch_all(&pool2)
         .await
         .expect("list graph product tables");
-        assert!(graph_tables.is_empty(), "S-PG4 graph tables must not exist yet");
+        assert!(
+            graph_tables.is_empty(),
+            "S-PG4 graph tables must not exist yet"
+        );
     }
 }

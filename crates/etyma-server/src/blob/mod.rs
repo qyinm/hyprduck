@@ -1,4 +1,4 @@
-//! Blob backend for original source bytes (outside SQLite metadata).
+//! Blob backend for original source bytes (outside Postgres metadata).
 //!
 //! Key scheme (v1): `w/{workspace_id}/sha256/{hex}`
 //! Content hash form: `sha256:{hex}` (full SHA-256 of raw bytes).
@@ -28,9 +28,7 @@ pub fn content_hash_sha256(bytes: &[u8]) -> String {
 }
 
 fn strip_sha256_prefix(content_hash: &str) -> &str {
-    content_hash
-        .strip_prefix("sha256:")
-        .unwrap_or(content_hash)
+    content_hash.strip_prefix("sha256:").unwrap_or(content_hash)
 }
 
 #[derive(Debug)]
@@ -46,7 +44,10 @@ impl fmt::Display for BlobError {
         match self {
             Self::NotFound { key } => write!(f, "blob not found: {key}"),
             Self::Integrity { expected, actual } => {
-                write!(f, "blob integrity mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "blob integrity mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::InvalidKey(msg) => write!(f, "invalid blob key: {msg}"),
             Self::Io(msg) => write!(f, "blob io: {msg}"),
@@ -152,9 +153,8 @@ pub struct LocalFsBlobStore {
 impl LocalFsBlobStore {
     pub fn open(root: impl AsRef<Path>) -> BlobResult<Self> {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(&root).map_err(|e| {
-            BlobError::Io(format!("create blob root {}: {e}", root.display()))
-        })?;
+        fs::create_dir_all(&root)
+            .map_err(|e| BlobError::Io(format!("create blob root {}: {e}", root.display())))?;
         Ok(Self { root })
     }
 
@@ -176,21 +176,18 @@ impl BlobStore for LocalFsBlobStore {
     fn put(&self, key: &str, bytes: &[u8]) -> BlobResult<()> {
         let path = self.resolve(key)?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                BlobError::Io(format!("create parent {}: {e}", parent.display()))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| BlobError::Io(format!("create parent {}: {e}", parent.display())))?;
         }
         let parent = path.parent().unwrap_or(self.root.as_path());
-        let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
-            BlobError::Io(format!("temp file in {}: {e}", parent.display()))
-        })?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| BlobError::Io(format!("temp file in {}: {e}", parent.display())))?;
         tmp.write_all(bytes)
             .map_err(|e| BlobError::Io(format!("write temp blob: {e}")))?;
         tmp.flush()
             .map_err(|e| BlobError::Io(format!("flush temp blob: {e}")))?;
-        tmp.persist(&path).map_err(|e| {
-            BlobError::Io(format!("persist blob {}: {e}", path.display()))
-        })?;
+        tmp.persist(&path)
+            .map_err(|e| BlobError::Io(format!("persist blob {}: {e}", path.display())))?;
         Ok(())
     }
 
@@ -228,7 +225,9 @@ fn validate_blob_key(key: &str) -> BlobResult<()> {
         return Err(BlobError::InvalidKey("leading/trailing slash".into()));
     }
     if key.contains("..") || key.contains('\\') || key.contains('\0') {
-        return Err(BlobError::InvalidKey("path traversal or invalid char".into()));
+        return Err(BlobError::InvalidKey(
+            "path traversal or invalid char".into(),
+        ));
     }
     for segment in key.split('/') {
         if segment.is_empty() {
