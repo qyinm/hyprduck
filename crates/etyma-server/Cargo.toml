@@ -1,0 +1,31 @@
+[package]
+name = "etyma-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Etyma cloud spike: multi-tenant pack compose over REST + MCP"
+
+[[bin]]
+name = "etyma-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = { version = "=0.8.4", features = ["macros"] }
+etyma-engine-types = { path = "../etyma-engine-types" }
+hex = "=0.4.3"
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "=0.10.9"
+tokio = { version = "=1.52.3", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util", "sync"] }
+tower = "=0.5.2"
+tower-http = { version = "=0.6.8", features = ["trace"] }
+tracing = "=0.1.41"
+tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
+uuid.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
+tempfile.workspace = true
+tokio = { version = "=1.52.3", features = ["macros", "rt-multi-thread", "net", "test-util"] }

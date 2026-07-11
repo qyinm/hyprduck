@@ -5,6 +5,7 @@ members = [
     "crates/etyma-engine-client",
     "crates/etyma-engine-types",
     "crates/etyma-knowledge",
+    "crates/etyma-server",
 ]
 resolver = "2"
 
