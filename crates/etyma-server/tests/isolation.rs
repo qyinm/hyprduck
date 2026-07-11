@@ -1,9 +1,11 @@
 use etyma_server::auth::AppState;
 use etyma_server::blob::{BlobStore, LocalFsBlobStore};
+use etyma_server::config::HostMode;
 use etyma_server::seed::seed_multi_source_workspace;
 use etyma_server::store::Store;
 use std::sync::Arc;
 use tempfile::tempdir;
+use uuid::Uuid;
 
 fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
     assert_eq!(pack["workspaceId"], workspace_id);
@@ -30,41 +32,48 @@ fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
     );
 }
 
-#[tokio::test]
-async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
-    let dir = tempdir().unwrap();
-    let db = dir.path().join("server.sqlite3");
-    let store = Arc::new(Store::open(&db).unwrap());
-    let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
+/// Full workspace isolation + spike operator flow against an already-open store.
+async fn run_isolation_suite(
+    store: Arc<Store>,
+    blobs: Arc<LocalFsBlobStore>,
+    host_mode: HostMode,
+    pg_pool: Option<sqlx::PgPool>,
+    id_prefix: &str,
+) {
+    let org = format!("{id_prefix}_org_demo");
+    let w1 = format!("{id_prefix}_ws_alpha");
+    let w2 = format!("{id_prefix}_ws_beta");
+    let org_http = format!("{id_prefix}_org_http");
+    let ws_http = format!("{id_prefix}_ws_http");
 
-    let org = "org_demo";
-    store.create_org(org, "Demo Org").unwrap();
-
-    let w1 = "ws_alpha";
-    let w2 = "ws_beta";
-    store.create_workspace(org, w1).unwrap();
-    store.create_workspace(org, w2).unwrap();
-    seed_multi_source_workspace(&store, blobs.as_ref(), w1).unwrap();
-    seed_multi_source_workspace(&store, blobs.as_ref(), w2).unwrap();
+    store.create_org(&org, "Demo Org").await.unwrap();
+    store.create_workspace(&org, &w1).await.unwrap();
+    store.create_workspace(&org, &w2).await.unwrap();
+    seed_multi_source_workspace(&store, blobs.as_ref(), &w1)
+        .await
+        .unwrap();
+    seed_multi_source_workspace(&store, blobs.as_ref(), &w2)
+        .await
+        .unwrap();
 
     // Seed created real blob objects on disk.
-    let w1_sources = store.list_sources(w1).unwrap();
+    let w1_sources = store.list_sources(&w1).await.unwrap();
     assert_eq!(w1_sources.len(), 2);
     for src in &w1_sources {
         assert!(blobs.exists(&src.blob_key).unwrap());
         assert!(src.content_hash.starts_with("sha256:"));
     }
 
-    let t1 = store.mint_token(w1, Some("a")).unwrap();
-    let t2 = store.mint_token(w2, Some("b")).unwrap();
+    let t1 = store.mint_token(&w1, Some("a")).await.unwrap();
+    let t2 = store.mint_token(&w2, Some("b")).await.unwrap();
 
     let app = {
         let state = AppState {
             store: store.clone(),
             blobs: blobs.clone(),
             spike_admin_token: Some("admin-secret".into()),
-            host_mode: etyma_server::config::HostMode::Spike,
-            pg_pool: None,
+            host_mode,
+            pg_pool,
         };
         axum::Router::new()
             .merge(etyma_server::http::router())
@@ -86,25 +95,25 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let org_res = client
         .post(format!("{base}/v1/spike/orgs"))
         .header("x-etyma-admin-token", admin)
-        .json(&serde_json::json!({ "name": "HTTP Org", "orgId": "org_http" }))
+        .json(&serde_json::json!({ "name": "HTTP Org", "orgId": org_http }))
         .send()
         .await
         .unwrap();
     assert_eq!(org_res.status(), 200, "{}", org_res.text().await.unwrap());
     let ws_res = client
-        .post(format!("{base}/v1/spike/orgs/org_http/workspaces"))
+        .post(format!("{base}/v1/spike/orgs/{org_http}/workspaces"))
         .header("x-etyma-admin-token", admin)
-        .json(&serde_json::json!({ "workspaceId": "ws_http" }))
+        .json(&serde_json::json!({ "workspaceId": ws_http }))
         .send()
         .await
         .unwrap();
     assert_eq!(ws_res.status(), 200);
     let ws_body: serde_json::Value = ws_res.json().await.unwrap();
-    assert_eq!(ws_body["orgId"], "org_http");
-    assert_eq!(ws_body["workspaceId"], "ws_http");
+    assert_eq!(ws_body["orgId"], org_http);
+    assert_eq!(ws_body["workspaceId"], ws_http);
 
     let tok_res = client
-        .post(format!("{base}/v1/spike/workspaces/ws_http/tokens"))
+        .post(format!("{base}/v1/spike/workspaces/{ws_http}/tokens"))
         .header("x-etyma-admin-token", admin)
         .json(&serde_json::json!({ "label": "dev" }))
         .send()
@@ -115,7 +124,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let t_http = tok_body["token"].as_str().unwrap();
 
     let seed_res = client
-        .post(format!("{base}/v1/spike/workspaces/ws_http/seed"))
+        .post(format!("{base}/v1/spike/workspaces/{ws_http}/seed"))
         .header("x-etyma-admin-token", admin)
         .send()
         .await
@@ -143,7 +152,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_http.status(), 200);
     let pack_http: serde_json::Value = pack_http.json().await.unwrap();
-    assert_multi_source_pack(&pack_http, "ws_http");
+    assert_multi_source_pack(&pack_http, &ws_http);
 
     // Multi-source pack for w1
     let pack_res = client
@@ -155,7 +164,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_res.status(), 200);
     let pack: serde_json::Value = pack_res.json().await.unwrap();
-    assert_multi_source_pack(&pack, w1);
+    assert_multi_source_pack(&pack, &w1);
     let w1_source_ids: Vec<String> = pack["sourceSet"]
         .as_array()
         .unwrap_or(&vec![])
@@ -181,7 +190,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_w2.status(), 200);
     let pack_w2: serde_json::Value = pack_w2.json().await.unwrap();
-    assert_multi_source_pack(&pack_w2, w2);
+    assert_multi_source_pack(&pack_w2, &w2);
     let w2_sources: Vec<String> = pack_w2["sourceSet"]
         .as_array()
         .unwrap_or(&vec![])
@@ -221,8 +230,9 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     }
 
     // AE3: orphan workspace create denied (missing org)
+    let missing_org = format!("{id_prefix}_org_does_not_exist");
     let orphan = client
-        .post(format!("{base}/v1/spike/orgs/org_does_not_exist/workspaces"))
+        .post(format!("{base}/v1/spike/orgs/{missing_org}/workspaces"))
         .header("x-etyma-admin-token", admin)
         .json(&serde_json::json!({}))
         .send()
@@ -234,7 +244,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let dup = client
         .post(format!("{base}/v1/spike/orgs"))
         .header("x-etyma-admin-token", admin)
-        .json(&serde_json::json!({ "name": "Again", "orgId": "org_http" }))
+        .json(&serde_json::json!({ "name": "Again", "orgId": org_http }))
         .send()
         .await
         .unwrap();
@@ -282,6 +292,49 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .as_str()
         .unwrap_or("");
     assert!(text.contains("alpha-token"), "{mcp_body}");
-    assert!(text.contains(w1), "{mcp_body}");
-    assert!(!text.contains(&format!("\"workspaceId\": \"{w2}\"")), "{mcp_body}");
+    assert!(text.contains(&w1), "{mcp_body}");
+    assert!(
+        !text.contains(&format!("\"workspaceId\": \"{w2}\"")),
+        "{mcp_body}"
+    );
+}
+
+#[tokio::test]
+async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("server.sqlite3");
+    let store = Arc::new(Store::open(&db).unwrap());
+    let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
+    run_isolation_suite(store, blobs, HostMode::Spike, None, "sq").await;
+}
+
+#[tokio::test]
+#[ignore = "requires ETYMA_DATABASE_URL"]
+async fn org_hierarchy_sibling_isolation_on_postgres_control() {
+    let url = std::env::var("ETYMA_DATABASE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .expect(
+            "ETYMA_DATABASE_URL required for ignored Postgres tests \
+             (run: docker compose up -d && cargo test -p etyma-server -- --include-ignored)",
+        );
+
+    let pool = etyma_server::db::connect_and_migrate(&url)
+        .await
+        .expect("connect_and_migrate");
+    let dir = tempdir().unwrap();
+    let knowledge = dir.path().join("knowledge.sqlite3");
+    let store = Arc::new(Store::open_hybrid(pool.clone(), &knowledge).unwrap());
+    let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
+    // Unique prefix so shared CI/dev Postgres DBs do not collide on fixed org ids.
+    let prefix = format!("pg_{}", Uuid::now_v7().simple());
+    run_isolation_suite(
+        store,
+        blobs,
+        HostMode::CloudFoundation,
+        Some(pool),
+        &prefix,
+    )
+    .await;
 }

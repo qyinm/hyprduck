@@ -80,6 +80,7 @@ async fn list_sources(
     let sources = state
         .store
         .list_sources(&auth.workspace_id)
+        .await
         .map_err(store_err)?;
     let body: Vec<Value> = sources
         .into_iter()
@@ -116,6 +117,7 @@ async fn create_pack(
         &auth.workspace_id,
         &body.query,
     )
+    .await
     .map_err(store_err)?;
     Ok(Json(pack))
 }
@@ -162,7 +164,11 @@ async fn create_org(
         .org_id
         .unwrap_or_else(|| format!("org_{}", Uuid::now_v7().simple()));
     validate_org_id(&org_id)?;
-    let org = state.store.create_org(&org_id, name).map_err(store_err)?;
+    let org = state
+        .store
+        .create_org(&org_id, name)
+        .await
+        .map_err(store_err)?;
     Ok(Json(OrgBody {
         org_id: org.id,
         name: org.name,
@@ -173,7 +179,7 @@ async fn list_orgs(
     State(state): State<AppState>,
     _admin: AdminAuth,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let orgs = state.store.list_orgs().map_err(store_err)?;
+    let orgs = state.store.list_orgs().await.map_err(store_err)?;
     let body: Vec<OrgBody> = orgs
         .into_iter()
         .map(|o| OrgBody {
@@ -213,6 +219,7 @@ async fn create_workspace(
     let ws = state
         .store
         .create_workspace(&org_id, &workspace_id)
+        .await
         .map_err(store_err)?;
     Ok(Json(WorkspaceBody {
         workspace_id: ws.id,
@@ -226,7 +233,11 @@ async fn list_workspaces(
     axum::extract::Path(org_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     validate_org_id(&org_id)?;
-    let workspaces = state.store.list_workspaces(&org_id).map_err(store_err)?;
+    let workspaces = state
+        .store
+        .list_workspaces(&org_id)
+        .await
+        .map_err(store_err)?;
     let body: Vec<WorkspaceBody> = workspaces
         .into_iter()
         .map(|w| WorkspaceBody {
@@ -261,6 +272,7 @@ async fn mint_token(
     let token = state
         .store
         .mint_token(&workspace_id, body.label.as_deref())
+        .await
         .map_err(store_err)?;
     Ok(Json(MintTokenResponse {
         workspace_id,
@@ -279,8 +291,13 @@ async fn seed_workspace(
         state.blobs.as_ref(),
         &workspace_id,
     )
+    .await
     .map_err(store_err)?;
-    let sources = state.store.list_sources(&workspace_id).map_err(store_err)?;
+    let sources = state
+        .store
+        .list_sources(&workspace_id)
+        .await
+        .map_err(store_err)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "sourceCount": source_count,

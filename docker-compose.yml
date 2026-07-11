@@ -1,4 +1,4 @@
-# Local Postgres for etyma-server cloud foundation (S-PG1).
+# Local Postgres for etyma-server cloud control plane (S-PG1 foundation + S-PG2 control).
 # Default DSN: postgres://etyma:etyma@127.0.0.1:5432/etyma
 services:
   postgres:

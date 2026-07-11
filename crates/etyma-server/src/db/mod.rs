@@ -1,6 +1,6 @@
 //! Postgres pool connect, migrations, and lightweight health probe.
 //!
-//! Plane schemas only in S-PG1; product tables arrive in S-PG2+.
+//! S-PG1: plane schemas. S-PG2: control product tables. knowledge/graph tables in S-PG3/4.
 
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
@@ -87,22 +87,48 @@ mod tests {
             "expected ordered plane schemas"
         );
 
-        // No product tables in these schemas yet (S-PG2/3/4).
-        let product_tables: Vec<String> = sqlx::query_scalar(
+        // Control product tables from S-PG2.
+        let control_tables: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'control'
+              AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            "#,
+        )
+        .fetch_all(&pool2)
+        .await
+        .expect("list control product tables");
+        assert_eq!(
+            control_tables,
+            vec![
+                "api_tokens",
+                "audit_events",
+                "memberships",
+                "orgs",
+                "users",
+                "workspaces",
+            ],
+            "expected S-PG2 control product tables"
+        );
+
+        // knowledge/graph still have no product tables (S-PG3/4).
+        let other_plane_tables: Vec<String> = sqlx::query_scalar(
             r#"
             SELECT table_schema || '.' || table_name
             FROM information_schema.tables
-            WHERE table_schema IN ('control', 'knowledge', 'graph')
+            WHERE table_schema IN ('knowledge', 'graph')
               AND table_type = 'BASE TABLE'
             ORDER BY 1
             "#,
         )
         .fetch_all(&pool2)
         .await
-        .expect("list product tables in plane schemas");
+        .expect("list knowledge/graph product tables");
         assert!(
-            product_tables.is_empty(),
-            "S-PG1 must not create product tables; found {product_tables:?}"
+            other_plane_tables.is_empty(),
+            "knowledge/graph must not have product tables yet; found {other_plane_tables:?}"
         );
     }
 }

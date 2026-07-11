@@ -11,14 +11,14 @@ use uuid::Uuid;
 
 /// Compose a cited V1 pack from server-owned multi-source evidence (spike path).
 /// Source body text is loaded from the blob backend when needed for title/body matching.
-pub fn compose_pack(
+pub async fn compose_pack(
     store: &Store,
     blobs: &dyn BlobStore,
     workspace_id: &str,
     query: &str,
 ) -> StoreResult<ContextPackV1> {
-    let sources = store.list_sources(workspace_id)?;
-    let evidence = store.list_evidence(workspace_id)?;
+    let sources = store.list_sources(workspace_id).await?;
+    let evidence = store.list_evidence(workspace_id).await?;
     let terms = query_terms(query);
     let mut hits: Vec<&EvidenceRow> = evidence
         .iter()
@@ -173,13 +173,13 @@ mod tests {
     use crate::store::Store;
     use tempfile::tempdir;
 
-    #[test]
-    fn compose_hits_document_and_issue() {
+    #[tokio::test]
+    async fn compose_hits_document_and_issue() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("db.sqlite3")).unwrap();
         let blobs = LocalFsBlobStore::open(dir.path().join("blobs")).unwrap();
-        store.create_org("org1", "Test").unwrap();
-        store.create_workspace("org1", "ws").unwrap();
+        store.create_org("org1", "Test").await.unwrap();
+        store.create_workspace("org1", "ws").await.unwrap();
         let doc = ingest_source(
             &store,
             &blobs,
@@ -190,6 +190,7 @@ mod tests {
             "text/plain",
             None,
         )
+        .await
         .unwrap();
         store
             .insert_evidence(
@@ -199,6 +200,7 @@ mod tests {
                 "The alpha-token boundary requires explicit workspace binding.",
                 "page:1",
             )
+            .await
             .unwrap();
         let issue = ingest_source(
             &store,
@@ -210,6 +212,7 @@ mod tests {
             "text/plain",
             Some("ENG-1"),
         )
+        .await
         .unwrap();
         store
             .insert_evidence(
@@ -219,9 +222,12 @@ mod tests {
                 "Track alpha-token migration for multi-tenant packs.",
                 "issue:ENG-1",
             )
+            .await
             .unwrap();
 
-        let pack = compose_pack(&store, &blobs, "ws", "alpha-token").unwrap();
+        let pack = compose_pack(&store, &blobs, "ws", "alpha-token")
+            .await
+            .unwrap();
         assert_eq!(pack.workspace_id, "ws");
         assert!(
             pack.selected_evidence

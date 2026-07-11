@@ -11,7 +11,7 @@ use crate::blob::{blob_key_for, put_bytes, BlobStore};
 use crate::store::{SourceRow, Store, StoreResult};
 
 /// Write original bytes to the blob backend, then insert source metadata.
-pub fn ingest_source(
+pub async fn ingest_source(
     store: &Store,
     blobs: &dyn BlobStore,
     workspace_id: &str,
@@ -21,7 +21,7 @@ pub fn ingest_source(
     content_type: &str,
     external_id: Option<&str>,
 ) -> StoreResult<SourceRow> {
-    store.require_workspace(workspace_id)?;
+    store.require_workspace(workspace_id).await?;
     let meta = put_bytes(blobs, workspace_id, bytes)?;
     // Defensive: meta key must match workspace content-address scheme.
     let expected_key = blob_key_for(workspace_id, &meta.content_hash);
@@ -31,12 +31,14 @@ pub fn ingest_source(
             meta.blob_key, meta.content_hash
         )));
     }
-    store.insert_source(
-        workspace_id,
-        kind,
-        title,
-        &meta,
-        content_type,
-        external_id,
-    )
+    store
+        .insert_source(
+            workspace_id,
+            kind,
+            title,
+            &meta,
+            content_type,
+            external_id,
+        )
+        .await
 }

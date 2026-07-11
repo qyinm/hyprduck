@@ -29,13 +29,13 @@ impl FromRequestParts<AppState> for AuthenticatedWorkspace {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let workspace_id = resolve_bearer_workspace(state, &parts.headers)?;
+        let workspace_id = resolve_bearer_workspace(state, &parts.headers).await?;
         Ok(Self { workspace_id })
     }
 }
 
 /// Single place for workspace bearer auth (REST + MCP).
-pub fn resolve_bearer_workspace(
+pub async fn resolve_bearer_workspace(
     state: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Result<String, (StatusCode, String)> {
@@ -57,6 +57,7 @@ pub fn resolve_bearer_workspace(
     state
         .store
         .resolve_token(token)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::UNAUTHORIZED, "invalid token".into()))
 }
