@@ -46,7 +46,12 @@ function collectDesktopCommandMapKeys() {
 }
 
 function collectMainCommandCases() {
-  const sourceFile = readSource("main.cjs", ts.ScriptKind.JS);
+  // IPC switch lives in main/ipc-handlers.cjs after the domain split; also scan
+  // main.cjs so a future re-merge does not silently drop contract coverage.
+  const sourceFiles = [
+    readSource("main.cjs", ts.ScriptKind.JS),
+    readSource("main/ipc-handlers.cjs", ts.ScriptKind.JS),
+  ];
   const commands = new Set();
 
   function visit(node) {
@@ -68,7 +73,9 @@ function collectMainCommandCases() {
     ts.forEachChild(node, visit);
   }
 
-  visit(sourceFile);
+  for (const sourceFile of sourceFiles) {
+    visit(sourceFile);
+  }
   return commands;
 }
 
@@ -130,7 +137,7 @@ function assertSameContract(label, expected, actual) {
 }
 
 const typedCommands = collectDesktopCommandMapKeys();
-assertSameContract("main.cjs IPC switch", typedCommands, collectMainCommandCases());
+assertSameContract("main IPC switch", typedCommands, collectMainCommandCases());
 assertSameContract("web preview handlers", typedCommands, collectWebPreviewHandlers());
 
 console.log(

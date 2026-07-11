@@ -1,3 +1,9 @@
+/**
+ * FREEZE: Agent Terminal session manager is maintenance-only.
+ * Do not expand the session protocol, handoff model, or backend surface here
+ * without an explicit unfreeze decision. Keep behavior-preserving bugfixes only.
+ * Related backends/tests under main/agent-terminal-* must not be deleted.
+ */
 const { randomUUID } = require("node:crypto");
 const {
   assertKnownAgentId,

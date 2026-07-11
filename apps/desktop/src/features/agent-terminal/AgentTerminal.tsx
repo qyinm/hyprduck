@@ -1,3 +1,9 @@
+/**
+ * FREEZE: Agent Terminal surface is maintenance-only.
+ * Do not expand features, rewrite session UX, or couple new product flows here
+ * without an explicit unfreeze decision. Keep behavior-preserving bugfixes only.
+ * Backends/tests under main/agent-terminal-* remain; do not delete them.
+ */
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTermTerminal } from "@xterm/xterm";

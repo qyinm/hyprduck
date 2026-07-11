@@ -440,10 +440,6 @@ export interface DesktopCommandMap {
     args: undefined;
     result: RuntimeReadinessResponseData;
   };
-  brain_health: {
-    args: { workspace_id?: string | null } | undefined;
-    result: BrainHealthResponseData;
-  };
   get_models_for_provider: {
     args: { providerSlug: string };
     result: string[];
@@ -487,10 +483,6 @@ export interface DesktopCommandMap {
   apply_workspace_correction: {
     args: { correction: WorkspaceCorrectionPayload };
     result: WorkspaceProject;
-  };
-  answer_workspace_project: {
-    args: { request: WorkspaceAnswerPayload };
-    result: WorkspaceProject["answerByNodeId"][string];
   };
   agent_chat_ask: {
     args: { request: AgentChatAskPayload };

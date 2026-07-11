@@ -11,15 +11,13 @@ import {
   sigmaGraphScopeFromUiState,
   sigmaGraphSelectionFromUiState,
   sigmaGraphTopologySelectionFromUiState,
-} from "./SigmaGraphCanvas";
+} from "./WorkspaceGraphCanvas";
 import type { WorkspaceUiState } from "./state";
 
 const baseUiState: WorkspaceUiState = {
   selectedNodeId: null,
   selectedEdgeId: null,
   inspectorOpen: true,
-  answerDockOpen: false,
-  answerInput: "",
 };
 
 describe("graph viewport controls", () => {

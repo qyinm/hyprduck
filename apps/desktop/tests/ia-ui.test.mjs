@@ -2,12 +2,36 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const desktopApiSource = readFileSync(
+  new URL("../src/desktopApi.ts", import.meta.url),
+  "utf8",
+);
+const workspaceLoadSource = readFileSync(
+  new URL("../src/features/workspace/loadWorkspaceEnvelope.ts", import.meta.url),
+  "utf8",
+);
 const graphSource = readFileSync(
   new URL("../src/features/workspace/GraphWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const graphNodeInspectorSource = readFileSync(
+  new URL("../src/features/workspace/GraphNodeInspector.tsx", import.meta.url),
+  "utf8",
+);
 const docsSource = readFileSync(
   new URL("../src/features/workspace/DocsWorkspace.tsx", import.meta.url),
+  "utf8",
+);
+const docsPdfPreviewSource = readFileSync(
+  new URL("../src/features/workspace/docs/PdfOriginalPreview.tsx", import.meta.url),
+  "utf8",
+);
+const docsMarkdownPreviewSource = readFileSync(
+  new URL("../src/features/workspace/docs/ParsedMarkdownPreview.tsx", import.meta.url),
+  "utf8",
+);
+const graphEvidenceSource = readFileSync(
+  new URL("../src/features/workspace/GraphEvidence.tsx", import.meta.url),
   "utf8",
 );
 const agentChatSource = readFileSync(
@@ -29,7 +53,11 @@ const previewSource = readFileSync(
 );
 const settingsSource = readFileSync(new URL("../src/SettingsPanel.tsx", import.meta.url), "utf8");
 const localesSource = readFileSync(new URL("../src/i18n/locales.ts", import.meta.url), "utf8");
-const previewApiSource = readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8");
+const previewApiSource = [
+  readFileSync(new URL("../src/webPreviewApi.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/webPreview/handlers/config.ts", import.meta.url), "utf8"),
+  readFileSync(new URL("../src/webPreview/handlers/graph.ts", import.meta.url), "utf8"),
+].join("\n");
 const cliShimSource = readFileSync(new URL("../main/cli-shim.cjs", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const iaSource = readFileSync(new URL("../IA.md", import.meta.url), "utf8");
@@ -37,7 +65,18 @@ const modelTaskMatrixSource = readFileSync(
   new URL("../../../docs/model-task-matrix.md", import.meta.url),
   "utf8",
 );
-const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
+// Domain logic was split out of main.cjs; concatenate for source-level contracts.
+const mainSource = [
+  "../main.cjs",
+  "../main/snapshot-state.cjs",
+  "../main/engine-rpc.cjs",
+  "../main/import-pipeline.cjs",
+  "../main/source-preview.cjs",
+  "../main/agent-chat-stream.cjs",
+  "../main/ipc-handlers.cjs",
+]
+  .map((relativePath) => readFileSync(new URL(relativePath, import.meta.url), "utf8"))
+  .join("\n");
 const packageSource = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const preloadSource = readFileSync(new URL("../preload.cjs", import.meta.url), "utf8");
 
@@ -132,25 +171,26 @@ test("Docs page focuses first users on importing source files", () => {
   expect(docsSource).toMatch(/View in Graph/);
   expect(docsSource).toMatch(/SourceDetailWorkspace/);
   expect(docsSource).toMatch(/Original/);
-  expect(docsSource).toMatch(/Parsed Markdown/);
-  expect(docsSource).toMatch(/Document/);
-  expect(docsSource).toMatch(/Page/);
-  expect(docsSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
-  expect(docsSource).toMatch(/visiblePageRange/);
-  expect(docsSource).toMatch(/visiblePageNumbers/);
-  expect(docsSource).toMatch(/pageNumber=\{pageNumber\}/);
-  expect(docsSource).toMatch(/onScroll=\{updateVisiblePages\}/);
-  expect(docsSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
-  expect(docsSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
+  expect(docsSource).toMatch(/ParsedMarkdownPreview/);
+  expect(docsMarkdownPreviewSource).toMatch(/Parsed Markdown/);
+  expect(docsPdfPreviewSource).toMatch(/Document/);
+  expect(docsPdfPreviewSource).toMatch(/Page/);
+  expect(docsMarkdownPreviewSource).toMatch(/useState<MarkdownViewMode>\("raw"\)/);
+  expect(docsPdfPreviewSource).toMatch(/visiblePageRange/);
+  expect(docsPdfPreviewSource).toMatch(/visiblePageNumbers/);
+  expect(docsPdfPreviewSource).toMatch(/pageNumber=\{pageNumber\}/);
+  expect(docsPdfPreviewSource).toMatch(/onScroll=\{updateVisiblePages\}/);
+  expect(docsPdfPreviewSource).not.toMatch(/Array\.from\(\{ length: numPages \}/);
+  expect(docsPdfPreviewSource).toMatch(/pdfjs\.GlobalWorkerOptions\.workerSrc/);
   expect(packageSource).toMatch(/"react-pdf": "\^10\.4\.1"/);
   expect(packageSource).toMatch(/"pdfjs-dist": "5\.4\.296"/);
-  expect(docsSource).toMatch(/top-12 z-\[60\]/);
-  expect(docsSource).toMatch(/data-electron-no-drag/);
-  expect(docsSource).not.toMatch(/type="application\/pdf"/);
-  expect(docsSource).toMatch(/Preview/);
-  expect(docsSource).toMatch(/Raw/);
-  expect(docsSource).toMatch(/Copy/);
-  expect(docsSource).toMatch(/MessageResponse/);
+  expect(docsPdfPreviewSource).toMatch(/top-12 z-\[60\]/);
+  expect(docsPdfPreviewSource).toMatch(/data-electron-no-drag/);
+  expect(docsPdfPreviewSource).not.toMatch(/type="application\/pdf"/);
+  expect(docsMarkdownPreviewSource).toMatch(/Preview/);
+  expect(docsMarkdownPreviewSource).toMatch(/Raw/);
+  expect(docsMarkdownPreviewSource).toMatch(/Copy/);
+  expect(docsMarkdownPreviewSource).toMatch(/MessageResponse/);
   expect(docsSource).not.toMatch(/Open extracted text/);
   expect(docsSource).toMatch(/Reveal in Finder/);
   expect(docsSource).not.toMatch(/Filter/);
@@ -193,7 +233,7 @@ test("launch copy stays agent-ready without unsupported provider claims", () => 
 });
 
 test("Graph workspace keeps the graph canvas and removes chat/import chrome", () => {
-  expect(graphSource).toMatch(/SigmaGraphCanvas/);
+  expect(graphSource).toMatch(/WorkspaceGraphCanvas/);
   expect(graphSource).toMatch(/onOpenDocs/);
   expect(graphSource).not.toMatch(/AgentTerminal/);
   expect(graphSource).not.toMatch(/GraphPromptComposer/);
@@ -207,21 +247,23 @@ test("Graph workspace keeps the graph canvas and removes chat/import chrome", ()
 });
 
 test("Graph workspace centers the canvas with inspector actions", () => {
-  expect(graphSource).toMatch(/SigmaGraphCanvas/);
-  expect(graphSource).toMatch(/Document/);
-  expect(graphSource).toMatch(/File/);
-  expect(graphSource).toMatch(/workspace\.inspector\.openFile/);
-  expect(graphSource).toMatch(/workspace\.inspector\.openExtractedText/);
-  expect(graphSource).toMatch(/workspace\.inspector\.revealInFinder/);
-  expect(graphSource).toMatch(/ExternalLink/);
-  expect(graphSource).toMatch(/FileText/);
-  expect(graphSource).toMatch(/FolderOpen/);
-  expect(graphSource).toMatch(/Trash2/);
+  expect(graphSource).toMatch(/WorkspaceGraphCanvas/);
+  expect(graphSource).toMatch(/GraphNodeInspector/);
+  expect(graphNodeInspectorSource).toMatch(/Document/);
+  expect(graphNodeInspectorSource).toMatch(/File/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.openFile/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.openExtractedText/);
+  expect(graphNodeInspectorSource).toMatch(/workspace\.inspector\.revealInFinder/);
+  expect(graphNodeInspectorSource).toMatch(/ExternalLink/);
+  expect(graphNodeInspectorSource).toMatch(/FileText/);
+  expect(graphNodeInspectorSource).toMatch(/FolderOpen/);
+  expect(graphNodeInspectorSource).toMatch(/Trash2/);
   expect(graphSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
-  expect(graphSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
-  expect(graphSource).toMatch(/workspaceSelectionKindLabel/);
-  expect(graphSource).toMatch(/customerVisibleDescription/);
-  expect(graphSource).not.toMatch(/<Badge variant="outline">\{selectedNode\.node\.kind\}<\/Badge>/);
+  expect(graphNodeInspectorSource).not.toMatch(/workspace\.inspector\.reviewSuggestions/);
+  expect(graphNodeInspectorSource).toMatch(/selectedNode\.evidence\.slice\(0, 3\)/);
+  expect(graphNodeInspectorSource).toMatch(/workspaceSelectionKindLabel/);
+  expect(graphNodeInspectorSource).toMatch(/customerVisibleDescription/);
+  expect(graphNodeInspectorSource).not.toMatch(/<Badge variant="outline">\{selectedNode\.node\.kind\}<\/Badge>/);
   expect(graphSource).not.toMatch(/graphMaterializationSummary/);
   expect(graphSource).not.toMatch(/projectionSummary/);
 });
@@ -295,19 +337,25 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
 });
 
 test("evidence is rendered as UI content instead of raw markdown", () => {
-  expect(graphSource).toMatch(/formatEvidenceSnippet/);
-  expect(graphSource).toMatch(/extractMarkdownImageLabel/);
-  expect(graphSource).toMatch(/Page image:/);
+  expect(graphEvidenceSource).toMatch(/formatEvidenceSnippet/);
+  expect(graphEvidenceSource).toMatch(/extractMarkdownImageLabel/);
+  expect(graphEvidenceSource).toMatch(/Page image:/);
 });
 
 test("workspace graph reader loads the latest materialized snapshot first", () => {
   expect(mainSource).toMatch(/case "load_materialized_graph_snapshot"/);
   expect(mainSource).toMatch(/command: "read_graph_snapshot"/);
-  expect(appSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
-  expect(appSource).toMatch(/loadGraphWorkspaceEnvelope/);
-  expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
-  expect(appSource).toMatch(/load_materialized_graph_snapshot/);
-  expect(appSource).toMatch(/load_workspace_project/);
+  expect(desktopApiSource).toMatch(/export function getDesktopApi/);
+  expect(desktopApiSource).toMatch(/export async function invoke/);
+  expect(workspaceLoadSource).toMatch(/materializedGraphSnapshotToWorkspaceEnvelope/);
+  expect(workspaceLoadSource).toMatch(/loadGraphWorkspaceEnvelope/);
+  expect(workspaceLoadSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
+  expect(workspaceLoadSource).toMatch(/load_materialized_graph_snapshot/);
+  expect(workspaceLoadSource).toMatch(/load_workspace_project/);
+  expect(workspaceLoadSource).toMatch(/source: "materialized"/);
+  expect(workspaceLoadSource).toMatch(/source: "legacy"/);
+  expect(appSource).toMatch(/from "@\/features\/workspace\/loadWorkspaceEnvelope"/);
+  expect(appSource).toMatch(/from "@\/desktopApi"/);
   expect(appSource).toMatch(/const nextLoad = await loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setLoadedWorkspaceEnvelope\(nextLoad\.envelope\)/);
   expect(appSource).toMatch(/\}, \[workspaceProject\]\);/);
@@ -365,11 +413,13 @@ test("desktop provider validation preserves issue codes", () => {
 
 test("workspace snapshot refresh exposes loading fallback and error states", () => {
   expect(appTypesSource).toMatch(/type WorkspaceLoadStatus =\s*\|\s*"idle"\s*\|\s*"loading"\s*\|\s*"ready"\s*\|\s*"fallback"\s*\|\s*"error"/);
+  expect(workspaceLoadSource).toMatch(/workspaceLoadStateFromResult/);
+  expect(workspaceLoadSource).toMatch(/status: "ready"/);
+  expect(workspaceLoadSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/loadGraphWorkspaceEnvelopeResult/);
   expect(appSource).toMatch(/setWorkspaceLoadState\(\{\s*status: "loading"/);
   expect(appSource).toMatch(/workspaceLoadStateFromResult\(result, t\)/);
   expect(appSource).toMatch(/workspaceLoadStateFromResult\(initialWorkspaceLoad, t\)/);
-  expect(appSource).toMatch(/status: "fallback"/);
   expect(appSource).toMatch(/status: "error"/);
   expect(appSource).toMatch(/WorkspaceSnapshotStatusBanner/);
   expect(appSource).toMatch(/workspace\.status\.refreshingTitle/);
@@ -389,9 +439,8 @@ test("partial import failures expose failed-page retry affordance", () => {
   expect(graphSource).toMatch(/failedPageCount === 1 \? "page" : "pages"/);
   expect(graphSource).toMatch(/onRetryFailedPages/);
   expect(appSource).toMatch(/invoke\("retry_failed_pages"\)/);
-  const mainSource = readFileSync(new URL("../main.cjs", import.meta.url), "utf8");
   expect(mainSource).toMatch(/case "retry_failed_pages"/);
-  expect(mainSource).toMatch(/function retryFailedPages/);
+  expect(mainSource).toMatch(/async function retryFailedPages/);
   expect(mainSource).toMatch(/command: "retry_failed_pages"/);
   expect(mainSource).toMatch(/sourceManifestPath: manifestPath/);
   expect(mainSource).not.toMatch(/onRetryFailedPages=\{startParse\}/);

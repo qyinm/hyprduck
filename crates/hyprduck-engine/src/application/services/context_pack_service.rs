@@ -1,3 +1,4 @@
+use crate::application::services::workspace_knowledge_read::db_then_reader;
 use crate::domains::retrieval::brain_search::{db_context_window, db_search_terms};
 use crate::policy;
 use crate::*;
@@ -11,90 +12,66 @@ pub(crate) fn handle_get_context_pack(
     let generated_at = current_iso_timestamp_utc();
 
     // Prefer DB assemble path for primary context pack (v1) per AGENTS.md (DB/GraphQLite authoritative).
+    // Internal assembly is V1-only; ContextPack V0 is derived at the service/wire boundary.
     // DB assemble is attempted first for non-selection case; reader is opened only if DB assemble
     // is inapplicable (selected_node) or fails (conditional fallback, matching brain_read_service pattern).
-    let mut db_pack_error: Option<String> = None;
-    let db_pack = if request.selected_node_id.is_none() {
+    let (root, mut context_pack, mut context_pack_v1) = if request.selected_node_id.is_some() {
+        // Selection queries skip DB assemble and use the legacy reader path only.
         let root = resolve_brain_workspace_root(&request.scope)?;
-        let store = KnowledgeStore::open(KnowledgeStore::default_path_for_root(&root))?;
-        match store.assemble_context_pack_v1_from_db(
-            &request.scope.workspace_id,
-            &request.query,
+        let reader = BrainReader::open(&request.scope)?;
+        let (context_pack, context_pack_v1) = assemble_context_pack_from_reader(
+            &reader,
+            &request,
             budget,
-            pack_id.clone(),
-            generated_at.clone(),
-        ) {
-            Ok((context_pack, v1)) if db_context_pack_v1_has_content(&v1) => {
-                Some((context_pack, v1))
-            }
-            Ok(_) => None,
-            Err(error) => {
-                db_pack_error = Some(format!("{error:#}"));
-                None
-            }
-        }
+            &pack_id,
+            &generated_at,
+            /*db_attempted*/ false,
+            None,
+        )?;
+        (root, context_pack, context_pack_v1)
     } else {
-        None
+        // Capture DB assemble failures for the legacy-path warning without inventing a third route.
+        let db_pack_error = std::cell::RefCell::new(None::<String>);
+        db_then_reader(
+            &request.scope,
+            |store, root| {
+                match store.assemble_context_pack_v1_from_db(
+                    &request.scope.workspace_id,
+                    &request.query,
+                    budget,
+                    pack_id.clone(),
+                    generated_at.clone(),
+                ) {
+                    Ok((context_pack, v1)) if db_context_pack_v1_has_content(&v1) => {
+                        Ok(Some((root.to_path_buf(), context_pack, v1)))
+                    }
+                    Ok(_) => Ok(None),
+                    Err(error) => {
+                        *db_pack_error.borrow_mut() = Some(format!("{error:#}"));
+                        Ok(None)
+                    }
+                }
+            },
+            |reader, root| {
+                let (context_pack, context_pack_v1) = assemble_context_pack_from_reader(
+                    reader,
+                    &request,
+                    budget,
+                    &pack_id,
+                    &generated_at,
+                    /*db_attempted*/ true,
+                    db_pack_error.borrow().clone(),
+                )?;
+                Ok((root.to_path_buf(), context_pack, context_pack_v1))
+            },
+        )?
     };
 
-    let (mut context_pack, mut context_pack_v0, mut context_pack_v1) = if let Some((
-        context_pack,
-        v1,
-    )) = db_pack
-    {
-        let context_pack_v0 = context_pack_v0_from_v1(v1.clone());
-        (context_pack, context_pack_v0, v1)
-    } else {
-        // Reader path (selected_node or DB assemble failure).
-        let reader = BrainReader::open(&request.scope)?;
-        let context_pack = if request.selected_node_id.is_some() {
-            reader.context_pack_with_selection(
-                &request.query,
-                budget,
-                request.selected_node_id.as_deref(),
-            )?
-        } else {
-            reader.context_pack(&request.query, budget)?
-        };
-        let artifact_metadata =
-            build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
-        let context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
-            &context_pack,
-            pack_id.clone(),
-            generated_at.clone(),
-            &artifact_metadata,
-        );
-        let mut context_pack_v1 = hyprduck_engine_types::ContextPackV1::from_brain_context_pack(
-            &context_pack,
-            pack_id.clone(),
-            generated_at.clone(),
-            &artifact_metadata,
-        );
-        if request.selected_node_id.is_none() {
-            // DB was attempted (no selected) but failed -> degrade with warning (as before).
-            let message = db_pack_error
-                    .as_deref()
-                    .map(|error| {
-                        format!(
-                            "DB-backed Context Pack assembly failed; legacy Context Pack was used. {error}"
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        "DB-backed Context Pack assembly returned no citation-ready evidence; legacy Context Pack was used.".into()
-                    });
-            context_pack_v1
-                .warnings
-                .push(policy::graph_trail_unavailable_warning(&message));
-        }
-        (context_pack, context_pack_v0, context_pack_v1)
-    };
-    let root = resolve_brain_workspace_root(&request.scope)?;
     augment_context_pack_with_source_page_text(
         &root,
         &request.scope.workspace_id,
         &request.query,
         &mut context_pack,
-        &mut context_pack_v0,
         &mut context_pack_v1,
     )?;
 
@@ -103,12 +80,59 @@ pub(crate) fn handle_get_context_pack(
     } else {
         None
     };
+    // Wire adapter: V0 is always projected from the V1 primary pack at the boundary.
+    let context_pack_v0 = context_pack_v0_from_v1(context_pack_v1.clone());
     Ok(GetContextPackResponseData {
         context_pack,
         context_pack_v1,
         context_pack_v0,
         persisted_context_pack_path,
     })
+}
+
+fn assemble_context_pack_from_reader(
+    reader: &BrainReader,
+    request: &GetContextPackRequest,
+    budget: usize,
+    pack_id: &str,
+    generated_at: &str,
+    db_attempted: bool,
+    db_pack_error: Option<String>,
+) -> Result<(BrainContextPack, hyprduck_engine_types::ContextPackV1)> {
+    let context_pack = if request.selected_node_id.is_some() {
+        reader.context_pack_with_selection(
+            &request.query,
+            budget,
+            request.selected_node_id.as_deref(),
+        )?
+    } else {
+        reader.context_pack(&request.query, budget)?
+    };
+    let artifact_metadata =
+        build_context_pack_artifact_metadata(reader.root(), &context_pack.sources);
+    let mut context_pack_v1 = hyprduck_engine_types::ContextPackV1::from_brain_context_pack(
+        &context_pack,
+        pack_id.to_string(),
+        generated_at.to_string(),
+        &artifact_metadata,
+    );
+    if db_attempted {
+        // DB was attempted (no selected) but failed/empty -> degrade with warning (as before).
+        let message = db_pack_error
+            .as_deref()
+            .map(|error| {
+                format!(
+                    "DB-backed Context Pack assembly failed; legacy Context Pack was used. {error}"
+                )
+            })
+            .unwrap_or_else(|| {
+                "DB-backed Context Pack assembly returned no citation-ready evidence; legacy Context Pack was used.".into()
+            });
+        context_pack_v1
+            .warnings
+            .push(policy::graph_trail_unavailable_warning(&message));
+    }
+    Ok((context_pack, context_pack_v1))
 }
 
 pub(crate) fn persist_context_pack_v1(
@@ -229,7 +253,6 @@ fn augment_context_pack_with_source_page_text(
     workspace_id: &str,
     query: &str,
     context_pack: &mut BrainContextPack,
-    context_pack_v0: &mut hyprduck_engine_types::ContextPackV0,
     context_pack_v1: &mut hyprduck_engine_types::ContextPackV1,
 ) -> Result<bool> {
     let terms = db_search_terms(query);
@@ -282,11 +305,6 @@ fn augment_context_pack_with_source_page_text(
         return Ok(false);
     }
 
-    for evidence in &mut context_pack_v0.selected_evidence {
-        if let Some(quoted_text) = updates.get(&evidence.evidence_ref) {
-            evidence.quoted_text = quoted_text.clone();
-        }
-    }
     for evidence in &mut context_pack.evidence {
         if let Some(quoted_text) = updates.get(&evidence.id) {
             evidence.snippet = quoted_text.clone();
@@ -589,12 +607,6 @@ mod tests {
                 },
             )]),
         );
-        let mut context_pack_v0 = hyprduck_engine_types::ContextPackV0::from_brain_context_pack(
-            &context_pack,
-            "ctx-selected",
-            "2026-06-19T00:00:00Z",
-            &artifact_metadata,
-        );
         let mut context_pack_v1 = ContextPackV1::from_brain_context_pack(
             &context_pack,
             "ctx-selected",
@@ -607,10 +619,10 @@ mod tests {
             "workspace-default",
             "dynamic hashing 내용 설명해",
             &mut context_pack,
-            &mut context_pack_v0,
             &mut context_pack_v1,
         )
         .expect("augment context pack");
+        let context_pack_v0 = context_pack_v0_from_v1(context_pack_v1.clone());
 
         assert!(augmented);
         assert!(context_pack_v1.selected_evidence[0]
