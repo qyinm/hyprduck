@@ -4,6 +4,31 @@ use etyma_server::store::Store;
 use std::sync::Arc;
 use tempfile::tempdir;
 
+fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
+    assert_eq!(pack["workspaceId"], workspace_id);
+    assert_eq!(pack["schemaVersion"], "etyma.context_pack.v1");
+    let evidence = pack["selectedEvidence"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        evidence.len() >= 2,
+        "expected multi-source evidence, got {evidence:?}"
+    );
+    let reasons: Vec<String> = evidence
+        .iter()
+        .filter_map(|e| e["selectionReason"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        reasons.iter().any(|r| r.contains("document")),
+        "missing document evidence: {reasons:?}"
+    );
+    assert!(
+        reasons.iter().any(|r| r.contains("issue")),
+        "missing issue evidence: {reasons:?}"
+    );
+}
+
 #[tokio::test]
 async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let dir = tempdir().unwrap();
@@ -44,7 +69,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let base = format!("http://{addr}");
     let admin = "admin-secret";
 
-    // AE1: operator create org + workspace via HTTP, then pack
+    // AE1: operator create org + workspace via HTTP, then multi-source pack
     let org_res = client
         .post(format!("{base}/v1/spike/orgs"))
         .header("x-etyma-admin-token", admin)
@@ -92,16 +117,9 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_http.status(), 200);
     let pack_http: serde_json::Value = pack_http.json().await.unwrap();
-    assert_eq!(pack_http["workspaceId"], "ws_http");
-    assert!(
-        pack_http["selectedEvidence"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0)
-            >= 2
-    );
+    assert_multi_source_pack(&pack_http, "ws_http");
 
-    // Mixed multi-source pack for w1
+    // Multi-source pack for w1
     let pack_res = client
         .post(format!("{base}/v1/packs"))
         .header("Authorization", format!("Bearer {t1}"))
@@ -111,7 +129,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_res.status(), 200);
     let pack: serde_json::Value = pack_res.json().await.unwrap();
-    assert_eq!(pack["workspaceId"], w1);
+    assert_multi_source_pack(&pack, w1);
     let w1_sources: Vec<String> = pack["sourceSet"]
         .as_array()
         .unwrap_or(&vec![])
@@ -130,7 +148,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(pack_w2.status(), 200);
     let pack_w2: serde_json::Value = pack_w2.json().await.unwrap();
-    assert_eq!(pack_w2["workspaceId"], w2);
+    assert_multi_source_pack(&pack_w2, w2);
     let w2_sources: Vec<String> = pack_w2["sourceSet"]
         .as_array()
         .unwrap_or(&vec![])
@@ -152,6 +170,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .unwrap();
     assert_eq!(sources_w2.status(), 200);
     let body: serde_json::Value = sources_w2.json().await.unwrap();
+    assert_eq!(body["workspaceId"], w2);
     let listed: Vec<String> = body["sources"]
         .as_array()
         .unwrap_or(&vec![])
@@ -171,6 +190,16 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .await
         .unwrap();
     assert_eq!(orphan.status(), 404);
+
+    // Duplicate org id → 409
+    let dup = client
+        .post(format!("{base}/v1/spike/orgs"))
+        .header("x-etyma-admin-token", admin)
+        .json(&serde_json::json!({ "name": "Again", "orgId": "org_http" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dup.status(), 409);
 
     // Flat create route removed
     let flat = client
@@ -213,6 +242,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let text = mcp_body["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or("");
+    assert!(text.contains("alpha-token"), "{mcp_body}");
     assert!(text.contains(w1), "{mcp_body}");
     assert!(!text.contains(&format!("\"workspaceId\": \"{w2}\"")), "{mcp_body}");
 }

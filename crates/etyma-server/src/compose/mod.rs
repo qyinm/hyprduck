@@ -1,5 +1,4 @@
-use crate::store::{EvidenceRow, Store};
-use anyhow::Result;
+use crate::store::{EvidenceRow, Store, StoreResult};
 use etyma_engine_types::{
     ContextPackEvidenceV1, ContextPackFindingStatus, ContextPackFindingV0,
     ContextPackParseConfidence, ContextPackRetrievalTraceV1, ContextPackSourceV0,
@@ -10,7 +9,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// Compose a cited V1 pack from server-owned multi-source evidence (spike path).
-pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> Result<ContextPackV1> {
+pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> StoreResult<ContextPackV1> {
     let sources = store.list_sources(workspace_id)?;
     let evidence = store.list_evidence(workspace_id)?;
     let terms = query_terms(query);

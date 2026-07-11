@@ -3,6 +3,7 @@ use crate::auth::{
 };
 use crate::compose::compose_pack;
 use crate::seed::seed_multi_source_workspace;
+use crate::store::StoreError;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -44,7 +45,7 @@ async fn list_sources(
     let sources = state
         .store
         .list_sources(&auth.workspace_id)
-        .map_err(internal)?;
+        .map_err(store_err)?;
     let body: Vec<Value> = sources
         .into_iter()
         .map(|s| {
@@ -70,7 +71,8 @@ async fn create_pack(
     auth: AuthenticatedWorkspace,
     Json(body): Json<PackRequest>,
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
-    let pack = compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(internal)?;
+    let pack =
+        compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(store_err)?;
     Ok(Json(pack))
 }
 
@@ -98,7 +100,7 @@ struct CreateOrgRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateOrgResponse {
+struct OrgBody {
     org_id: String,
     name: String,
 }
@@ -107,7 +109,7 @@ async fn create_org(
     State(state): State<AppState>,
     _admin: AdminAuth,
     Json(body): Json<CreateOrgRequest>,
-) -> Result<Json<CreateOrgResponse>, (StatusCode, String)> {
+) -> Result<Json<OrgBody>, (StatusCode, String)> {
     let name = body.name.trim();
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name is required".into()));
@@ -116,8 +118,8 @@ async fn create_org(
         .org_id
         .unwrap_or_else(|| format!("org_{}", Uuid::now_v7().simple()));
     validate_org_id(&org_id)?;
-    let org = state.store.create_org(&org_id, name).map_err(internal)?;
-    Ok(Json(CreateOrgResponse {
+    let org = state.store.create_org(&org_id, name).map_err(store_err)?;
+    Ok(Json(OrgBody {
         org_id: org.id,
         name: org.name,
     }))
@@ -127,10 +129,13 @@ async fn list_orgs(
     State(state): State<AppState>,
     _admin: AdminAuth,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let orgs = state.store.list_orgs().map_err(internal)?;
-    let body: Vec<Value> = orgs
+    let orgs = state.store.list_orgs().map_err(store_err)?;
+    let body: Vec<OrgBody> = orgs
         .into_iter()
-        .map(|o| json!({ "orgId": o.id, "name": o.name }))
+        .map(|o| OrgBody {
+            org_id: o.id,
+            name: o.name,
+        })
         .collect();
     Ok(Json(json!({ "orgs": body })))
 }
@@ -144,7 +149,7 @@ struct CreateWorkspaceRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateWorkspaceResponse {
+struct WorkspaceBody {
     workspace_id: String,
     org_id: String,
 }
@@ -154,20 +159,18 @@ async fn create_workspace(
     _admin: AdminAuth,
     axum::extract::Path(org_id): axum::extract::Path<String>,
     Json(body): Json<CreateWorkspaceRequest>,
-) -> Result<Json<CreateWorkspaceResponse>, (StatusCode, String)> {
+) -> Result<Json<WorkspaceBody>, (StatusCode, String)> {
     validate_org_id(&org_id)?;
-    if state.store.get_org(&org_id).map_err(internal)?.is_none() {
-        return Err((StatusCode::NOT_FOUND, "org not found".into()));
-    }
     let workspace_id = body
         .workspace_id
         .unwrap_or_else(|| format!("ws_{}", Uuid::now_v7().simple()));
     validate_workspace_id(&workspace_id)?;
+    // Store enforces parent org existence + unique id (no double HTTP pre-check).
     let ws = state
         .store
         .create_workspace(&org_id, &workspace_id)
-        .map_err(internal)?;
-    Ok(Json(CreateWorkspaceResponse {
+        .map_err(store_err)?;
+    Ok(Json(WorkspaceBody {
         workspace_id: ws.id,
         org_id: ws.org_id,
     }))
@@ -179,13 +182,13 @@ async fn list_workspaces(
     axum::extract::Path(org_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     validate_org_id(&org_id)?;
-    if state.store.get_org(&org_id).map_err(internal)?.is_none() {
-        return Err((StatusCode::NOT_FOUND, "org not found".into()));
-    }
-    let workspaces = state.store.list_workspaces(&org_id).map_err(internal)?;
-    let body: Vec<Value> = workspaces
+    let workspaces = state.store.list_workspaces(&org_id).map_err(store_err)?;
+    let body: Vec<WorkspaceBody> = workspaces
         .into_iter()
-        .map(|w| json!({ "workspaceId": w.id, "orgId": w.org_id }))
+        .map(|w| WorkspaceBody {
+            workspace_id: w.id,
+            org_id: w.org_id,
+        })
         .collect();
     Ok(Json(json!({ "orgId": org_id, "workspaces": body })))
 }
@@ -211,18 +214,10 @@ async fn mint_token(
     Json(body): Json<MintTokenRequest>,
 ) -> Result<Json<MintTokenResponse>, (StatusCode, String)> {
     validate_workspace_id(&workspace_id)?;
-    if state
-        .store
-        .get_workspace(&workspace_id)
-        .map_err(internal)?
-        .is_none()
-    {
-        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
-    }
     let token = state
         .store
         .mint_token(&workspace_id, body.label.as_deref())
-        .map_err(internal)?;
+        .map_err(store_err)?;
     Ok(Json(MintTokenResponse {
         workspace_id,
         token,
@@ -235,16 +230,9 @@ async fn seed_workspace(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     validate_workspace_id(&workspace_id)?;
-    if state
-        .store
-        .get_workspace(&workspace_id)
-        .map_err(internal)?
-        .is_none()
-    {
-        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
-    }
-    let source_count = seed_multi_source_workspace(&state.store, &workspace_id).map_err(internal)?;
-    let sources = state.store.list_sources(&workspace_id).map_err(internal)?;
+    let source_count =
+        seed_multi_source_workspace(&state.store, &workspace_id).map_err(store_err)?;
+    let sources = state.store.list_sources(&workspace_id).map_err(store_err)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "sourceCount": source_count,
@@ -252,13 +240,11 @@ async fn seed_workspace(
     })))
 }
 
-fn internal(err: anyhow::Error) -> (StatusCode, String) {
-    let msg = format!("{err:#}");
-    if msg.contains("not found") {
-        return (StatusCode::NOT_FOUND, msg);
-    }
-    if msg.contains("org has workspaces") {
-        return (StatusCode::CONFLICT, msg);
-    }
-    (StatusCode::INTERNAL_SERVER_ERROR, msg)
+fn store_err(err: StoreError) -> (StatusCode, String) {
+    let status = match &err {
+        StoreError::NotFound { .. } => StatusCode::NOT_FOUND,
+        StoreError::Conflict(_) => StatusCode::CONFLICT,
+        StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, err.to_string())
 }
