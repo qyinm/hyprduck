@@ -86,6 +86,17 @@ pub(crate) use application::services::brain_read_service::{
 pub(crate) use application::services::context_pack_service::{
     handle_get_context_pack, handle_read_context_pack, persist_context_pack_v1,
 };
+
+/// Cloud/server façade: stable entrypoints for multi-tenant hosts.
+pub mod cloud {
+    use anyhow::Result;
+    use etyma_engine_types::{GetContextPackRequest, GetContextPackResponseData};
+
+    /// Compose a context pack for a workspace scope (typically `root_dir` set by the server).
+    pub fn get_context_pack(request: GetContextPackRequest) -> Result<GetContextPackResponseData> {
+        crate::application::services::context_pack_service::handle_get_context_pack(request)
+    }
+}
 #[cfg(test)]
 pub(crate) use application::services::project_service::{
     handle_answer_project, handle_apply_correction, handle_load_project, load_answerable_project,
