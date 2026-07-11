@@ -15,6 +15,7 @@ Etyma/
 |-- crates/etyma-engine-types/ # Shared command, response, graph, artifact contracts
 |-- crates/etyma-engine-client/# Engine subprocess client
 |-- crates/etyma-knowledge/    # Shared knowledge/brain record types
+|-- crates/etyma-server/       # Cloud host spike (org/workspace, tokens, blob, pack/MCP)
 |-- docs/agents/                  # Operational commands and agent setup docs
 |-- docs/solutions/               # Reusable fixes and architecture patterns
 |-- schemas/                      # External JSON schema contracts
@@ -30,6 +31,7 @@ Etyma/
 | Parsing, artifacts, providers, graph/wiki state | `crates/etyma-engine` | See its local `AGENTS.md`; this owns runtime behavior. |
 | MCP tools, import status, agent mutations | `crates/etyma-cli/src/mcp.rs` | See `crates/etyma-cli/AGENTS.md` and `docs/mcp.md`. |
 | Engine command and artifact DTOs | `crates/etyma-engine-types/src/lib.rs`, `schemas/` | Keep Rust types and JSON schemas aligned. |
+| Cloud host runtime (org/workspace, tokens, blob, pack) | `crates/etyma-server` | Spike uses server SQLite + blob; see crate README. |
 | Build/test commands | `docs/agents/commands.md`, `justfile` | Commands belong in `docs/agents/`, not root instruction files. |
 | Prior fixes and reusable patterns | `docs/solutions/` | Check before re-solving integration or architecture issues. |
 | Cloud multi-plane storage (frozen target) | `docs/storage-planes.md` | Cloud: Postgres control/knowledge/graph + blob. Local remains SQLite + GraphQLite. |

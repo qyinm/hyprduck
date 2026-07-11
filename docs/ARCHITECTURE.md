@@ -40,7 +40,8 @@ Etyma/
 │   ├── etyma-engine-client           # Subprocess client used by CLI and MCP callers
 │   ├── etyma-engine-types            # Shared command, response, graph, brain schemas
 │   ├── etyma-cli                     # CLI, TUI, MCP server, eval harness
-│   └── etyma-knowledge               # Shared knowledge/brain record types
+│   ├── etyma-knowledge               # Shared knowledge/brain record types
+│   └── etyma-server                  # Cloud host spike; storage target in docs/storage-planes.md
 ├── docs/                                # Architecture, MCP, model task matrix, graph docs
 ├── schemas/                             # JSON schema contracts for external consumers
 └── scripts/                             # Engine sync/build helpers for Electron
