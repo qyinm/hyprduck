@@ -2,6 +2,7 @@ pub mod auth;
 pub mod blob;
 pub mod compose;
 pub mod config;
+pub mod db;
 pub mod http;
 pub mod ingest;
 pub mod mcp;
