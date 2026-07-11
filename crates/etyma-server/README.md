@@ -8,32 +8,33 @@ Minimal multi-tenant Etyma cloud host: **Org → Workspace** hierarchy, workspac
 | --- | --- |
 | **Org** | Organization, or a solo user's personal org (personal org auto-provision is later). Members/billing later. |
 | **Workspace** | Project unit under an org. Tokens, sources, evidence, and packs are scoped **here only**. |
-| **Metadata store** | Tenant rows, tokens, source/evidence indexes. **Today:** product tables still live in process-local SQLite (`Store`). **Cloud foundation:** Postgres pool + migrations create plane schemas `control` / `knowledge` / `graph` (no product tables yet; S-PG2+). |
+| **Control store** | Orgs, workspaces, API tokens (and future users/memberships/audit stubs). **Cloud:** Postgres `control.*`. **Spike:** SQLite. |
+| **Knowledge meta** | Source/evidence indexes. **Still process-local SQLite** until S-PG3 (hybrid when DSN is set). |
 | **Blob store** | Original source bytes (local FS adapter for dev/CI; S3/presign later). |
 
-**Postgres is the cloud foundation.** When `ETYMA_DATABASE_URL` is set, boot connects a pool and applies migrations for the plane schemas. Product tables have **not** moved to Postgres yet — they remain on the SQLite spike `Store` until S-PG2+.
+**Postgres is the cloud control plane.** When `ETYMA_DATABASE_URL` is set, boot connects a pool, applies migrations, and opens a **hybrid** store: control on Postgres, sources/evidence on local SQLite. No control-plane reads/writes hit `server.sqlite3` in that mode.
 
-SQLite metadata is **spike/dev only** — not the cloud primary. Use it only when not in cloud mode (default allow unless `ETYMA_ALLOW_SQLITE=0`). The frozen multi-plane target is Postgres for control, knowledge, and graph projection, plus blob for original bytes — see [`docs/storage-planes.md`](../../docs/storage-planes.md).
+SQLite-only boot remains for spike/dev when no DSN is set (default allow unless `ETYMA_ALLOW_SQLITE=0`). The frozen multi-plane target is Postgres for control, knowledge, and graph projection, plus blob for original bytes — see [`docs/storage-planes.md`](../../docs/storage-planes.md).
 
 - Same org **does not** grant cross-workspace access; sibling workspaces stay isolated.
 - There is **no “local desktop workspace”** product concept. Desktop is a cloud client only.
-- **Wipe on schema change:** local SQLite is spike-only. Delete the data dir (DB **and** blob root) if you hit migration errors after upgrades.
+- **Wipe on schema change:** local SQLite is spike/knowledge-meta only. Delete the data dir (DB **and** blob root) if you hit migration errors after upgrades. **There is no one-shot migrate of control rows from spike SQLite → Postgres** — wipe/re-seed is OK for the spike.
 
 ## Requirements
 
 - Rust workspace toolchain
-- **Postgres foundation (recommended for cloud work):** local Postgres via `docker compose up -d` at repo root
-- **Spike path:** no Postgres required — SQLite metadata + local FS blobs still work without a DSN (transitional)
+- **Postgres (cloud / hybrid):** local Postgres via `docker compose up -d` at repo root (or any Postgres accepting the DSN)
+- **Spike path:** no Postgres required — full SQLite product meta + local FS blobs
 
 ## Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ETYMA_DATABASE_URL` | _(unset)_ | Postgres DSN. When set, boot connects a pool and runs migrations (plane schemas only in S-PG1). |
+| `ETYMA_DATABASE_URL` | _(unset)_ | Postgres DSN. When set, boot connects a pool, runs migrations, and uses hybrid Store (control=PG). |
 | `ETYMA_CLOUD_MODE` | off (`0` / unset) | When `1`/`true`/`yes`, fail-fast at config parse if `ETYMA_DATABASE_URL` is missing. |
 | `ETYMA_ALLOW_SQLITE` | `1` (allow) | Spike/dev only when not cloud mode. Set `0`/`false`/`no` to refuse boot without a Postgres DSN. |
-| `ETYMA_SERVER_DATA` | `./.etyma-server-data` | Parent dir for default SQLite DB + blob root |
-| `ETYMA_SERVER_DB` | `$ETYMA_SERVER_DATA/server.sqlite3` | Spike metadata SQLite path (product tables until S-PG2+) |
+| `ETYMA_SERVER_DATA` | `./.etyma-server-data` | Parent dir for default SQLite path + blob root |
+| `ETYMA_SERVER_DB` | `$ETYMA_SERVER_DATA/server.sqlite3` | Spike: full meta SQLite. Hybrid: knowledge-only SQLite (sources/evidence; no control tables written). |
 | `ETYMA_BLOB_ROOT` | `$ETYMA_SERVER_DATA/blobs` | Local filesystem blob root (dev/CI) |
 | `ETYMA_SERVER_BIND` | `127.0.0.1:8787` | Listen address |
 | `ETYMA_SPIKE_ADMIN_TOKEN` | _(unset)_ | Required for spike operator routes |
@@ -41,7 +42,7 @@ SQLite metadata is **spike/dev only** — not the cloud primary. Use it only whe
 ### Wipe + blob root
 
 ```bash
-# Full local reset (spike SQLite metadata + blobs)
+# Full local reset (SQLite metadata + blobs). Control rows on Postgres are separate.
 rm -rf ./.etyma-server-data
 
 # Or only blobs (re-seed after)
@@ -52,11 +53,11 @@ After a wipe, recreate org → workspace → token → seed.
 
 Blob object keys use: `w/{workspace_id}/sha256/{hex}` with content hash `sha256:{hex}` of the raw bytes. Keys are content-addressed (hash embedded in the key); caller-supplied hashes are checked on write, and content-addressed reads can re-verify on get.
 
-Ingest is **blob put then SQLite meta** and is not a single transaction. If meta insert fails after put, an orphan blob may remain until you wipe the data dir.
+Ingest is **blob put then knowledge meta** and is not a single transaction. If meta insert fails after put, an orphan blob may remain until you wipe the data dir.
 
 ## Run
 
-### Boot with Postgres (cloud foundation)
+### Boot with Postgres (cloud control plane)
 
 ```bash
 docker compose up -d
@@ -67,7 +68,7 @@ cargo run -p etyma-server
 curl -sS http://127.0.0.1:8787/health
 ```
 
-With a DSN, health reports `postgres: "up"` and `mode: "cloud-foundation"` after migrate. Product metadata still uses the spike SQLite `Store` until S-PG2+.
+With a DSN, health reports `postgres: "up"` and `mode: "cloud-foundation"` after migrate. Control (orgs/workspaces/tokens) lives in Postgres; sources/evidence remain on the local knowledge SQLite path until S-PG3.
 
 ### Spike SQLite path (transitional, no DSN)
 
@@ -132,10 +133,10 @@ Flat `POST /v1/spike/workspaces` (no org) is **removed**.
 ## Tests
 
 ```bash
-# Default suite (Postgres foundation tests are #[ignore]d)
+# Default suite (Postgres hybrid/isolation tests are #[ignore]d)
 cargo test -p etyma-server
 
-# Full suite including Postgres foundation (pool, migrate, plane schemas, health)
+# Full suite including Postgres control plane
 docker compose up -d
 export ETYMA_DATABASE_URL=postgres://etyma:etyma@127.0.0.1:5432/etyma
 cargo test -p etyma-server -- --include-ignored
@@ -145,4 +146,4 @@ cargo test -p etyma-server -- --include-ignored
 
 ## Out of scope (intentionally)
 
-OIDC, org members/invites/roles, org-scoped tokens, personal-org auto-provision, real GitHub OAuth, full MCP catalog, desktop cloud client default, S3/presign upload, human upload UI, product-table migration to Postgres (S-PG2+).
+OIDC, org members/invites/roles, org-scoped tokens, personal-org auto-provision, real GitHub OAuth, full MCP catalog, desktop cloud client default, S3/presign upload, human upload UI, knowledge meta migration to Postgres (S-PG3), graph projection (S-PG4), cutover drop of residual SQLite (S-PG5).
