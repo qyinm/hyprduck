@@ -70,10 +70,13 @@ pub fn require_admin(state: &AppState, parts: &Parts) -> Result<(), (StatusCode,
     Ok(())
 }
 
-/// Workspace ids are tenant keys (not filesystem paths).
-pub fn validate_workspace_id(id: &str) -> Result<(), (StatusCode, String)> {
+/// Org / workspace ids are tenant keys (not filesystem paths).
+pub fn validate_tenant_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
     if id.is_empty() || id.len() > 128 {
-        return Err((StatusCode::BAD_REQUEST, "invalid workspace id length".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("invalid {kind} id length"),
+        ));
     }
     if !id
         .chars()
@@ -81,8 +84,16 @@ pub fn validate_workspace_id(id: &str) -> Result<(), (StatusCode, String)> {
     {
         return Err((
             StatusCode::BAD_REQUEST,
-            "workspace id must be alphanumeric, '_' or '-'".into(),
+            format!("{kind} id must be alphanumeric, '_' or '-'"),
         ));
     }
     Ok(())
+}
+
+pub fn validate_workspace_id(id: &str) -> Result<(), (StatusCode, String)> {
+    validate_tenant_id("workspace", id)
+}
+
+pub fn validate_org_id(id: &str) -> Result<(), (StatusCode, String)> {
+    validate_tenant_id("org", id)
 }

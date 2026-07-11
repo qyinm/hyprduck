@@ -1,5 +1,4 @@
-use crate::store::Store;
-use anyhow::Result;
+use crate::store::{Store, StoreResult};
 
 pub const FIXTURE_TERM: &str = "alpha-token";
 
@@ -19,10 +18,8 @@ Acceptance: token for workspace A cannot read workspace B.
 
 /// Seed document + synthetic issue rows into the workspace tenant (metadata DB only).
 /// Idempotent: if the workspace already has sources, this is a no-op.
-pub fn seed_multi_source_workspace(store: &Store, workspace_id: &str) -> Result<usize> {
-    if store.get_workspace(workspace_id)?.is_none() {
-        anyhow::bail!("workspace not found: {workspace_id}");
-    }
+pub fn seed_multi_source_workspace(store: &Store, workspace_id: &str) -> StoreResult<usize> {
+    store.require_workspace(workspace_id)?;
     let existing = store.source_count(workspace_id)?;
     if existing > 0 {
         return Ok(existing);
@@ -57,5 +54,5 @@ pub fn seed_multi_source_workspace(store: &Store, workspace_id: &str) -> Result<
         "We need alpha-token binding so packs never leak across workspaces.",
         "issue:ENG-42",
     )?;
-    Ok(store.source_count(workspace_id)?)
+    store.source_count(workspace_id)
 }

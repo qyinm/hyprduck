@@ -1,6 +1,9 @@
-use crate::auth::{require_admin, validate_workspace_id, AppState, AuthenticatedWorkspace};
+use crate::auth::{
+    require_admin, validate_org_id, validate_workspace_id, AppState, AuthenticatedWorkspace,
+};
 use crate::compose::compose_pack;
 use crate::seed::seed_multi_source_workspace;
+use crate::store::StoreError;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -16,7 +19,11 @@ pub fn router() -> Router<AppState> {
         .route("/healthz", get(healthz))
         .route("/v1/sources", get(list_sources))
         .route("/v1/packs", post(create_pack))
-        .route("/v1/spike/workspaces", post(create_workspace))
+        .route("/v1/spike/orgs", post(create_org).get(list_orgs))
+        .route(
+            "/v1/spike/orgs/{org_id}/workspaces",
+            post(create_workspace).get(list_workspaces),
+        )
         .route(
             "/v1/spike/workspaces/{workspace_id}/tokens",
             post(mint_token),
@@ -38,7 +45,7 @@ async fn list_sources(
     let sources = state
         .store
         .list_sources(&auth.workspace_id)
-        .map_err(internal)?;
+        .map_err(store_err)?;
     let body: Vec<Value> = sources
         .into_iter()
         .map(|s| {
@@ -64,21 +71,9 @@ async fn create_pack(
     auth: AuthenticatedWorkspace,
     Json(body): Json<PackRequest>,
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
-    let pack = compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(internal)?;
+    let pack =
+        compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(store_err)?;
     Ok(Json(pack))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateWorkspaceRequest {
-    #[serde(default)]
-    workspace_id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateWorkspaceResponse {
-    workspace_id: String,
 }
 
 struct AdminAuth;
@@ -95,20 +90,107 @@ impl FromRequestParts<AppState> for AdminAuth {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateOrgRequest {
+    name: String,
+    #[serde(default)]
+    org_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrgBody {
+    org_id: String,
+    name: String,
+}
+
+async fn create_org(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Json(body): Json<CreateOrgRequest>,
+) -> Result<Json<OrgBody>, (StatusCode, String)> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name is required".into()));
+    }
+    let org_id = body
+        .org_id
+        .unwrap_or_else(|| format!("org_{}", Uuid::now_v7().simple()));
+    validate_org_id(&org_id)?;
+    let org = state.store.create_org(&org_id, name).map_err(store_err)?;
+    Ok(Json(OrgBody {
+        org_id: org.id,
+        name: org.name,
+    }))
+}
+
+async fn list_orgs(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let orgs = state.store.list_orgs().map_err(store_err)?;
+    let body: Vec<OrgBody> = orgs
+        .into_iter()
+        .map(|o| OrgBody {
+            org_id: o.id,
+            name: o.name,
+        })
+        .collect();
+    Ok(Json(json!({ "orgs": body })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWorkspaceRequest {
+    #[serde(default)]
+    workspace_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceBody {
+    workspace_id: String,
+    org_id: String,
+}
+
 async fn create_workspace(
     State(state): State<AppState>,
     _admin: AdminAuth,
+    axum::extract::Path(org_id): axum::extract::Path<String>,
     Json(body): Json<CreateWorkspaceRequest>,
-) -> Result<Json<CreateWorkspaceResponse>, (StatusCode, String)> {
+) -> Result<Json<WorkspaceBody>, (StatusCode, String)> {
+    validate_org_id(&org_id)?;
     let workspace_id = body
         .workspace_id
         .unwrap_or_else(|| format!("ws_{}", Uuid::now_v7().simple()));
     validate_workspace_id(&workspace_id)?;
-    state
+    // Store enforces parent org existence + unique id (no double HTTP pre-check).
+    let ws = state
         .store
-        .create_workspace(&workspace_id)
-        .map_err(internal)?;
-    Ok(Json(CreateWorkspaceResponse { workspace_id }))
+        .create_workspace(&org_id, &workspace_id)
+        .map_err(store_err)?;
+    Ok(Json(WorkspaceBody {
+        workspace_id: ws.id,
+        org_id: ws.org_id,
+    }))
+}
+
+async fn list_workspaces(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    axum::extract::Path(org_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    validate_org_id(&org_id)?;
+    let workspaces = state.store.list_workspaces(&org_id).map_err(store_err)?;
+    let body: Vec<WorkspaceBody> = workspaces
+        .into_iter()
+        .map(|w| WorkspaceBody {
+            workspace_id: w.id,
+            org_id: w.org_id,
+        })
+        .collect();
+    Ok(Json(json!({ "orgId": org_id, "workspaces": body })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,18 +214,10 @@ async fn mint_token(
     Json(body): Json<MintTokenRequest>,
 ) -> Result<Json<MintTokenResponse>, (StatusCode, String)> {
     validate_workspace_id(&workspace_id)?;
-    if state
-        .store
-        .get_workspace(&workspace_id)
-        .map_err(internal)?
-        .is_none()
-    {
-        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
-    }
     let token = state
         .store
         .mint_token(&workspace_id, body.label.as_deref())
-        .map_err(internal)?;
+        .map_err(store_err)?;
     Ok(Json(MintTokenResponse {
         workspace_id,
         token,
@@ -156,16 +230,9 @@ async fn seed_workspace(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     validate_workspace_id(&workspace_id)?;
-    if state
-        .store
-        .get_workspace(&workspace_id)
-        .map_err(internal)?
-        .is_none()
-    {
-        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
-    }
-    let source_count = seed_multi_source_workspace(&state.store, &workspace_id).map_err(internal)?;
-    let sources = state.store.list_sources(&workspace_id).map_err(internal)?;
+    let source_count =
+        seed_multi_source_workspace(&state.store, &workspace_id).map_err(store_err)?;
+    let sources = state.store.list_sources(&workspace_id).map_err(store_err)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "sourceCount": source_count,
@@ -173,10 +240,11 @@ async fn seed_workspace(
     })))
 }
 
-fn internal(err: anyhow::Error) -> (StatusCode, String) {
-    let msg = format!("{err:#}");
-    if msg.contains("workspace not found") {
-        return (StatusCode::NOT_FOUND, msg);
-    }
-    (StatusCode::INTERNAL_SERVER_ERROR, msg)
+fn store_err(err: StoreError) -> (StatusCode, String) {
+    let status = match &err {
+        StoreError::NotFound { .. } => StatusCode::NOT_FOUND,
+        StoreError::Conflict(_) => StatusCode::CONFLICT,
+        StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, err.to_string())
 }
