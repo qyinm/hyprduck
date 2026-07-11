@@ -178,14 +178,16 @@ MCP, and resource reads.
 
 ## Storage
 
-**Local** desktop and engine knowledge storage remain SQLite + GraphQLite as
-described above (`knowledge.sqlite3` and GraphQLite graph state). That path is
-unchanged by cloud planning.
+**Local** desktop and engine knowledge storage remain SQLite + GraphQLite
+(`knowledge.sqlite3` and GraphQLite graph state). Workspace graph/wiki/memory
+files under the artifacts tree are read models rebuilt from that store, not a
+separate primary database. That local path is unchanged by cloud planning.
 
 **Cloud** primary storage planes are frozen separately: Postgres for control,
 knowledge, and graph projection, plus a blob plane for original bytes. See
 [`docs/storage-planes.md`](./storage-planes.md). That ADR does not change local
-runtime behavior and does not imply Postgres is implemented yet.
+runtime behavior and does not imply Postgres is implemented yet. The cloud spike
+today uses server SQLite + blob only.
 
 ## Refactor Pattern Criteria
 

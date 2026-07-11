@@ -12,21 +12,31 @@ GraphQLite knowledge store direction.
 
 ## Context
 
-Today cloud storage is split across several backends:
+### Cloud today (etyma-server spike)
 
 | Store | Role today |
 | --- | --- |
-| Server SQLite (`server.sqlite3`) | Control and server meta (orgs, workspaces, users, membership, tokens, audit-shaped records) |
-| Engine SQLite + GraphQLite (`knowledge.sqlite3`) | Knowledge meta, evidence, import jobs, and graph state on the engine path |
-| Blob backend | Original document bytes |
+| Server SQLite (`server.sqlite3`) | Control and meta actually present in the spike: orgs, workspaces, API tokens, source meta, evidence index |
+| Blob backend | Original document bytes (`blob_key` + content hash on source rows) |
 
-That layout works for early cloud, but it couples multi-tenant control data,
-knowledge lifecycle, and graph state to file-backed SQLite/GraphQLite patterns.
-Postgres migration must not turn into a debate about whether cloud graph should
-stay on GraphQLite files.
+The spike does **not** open per-workspace `knowledge.sqlite3` or GraphQLite. Source
+and evidence rows live in the same server SQLite file as tenant control data.
 
-Blob storage is already in place: original bytes live in the blob backend; the
-database stores `blob_key` and content hash only, not raw file payloads.
+Users, membership, audit, import job state machines, and full engine knowledge/graph
+are **target** control/knowledge/graph plane contents — not current spike tables.
+
+### Local / engine today (unchanged by this freeze)
+
+| Store | Role today |
+| --- | --- |
+| Engine SQLite + GraphQLite (`knowledge.sqlite3`) | Local desktop/engine knowledge meta, evidence, FTS, and graph state |
+
+Postgres migration must not turn into a debate about whether **cloud** graph should
+stay on GraphQLite files. Cloud has not adopted GraphQLite as primary, and this freeze
+keeps it that way.
+
+Blob storage is already in place for cloud: original bytes live in the blob backend;
+the database stores `blob_key` and content hash only, not raw file payloads.
 
 ## Decision
 
@@ -111,9 +121,9 @@ earlier plane ownership.
 | --- | --- | --- |
 | 1 | Control foundation | Postgres bootstrap, schemas/prefixes, migrations, connectivity from the cloud server |
 | 2 | Control plane | Orgs, workspaces, users, membership, tokens, and audit live in Postgres; multi-tenant control no longer depends on `server.sqlite3` |
-| 3 | Knowledge / jobs | Source meta, evidence index, import jobs, content hashes, and `blob_key` move to Postgres; import lifecycle and citation readiness no longer depend on engine SQLite as cloud primary |
-| 4 | Graph projection | Nodes, edges, claims, and version fields materialize into Postgres relational tables; cloud graph reads/writes leave GraphQLite files |
-| 5 | Cutover | Cloud primary path is Postgres planes + blob; retire cloud reliance on server/engine SQLite and GraphQLite as authoritative stores |
+| 3 | Knowledge / jobs | Source meta, evidence index, import jobs, content hashes, and `blob_key` live in Postgres (moved off server SQLite spike tables; not grown as a second cloud SQLite/GraphQLite knowledge file) |
+| 4 | Graph projection | Nodes, edges, claims, and version fields materialize into Postgres relational tables; cloud never adopts GraphQLite files as primary |
+| 5 | Cutover | Cloud primary path is Postgres planes + blob; retire cloud reliance on `server.sqlite3` and block any cloud GraphQLite primary path |
 
 Blob remains in place through all steps. Migration does not re-store original
 bytes in Postgres.
@@ -129,6 +139,8 @@ This freeze does **not**:
 - Introduce graph-as-product positioning or memory-OS claims
 - Choose a specific Postgres ORM, hosting vendor, or connection pool
 - Define full table-level DDL (that belongs to migration implementation)
+- Place every local-only artifact (wiki revisions, memory records, full event log
+  schemas) into a plane — default: knowledge plane unless listed under graph
 
 Implementation work follows this document; it does not renegotiate the planes.
 
@@ -146,7 +158,7 @@ Implementation work follows this document; it does not renegotiate the planes.
 
 ### Local desktop / engine
 
-- Local path may keep SQLite + GraphQLite as the authoritative knowledge/graph
+- Local path remains SQLite + GraphQLite as the authoritative knowledge/graph
   store.
 - Offline and single-user file-backed behavior remains valid for desktop and
   engine.

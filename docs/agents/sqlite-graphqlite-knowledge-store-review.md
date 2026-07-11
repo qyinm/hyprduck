@@ -1,5 +1,9 @@
 # SQLite GraphQLite Knowledge Store Review
 
+**Scope:** local desktop / engine only. Cloud multi-plane storage is frozen
+separately in [`docs/storage-planes.md`](../storage-planes.md) (Postgres control,
+knowledge, and graph projection + blob; GraphQLite is not cloud primary).
+
 This document records agent-facing implementation gates for the local-first
 SQLite plus GraphQLite knowledge store migration.
 
