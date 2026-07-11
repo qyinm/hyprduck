@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod http;
 pub mod ingest;
+pub mod knowledge;
 pub mod mcp;
 pub mod seed;
 pub mod store;
