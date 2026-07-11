@@ -53,6 +53,10 @@ async fn list_sources(
                 "id": s.id,
                 "kind": s.kind,
                 "title": s.title,
+                "blobKey": s.blob_key,
+                "contentHash": s.content_hash,
+                "byteSize": s.byte_size,
+                "contentType": s.content_type,
                 "externalId": s.external_id,
             })
         })
@@ -71,8 +75,13 @@ async fn create_pack(
     auth: AuthenticatedWorkspace,
     Json(body): Json<PackRequest>,
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
-    let pack =
-        compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(store_err)?;
+    let pack = compose_pack(
+        &state.store,
+        state.blobs.as_ref(),
+        &auth.workspace_id,
+        &body.query,
+    )
+    .map_err(store_err)?;
     Ok(Json(pack))
 }
 
@@ -230,13 +239,23 @@ async fn seed_workspace(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     validate_workspace_id(&workspace_id)?;
-    let source_count =
-        seed_multi_source_workspace(&state.store, &workspace_id).map_err(store_err)?;
+    let source_count = seed_multi_source_workspace(
+        &state.store,
+        state.blobs.as_ref(),
+        &workspace_id,
+    )
+    .map_err(store_err)?;
     let sources = state.store.list_sources(&workspace_id).map_err(store_err)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "sourceCount": source_count,
         "kinds": sources.iter().map(|s| s.kind.clone()).collect::<Vec<_>>(),
+        "blobs": sources.iter().map(|s| json!({
+            "sourceId": s.id,
+            "blobKey": s.blob_key,
+            "contentHash": s.content_hash,
+            "byteSize": s.byte_size,
+        })).collect::<Vec<_>>(),
     })))
 }
 
@@ -244,6 +263,7 @@ fn store_err(err: StoreError) -> (StatusCode, String) {
     let status = match &err {
         StoreError::NotFound { .. } => StatusCode::NOT_FOUND,
         StoreError::Conflict(_) => StatusCode::CONFLICT,
+        StoreError::Integrity(_) => StatusCode::BAD_REQUEST,
         StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, err.to_string())

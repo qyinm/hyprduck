@@ -1,3 +1,4 @@
+use crate::blob::BlobStore;
 use crate::store::Store;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Store>,
+    pub blobs: Arc<dyn BlobStore>,
     pub spike_admin_token: Option<String>,
 }
 

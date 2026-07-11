@@ -1,4 +1,5 @@
 use etyma_server::auth::AppState;
+use etyma_server::blob::{BlobStore, LocalFsBlobStore};
 use etyma_server::seed::seed_multi_source_workspace;
 use etyma_server::store::Store;
 use std::sync::Arc;
@@ -34,6 +35,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let dir = tempdir().unwrap();
     let db = dir.path().join("server.sqlite3");
     let store = Arc::new(Store::open(&db).unwrap());
+    let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
 
     let org = "org_demo";
     store.create_org(org, "Demo Org").unwrap();
@@ -42,8 +44,16 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let w2 = "ws_beta";
     store.create_workspace(org, w1).unwrap();
     store.create_workspace(org, w2).unwrap();
-    seed_multi_source_workspace(&store, w1).unwrap();
-    seed_multi_source_workspace(&store, w2).unwrap();
+    seed_multi_source_workspace(&store, blobs.as_ref(), w1).unwrap();
+    seed_multi_source_workspace(&store, blobs.as_ref(), w2).unwrap();
+
+    // Seed created real blob objects on disk.
+    let w1_sources = store.list_sources(w1).unwrap();
+    assert_eq!(w1_sources.len(), 2);
+    for src in &w1_sources {
+        assert!(blobs.exists(&src.blob_key).unwrap());
+        assert!(src.content_hash.starts_with("sha256:"));
+    }
 
     let t1 = store.mint_token(w1, Some("a")).unwrap();
     let t2 = store.mint_token(w2, Some("b")).unwrap();
@@ -51,6 +61,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let app = {
         let state = AppState {
             store: store.clone(),
+            blobs: blobs.clone(),
             spike_admin_token: Some("admin-secret".into()),
         };
         axum::Router::new()
@@ -101,12 +112,25 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     let tok_body: serde_json::Value = tok_res.json().await.unwrap();
     let t_http = tok_body["token"].as_str().unwrap();
 
-    client
+    let seed_res = client
         .post(format!("{base}/v1/spike/workspaces/ws_http/seed"))
         .header("x-etyma-admin-token", admin)
         .send()
         .await
         .unwrap();
+    assert_eq!(seed_res.status(), 200);
+    let seed_body: serde_json::Value = seed_res.json().await.unwrap();
+    assert_eq!(seed_body["sourceCount"], 2);
+    let seed_blobs = seed_body["blobs"].as_array().expect("seed returns blob meta");
+    assert_eq!(seed_blobs.len(), 2);
+    for b in seed_blobs {
+        let key = b["blobKey"].as_str().unwrap();
+        assert!(blobs.exists(key).unwrap(), "missing blob {key}");
+        assert!(b["contentHash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+    }
 
     let pack_http = client
         .post(format!("{base}/v1/packs"))
@@ -130,13 +154,20 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
     assert_eq!(pack_res.status(), 200);
     let pack: serde_json::Value = pack_res.json().await.unwrap();
     assert_multi_source_pack(&pack, w1);
-    let w1_sources: Vec<String> = pack["sourceSet"]
+    let w1_source_ids: Vec<String> = pack["sourceSet"]
         .as_array()
         .unwrap_or(&vec![])
         .iter()
         .filter_map(|s| s["sourceId"].as_str().map(str::to_string))
         .collect();
-    assert!(!w1_sources.is_empty());
+    assert!(!w1_source_ids.is_empty());
+    // Pack source hashes come from blob-backed metadata.
+    for s in pack["sourceSet"].as_array().unwrap() {
+        assert!(s["contentHash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+    }
 
     // AE2: same org sibling isolation
     let pack_w2 = client
@@ -155,7 +186,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .iter()
         .filter_map(|s| s["sourceId"].as_str().map(str::to_string))
         .collect();
-    for sid in &w1_sources {
+    for sid in &w1_source_ids {
         assert!(
             !w2_sources.contains(sid),
             "same-org sibling leaked w1 source {sid}"
@@ -177,8 +208,14 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
         .iter()
         .filter_map(|s| s["id"].as_str().map(str::to_string))
         .collect();
-    for sid in &w1_sources {
+    for sid in &w1_source_ids {
         assert!(!listed.contains(sid), "t2 listed w1 source {sid}");
+    }
+    // Listed sources expose blob meta, not body.
+    for s in body["sources"].as_array().unwrap() {
+        assert!(s.get("blobKey").and_then(|v| v.as_str()).is_some());
+        assert!(s.get("contentHash").and_then(|v| v.as_str()).is_some());
+        assert!(s.get("body").is_none());
     }
 
     // AE3: orphan workspace create denied (missing org)
