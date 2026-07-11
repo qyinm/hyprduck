@@ -86,7 +86,7 @@ impl ServerConfig {
         }
         if database_url.is_none() && !allow_sqlite {
             bail!(
-                "ETYMA_ALLOW_SQLITE disables the SQLite metadata store but ETYMA_DATABASE_URL is not set"
+                "ETYMA_DATABASE_URL is required when ETYMA_ALLOW_SQLITE is false (refuses SQLite-only boot; product Store still uses SQLite until S-PG2)"
             );
         }
 
