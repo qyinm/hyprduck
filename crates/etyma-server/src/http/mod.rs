@@ -1,4 +1,4 @@
-use crate::auth::{require_admin, AppState, AuthenticatedWorkspace};
+use crate::auth::{require_admin, validate_workspace_id, AppState, AuthenticatedWorkspace};
 use crate::compose::compose_pack;
 use crate::seed::seed_multi_source_workspace;
 use axum::extract::{FromRequestParts, State};
@@ -6,6 +6,7 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use etyma_engine_types::ContextPackV1;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -62,11 +63,9 @@ async fn create_pack(
     State(state): State<AppState>,
     auth: AuthenticatedWorkspace,
     Json(body): Json<PackRequest>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
     let pack = compose_pack(&state.store, &auth.workspace_id, &body.query).map_err(internal)?;
-    serde_json::to_value(pack)
-        .map(Json)
-        .map_err(|e| internal(e.into()))
+    Ok(Json(pack))
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,11 +103,10 @@ async fn create_workspace(
     let workspace_id = body
         .workspace_id
         .unwrap_or_else(|| format!("ws_{}", Uuid::now_v7().simple()));
-    let engine_root = state.data_dir.join("workspaces").join(&workspace_id);
-    std::fs::create_dir_all(&engine_root).map_err(|e| internal(e.into()))?;
+    validate_workspace_id(&workspace_id)?;
     state
         .store
-        .create_workspace(&workspace_id, &engine_root)
+        .create_workspace(&workspace_id)
         .map_err(internal)?;
     Ok(Json(CreateWorkspaceResponse { workspace_id }))
 }
@@ -133,6 +131,15 @@ async fn mint_token(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
     Json(body): Json<MintTokenRequest>,
 ) -> Result<Json<MintTokenResponse>, (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    if state
+        .store
+        .get_workspace(&workspace_id)
+        .map_err(internal)?
+        .is_none()
+    {
+        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
+    }
     let token = state
         .store
         .mint_token(&workspace_id, body.label.as_deref())
@@ -148,20 +155,28 @@ async fn seed_workspace(
     _admin: AdminAuth,
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let ws = state
+    validate_workspace_id(&workspace_id)?;
+    if state
         .store
         .get_workspace(&workspace_id)
         .map_err(internal)?
-        .ok_or((StatusCode::NOT_FOUND, "workspace not found".into()))?;
-    seed_multi_source_workspace(&state.store, &workspace_id, &ws.engine_root).map_err(internal)?;
+        .is_none()
+    {
+        return Err((StatusCode::NOT_FOUND, "workspace not found".into()));
+    }
+    let source_count = seed_multi_source_workspace(&state.store, &workspace_id).map_err(internal)?;
     let sources = state.store.list_sources(&workspace_id).map_err(internal)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
-        "sourceCount": sources.len(),
+        "sourceCount": source_count,
         "kinds": sources.iter().map(|s| s.kind.clone()).collect::<Vec<_>>(),
     })))
 }
 
 fn internal(err: anyhow::Error) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}"))
+    let msg = format!("{err:#}");
+    if msg.contains("workspace not found") {
+        return (StatusCode::NOT_FOUND, msg);
+    }
+    (StatusCode::INTERNAL_SERVER_ERROR, msg)
 }

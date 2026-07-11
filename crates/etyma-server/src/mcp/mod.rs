@@ -1,7 +1,7 @@
-use crate::auth::AppState;
+use crate::auth::{resolve_bearer_workspace, AppState};
 use crate::compose::compose_pack;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -23,7 +23,8 @@ struct JsonRpcRequest {
 
 async fn mcp_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    // tools/call requires workspace token; initialize/list/ping stay open for MCP handshake.
+    headers: axum::http::HeaderMap,
     Json(req): Json<JsonRpcRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let id = req.id.clone().unwrap_or(Value::Null);
@@ -43,7 +44,7 @@ async fn mcp_handler(
             "result": {
                 "tools": [{
                     "name": "get_context_pack",
-                    "description": "Compose a cited multi-source context pack for the token workspace.",
+                    "description": "Compose a cited multi-source context pack (V1) for the token workspace.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -55,7 +56,7 @@ async fn mcp_handler(
             }
         }))),
         "tools/call" => {
-            let workspace_id = workspace_from_headers(&state, &headers)?;
+            let workspace_id = resolve_bearer_workspace(&state, &headers)?;
             let name = req
                 .params
                 .get("name")
@@ -94,29 +95,6 @@ async fn mcp_handler(
             format!("method not found: {other}"),
         ))),
     }
-}
-
-fn workspace_from_headers(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<String, (StatusCode, String)> {
-    let header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
-            "missing Authorization bearer token".into(),
-        ))?;
-    let token = header
-        .strip_prefix("Bearer ")
-        .or_else(|| header.strip_prefix("bearer "))
-        .unwrap_or(header)
-        .trim();
-    state
-        .store
-        .resolve_token(token)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::UNAUTHORIZED, "invalid token".into()))
 }
 
 fn rpc_error(id: Value, code: i64, message: String) -> Value {

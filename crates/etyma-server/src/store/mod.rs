@@ -1,14 +1,13 @@
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceRow {
     pub id: String,
-    pub engine_root: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -39,12 +38,12 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed opening server db {}", path.display()))?;
+        // Spike metadata only: workspace is a tenant id, not a filesystem root.
         conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS workspaces (
               id TEXT PRIMARY KEY NOT NULL,
-              engine_root TEXT NOT NULL,
               created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS api_tokens (
@@ -87,30 +86,23 @@ impl Store {
             .map_err(|_| anyhow!("server db mutex poisoned"))
     }
 
-    pub fn create_workspace(&self, id: &str, engine_root: &Path) -> Result<WorkspaceRow> {
+    pub fn create_workspace(&self, id: &str) -> Result<WorkspaceRow> {
         let now = unix_now();
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO workspaces (id, engine_root, created_at) VALUES (?1, ?2, ?3)",
-            params![id, engine_root.to_string_lossy(), now],
+            "INSERT INTO workspaces (id, created_at) VALUES (?1, ?2)",
+            params![id, now],
         )
         .with_context(|| format!("failed inserting workspace {id}"))?;
-        Ok(WorkspaceRow {
-            id: id.to_string(),
-            engine_root: engine_root.to_path_buf(),
-        })
+        Ok(WorkspaceRow { id: id.to_string() })
     }
 
     pub fn get_workspace(&self, id: &str) -> Result<Option<WorkspaceRow>> {
         let conn = self.lock()?;
-        let mut stmt =
-            conn.prepare("SELECT id, engine_root FROM workspaces WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id FROM workspaces WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(WorkspaceRow {
-                id: row.get(0)?,
-                engine_root: PathBuf::from(row.get::<_, String>(1)?),
-            }))
+            Ok(Some(WorkspaceRow { id: row.get(0)? }))
         } else {
             Ok(None)
         }
@@ -240,24 +232,14 @@ impl Store {
         Ok(out)
     }
 
-    pub fn get_source(&self, workspace_id: &str, source_id: &str) -> Result<Option<SourceRow>> {
+    pub fn source_count(&self, workspace_id: &str) -> Result<usize> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, kind, title, body, external_id FROM sources WHERE workspace_id = ?1 AND id = ?2",
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sources WHERE workspace_id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
         )?;
-        let mut rows = stmt.query(params![workspace_id, source_id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(SourceRow {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                kind: row.get(2)?,
-                title: row.get(3)?,
-                body: row.get(4)?,
-                external_id: row.get(5)?,
-            }))
-        } else {
-            Ok(None)
-        }
+        Ok(count as usize)
     }
 }
 
@@ -283,9 +265,7 @@ mod tests {
     fn mint_and_resolve_token() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("t.sqlite3")).unwrap();
-        store
-            .create_workspace("ws1", &dir.path().join("ws1"))
-            .unwrap();
+        store.create_workspace("ws1").unwrap();
         let token = store.mint_token("ws1", Some("test")).unwrap();
         assert!(token.starts_with("etyma_"));
         assert_eq!(store.resolve_token(&token).unwrap().as_deref(), Some("ws1"));

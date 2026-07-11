@@ -18,7 +18,6 @@ pub fn build_app(config: &ServerConfig) -> Result<Router> {
     let store = Store::open(&config.database_path).context("open server store")?;
     let state = AppState {
         store: Arc::new(store),
-        data_dir: config.data_dir.clone(),
         spike_admin_token: config.spike_admin_token.clone(),
     };
     Ok(Router::new()

@@ -1,7 +1,5 @@
 use crate::store::Store;
-use anyhow::{Context, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::Result;
 
 pub const FIXTURE_TERM: &str = "alpha-token";
 
@@ -19,16 +17,16 @@ We need alpha-token binding so packs never leak across workspaces.
 Acceptance: token for workspace A cannot read workspace B.
 "#;
 
-/// Seed document + synthetic issue sources with shared distinctive term.
-pub fn seed_multi_source_workspace(
-    store: &Store,
-    workspace_id: &str,
-    engine_root: &Path,
-) -> Result<()> {
-    fs::create_dir_all(engine_root)
-        .with_context(|| format!("failed creating engine root {}", engine_root.display()))?;
-    fs::write(engine_root.join("document.md"), DOCUMENT_BODY)?;
-    fs::write(engine_root.join("issue-ENG-42.md"), ISSUE_BODY)?;
+/// Seed document + synthetic issue rows into the workspace tenant (metadata DB only).
+/// Idempotent: if the workspace already has sources, this is a no-op.
+pub fn seed_multi_source_workspace(store: &Store, workspace_id: &str) -> Result<usize> {
+    if store.get_workspace(workspace_id)?.is_none() {
+        anyhow::bail!("workspace not found: {workspace_id}");
+    }
+    let existing = store.source_count(workspace_id)?;
+    if existing > 0 {
+        return Ok(existing);
+    }
 
     let doc = store.insert_source(
         workspace_id,
@@ -59,5 +57,5 @@ pub fn seed_multi_source_workspace(
         "We need alpha-token binding so packs never leak across workspaces.",
         "issue:ENG-42",
     )?;
-    Ok(())
+    Ok(store.source_count(workspace_id)?)
 }
