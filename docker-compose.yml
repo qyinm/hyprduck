@@ -1,0 +1,21 @@
+# Local Postgres for etyma-server cloud foundation (S-PG1).
+# Default DSN: postgres://etyma:etyma@127.0.0.1:5432/etyma
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: etyma
+      POSTGRES_PASSWORD: etyma
+      POSTGRES_DB: etyma
+    ports:
+      - "5432:5432"
+    volumes:
+      - etyma-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etyma -d etyma"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  etyma-pg-data:

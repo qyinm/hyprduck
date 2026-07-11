@@ -19,6 +19,18 @@ cargo test -p etyma-engine-types -p etyma-engine-client -p etyma-engine -p etyma
 cargo check -p etyma-cli
 ```
 
+## etyma-server
+
+```bash
+# Local Postgres (S-PG1 foundation)
+docker compose up -d
+export ETYMA_DATABASE_URL=postgres://etyma:etyma@127.0.0.1:5432/etyma
+cargo test -p etyma-server -- --include-ignored
+cargo run -p etyma-server
+```
+
+Without `ETYMA_DATABASE_URL`, `cargo test -p etyma-server` still runs (SQLite spike path; PG tests are `#[ignore]`d). Product tables remain on SQLite until S-PG2+; see `crates/etyma-server/README.md` and `docs/storage-planes.md`.
+
 ## Site
 
 ```bash

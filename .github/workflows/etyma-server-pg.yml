@@ -1,0 +1,48 @@
+name: etyma-server Postgres
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/etyma-server/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "docker-compose.yml"
+      - ".github/workflows/etyma-server-pg.yml"
+  pull_request:
+    paths:
+      - "crates/etyma-server/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "docker-compose.yml"
+      - ".github/workflows/etyma-server-pg.yml"
+
+jobs:
+  pg-foundation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: etyma
+          POSTGRES_PASSWORD: etyma
+          POSTGRES_DB: etyma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U etyma -d etyma"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      ETYMA_DATABASE_URL: postgres://etyma:etyma@localhost:5432/etyma
+      ETYMA_CLOUD_MODE: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: cargo test etyma-server (with Postgres)
+        # Default suite + ignored PG foundation tests (require ETYMA_DATABASE_URL).
+        run: cargo test -p etyma-server -- --include-ignored --nocapture

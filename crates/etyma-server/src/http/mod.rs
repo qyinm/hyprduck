@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/healthz", get(healthz))
+        // `/health` is the plan-aligned path; `/healthz` stays for backward compatibility.
+        .route("/health", get(health))
+        .route("/healthz", get(health))
         .route("/v1/sources", get(list_sources))
         .route("/v1/packs", post(create_pack))
         .route("/v1/spike/orgs", post(create_org).get(list_orgs))
@@ -34,8 +36,41 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn healthz() -> Json<Value> {
-    Json(json!({ "ok": true, "service": "etyma-server", "mode": "spike" }))
+/// Readiness for `/health` and `/healthz` (includes Postgres probe when pooled).
+///
+/// - No pool: `postgres: "skipped"`, HTTP 200
+/// - Pool up: `postgres: "up"`, HTTP 200
+/// - Pool present but `SELECT 1` fails: `postgres: "down"`, HTTP 503
+///
+/// Prefer this for readiness, not process liveness: a brief DB blip should not
+/// restart the process.
+async fn health(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let (http_status, postgres, ok) = match state.pg_pool.as_ref() {
+        None => (StatusCode::OK, "skipped", true),
+        Some(pool) => match crate::db::health_check(pool).await {
+            Ok(()) => (StatusCode::OK, "up", true),
+            Err(err) => {
+                tracing::warn!(error = %err, "postgres health check failed");
+                (StatusCode::SERVICE_UNAVAILABLE, "down", false)
+            }
+        },
+    };
+
+    let body = json!({
+        "ok": ok,
+        "status": if ok { "ok" } else { "degraded" },
+        "service": "etyma-server",
+        "mode": state.host_mode.as_str(),
+        "postgres": postgres,
+    });
+
+    if ok {
+        Ok(Json(body))
+    } else {
+        Err((http_status, Json(body)))
+    }
 }
 
 async fn list_sources(
