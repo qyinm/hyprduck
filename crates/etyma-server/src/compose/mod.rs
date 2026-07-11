@@ -1,4 +1,5 @@
-use crate::store::{EvidenceRow, Store, StoreResult};
+use crate::blob::BlobStore;
+use crate::store::{EvidenceRow, Store, StoreError, StoreResult};
 use etyma_engine_types::{
     ContextPackEvidenceV1, ContextPackFindingStatus, ContextPackFindingV0,
     ContextPackParseConfidence, ContextPackRetrievalTraceV1, ContextPackSourceV0,
@@ -9,7 +10,13 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// Compose a cited V1 pack from server-owned multi-source evidence (spike path).
-pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> StoreResult<ContextPackV1> {
+/// Source body text is loaded from the blob backend when needed for title/body matching.
+pub fn compose_pack(
+    store: &Store,
+    blobs: &dyn BlobStore,
+    workspace_id: &str,
+    query: &str,
+) -> StoreResult<ContextPackV1> {
     let sources = store.list_sources(workspace_id)?;
     let evidence = store.list_evidence(workspace_id)?;
     let terms = query_terms(query);
@@ -19,7 +26,8 @@ pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> StoreResu
         .collect();
     if hits.is_empty() {
         for source in &sources {
-            if matches_terms(&source.body, &terms) || matches_terms(&source.title, &terms) {
+            let body = load_source_text(blobs, source)?;
+            if matches_terms(&body, &terms) || matches_terms(&source.title, &terms) {
                 if let Some(ev) = evidence.iter().find(|e| e.source_id == source.id) {
                     hits.push(ev);
                 }
@@ -64,7 +72,8 @@ pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> StoreResu
             source_set.entry(source.id.clone()).or_insert_with(|| ContextPackSourceV0 {
                 source_id: source.id.clone(),
                 original_filename: source.title.clone(),
-                content_hash: format!("sha256:{}", short_hash(&source.body)),
+                // Stored content hash of original blob bytes (not re-derived from body column).
+                content_hash: source.content_hash.clone(),
                 page_count: 1,
                 ingestion_status: "ingested".into(),
                 staleness: ContextPackStaleness::Current,
@@ -105,6 +114,16 @@ pub fn compose_pack(store: &Store, workspace_id: &str, query: &str) -> StoreResu
         },
         suggested_next_reads: vec![],
     })
+}
+
+fn load_source_text(
+    blobs: &dyn BlobStore,
+    source: &crate::store::SourceRow,
+) -> StoreResult<String> {
+    let bytes = blobs
+        .get(&source.blob_key)
+        .map_err(|e| StoreError::Internal(e.to_string()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn evidence_type_for_kind(kind: &str) -> EvidenceType {
@@ -151,6 +170,8 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob::LocalFsBlobStore;
+    use crate::seed::ingest_source;
     use crate::store::Store;
     use tempfile::tempdir;
 
@@ -158,17 +179,20 @@ mod tests {
     fn compose_hits_document_and_issue() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("db.sqlite3")).unwrap();
+        let blobs = LocalFsBlobStore::open(dir.path().join("blobs")).unwrap();
         store.create_org("org1", "Test").unwrap();
         store.create_workspace("org1", "ws").unwrap();
-        let doc = store
-            .insert_source(
-                "ws",
-                "document",
-                "Auth Spec",
-                "The alpha-token boundary requires explicit workspace binding.",
-                None,
-            )
-            .unwrap();
+        let doc = ingest_source(
+            &store,
+            &blobs,
+            "ws",
+            "document",
+            "Auth Spec",
+            b"The alpha-token boundary requires explicit workspace binding.",
+            "text/plain",
+            None,
+        )
+        .unwrap();
         store
             .insert_evidence(
                 "ws",
@@ -178,15 +202,17 @@ mod tests {
                 "page:1",
             )
             .unwrap();
-        let issue = store
-            .insert_source(
-                "ws",
-                "issue",
-                "ENG-1 alpha-token",
-                "Track alpha-token migration for multi-tenant packs.",
-                Some("ENG-1"),
-            )
-            .unwrap();
+        let issue = ingest_source(
+            &store,
+            &blobs,
+            "ws",
+            "issue",
+            "ENG-1 alpha-token",
+            b"Track alpha-token migration for multi-tenant packs.",
+            "text/plain",
+            Some("ENG-1"),
+        )
+        .unwrap();
         store
             .insert_evidence(
                 "ws",
@@ -197,7 +223,7 @@ mod tests {
             )
             .unwrap();
 
-        let pack = compose_pack(&store, "ws", "alpha-token").unwrap();
+        let pack = compose_pack(&store, &blobs, "ws", "alpha-token").unwrap();
         assert_eq!(pack.workspace_id, "ws");
         assert!(
             pack.selected_evidence
@@ -209,5 +235,11 @@ mod tests {
                 .iter()
                 .any(|e| e.selection_reason.contains("issue"))
         );
+        // Source set uses blob content hashes from metadata.
+        assert!(pack
+            .source_set
+            .iter()
+            .all(|s| s.content_hash.starts_with("sha256:")));
+        assert_eq!(pack.source_set.len(), 2);
     }
 }

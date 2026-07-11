@@ -76,7 +76,13 @@ async fn mcp_handler(
             if query.trim().is_empty() {
                 return Ok(Json(rpc_error(id, -32602, "query is required".into())));
             }
-            let pack = compose_pack(&state.store, &workspace_id, &query).map_err(store_err)?;
+            let pack = compose_pack(
+                &state.store,
+                state.blobs.as_ref(),
+                &workspace_id,
+                &query,
+            )
+            .map_err(store_err)?;
             let text = serde_json::to_string_pretty(&pack)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             Ok(Json(json!({
