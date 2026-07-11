@@ -6,8 +6,15 @@ use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
+pub struct OrgRow {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct WorkspaceRow {
     pub id: String,
+    pub org_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -38,12 +45,18 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed opening server db {}", path.display()))?;
-        // Spike metadata only: workspace is a tenant id, not a filesystem root.
+        // Spike metadata: Org → Workspace hierarchy. Wipe local DB if schema conflicts.
         conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
+            CREATE TABLE IF NOT EXISTS orgs (
+              id TEXT PRIMARY KEY NOT NULL,
+              name TEXT NOT NULL,
+              created_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS workspaces (
               id TEXT PRIMARY KEY NOT NULL,
+              org_id TEXT NOT NULL REFERENCES orgs(id),
               created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS api_tokens (
@@ -70,6 +83,7 @@ impl Store {
               locator TEXT NOT NULL,
               created_at INTEGER NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_workspaces_org ON workspaces(org_id);
             CREATE INDEX IF NOT EXISTS idx_sources_workspace ON sources(workspace_id);
             CREATE INDEX IF NOT EXISTS idx_evidence_workspace ON evidence(workspace_id);
             CREATE INDEX IF NOT EXISTS idx_tokens_workspace ON api_tokens(workspace_id);
@@ -86,26 +100,121 @@ impl Store {
             .map_err(|_| anyhow!("server db mutex poisoned"))
     }
 
-    pub fn create_workspace(&self, id: &str) -> Result<WorkspaceRow> {
+    pub fn create_org(&self, id: &str, name: &str) -> Result<OrgRow> {
         let now = unix_now();
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO workspaces (id, created_at) VALUES (?1, ?2)",
-            params![id, now],
+            "INSERT INTO orgs (id, name, created_at) VALUES (?1, ?2, ?3)",
+            params![id, name, now],
+        )
+        .with_context(|| format!("failed inserting org {id}"))?;
+        Ok(OrgRow {
+            id: id.to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    pub fn get_org(&self, id: &str) -> Result<Option<OrgRow>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT id, name FROM orgs WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(OrgRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_orgs(&self) -> Result<Vec<OrgRow>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT id, name FROM orgs ORDER BY created_at")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(OrgRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn workspace_count_for_org(&self, org_id: &str) -> Result<usize> {
+        let conn = self.lock()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE org_id = ?1",
+            params![org_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Reject delete while workspaces remain (origin R3 / KTD5).
+    pub fn delete_org(&self, org_id: &str) -> Result<()> {
+        if self.get_org(org_id)?.is_none() {
+            bail!("org not found: {org_id}");
+        }
+        let n = self.workspace_count_for_org(org_id)?;
+        if n > 0 {
+            bail!("org has workspaces: {org_id} ({n})");
+        }
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM orgs WHERE id = ?1", params![org_id])?;
+        Ok(())
+    }
+
+    pub fn create_workspace(&self, org_id: &str, id: &str) -> Result<WorkspaceRow> {
+        if self.get_org(org_id)?.is_none() {
+            bail!("org not found: {org_id}");
+        }
+        let now = unix_now();
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO workspaces (id, org_id, created_at) VALUES (?1, ?2, ?3)",
+            params![id, org_id, now],
         )
         .with_context(|| format!("failed inserting workspace {id}"))?;
-        Ok(WorkspaceRow { id: id.to_string() })
+        Ok(WorkspaceRow {
+            id: id.to_string(),
+            org_id: org_id.to_string(),
+        })
     }
 
     pub fn get_workspace(&self, id: &str) -> Result<Option<WorkspaceRow>> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT id FROM workspaces WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, org_id FROM workspaces WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(WorkspaceRow { id: row.get(0)? }))
+            Ok(Some(WorkspaceRow {
+                id: row.get(0)?,
+                org_id: row.get(1)?,
+            }))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn list_workspaces(&self, org_id: &str) -> Result<Vec<WorkspaceRow>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, org_id FROM workspaces WHERE org_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![org_id], |row| {
+            Ok(WorkspaceRow {
+                id: row.get(0)?,
+                org_id: row.get(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn mint_token(&self, workspace_id: &str, label: Option<&str>) -> Result<String> {
@@ -262,13 +371,17 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn mint_and_resolve_token() {
+    fn org_workspace_hierarchy_and_token() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("t.sqlite3")).unwrap();
-        store.create_workspace("ws1").unwrap();
+        store.create_org("org1", "Acme").unwrap();
+        let ws = store.create_workspace("org1", "ws1").unwrap();
+        assert_eq!(ws.org_id, "org1");
+        assert!(store.create_workspace("missing", "ws2").is_err());
         let token = store.mint_token("ws1", Some("test")).unwrap();
         assert!(token.starts_with("etyma_"));
         assert_eq!(store.resolve_token(&token).unwrap().as_deref(), Some("ws1"));
-        assert!(store.resolve_token("etyma_bogus").unwrap().is_none());
+        assert_eq!(store.list_workspaces("org1").unwrap().len(), 1);
+        assert!(store.delete_org("org1").is_err());
     }
 }

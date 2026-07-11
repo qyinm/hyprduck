@@ -159,7 +159,8 @@ mod tests {
     fn compose_hits_document_and_issue() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("db.sqlite3")).unwrap();
-        store.create_workspace("ws").unwrap();
+        store.create_org("org1", "Test").unwrap();
+        store.create_workspace("org1", "ws").unwrap();
         let doc = store
             .insert_source(
                 "ws",
