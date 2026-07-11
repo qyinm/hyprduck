@@ -10,6 +10,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub blobs: Arc<dyn BlobStore>,
     pub spike_admin_token: Option<String>,
+    /// Postgres pool when `ETYMA_DATABASE_URL` is set; `None` keeps the spike SQLite path.
+    pub pg_pool: Option<sqlx::PgPool>,
 }
 
 #[derive(Debug, Clone)]

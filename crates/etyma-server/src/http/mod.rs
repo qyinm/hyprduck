@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/healthz", get(healthz))
+        // `/health` is the plan-aligned path; `/healthz` stays for backward compatibility.
+        .route("/health", get(health))
+        .route("/healthz", get(health))
         .route("/v1/sources", get(list_sources))
         .route("/v1/packs", post(create_pack))
         .route("/v1/spike/orgs", post(create_org).get(list_orgs))
@@ -34,8 +36,45 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn healthz() -> Json<Value> {
-    Json(json!({ "ok": true, "service": "etyma-server", "mode": "spike" }))
+/// Liveness for `/health` and `/healthz`.
+///
+/// - No pool: `postgres: "skipped"`, HTTP 200
+/// - Pool up: `postgres: "up"`, HTTP 200
+/// - Pool present but `SELECT 1` fails: `postgres: "down"`, HTTP 503
+async fn health(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.pg_pool.as_ref() {
+        None => Ok(Json(json!({
+            "ok": true,
+            "status": "ok",
+            "service": "etyma-server",
+            "mode": "spike",
+            "postgres": "skipped",
+        }))),
+        Some(pool) => match crate::db::health_check(pool).await {
+            Ok(()) => Ok(Json(json!({
+                "ok": true,
+                "status": "ok",
+                "service": "etyma-server",
+                "mode": "spike",
+                "postgres": "up",
+            }))),
+            Err(err) => {
+                tracing::warn!(error = %err, "postgres health check failed");
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({
+                        "ok": false,
+                        "status": "degraded",
+                        "service": "etyma-server",
+                        "mode": "spike",
+                        "postgres": "down",
+                    })),
+                ))
+            }
+        },
+    }
 }
 
 async fn list_sources(

@@ -63,6 +63,7 @@ async fn org_hierarchy_sibling_isolation_and_orphan_denied() {
             store: store.clone(),
             blobs: blobs.clone(),
             spike_admin_token: Some("admin-secret".into()),
+            pg_pool: None,
         };
         axum::Router::new()
             .merge(etyma_server::http::router())

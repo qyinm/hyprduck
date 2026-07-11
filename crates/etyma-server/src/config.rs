@@ -11,7 +11,7 @@ pub struct ServerConfig {
     /// Local filesystem blob root (`ETYMA_BLOB_ROOT`). Dev/CI adapter only.
     pub blob_root: PathBuf,
     pub spike_admin_token: Option<String>,
-    /// Postgres DSN from `ETYMA_DATABASE_URL` (not connected in Task 1).
+    /// Postgres DSN from `ETYMA_DATABASE_URL`. When set, boot connects a pool and migrates.
     pub database_url: Option<String>,
     /// When true, `ETYMA_DATABASE_URL` is required at parse time.
     pub cloud_mode: bool,
