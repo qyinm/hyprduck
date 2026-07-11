@@ -8,8 +8,10 @@ Minimal multi-tenant Etyma cloud host: **Org → Workspace** hierarchy, workspac
 | --- | --- |
 | **Org** | Organization, or a solo user's personal org (personal org auto-provision is later). Members/billing later. |
 | **Workspace** | Project unit under an org. Tokens, sources, evidence, and packs are scoped **here only**. |
-| **Metadata store** | Tenant rows, tokens, source/evidence indexes (spike: one SQLite file for the process). Source rows hold `blob_key`, `content_hash`, size, and content type — **not** original bytes. |
+| **Metadata store** | Tenant rows, tokens, source/evidence indexes. **Spike today:** one SQLite file for the process (transitional). Source rows hold `blob_key`, `content_hash`, size, and content type — **not** original bytes. |
 | **Blob store** | Original source bytes (local FS adapter for dev/CI; S3/presign later). |
+
+Spike SQLite is transitional. The frozen **cloud** multi-plane target is Postgres for control, knowledge, and graph projection, plus blob for original bytes — see [`docs/storage-planes.md`](../../docs/storage-planes.md). Postgres is **not** implemented in this spike; the run instructions below still use SQLite + local FS blobs.
 
 - Same org **does not** grant cross-workspace access; sibling workspaces stay isolated.
 - There is **no “local desktop workspace”** product concept. Desktop is a cloud client only.

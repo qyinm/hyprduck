@@ -40,7 +40,8 @@ Etyma/
 │   ├── etyma-engine-client           # Subprocess client used by CLI and MCP callers
 │   ├── etyma-engine-types            # Shared command, response, graph, brain schemas
 │   ├── etyma-cli                     # CLI, TUI, MCP server, eval harness
-│   └── etyma-knowledge               # Shared knowledge/brain record types
+│   ├── etyma-knowledge               # Shared knowledge/brain record types
+│   └── etyma-server                  # Cloud host spike; storage target in docs/storage-planes.md
 ├── docs/                                # Architecture, MCP, model task matrix, graph docs
 ├── schemas/                             # JSON schema contracts for external consumers
 └── scripts/                             # Engine sync/build helpers for Electron
@@ -175,6 +176,19 @@ wiki/
 wiki files are read models rebuilt from materialization and correction events.
 `state/latest-readable-snapshot.json` is the stable loading marker for desktop,
 MCP, and resource reads.
+
+## Storage
+
+**Local** desktop and engine knowledge storage remain SQLite + GraphQLite
+(`knowledge.sqlite3` and GraphQLite graph state). Workspace graph/wiki/memory
+files under the artifacts tree are read models rebuilt from that store, not a
+separate primary database. That local path is unchanged by cloud planning.
+
+**Cloud** primary storage planes are frozen separately: Postgres for control,
+knowledge, and graph projection, plus a blob plane for original bytes. See
+[`docs/storage-planes.md`](./storage-planes.md). That ADR does not change local
+runtime behavior and does not imply Postgres is implemented yet. The cloud spike
+today uses server SQLite + blob only.
 
 ## Refactor Pattern Criteria
 
