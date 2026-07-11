@@ -34,10 +34,10 @@ class PtyAgentTerminalBackend extends AgentTerminalBackend {
         ...this.env,
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
-        HYPRDUCK_AGENT_TERMINAL: "1",
-        HYPRDUCK_WORKSPACE_ID: args.handoff.workspace.workspaceId,
-        HYPRDUCK_PROJECT_ID: args.handoff.workspace.projectId ?? "",
-        HYPRDUCK_NODE_ID: args.handoff.workspace.nodeId ?? "",
+        ETYMA_AGENT_TERMINAL: "1",
+        ETYMA_WORKSPACE_ID: args.handoff.workspace.workspaceId,
+        ETYMA_PROJECT_ID: args.handoff.workspace.projectId ?? "",
+        ETYMA_NODE_ID: args.handoff.workspace.nodeId ?? "",
       },
     });
 
@@ -171,7 +171,7 @@ function tryCreatePtyAgentTerminalBackend(options = {}) {
 }
 
 function resolveWorkingDirectory(env) {
-  const configured = env.HYPRDUCK_AGENT_TERMINAL_CWD;
+  const configured = env.ETYMA_AGENT_TERMINAL_CWD;
   if (configured && isDirectory(configured)) {
     return configured;
   }

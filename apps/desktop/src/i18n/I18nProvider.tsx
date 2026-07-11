@@ -16,7 +16,7 @@ import {
   type TranslationKey,
 } from "./locales";
 
-export const UI_LANGUAGE_STORAGE_KEY = "hyprduck.uiLanguage";
+export const UI_LANGUAGE_STORAGE_KEY = "etyma.uiLanguage";
 
 interface I18nContextValue {
   locale: Locale;

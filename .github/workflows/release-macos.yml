@@ -65,7 +65,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run MCP contract test
-        run: cargo test -p hyprduck-cli --test mcp_server mcp_server_exposes_read_and_agent_session_write_brain_tools
+        run: cargo test -p etyma-cli --test mcp_server mcp_server_exposes_read_and_agent_session_write_brain_tools
 
       - name: Build signed and notarized macOS artifacts
         working-directory: apps/desktop
@@ -75,9 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
-          APP_PATH="apps/desktop/release/electron/mac-arm64/HyprDuck.app"
-          DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
-          ZIP_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
+          APP_PATH="apps/desktop/release/electron/mac-arm64/Etyma.app"
+          DMG_PATH="apps/desktop/release/electron/Etyma-${VERSION}-mac-arm64.dmg"
+          ZIP_PATH="apps/desktop/release/electron/Etyma-${VERSION}-mac-arm64.zip"
           UPDATE_PATH="apps/desktop/release/electron/latest-mac.yml"
           DMG_NOTARIZED_MARKER="apps/desktop/release/electron/.dmg-notarized"
           test -d "$APP_PATH"
@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./apps/desktop/package.json').version")"
-          DMG_PATH="apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
+          DMG_PATH="apps/desktop/release/electron/Etyma-${VERSION}-mac-arm64.dmg"
           MOUNT_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
           MOUNT_POINT="$(printf '%s\n' "$MOUNT_OUTPUT" | sed -n 's#.*\(/Volumes/.*\)$#\1#p' | tail -n 1)"
           if [[ -z "$MOUNT_POINT" ]]; then
@@ -110,7 +110,7 @@ jobs:
             exit 1
           fi
           trap 'hdiutil detach "$MOUNT_POINT"' EXIT
-          APP_PATH="$MOUNT_POINT/HyprDuck.app"
+          APP_PATH="$MOUNT_POINT/Etyma.app"
           codesign --verify --deep --strict --verbose=4 "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=4 "$APP_PATH"
@@ -149,9 +149,9 @@ jobs:
             } >> "$RELEASE_BODY_PATH"
           fi
           gh release create "v${VERSION}" \
-            "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg" \
-            "apps/desktop/release/electron/HyprDuck-${VERSION}-mac-arm64.zip" \
+            "apps/desktop/release/electron/Etyma-${VERSION}-mac-arm64.dmg" \
+            "apps/desktop/release/electron/Etyma-${VERSION}-mac-arm64.zip" \
             "apps/desktop/release/electron/latest-mac.yml" \
-            --title "HyprDuck v${VERSION}" \
+            --title "Etyma v${VERSION}" \
             --notes-file "$RELEASE_BODY_PATH" \
             --verify-tag

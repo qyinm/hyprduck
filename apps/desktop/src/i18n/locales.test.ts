@@ -54,7 +54,7 @@ describe("desktop i18n locales", () => {
     ];
 
     expect(keys.map((key) => translate(DEFAULT_LOCALE, key))).toEqual([
-      "HyprDuck failed to start",
+      "Etyma failed to start",
       "Refresh",
       "Add private docs",
       "Partial import",
@@ -66,5 +66,5 @@ describe("desktop i18n locales", () => {
 test("provider exports the existing settings storage key", async () => {
   const provider = await import("./I18nProvider");
 
-  expect(provider.UI_LANGUAGE_STORAGE_KEY).toBe("hyprduck.uiLanguage");
+  expect(provider.UI_LANGUAGE_STORAGE_KEY).toBe("etyma.uiLanguage");
 });

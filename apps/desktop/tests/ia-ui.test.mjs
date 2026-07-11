@@ -206,7 +206,7 @@ test("Docs page focuses first users on importing source files", () => {
   expect(mainSource).toMatch(/resolveKnownWorkspacePath\(candidatePath\)/);
   expect(mainSource).toMatch(/readOriginalPreview\(\[originalPath, sourcePath\]/);
   expect(mainSource).toMatch(/resolveFirstKnownWorkspacePath/);
-  expect(mainSource).toMatch(/hyprduck-source/);
+  expect(mainSource).toMatch(/etyma-source/);
   expect(docsSource).toMatch(/previewableSourcePath\(source\)/);
   expect(previewApiSource).toMatch(/read_source_detail/);
   expect(localesSource).toMatch(/Add private docs/);
@@ -270,7 +270,7 @@ test("Graph workspace centers the canvas with inspector actions", () => {
 
 test("Agent page renders chat UI and uses the streaming agent chat IPC contract", () => {
   expect(appSource).toMatch(/<AgentChatWorkspace/);
-  expect(agentChatSource).toMatch(/STORAGE_KEY = "hyprduck\.agentChatThreads\.v4"/);
+  expect(agentChatSource).toMatch(/STORAGE_KEY = "etyma\.agentChatThreads\.v4"/);
   expect(agentChatSource).toMatch(/window\.localStorage/);
   expect(agentChatSource).toMatch(/What should we work on\?/);
   expect(agentChatSource).toMatch(/mode: "auto"/);
@@ -322,14 +322,14 @@ test("Agent page renders chat UI and uses the streaming agent chat IPC contract"
   expect(aiElementsInlineCitationSource).toMatch(/max-h-72/);
   expect(appSource).toMatch(/invoke\("agent_chat_start"/);
   expect(appSource).toMatch(/invoke\("agent_chat_stop"/);
-  expect(appSource).toMatch(/hyprduck:\/\/agent-chat/);
+  expect(appSource).toMatch(/etyma:\/\/agent-chat/);
   expect(appTypesSource).toMatch(/interface AgentChatAskPayload/);
   expect(appTypesSource).toMatch(/interface AgentChatAskResult/);
   expect(appTypesSource).toMatch(/type AgentChatStreamEvent/);
   expect(mainSource).toMatch(/case "agent_chat_start"/);
   expect(mainSource).toMatch(/case "agent_chat_stop"/);
   expect(mainSource).toMatch(/command: "agent_chat_ask"/);
-  expect(preloadSource).toMatch(/hyprduck:\/\/agent-chat/);
+  expect(preloadSource).toMatch(/etyma:\/\/agent-chat/);
   expect(graphSource).not.toMatch(/AgentTerminal/);
   expect(graphSource).not.toMatch(/GraphPromptComposer/);
   expect(agentChatSource).not.toMatch(/AgentTerminal/);
@@ -362,21 +362,21 @@ test("workspace graph reader loads the latest materialized snapshot first", () =
   expect(appSource).not.toMatch(/setLoadedWorkspaceEnvelope\(\(current\) => \(\{\s*project,/);
 });
 
-test("desktop app prepares the short HyprDuck MCP shell command", () => {
-  expect(mainSource).toMatch(/ensureHyprduckShellCommand\(app\)/);
+test("desktop app prepares the short Etyma MCP shell command", () => {
+  expect(mainSource).toMatch(/ensureEtymaShellCommand\(app\)/);
   expect(mainSource).toMatch(/require\("\.\/main\/cli-shim\.cjs"\)/);
   expect(cliShimSource).toMatch(/function resolveCliPath\(\)/);
-  expect(cliShimSource).toMatch(/HYPRDUCK_CLI_BIN/);
-  expect(cliShimSource).toMatch(/HYPRDUCK_INSTALL_CLI_SHIM/);
-  expect(cliShimSource).toMatch(/isManagedHyprduckCliTarget/);
+  expect(cliShimSource).toMatch(/ETYMA_CLI_BIN/);
+  expect(cliShimSource).toMatch(/ETYMA_INSTALL_CLI_SHIM/);
+  expect(cliShimSource).toMatch(/isManagedEtymaCliTarget/);
   expect(cliShimSource).toMatch(/isDirectoryOnPath/);
   expect(cliShimSource).toMatch(/existing-symlink/);
   expect(cliShimSource).toMatch(/"\.local", "bin"/);
-  expect(cliShimSource).toMatch(/"hyprduck"/);
+  expect(cliShimSource).toMatch(/"etyma"/);
   expect(cliShimSource).toMatch(/fs\.symlinkSync\(cliPath, shimPath\)/);
 });
 
-test("desktop import jobs use HyprDuck citation lifecycle states", () => {
+test("desktop import jobs use Etyma citation lifecycle states", () => {
   const activeJobStatusAssignments = [
     ...mainSource.matchAll(/snapshot\.activeJob\.status\s*=\s*"([^"]+)"/g),
   ].map((match) => match[1]);

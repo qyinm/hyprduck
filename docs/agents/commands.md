@@ -15,8 +15,8 @@ bun run --cwd apps/desktop test:ia
 ## Rust
 
 ```bash
-cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
-cargo check -p hyprduck-cli
+cargo test -p etyma-engine-types -p etyma-engine-client -p etyma-engine -p etyma-cli
+cargo check -p etyma-cli
 ```
 
 ## Site

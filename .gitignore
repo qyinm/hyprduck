@@ -41,7 +41,7 @@ target/
 node_modules/
 .pnpm-store/
 apps/desktop/src-tauri/gen/
-apps/desktop/src-tauri/binaries/hyprduck-engine-*
+apps/desktop/src-tauri/binaries/etyma-engine-*
 apps/desktop/dist/
 apps/desktop/resources/binaries/
 .gstack/

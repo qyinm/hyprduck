@@ -5,7 +5,7 @@ import type {
   DesktopCommandParameters,
   DesktopCommandResult,
   DesktopMessage,
-  HyprDuckDesktopApi,
+  EtymaDesktopApi,
   UiSnapshot,
 } from "@/appTypes";
 
@@ -32,7 +32,7 @@ type WebPreviewCommandHandlers = {
  * Demo-critical surfaces: snapshot, parse fake, load graph, agent chat, config.
  * Other desktop commands throw a clear unsupported error.
  */
-export function createWebMockApi(): HyprDuckDesktopApi {
+export function createWebMockApi(): EtymaDesktopApi {
   setWebMockValidation(deriveWebValidation(null));
 
   const handlers: WebPreviewCommandHandlers = {
@@ -78,10 +78,10 @@ export function createWebMockApi(): HyprDuckDesktopApi {
       eventName: string,
       handler: (message: DesktopMessage<T>) => void | Promise<void>,
     ) {
-      if (eventName === "hyprduck://agent-terminal") {
+      if (eventName === "etyma://agent-terminal") {
         return () => undefined;
       }
-      if (eventName === "hyprduck://agent-chat") {
+      if (eventName === "etyma://agent-chat") {
         const typedHandler = (message: DesktopMessage<AgentChatStreamEvent>) => {
           void handler(message as DesktopMessage<T>);
         };
@@ -90,7 +90,7 @@ export function createWebMockApi(): HyprDuckDesktopApi {
           webMockAgentChatListeners.delete(typedHandler);
         };
       }
-      if (eventName !== "hyprduck://snapshot") {
+      if (eventName !== "etyma://snapshot") {
         return () => undefined;
       }
       const typedHandler = (message: DesktopMessage<UiSnapshot>) => {

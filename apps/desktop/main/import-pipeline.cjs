@@ -11,7 +11,7 @@ function createImportPipeline({
   runEngineCommand,
   runOneShotEngineCommand,
   resetEngineRuntime,
-  ensureHyprduckApplicationSupportPath,
+  ensureEtymaApplicationSupportPath,
   resolveKnownWorkspacePath,
 }) {
   let graphRebuildQueue = Promise.resolve();
@@ -34,7 +34,7 @@ function createImportPipeline({
     }
 
     const outputName = path.basename(request.path, path.extname(request.path)) || "document";
-    const storageRoot = ensureHyprduckApplicationSupportPath();
+    const storageRoot = ensureEtymaApplicationSupportPath();
     const parseRequest = {
       version: "1",
       template: "General",

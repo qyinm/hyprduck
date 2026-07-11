@@ -2,13 +2,13 @@ import {
   type DesktopCommand,
   type DesktopCommandParameters,
   type DesktopCommandResult,
-  type HyprDuckDesktopApi,
+  type EtymaDesktopApi,
 } from "@/appTypes";
 import { createWebMockApi } from "@/webPreviewApi";
 
 declare global {
   interface Window {
-    hyprduck?: HyprDuckDesktopApi;
+    etyma?: EtymaDesktopApi;
   }
 }
 
@@ -16,13 +16,13 @@ const IS_WEB_PREVIEW = import.meta.env.VITE_PLATFORM === "web";
 
 const webPreviewApi = IS_WEB_PREVIEW ? createWebMockApi() : null;
 
-export function getDesktopApi(): HyprDuckDesktopApi {
+export function getDesktopApi(): EtymaDesktopApi {
   if (IS_WEB_PREVIEW) {
-    return webPreviewApi as HyprDuckDesktopApi;
+    return webPreviewApi as EtymaDesktopApi;
   }
-  const api = window.hyprduck;
+  const api = window.etyma;
   if (!api) {
-    throw new Error("HyprDuck desktop UI requires Electron preload APIs.");
+    throw new Error("Etyma desktop UI requires Electron preload APIs.");
   }
   return api;
 }

@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "crates/hyprduck-cli",
-    "crates/hyprduck-engine",
-    "crates/hyprduck-engine-client",
-    "crates/hyprduck-engine-types",
-    "crates/hyprduck-knowledge",
+    "crates/etyma-cli",
+    "crates/etyma-engine",
+    "crates/etyma-engine-client",
+    "crates/etyma-engine-types",
+    "crates/etyma-knowledge",
 ]
 resolver = "2"
 

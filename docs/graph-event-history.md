@@ -1,6 +1,6 @@
 # Graph Event History
 
-HyprDuck graph maintenance treats `events/brain_events.jsonl` as the source of
+Etyma graph maintenance treats `events/brain_events.jsonl` as the source of
 truth. Files such as `graph/nodes.json`, `graph/edges.json`,
 `graph/claims.json`, `memory/records.json`, `wiki/index.md`, and topic pages are
 materialized read models that can be rebuilt from the event history.
@@ -105,8 +105,8 @@ page selector:
 
 Record history responses include logical IDs, version IDs, creating event IDs,
 lifecycle timestamps, evidence refs, source refs, graph refs, and redacted
-storage labels such as `hyprduck.sqlite:graphqlite` or
-`hyprduck.sqlite:wiki_revisions`. They do not expose raw local paths or
+storage labels such as `etyma.sqlite:graphqlite` or
+`etyma.sqlite:wiki_revisions`. They do not expose raw local paths or
 rollback/replay selectors.
 
 ## Rollback And Snapshots

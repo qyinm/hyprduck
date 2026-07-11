@@ -16,20 +16,20 @@ mkdir -p "${BIN_DIR}"
 
 pushd "${REPO_ROOT}" >/dev/null
 if [[ "${MODE}" == "release" ]]; then
-  cargo build -p hyprduck-engine -p hyprduck-cli --release
+  cargo build -p etyma-engine -p etyma-cli --release
   PROFILE_DIR="${REPO_ROOT}/target/release"
 else
-  cargo build -p hyprduck-engine -p hyprduck-cli
+  cargo build -p etyma-engine -p etyma-cli
   PROFILE_DIR="${REPO_ROOT}/target/debug"
 fi
 popd >/dev/null
 
-ENGINE_TARGET_BIN="${BIN_DIR}/hyprduck-engine-${HOST_TRIPLE}"
-CLI_TARGET_BIN="${BIN_DIR}/hyprduck-${HOST_TRIPLE}"
+ENGINE_TARGET_BIN="${BIN_DIR}/etyma-engine-${HOST_TRIPLE}"
+CLI_TARGET_BIN="${BIN_DIR}/etyma-${HOST_TRIPLE}"
 
-cp "${PROFILE_DIR}/hyprduck-engine" "${ENGINE_TARGET_BIN}"
-cp "${PROFILE_DIR}/hyprduck" "${CLI_TARGET_BIN}"
+cp "${PROFILE_DIR}/etyma-engine" "${ENGINE_TARGET_BIN}"
+cp "${PROFILE_DIR}/etyma" "${CLI_TARGET_BIN}"
 chmod +x "${ENGINE_TARGET_BIN}" "${CLI_TARGET_BIN}"
 
-echo "synced engine ${PROFILE_DIR}/hyprduck-engine -> ${ENGINE_TARGET_BIN}"
-echo "synced cli ${PROFILE_DIR}/hyprduck -> ${CLI_TARGET_BIN}"
+echo "synced engine ${PROFILE_DIR}/etyma-engine -> ${ENGINE_TARGET_BIN}"
+echo "synced cli ${PROFILE_DIR}/etyma -> ${CLI_TARGET_BIN}"

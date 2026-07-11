@@ -16,33 +16,42 @@ function createEngineRpc({ app }) {
   let engineRuntimeBinarySignature = null;
   let providerModelCatalogPromise = null;
 
-  function hyprduckApplicationSupportPath() {
-    return path.join(app.getPath("appData"), "HyprDuck");
+  function etymaApplicationSupportPath() {
+    const etyma = path.join(app.getPath("appData"), "Etyma");
+    const legacy = path.join(app.getPath("appData"), "HyprDuck");
+    // Prefer Etyma; keep reading legacy HyprDuck data during rename migration.
+    if (fs.existsSync(etyma) || !fs.existsSync(legacy)) {
+      return etyma;
+    }
+    return legacy;
   }
 
-  function ensureHyprduckApplicationSupportPath() {
-    const storageRoot = hyprduckApplicationSupportPath();
+  function ensureEtymaApplicationSupportPath() {
+    const storageRoot = etymaApplicationSupportPath();
     fs.mkdirSync(storageRoot, { recursive: true });
     return storageRoot;
   }
 
   function engineEnvironment() {
+    const storageRoot = ensureEtymaApplicationSupportPath();
     return {
       ...process.env,
-      HYPRDUCK_OUTPUT_DIR: ensureHyprduckApplicationSupportPath(),
+      ETYMA_OUTPUT_DIR: storageRoot,
+      // Temporary alias so older tooling still finds the workspace root.
+      HYPRDUCK_OUTPUT_DIR: storageRoot,
     };
   }
 
   function brainReadScope(workspaceId) {
     return {
       workspaceId,
-      rootDir: ensureHyprduckApplicationSupportPath(),
+      rootDir: ensureEtymaApplicationSupportPath(),
     };
   }
 
   function resolveEnginePath() {
-    if (process.env.HYPRDUCK_ENGINE_BIN) {
-      return process.env.HYPRDUCK_ENGINE_BIN;
+    if (process.env.ETYMA_ENGINE_BIN) {
+      return process.env.ETYMA_ENGINE_BIN;
     }
 
     if (!app.isPackaged) {
@@ -53,14 +62,14 @@ function createEngineRpc({ app }) {
         "..",
         "target",
         "debug",
-        process.platform === "win32" ? "hyprduck-engine.exe" : "hyprduck-engine",
+        process.platform === "win32" ? "etyma-engine.exe" : "etyma-engine",
       );
       if (fs.existsSync(devTargetPath)) {
         return devTargetPath;
       }
     }
 
-    const engineName = `hyprduck-engine-${hostTriple()}`;
+    const engineName = `etyma-engine-${hostTriple()}`;
     const devPath = path.join(__dirname, "..", "resources", "binaries", engineName);
     if (fs.existsSync(devPath)) {
       return devPath;
@@ -71,7 +80,7 @@ function createEngineRpc({ app }) {
       return packagedPath;
     }
 
-    return "hyprduck-engine";
+    return "etyma-engine";
   }
 
   function engineBinarySignature() {
@@ -188,7 +197,7 @@ function createEngineRpc({ app }) {
 
   return {
     brainReadScope,
-    ensureHyprduckApplicationSupportPath,
+    ensureEtymaApplicationSupportPath,
     getModelsForProvider,
     maybeImportLegacySwiftConfig,
     resetEngineRuntime,

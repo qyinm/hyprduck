@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/graph-mutation-event.schema.json",
+  "$id": "https://etyma.local/schemas/graph-mutation-event.schema.json",
   "title": "GraphMutationEvent",
   "description": "Append-only graph/wiki event row stored in events/brain_events.jsonl. The JSONL file is the source of truth; materialized graph, claim, memory, and wiki files are rebuildable read models.",
   "x-sourceOfTruth": "events/brain_events.jsonl",

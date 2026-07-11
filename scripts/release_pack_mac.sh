@@ -71,13 +71,13 @@ write_update_manifest() {
   cat > "$update_path" <<EOF
 version: $version
 files:
-  - url: HyprDuck-${version}-mac-arm64.zip
+  - url: Etyma-${version}-mac-arm64.zip
     sha512: $zip_sha512
     size: $zip_size
-  - url: HyprDuck-${version}-mac-arm64.dmg
+  - url: Etyma-${version}-mac-arm64.dmg
     sha512: $dmg_sha512
     size: $dmg_size
-path: HyprDuck-${version}-mac-arm64.zip
+path: Etyma-${version}-mac-arm64.zip
 sha512: $zip_sha512
 releaseDate: '$release_date'
 EOF
@@ -96,9 +96,9 @@ bun run release:prepare:mac
 electron-builder --mac dir --arm64 --publish never
 
 VERSION="$(node -p "require('./package.json').version")"
-APP_PATH="$DESKTOP_DIR/release/electron/mac-arm64/HyprDuck.app"
-DMG_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.dmg"
-ZIP_PATH="$DESKTOP_DIR/release/electron/HyprDuck-${VERSION}-mac-arm64.zip"
+APP_PATH="$DESKTOP_DIR/release/electron/mac-arm64/Etyma.app"
+DMG_PATH="$DESKTOP_DIR/release/electron/Etyma-${VERSION}-mac-arm64.dmg"
+ZIP_PATH="$DESKTOP_DIR/release/electron/Etyma-${VERSION}-mac-arm64.zip"
 UPDATE_PATH="$DESKTOP_DIR/release/electron/latest-mac.yml"
 DMG_NOTARIZED_MARKER="$DESKTOP_DIR/release/electron/.dmg-notarized"
 DMG_STAGING_DIR="$DESKTOP_DIR/release/electron/dmg-staging"
@@ -121,11 +121,11 @@ rm -rf "$DMG_STAGING_DIR"
 ditto -c -k --sequesterRsrc --keepParent --noextattr --noqtn "$APP_PATH" "$ZIP_PATH"
 
 mkdir -p "$DMG_STAGING_DIR"
-ditto --noextattr --noqtn "$APP_PATH" "$DMG_STAGING_DIR/HyprDuck.app"
+ditto --noextattr --noqtn "$APP_PATH" "$DMG_STAGING_DIR/Etyma.app"
 ln -s /Applications "$DMG_STAGING_DIR/Applications"
 xattr -cr "$DMG_STAGING_DIR"
 hdiutil create \
-  -volname "HyprDuck ${VERSION}-arm64" \
+  -volname "Etyma ${VERSION}-arm64" \
   -srcfolder "$DMG_STAGING_DIR" \
   -ov \
   -format UDZO \

@@ -10,7 +10,7 @@ const {
 } = require("../main/agent-detection.cjs");
 
 test("detectSupportedAgents detects supported agent commands from PATH", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprduck-agents-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "etyma-agents-"));
   const codexPath = path.join(tempDir, "codex");
   fs.writeFileSync(codexPath, "#!/bin/sh\nexit 0\n");
   fs.chmodSync(codexPath, 0o755);
@@ -36,7 +36,7 @@ test("detectSupportedAgents does not expose generic shell as a v1 agent", () => 
 });
 
 test("detectSupportedAgents does not approve a generic pi executable", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprduck-agents-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "etyma-agents-"));
   const piPath = path.join(tempDir, "pi");
   fs.writeFileSync(piPath, "#!/bin/sh\nexit 0\n");
   fs.chmodSync(piPath, 0o755);

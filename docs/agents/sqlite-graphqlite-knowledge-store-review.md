@@ -98,8 +98,8 @@ mutation/read behavior, and rollback behavior as release gates.
 Release-blocking checks:
 
 1. The engine dependency remains pinned to the reviewed GraphQLite version.
-2. Workspace initialization opens the canonical `hyprduck.sqlite` file through
-   GraphQLite and records `hyprduck.sqlite:graphqlite` as the redacted graph
+2. Workspace initialization opens the canonical `etyma.sqlite` file through
+   GraphQLite and records `etyma.sqlite:graphqlite` as the redacted graph
    storage label.
 3. The GraphQLite gate creates, reads, cleans up, and verifies rollback behavior
    before normal workspace operation is considered healthy.

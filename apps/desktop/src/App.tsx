@@ -336,7 +336,7 @@ export function App() {
       setLoadedWorkspaceEnvelope(initialWorkspaceLoad.envelope);
       setWorkspaceLoadState(workspaceLoadStateFromResult(initialWorkspaceLoad, t));
 
-      unlisten = desktop.listen<UiSnapshot>("hyprduck://snapshot", (message) => {
+      unlisten = desktop.listen<UiSnapshot>("etyma://snapshot", (message) => {
         setSnapshot(message.payload);
       });
     };
@@ -489,7 +489,7 @@ export function App() {
       handler: (
         message: DesktopMessage<AgentChatStreamEvent>,
       ) => void | Promise<void>,
-    ): DesktopUnlisten => getDesktopApi().listen("hyprduck://agent-chat", handler),
+    ): DesktopUnlisten => getDesktopApi().listen("etyma://agent-chat", handler),
     [],
   );
 

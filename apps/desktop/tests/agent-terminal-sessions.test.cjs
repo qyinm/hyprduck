@@ -139,7 +139,7 @@ test("writeSession blocks after a backend exit event closes the session", async 
 
 
 async function withDetectedCodex(callback) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprduck-codex-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "etyma-codex-"));
   const codexPath = path.join(tempDir, "codex");
   fs.writeFileSync(codexPath, "#!/bin/sh\nexit 0\n");
   fs.chmodSync(codexPath, 0o755);

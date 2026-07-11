@@ -1,5 +1,5 @@
 {
-  "name": "hyprduck-desktop",
+  "name": "etyma-desktop",
   "packageManager": "bun@1.2.18",
   "private": true,
   "version": "1.1.11",
@@ -7,7 +7,7 @@
   "author": "hippoo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/qyinm/hyprduck.git"
+    "url": "git+https://github.com/qyinm/etyma.git"
   },
   "type": "module",
   "main": "main.cjs",
@@ -35,8 +35,8 @@
     "sync:engine:release": "../../scripts/sync-electron-engine.sh release"
   },
   "build": {
-    "appId": "com.hyprduck.desktop",
-    "productName": "HyprDuck",
+    "appId": "com.etyma.desktop",
+    "productName": "Etyma",
     "asar": true,
     "asarUnpack": [
       "node_modules/node-pty/prebuilds/**/*"
@@ -64,8 +64,8 @@
       "entitlements": "build/macos/entitlements.mac.plist",
       "entitlementsInherit": "build/macos/entitlements.mac.inherit.plist",
       "binaries": [
-        "Contents/Resources/binaries/hyprduck-engine-aarch64-apple-darwin",
-        "Contents/Resources/binaries/hyprduck-aarch64-apple-darwin",
+        "Contents/Resources/binaries/etyma-engine-aarch64-apple-darwin",
+        "Contents/Resources/binaries/etyma-aarch64-apple-darwin",
         "Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
       ],
       "target": [
@@ -83,8 +83,8 @@
         }
       ],
       "extendInfo": {
-        "NSDocumentsFolderUsageDescription": "HyprDuck imports documents you select and writes local markdown packages.",
-        "NSDownloadsFolderUsageDescription": "HyprDuck can import documents you select from Downloads."
+        "NSDocumentsFolderUsageDescription": "Etyma imports documents you select and writes local markdown packages.",
+        "NSDownloadsFolderUsageDescription": "Etyma can import documents you select from Downloads."
       }
     },
     "afterPack": "scripts/after-pack.cjs",

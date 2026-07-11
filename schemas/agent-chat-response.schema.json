@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/agent-chat-response.schema.json",
-  "title": "HyprDuck Agent Chat Response",
+  "$id": "https://etyma.local/schemas/agent-chat-response.schema.json",
+  "title": "Etyma Agent Chat Response",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,7 +17,7 @@
     "warnings"
   ],
   "properties": {
-    "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
+    "schemaVersion": { "const": "etyma.agent_chat.v1" },
     "conversationId": { "type": "string", "minLength": 1 },
     "answerMode": { "type": "string", "enum": ["general", "evidence", "blocked"] },
     "assistantMessage": { "$ref": "#/$defs/message" },

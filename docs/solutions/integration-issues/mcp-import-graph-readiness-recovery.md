@@ -122,7 +122,7 @@ The final MCP behavior is:
 
 `sourceId` is the durable import identity; `jobId` is only a live process handle. Persisting graph status by `sourceId` makes the MCP protocol resilient to restarts without reparsing a source that already has citation artifacts.
 
-The separation also matches HyprDuck's product boundary. Citation-backed evidence reuse is useful before graph/wiki materialization finishes. Graph state remains visible and retryable, but it no longer blocks the core agent workflow.
+The separation also matches Etyma's product boundary. Citation-backed evidence reuse is useful before graph/wiki materialization finishes. Graph state remains visible and retryable, but it no longer blocks the core agent workflow.
 
 The explicit graph-ready allowlist prevents false positives: skipped and pending graph work remain inspectable states, not successful graph completion. Redacting error strings before persistence keeps agent-facing payloads aligned with the local-path disclosure rule.
 
@@ -138,9 +138,9 @@ The explicit graph-ready allowlist prevents false positives: skipped and pending
 Useful verification targets:
 
 ```bash
-cargo test -p hyprduck-cli mcp::tests::
-cargo test -p hyprduck-engine import_job
-cargo test -p hyprduck-cli --test mcp_server
+cargo test -p etyma-cli mcp::tests::
+cargo test -p etyma-engine import_job
+cargo test -p etyma-cli --test mcp_server
 ```
 
 ## Related Issues

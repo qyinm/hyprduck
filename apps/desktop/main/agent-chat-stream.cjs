@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 
-const AGENT_CHAT_EVENT = "hyprduck://agent-chat";
+const AGENT_CHAT_EVENT = "etyma://agent-chat";
 
 function createAgentChatStream({
   getMainWindow,

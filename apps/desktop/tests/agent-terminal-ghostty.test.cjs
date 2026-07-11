@@ -10,7 +10,7 @@ test("ghosttyNativeBackendEnabled is opt-in", () => {
   assert.equal(ghosttyNativeBackendEnabled({}), false);
   assert.equal(
     ghosttyNativeBackendEnabled({
-      HYPRDUCK_AGENT_TERMINAL_BACKEND: "ghostty-native",
+      ETYMA_AGENT_TERMINAL_BACKEND: "ghostty-native",
     }),
     true,
   );
@@ -18,17 +18,17 @@ test("ghosttyNativeBackendEnabled is opt-in", () => {
 
 test("createGhosttyNativeBackendFromEnv reports missing spike module", async () => {
   const result = await createGhosttyNativeBackendFromEnv({
-    HYPRDUCK_AGENT_TERMINAL_BACKEND: "ghostty-native",
+    ETYMA_AGENT_TERMINAL_BACKEND: "ghostty-native",
   });
   assert.equal(result.enabled, true);
   assert.equal(result.backend, null);
-  assert.match(result.reason, /HYPRDUCK_GHOSTTY_BACKEND_MODULE/);
+  assert.match(result.reason, /ETYMA_GHOSTTY_BACKEND_MODULE/);
 });
 
 test("createGhosttyNativeBackendFromEnv contains bad spike module failures", async () => {
   const result = await createGhosttyNativeBackendFromEnv({
-    HYPRDUCK_AGENT_TERMINAL_BACKEND: "ghostty-native",
-    HYPRDUCK_GHOSTTY_BACKEND_MODULE: "hyprduck-missing-ghostty-backend",
+    ETYMA_AGENT_TERMINAL_BACKEND: "ghostty-native",
+    ETYMA_GHOSTTY_BACKEND_MODULE: "etyma-missing-ghostty-backend",
   });
   assert.equal(result.enabled, true);
   assert.equal(result.backend, null);

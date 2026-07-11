@@ -1,4 +1,4 @@
-const SNAPSHOT_EVENT = "hyprduck://snapshot";
+const SNAPSHOT_EVENT = "etyma://snapshot";
 const MAX_PROGRESS_LOG = 80;
 
 function createSnapshotState({ getMainWindow }) {

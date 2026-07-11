@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | Electron window lifecycle | `main.cjs` | Keep as shell glue: window, app ready, wire domain modules. |
 | IPC switch, import, preview, chat stream, engine RPC | `main/*.cjs` | Domain modules under `main/`; do not re-inflate `main.cjs`. |
-| Renderer bridge | `preload.cjs` | Expose only narrow `window.hyprduck.invoke/listen` APIs. |
+| Renderer bridge | `preload.cjs` | Expose only narrow `window.etyma.invoke/listen` APIs. |
 | Agent detection and terminal backends | `main/agent-terminal-*.cjs` | Keep terminal behavior in backend modules, not buried in `main.cjs`. |
 | Import/settings/history/workspace state | `src/App.tsx` | Large app shell; avoid adding engine behavior here. |
 | Graph workspace UI | `src/features/workspace/` | Required inspection surface for source/document/concept relationships. |

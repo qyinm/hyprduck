@@ -1,0 +1,14 @@
+[package]
+name = "etyma-engine-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+etyma-engine-types = { path = "../etyma-engine-types" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

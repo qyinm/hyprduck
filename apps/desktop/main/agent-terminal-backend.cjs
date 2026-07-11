@@ -38,7 +38,7 @@ class DisabledAgentTerminalBackend extends AgentTerminalBackend {
     super("disabled");
     this.reason =
       options.reason ??
-      "Native Ghostty backend has not passed the HyprDuck spike gate.";
+      "Native Ghostty backend has not passed the Etyma spike gate.";
   }
 
   async createSession() {

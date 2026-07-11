@@ -211,7 +211,7 @@ export interface AgentChatMessage {
 }
 
 export interface AgentChatAskPayload {
-  schemaVersion: "hyprduck.agent_chat.v1";
+  schemaVersion: "etyma.agent_chat.v1";
   conversationId: string;
   assistantMessageId?: string | null;
   scope: {
@@ -260,7 +260,7 @@ export interface AgentChatRetrievalTrace {
 }
 
 export interface AgentChatAskResult {
-  schemaVersion: "hyprduck.agent_chat.v1";
+  schemaVersion: "etyma.agent_chat.v1";
   conversationId: string;
   answerMode: AgentChatAnswerMode;
   assistantMessage: AgentChatMessage;
@@ -541,7 +541,7 @@ export type DesktopCommandParameters<K extends DesktopCommand> =
 export type DesktopCommandResult<K extends DesktopCommand> =
   DesktopCommandMap[K]["result"];
 
-export interface HyprDuckDesktopApi {
+export interface EtymaDesktopApi {
   invoke<K extends DesktopCommand>(
     command: K,
     ...args: DesktopCommandParameters<K>

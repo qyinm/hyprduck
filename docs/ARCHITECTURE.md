@@ -1,6 +1,6 @@
-# HyprDuck Architecture
+# Etyma Architecture
 
-HyprDuck is a local-first document ingestion and agent-readable knowledge
+Etyma is a local-first document ingestion and agent-readable knowledge
 workspace. The active product wedge is file parsing: import PDF, DOCX, or DOC,
 convert pages into local artifacts, generate markdown, and materialize a
 source-backed graph/wiki workspace that agents can read.
@@ -27,7 +27,7 @@ write-gating layer.
 ## Repository Map
 
 ```text
-HyprDuck/
+Etyma/
 ├── apps/
 │   ├── desktop/                         # Active Electron desktop shell
 │   │   ├── main.cjs                     # Main process, IPC, engine runtime queue
@@ -36,11 +36,11 @@ HyprDuck/
 │   │   └── src/features/workspace/      # Materialized graph UI adapter and canvas
 │   └── site/                            # Public Astro site / web preview assets
 ├── crates/
-│   ├── hyprduck-engine                  # Core Rust runtime and domain logic
-│   ├── hyprduck-engine-client           # Subprocess client used by CLI and MCP callers
-│   ├── hyprduck-engine-types            # Shared command, response, graph, brain schemas
-│   ├── hyprduck-cli                     # CLI, TUI, MCP server, eval harness
-│   └── hyprduck-knowledge               # Shared knowledge/brain record types
+│   ├── etyma-engine                  # Core Rust runtime and domain logic
+│   ├── etyma-engine-client           # Subprocess client used by CLI and MCP callers
+│   ├── etyma-engine-types            # Shared command, response, graph, brain schemas
+│   ├── etyma-cli                     # CLI, TUI, MCP server, eval harness
+│   └── etyma-knowledge               # Shared knowledge/brain record types
 ├── docs/                                # Architecture, MCP, model task matrix, graph docs
 ├── schemas/                             # JSON schema contracts for external consumers
 └── scripts/                             # Engine sync/build helpers for Electron
@@ -60,16 +60,16 @@ flowchart TB
   end
 
   subgraph Rust["Rust crates"]
-    CLI["hyprduck-cli"]
-    Client["hyprduck-engine-client"]
-    Engine["hyprduck-engine"]
-    Types["hyprduck-engine-types"]
-    Knowledge["hyprduck-knowledge"]
+    CLI["etyma-cli"]
+    Client["etyma-engine-client"]
+    Engine["etyma-engine"]
+    Types["etyma-engine-types"]
+    Knowledge["etyma-knowledge"]
   end
 
   subgraph Files["Local files"]
-    AppSupport["Application Support / HyprDuck"]
-    Config["~/.hyprduck/engine-config.json"]
+    AppSupport["Application Support / Etyma"]
+    Config["~/.etyma/engine-config.json"]
     Store["knowledge.sqlite3"]
     Workspace["workspace brain repo"]
   end
@@ -110,7 +110,7 @@ materialized graph/wiki snapshot.
 Agent graph patching is the MCP-owned agent path. External agents such as Codex,
 Claude Code, or a local PI agent read source/evidence/context through MCP using
 their own model runtime, then call `graph_patch_apply` with a
-`hyprduck.graph_patch.v1` payload. HyprDuck does not call that model. The engine
+`etyma.graph_patch.v1` payload. Etyma does not call that model. The engine
 validates the patch schema, source scope, evidence refs, relation endpoints,
 claim refs, and wiki refs, then auto-applies the valid patch through the same
 GraphQLite snapshot commit path and records an audit event with
@@ -122,7 +122,7 @@ requests local path disclosure.
 
 ## Engine Commands
 
-The shared engine contract lives in `crates/hyprduck-engine-types/src/lib.rs`.
+The shared engine contract lives in `crates/etyma-engine-types/src/lib.rs`.
 The active command surface includes:
 
 - Parse and project commands: `Parse`, `LoadProject`, `CompileProject`,
@@ -139,7 +139,7 @@ The active command surface includes:
 The active desktop shell is `apps/desktop`.
 
 - `main.cjs` owns Electron IPC and engine process calls.
-- `preload.cjs` exposes a narrow `window.hyprduck.invoke/listen` bridge.
+- `preload.cjs` exposes a narrow `window.etyma.invoke/listen` bridge.
 - `App.tsx` owns import, settings, progress, history, and graph workspace state.
 - `src/features/workspace` adapts materialized graph snapshots into the React
   graph workspace.
@@ -149,7 +149,7 @@ permissions.
 
 ## Workspace Artifacts
 
-A workspace is materialized under the local HyprDuck application-support root:
+A workspace is materialized under the local Etyma application-support root:
 
 ```text
 brain-manifest.json
@@ -178,7 +178,7 @@ MCP, and resource reads.
 
 ## Refactor Pattern Criteria
 
-HyprDuck uses named boundaries only when they protect a real contract.
+Etyma uses named boundaries only when they protect a real contract.
 
 - Command handlers stay as explicit `EngineRequest`/`EngineCommand` enum
   dispatch. Handler bodies may move into family modules, such as graph, write,
@@ -214,7 +214,7 @@ Current strategy audit:
 
 ## MCP Surface
 
-`hyprduck mcp serve` exposes read/search tools plus controlled mutating tools:
+`etyma mcp serve` exposes read/search tools plus controlled mutating tools:
 
 - `import_source`
 - `import_status`
@@ -247,6 +247,6 @@ memory, and event IDs for agent use.
 Core checks:
 
 ```bash
-cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
+cargo test -p etyma-engine-types -p etyma-engine-client -p etyma-engine -p etyma-cli
 bun run --cwd apps/desktop build
 ```

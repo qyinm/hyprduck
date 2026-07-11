@@ -1,8 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-function ensureHyprduckShellCommand(app) {
-  if (!app.isPackaged && process.env.HYPRDUCK_INSTALL_CLI_SHIM !== "1") {
+function ensureEtymaShellCommand(app) {
+  if (!app.isPackaged && process.env.ETYMA_INSTALL_CLI_SHIM !== "1") {
     return { installed: false, reason: "development-mode" };
   }
   if (process.platform === "win32") {
@@ -16,14 +16,14 @@ function ensureHyprduckShellCommand(app) {
   }
 
   const binDir = path.join(app.getPath("home"), ".local", "bin");
-  const shimPath = path.join(binDir, "hyprduck");
+  const shimPath = path.join(binDir, "etyma");
   const pathReady = isDirectoryOnPath(binDir);
   fs.mkdirSync(binDir, { recursive: true });
 
   const existing = safeLstat(shimPath);
   if (existing) {
     if (!existing.isSymbolicLink()) {
-      console.warn(`hyprduck shell command already exists and was left unchanged: ${shimPath}`);
+      console.warn(`etyma shell command already exists and was left unchanged: ${shimPath}`);
       return { installed: false, pathReady, reason: "existing-path" };
     }
     const currentTarget = fs.readlinkSync(shimPath);
@@ -31,8 +31,8 @@ function ensureHyprduckShellCommand(app) {
     if (resolvedTarget === path.resolve(cliPath)) {
       return { installed: true, path: shimPath, pathReady };
     }
-    if (!isManagedHyprduckCliTarget(resolvedTarget)) {
-      console.warn(`hyprduck shell command points elsewhere and was left unchanged: ${shimPath}`);
+    if (!isManagedEtymaCliTarget(resolvedTarget)) {
+      console.warn(`etyma shell command points elsewhere and was left unchanged: ${shimPath}`);
       return { installed: false, pathReady, reason: "existing-symlink" };
     }
     fs.unlinkSync(shimPath);
@@ -40,17 +40,17 @@ function ensureHyprduckShellCommand(app) {
 
   fs.symlinkSync(cliPath, shimPath);
   if (!pathReady) {
-    console.warn(`hyprduck shell command installed at ${shimPath}, but ${binDir} is not on PATH`);
+    console.warn(`etyma shell command installed at ${shimPath}, but ${binDir} is not on PATH`);
   }
   return { installed: true, path: shimPath, pathReady };
 }
 
 function resolveCliPath() {
-  if (process.env.HYPRDUCK_CLI_BIN) {
-    return process.env.HYPRDUCK_CLI_BIN;
+  if (process.env.ETYMA_CLI_BIN) {
+    return process.env.ETYMA_CLI_BIN;
   }
 
-  const cliName = `hyprduck-${hostTriple()}`;
+  const cliName = `etyma-${hostTriple()}`;
   const devPath = path.join(__dirname, "..", "resources", "binaries", cliName);
   if (fs.existsSync(devPath)) {
     return devPath;
@@ -65,10 +65,10 @@ function resolveCliPath() {
   return null;
 }
 
-function isManagedHyprduckCliTarget(targetPath) {
+function isManagedEtymaCliTarget(targetPath) {
   const normalized = path.normalize(targetPath);
   return (
-    path.basename(normalized) === `hyprduck-${hostTriple()}` &&
+    path.basename(normalized) === `etyma-${hostTriple()}` &&
     normalized.includes(`.app${path.sep}Contents${path.sep}Resources${path.sep}binaries${path.sep}`)
   );
 }
@@ -93,8 +93,8 @@ function safeLstat(targetPath) {
 }
 
 function hostTriple() {
-  if (process.env.HYPRDUCK_TARGET_TRIPLE) {
-    return process.env.HYPRDUCK_TARGET_TRIPLE;
+  if (process.env.ETYMA_TARGET_TRIPLE) {
+    return process.env.ETYMA_TARGET_TRIPLE;
   }
   if (process.platform === "darwin" && process.arch === "arm64") return "aarch64-apple-darwin";
   if (process.platform === "darwin" && process.arch === "x64") return "x86_64-apple-darwin";
@@ -104,6 +104,6 @@ function hostTriple() {
 }
 
 module.exports = {
-  ensureHyprduckShellCommand,
+  ensureEtymaShellCommand,
   hostTriple,
 };

@@ -2,7 +2,7 @@
 
 ## Direction
 
-HyprDuck is moving from a document parser into a local evidence compiler for AI agents.
+Etyma is moving from a document parser into a local evidence compiler for AI agents.
 
 The parser remains the wedge, but the next product milestone is not "more chat"
 or a memory OS. The next milestone is proving the reusable cited context loop:
@@ -24,18 +24,18 @@ Current roadmap order:
 Codex proof.
 
 **Why:** `docs/dogfood-reports/2026-06-02-codex-installed-app-distribution-proof.md`
-records `pass_active_codex_exec`, but also records that `~/.local/bin/hyprduck`
+records `pass_active_codex_exec`, but also records that `~/.local/bin/etyma`
 can still point at an unmanaged repo-local development binary. The active Codex
 registration used the app-bundled CLI, but the shell-command path still needs a
 clean user-facing story.
 
 **Acceptance:**
 
-- [ ] Opening or installing the packaged app refreshes a managed `hyprduck`
+- [ ] Opening or installing the packaged app refreshes a managed `etyma`
   shell command without overwriting unrelated unmanaged commands.
-- [ ] `hyprduck doctor` resolves the app-bundled engine runtime for an installed
+- [ ] `etyma doctor` resolves the app-bundled engine runtime for an installed
   app.
-- [ ] `hyprduck mcp install codex` registers the app-bundled CLI and forwards
+- [ ] `etyma mcp install codex` registers the app-bundled CLI and forwards
   import-root/project-store environment values.
 - [ ] The Codex installed-app proof can be rerun without the stale-shim warning.
 - [ ] Agent Terminal dogfood records the context handoff state before broad
@@ -47,7 +47,7 @@ clean user-facing story.
 
 **What:** Add a small benchmark corpus and CLI/eval path for extraction, retrieval, and context-pack quality.
 
-**Why:** HyprDuck is making a local-first promise. Without a corpus, we cannot tell whether graph/retrieval changes improve agent usefulness or only make the UI look richer.
+**Why:** Etyma is making a local-first promise. Without a corpus, we cannot tell whether graph/retrieval changes improve agent usefulness or only make the UI look richer.
 
 **Fixture cases:**
 
@@ -143,7 +143,7 @@ retrieval would freeze a poor external contract too early.
 
 **What:** Measure and document which hosted and local models are good enough for parse, extraction, merge, and answer workloads.
 
-**Why:** Users can pick a weak local model and get a graph that feels broken even when the app works. HyprDuck needs recommended defaults and clear fallbacks for local-first operation.
+**Why:** Users can pick a weak local model and get a graph that feels broken even when the app works. Etyma needs recommended defaults and clear fallbacks for local-first operation.
 
 **Scope:**
 
@@ -167,7 +167,7 @@ retrieval would freeze a poor external contract too early.
 
 ## P2 - MCP read surface and controlled writes - Done
 
-**What:** Expose HyprDuck's local document context through MCP after extraction
+**What:** Expose Etyma's local document context through MCP after extraction
 and retrieval stabilize, then add narrow mutating tools for import, graph
 patches, and evidence-backed save-back flows.
 
@@ -216,15 +216,15 @@ of generic filesystem or command access.
 **What:** Make a known fixture prove the full loop from import to cited agent
 answer.
 
-**Why:** HyprDuck needs proof that one local ingest can be reused by Claude Code,
+**Why:** Etyma needs proof that one local ingest can be reused by Claude Code,
 Codex, Cursor, or another MCP-aware agent without re-uploading documents or
 losing page evidence.
 
 **Scope:**
 
-- Define `hyprduck demo` target behavior.
-- Keep `hyprduck context` as the query-time context-pack alias.
-- Keep `hyprduck documents search` as the document-search alias.
+- Define `etyma demo` target behavior.
+- Keep `etyma context` as the query-time context-pack alias.
+- Keep `etyma documents search` as the document-search alias.
 - Publish setup guides for at least two MCP clients.
 - Add prompt-injection and hosted-provider disclosure warnings to first-run docs.
 - Defer shared/team workflows until repeated cited reuse is proven.
@@ -253,14 +253,14 @@ losing page evidence.
 - [x] Context readiness lint path
 - [x] Structured extraction artifact
   - Added `StructuredExtractionArtifact` and nested entity/topic/claim/relation/page-ref contracts.
-  - Re-exported the contract through `hyprduck-engine-types`.
+  - Re-exported the contract through `etyma-engine-types`.
   - Persisted per-source `artifacts/<source_id>/extraction.json`.
   - Marked the current extractor as `extractor=heuristic`.
   - Prevented evidence-free claims/relations from becoming generated graph context.
   - Covered artifact shape and source/evidence round trip in unit tests.
 - [x] Golden corpus and eval harness
-  - Added six checked-in benchmark fixtures under `crates/hyprduck-engine/tests/fixtures/brain-corpus`.
-  - Added `hyprduck eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
+  - Added six checked-in benchmark fixtures under `crates/etyma-engine/tests/fixtures/brain-corpus`.
+  - Added `etyma eval golden-corpus` with `--fixtures` and `--mode heuristic|hosted|local|all`.
   - Reports entity recall, claim citation coverage, relation evidence coverage, evidence snippet coverage, contradiction detection, context-pack relevance, and latency.
   - Covered the CLI eval path with an integration test.
 - [x] Local retrieval baseline and context-pack hardening
@@ -277,13 +277,13 @@ losing page evidence.
   - Covers schema and artifact round trips in tests.
 - [x] MCP document-context naming and root hardening
   - Added `search_documents` and `read_page_evidence`.
-  - Kept `search_brain` and `hyprduck://brain/...` as compatibility surfaces.
-  - Gated development `rootDir` behind `HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and a canonical `HYPRDUCK_MCP_ALLOWED_ROOTS` allowlist.
+  - Kept `search_brain` and `etyma://brain/...` as compatibility surfaces.
+  - Gated development `rootDir` behind `ETYMA_MCP_ALLOW_ROOT_DIR=1` and a canonical `ETYMA_MCP_ALLOWED_ROOTS` allowlist.
   - Rejects workspace path, prefix, and symlink escapes.
   - Keeps `read_health` read-only and adds per-source readiness fields for status, failed pages, content-hash state, and provider route.
 - [x] CLI context aliases
-  - Added `hyprduck context` / `hyprduck context-pack`.
-  - Added `hyprduck documents search` / `hyprduck docs search`.
+  - Added `etyma context` / `etyma context-pack`.
+  - Added `etyma documents search` / `etyma docs search`.
 - [x] MCP client setup guides
   - Added Codex and Claude Code installer setup instructions.
   - Documented Cursor manual stdio configuration.

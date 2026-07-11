@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/agent-chat-request.schema.json",
-  "title": "HyprDuck Agent Chat Request",
+  "$id": "https://etyma.local/schemas/agent-chat-request.schema.json",
+  "title": "Etyma Agent Chat Request",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "question"
   ],
   "properties": {
-    "schemaVersion": { "const": "hyprduck.agent_chat.v1" },
+    "schemaVersion": { "const": "etyma.agent_chat.v1" },
     "conversationId": { "type": "string", "minLength": 1 },
     "assistantMessageId": { "type": ["string", "null"], "minLength": 1 },
     "scope": { "$ref": "#/$defs/brainReadScope" },

@@ -12,10 +12,10 @@ export function graphPositionStorageKey(
   scope: BuildSigmaGraphScope,
 ): string {
   if (scope.mode === "local" && scope.centerNodeId) {
-    return `hyprduck:graph-layout:v2:${projectId}:local:${scope.centerNodeId}`;
+    return `etyma:graph-layout:v2:${projectId}:local:${scope.centerNodeId}`;
   }
 
-  return `hyprduck:graph-layout:v2:${projectId}:global`;
+  return `etyma:graph-layout:v2:${projectId}:global`;
 }
 
 export function readStoredGraphLayout(key: string): StoredGraphLayout {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "hyprduck/parse-request",
+  "$id": "etyma/parse-request",
   "type": "object",
   "required": ["version", "input", "template", "options"],
   "properties": {

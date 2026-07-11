@@ -54,7 +54,7 @@ export function hydrateWorkspaceProjectWithSources(
       canonicalName: node.label,
       aliases: ["Workspace source"],
       description:
-        "Immutable source registered in the workspace. HyprDuck keeps source artifacts addressable even when no graph links have been extracted yet.",
+        "Immutable source registered in the workspace. Etyma keeps source artifacts addressable even when no graph links have been extracted yet.",
       evidence: [],
       actions: [],
       source: sourceBackingFromSummary(source),

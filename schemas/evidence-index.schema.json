@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/evidence-index.schema.json",
-  "title": "HyprDuck Evidence Index v0",
+  "$id": "https://etyma.local/schemas/evidence-index.schema.json",
+  "title": "Etyma Evidence Index v0",
   "description": "Import-time index mapping evidence refs to source/page/region excerpts.",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     "generatedAt"
   ],
   "properties": {
-    "schemaVersion": { "const": "hyprduck.evidence_index.v0" },
+    "schemaVersion": { "const": "etyma.evidence_index.v0" },
     "workspaceId": { "$ref": "#/$defs/nonEmptyString" },
     "sourceId": { "$ref": "#/$defs/nonEmptyString" },
     "contentHash": { "$ref": "#/$defs/nonEmptyString" },

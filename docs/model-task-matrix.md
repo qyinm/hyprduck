@@ -1,6 +1,6 @@
 # Model Task Matrix
 
-HyprDuck uses the parser as the ingest wedge, but the product needs a stable
+Etyma uses the parser as the ingest wedge, but the product needs a stable
 model policy for local document parsing and agent-ready evidence reuse. This
 matrix defines the default model path for each task, the local fallback, and the
 latency budget that should be tracked with the golden corpus.
@@ -8,7 +8,7 @@ latency budget that should be tracked with the golden corpus.
 ## Benchmark Command
 
 ```bash
-cargo run -p hyprduck-cli -- eval golden-corpus \
+cargo run -p etyma-cli -- eval golden-corpus \
   --mode all
 ```
 
@@ -44,7 +44,7 @@ every task.
 - OCR-specialized local models such as `glm-ocr:latest` and
   `deepseek-ocr:latest` can improve page text recovery, but they do not replace
   claim extraction, contradiction detection, or graph merge policy.
-- If local output misses citations, HyprDuck should keep the artifact as
+- If local output misses citations, Etyma should keep the artifact as
   `partial` instead of promoting it to reusable evidence output.
 - Generated merge output should stay disabled until the local model is proven on
   the golden corpus.
@@ -64,7 +64,7 @@ The desktop settings surface should make the warning explicit:
 When model defaults change, update this file and verify:
 
 ```bash
-cargo run -p hyprduck-cli -- eval golden-corpus \
+cargo run -p etyma-cli -- eval golden-corpus \
   --mode all
 bun run --cwd apps/desktop build
 ```

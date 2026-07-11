@@ -44,7 +44,7 @@ export const parseHandlers = {
         lastProjectId: "preview:sample",
         workspaceRevision: (webMockSnapshot.workspaceRevision ?? 0) + 1,
         lastResult: {
-          savedOutputPath: `~/Library/Application Support/HyprDuck/web-preview/${new Date()
+          savedOutputPath: `~/Library/Application Support/Etyma/web-preview/${new Date()
             .toISOString()
             .slice(0, 10)}.md`,
           successCount: 2,

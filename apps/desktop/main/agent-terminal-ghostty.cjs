@@ -1,23 +1,23 @@
 const { assertAgentTerminalBackend } = require("./agent-terminal-backend.cjs");
 
 function ghosttyNativeBackendEnabled(env = process.env) {
-  return env.HYPRDUCK_AGENT_TERMINAL_BACKEND === "ghostty-native";
+  return env.ETYMA_AGENT_TERMINAL_BACKEND === "ghostty-native";
 }
 
 async function createGhosttyNativeBackendFromEnv(env = process.env) {
-  const moduleName = env.HYPRDUCK_GHOSTTY_BACKEND_MODULE;
+  const moduleName = env.ETYMA_GHOSTTY_BACKEND_MODULE;
   if (!ghosttyNativeBackendEnabled(env)) {
     return {
       enabled: false,
       backend: null,
-      reason: "HYPRDUCK_AGENT_TERMINAL_BACKEND is not ghostty-native.",
+      reason: "ETYMA_AGENT_TERMINAL_BACKEND is not ghostty-native.",
     };
   }
   if (!moduleName) {
     return {
       enabled: true,
       backend: null,
-      reason: "HYPRDUCK_GHOSTTY_BACKEND_MODULE is required for the native spike.",
+      reason: "ETYMA_GHOSTTY_BACKEND_MODULE is required for the native spike.",
     };
   }
 

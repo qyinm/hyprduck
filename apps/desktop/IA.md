@@ -1,6 +1,6 @@
-# HyprDuck Desktop IA
+# Etyma Desktop IA
 
-목적: HyprDuck의 UI를 "파일 파싱 앱"에서 "private document를 cited local context pack으로 컴파일하는 도구"로 정렬하기 위한 IA 기록.
+목적: Etyma의 UI를 "파일 파싱 앱"에서 "private document를 cited local context pack으로 컴파일하는 도구"로 정렬하기 위한 IA 기록.
 
 참고한 방향:
 - Karpathy LLM Wiki: raw sources -> LLM-maintained wiki -> schema, ingest/query/lint operations, index.md/log.md, persistent compounding artifact.
@@ -19,7 +19,7 @@ After
 제품 문장:
 
 ```text
-HyprDuck compiles private documents into reusable, cited local context packs for AI agents.
+Etyma compiles private documents into reusable, cited local context packs for AI agents.
 ```
 
 비범위:
@@ -31,7 +31,7 @@ HyprDuck compiles private documents into reusable, cited local context packs for
 
 ## 1. Product Model
 
-HyprDuck은 세 계층을 UI에 드러낸다.
+Etyma는 세 계층을 UI에 드러낸다.
 
 ```text
 +--------------------------------------------------------------------------------+
@@ -68,7 +68,7 @@ UI는 사용자가 아래 질문에 답할 수 있게 해야 한다.
 ## 2. Top-level IA
 
 ```text
-HyprDuck Desktop
+Etyma Desktop
 |
 +-- App Shell
 |   |
@@ -134,7 +134,7 @@ Sidebar
 |
 +-- Docs          source file을 추가하고 import 상태, source table, parse warning을 본다
 |
-+-- Agent         터미널이 아니라 HyprDuck agent chat UI에서 citation-backed 답변을 받는다
++-- Agent         터미널이 아니라 Etyma agent chat UI에서 citation-backed 답변을 받는다
 |
 +-- Graph         graph canvas와 inspector로 document/source/concept 관계를 검사한다
 |
@@ -150,7 +150,7 @@ Settings는 window bar에 중복 노출하지 않는다. Settings 진입점은 s
 History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 History는 window bar의 독립 activity surface로 남고, inspector toggle만 우측 rail을 제어한다.
 ```
 
-사용자가 파일을 넣으면 별도 Compile 화면 없이 HyprDuck이 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Docs의 import queue/source table과 Graph import banner에 노출한다. Agent는 terminal surface가 아니라 thread list와 central composer를 가진 chat destination이다. Sidebar item에는 source count, Ready/Setup, node count 같은 상태 배지를 넣지 않는다.
+사용자가 파일을 넣으면 별도 Compile 화면 없이 Etyma가 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Docs의 import queue/source table과 Graph import banner에 노출한다. Agent는 terminal surface가 아니라 thread list와 central composer를 가진 chat destination이다. Sidebar item에는 source count, Ready/Setup, node count 같은 상태 배지를 넣지 않는다.
 
 ---
 
@@ -160,7 +160,7 @@ History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열�
 +--------------------------------------------------------------------------------+
 | [sidebar] macOS drag region                            [history] [inspector]   |
 +----------------------+-------------------------------------------+-------------+
-| HyprDuck             | Current Screen                            | Right rail   |
+| Etyma             | Current Screen                            | Right rail   |
 |                      |                                           | when open    |
 |  > Docs              |                                           |             |
 |    Agent             |                                           |             |
@@ -194,7 +194,7 @@ Collapsed sidebar:
 |                         Your knowledge base is empty                            |
 |                                                                                |
 |             Drop PDF, DOCX, or DOC files here.                                  |
-|             HyprDuck will turn them into a source-backed graph,                 |
+|             Etyma will turn them into a source-backed graph,                 |
 |             wiki pages, claims, and evidence.                                   |
 |                                                                                |
 |                                  [Choose files]                                 |
@@ -229,13 +229,13 @@ Knowledge / Source Library
 |
 +-- Header
 |   +-- Title: Source Library
-|   +-- Subtitle: Immutable documents that HyprDuck automatically turns into knowledge.
+|   +-- Subtitle: Immutable documents that Etyma automatically turns into knowledge.
 |   +-- CTA: Add sources
 |
 +-- Source Intake
 |   +-- Dropzone / Choose files
 |   +-- Supported: PDF, DOCX, DOC
-|   +-- Destination: ~/Library/Application Support/HyprDuck/<workspace>/sources
+|   +-- Destination: ~/Library/Application Support/Etyma/<workspace>/sources
 |
 +-- Source Library
 |   +-- Source rows
@@ -262,11 +262,11 @@ Wireframe:
 ```text
 +--------------------------------------------------------------------------------+
 | Knowledge / Source Library                                       [Add sources] |
-| Immutable documents that HyprDuck turns into structured knowledge automatically. |
+| Immutable documents that Etyma turns into structured knowledge automatically. |
 |                                                                                |
 | +----------------------------------------------------------------------------+ |
 | | Drop PDF, DOCX, or DOC files here                                          | |
-| | Sources are preserved. HyprDuck writes derived markdown/wiki pages beside   | |
+| | Sources are preserved. Etyma writes derived markdown/wiki pages beside   | |
 | | them, never over the originals.                                             | |
 | |                                                        [Choose files]       | |
 | +----------------------------------------------------------------------------+ |
@@ -295,7 +295,7 @@ Wireframe:
 
 ## 7. Automatic Ingest IA
 
-목표: 별도 Compile 페이지나 수동 승인 단계를 만들지 않는다. 사용자가 source를 추가하면 HyprDuck이 자동으로 render -> extract -> link -> write wiki/graph까지 진행한다. safe update는 자동 승인하고, 사용자 판단이 필요한 충돌은 History에 남긴다.
+목표: 별도 Compile 페이지나 수동 승인 단계를 만들지 않는다. 사용자가 source를 추가하면 Etyma가 자동으로 render -> extract -> link -> write wiki/graph까지 진행한다. safe update는 자동 승인하고, 사용자 판단이 필요한 충돌은 History에 남긴다.
 
 Automatic ingest는 Karpathy LLM Wiki의 `ingest`와 GBrain의 self-wiring graph를 제품 내부 작업으로 만든 것이다.
 
@@ -592,7 +592,7 @@ Wireframe:
 
 ## 10. History & Maintenance Agent IA
 
-목표: History를 사용자가 매번 들어가야 하는 페이지로 만들지 않는다. 지식베이스 품질 관리는 HyprDuck이 백그라운드에서 자동으로 수행하고, 사용자는 우측 상단 custom window bar에서 변경 기록과 pending change만 확인한다.
+목표: History를 사용자가 매번 들어가야 하는 페이지로 만들지 않는다. 지식베이스 품질 관리는 Etyma가 백그라운드에서 자동으로 수행하고, 사용자는 우측 상단 custom window bar에서 변경 기록과 pending change만 확인한다.
 
 원칙:
 
@@ -797,10 +797,10 @@ Wireframe:
 
 ## 12. Data Artifacts Exposed by UI
 
-HyprDuck는 아래 산출물을 명시적으로 다룬다.
+Etyma는 아래 산출물을 명시적으로 다룬다.
 
 ```text
-~/Library/Application Support/HyprDuck/<workspace>/
+~/Library/Application Support/Etyma/<workspace>/
 |
 +-- sources/
 |   +-- original files
@@ -867,7 +867,7 @@ Add PDF/DOCX/DOC
 Source rendered into pages + raw markdown
   |
   v
-HyprDuck automatically extracts entities/topics/claims/evidence
+Etyma automatically extracts entities/topics/claims/evidence
   |
   v
 Safe wiki/graph updates are written automatically
@@ -888,7 +888,7 @@ Command-opened graph composer can answer from built knowledge
 Add source
   |
   v
-HyprDuck automatically ingests against existing index/wiki/graph
+Etyma automatically ingests against existing index/wiki/graph
   |
   +-- create new pages when safe
   +-- update existing pages when safe
@@ -907,7 +907,7 @@ HyprDuck automatically ingests against existing index/wiki/graph
 Open the graph composer from command/action
   |
   v
-HyprDuck reads index/wiki/graph/evidence
+Etyma reads index/wiki/graph/evidence
   |
   v
 Answer with citations and gaps
@@ -926,7 +926,7 @@ Saved answer becomes part of future knowledge
 Knowledge base changes
   |
   v
-HyprDuck runs background maintenance
+Etyma runs background maintenance
   |
   +-- rebuild index/log if needed
   +-- repair obvious backlinks
@@ -1178,7 +1178,7 @@ P3: Add background maintenance loop
 
 ## 17. Acceptance Criteria for UI Redesign
 
-A redesigned HyprDuck UI is acceptable only if:
+A redesigned Etyma UI is acceptable only if:
 
 ```text
 [ ] A new user understands this is a knowledge base builder, not only a parser.
@@ -1216,4 +1216,4 @@ IA를 바꾸는 경우:
 5. 구현 후 `pnpm --dir apps/desktop build`로 desktop UI 빌드를 확인한다.
 ```
 
-이 문서는 HyprDuck UI 개편의 source of truth다.
+이 문서는 Etyma UI 개편의 source of truth다.

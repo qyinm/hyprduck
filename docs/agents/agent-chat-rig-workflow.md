@@ -1,7 +1,7 @@
 # Agent Chat Rig Workflow
 
 This document describes the current Rig-backed Agent chat workflow implemented
-in `crates/hyprduck-engine/src/application/services/agent_chat_service.rs`.
+in `crates/etyma-engine/src/application/services/agent_chat_service.rs`.
 
 ## Runtime Shape
 

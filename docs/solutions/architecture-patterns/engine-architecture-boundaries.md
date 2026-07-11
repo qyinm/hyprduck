@@ -40,10 +40,10 @@ Session history reinforced the same design pressure. Earlier SQLite and GraphQLi
 Keep the engine layered by ownership, not by whichever command first needed the code:
 
 ```text
-crates/hyprduck-engine/src/application/commands/
-crates/hyprduck-engine/src/application/services/
-crates/hyprduck-engine/src/domains/
-crates/hyprduck-engine/src/adapters/
+crates/etyma-engine/src/application/commands/
+crates/etyma-engine/src/application/services/
+crates/etyma-engine/src/domains/
+crates/etyma-engine/src/adapters/
 ```
 
 Use these boundaries when placing new code:
@@ -62,13 +62,13 @@ Use review findings as boundary tests:
 - `graph_patch_apply` validates source and evidence scope before writing, then merges with existing graph records instead of overwriting record refs or provenance.
 - `write_commit` and `write_commit_all` keep proposal state, memory events, and persistence ordering replay-safe.
 - Import lifecycle code treats citation-ready evidence as usable even when graph materialization is pending, skipped, or retrying.
-- Desktop development resolves the unpackaged `target/debug/hyprduck-engine` binary instead of assuming packaged app layout.
+- Desktop development resolves the unpackaged `target/debug/etyma-engine` binary instead of assuming packaged app layout.
 
 When adding behavior, ask which layer owns the durable invariant. Transport modules can expose a tool or IPC route, but they should not own evidence validation, graph commit semantics, provider persistence, or output packaging.
 
 ## Why This Matters
 
-HyprDuck is an evidence compiler for coding agents. The product boundary depends on preserving provider route, local or hosted status, source refs, evidence refs, graph commit state, and local-path disclosure consistently across desktop and MCP surfaces.
+Etyma is an evidence compiler for coding agents. The product boundary depends on preserving provider route, local or hosted status, source refs, evidence refs, graph commit state, and local-path disclosure consistently across desktop and MCP surfaces.
 
 DB-first storage increases the cost of hidden coupling. When GraphQLite holds current graph state and relational tables hold source, page, evidence, import job, and audit data, a mutation is not just a file write. It is a transaction across evidence validation, graph projection, read-model publication, and event history.
 
@@ -106,10 +106,10 @@ For desktop development, keep packaged and unpackaged runtime assumptions separa
 ```javascript
 function resolveEnginePath() {
   if (isPackaged()) {
-    return path.join(process.resourcesPath, "hyprduck-engine");
+    return path.join(process.resourcesPath, "etyma-engine");
   }
 
-  return path.resolve(__dirname, "../../target/debug/hyprduck-engine");
+  return path.resolve(__dirname, "../../target/debug/etyma-engine");
 }
 ```
 
@@ -127,8 +127,8 @@ Useful verification targets for this architecture family:
 
 ```bash
 cargo fmt
-cargo test -p hyprduck-engine
-cargo test -p hyprduck-cli --test mcp_server
+cargo test -p etyma-engine
+cargo test -p etyma-cli --test mcp_server
 bun test apps/desktop/src/features/workspace/materializedGraphSnapshot.test.ts
 git diff --check
 ```

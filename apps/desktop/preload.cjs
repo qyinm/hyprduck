@@ -1,18 +1,18 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const ALLOWED_EVENTS = new Set([
-  "hyprduck://snapshot",
-  "hyprduck://agent-terminal",
-  "hyprduck://agent-chat",
+  "etyma://snapshot",
+  "etyma://agent-terminal",
+  "etyma://agent-chat",
 ]);
 
-contextBridge.exposeInMainWorld("hyprduck", {
+contextBridge.exposeInMainWorld("etyma", {
   invoke(command, args = {}) {
-    return ipcRenderer.invoke("hyprduck:invoke", command, args);
+    return ipcRenderer.invoke("etyma:invoke", command, args);
   },
   listen(eventName, handler) {
     if (!ALLOWED_EVENTS.has(eventName)) {
-      throw new Error(`HyprDuck event is not allowed: ${eventName}`);
+      throw new Error(`Etyma event is not allowed: ${eventName}`);
     }
     const listener = (_event, payload) => handler({ payload });
     ipcRenderer.on(eventName, listener);

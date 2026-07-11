@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "hyprduck/parse-result",
+  "$id": "etyma/parse-result",
   "type": "object",
   "required": ["version", "markdown", "pages", "assets", "metadata"],
   "properties": {

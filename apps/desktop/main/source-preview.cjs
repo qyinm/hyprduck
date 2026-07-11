@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const SOURCE_PREVIEW_PROTOCOL = "hyprduck-source";
+const SOURCE_PREVIEW_PROTOCOL = "etyma-source";
 const MAX_INLINE_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
 
 function registerSourcePreviewScheme(protocol) {
@@ -21,7 +21,7 @@ function registerSourcePreviewScheme(protocol) {
   ]);
 }
 
-function createSourcePreview({ app, protocol, net, shell, ensureHyprduckApplicationSupportPath }) {
+function createSourcePreview({ app, protocol, net, shell, ensureEtymaApplicationSupportPath }) {
   const sourcePreviewPaths = new Map();
   let sourcePreviewProtocolRegistered = false;
 
@@ -45,7 +45,7 @@ function createSourcePreview({ app, protocol, net, shell, ensureHyprduckApplicat
     if (!candidatePath || typeof candidatePath !== "string") {
       throw new Error("Missing local artifact path.");
     }
-    const storageRoot = path.resolve(ensureHyprduckApplicationSupportPath());
+    const storageRoot = path.resolve(ensureEtymaApplicationSupportPath());
     const expandedPath = candidatePath.startsWith("~/")
       ? path.join(app.getPath("home"), candidatePath.slice(2))
       : candidatePath;
@@ -71,7 +71,7 @@ function createSourcePreview({ app, protocol, net, shell, ensureHyprduckApplicat
       path.isAbsolute(relativePath) ||
       relativePath.length === 0
     ) {
-      throw new Error("Refusing to open a path outside the HyprDuck workspace.");
+      throw new Error("Refusing to open a path outside the Etyma workspace.");
     }
     return resolvedPath;
   }

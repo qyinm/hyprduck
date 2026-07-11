@@ -8,7 +8,7 @@ function createAgentContextHandoff(options = {}) {
   return {
     mcp: {
       status: "available",
-      toolHint: "Use HyprDuck MCP get_context_pack/read_context_pack for cited evidence.",
+      toolHint: "Use Etyma MCP get_context_pack/read_context_pack for cited evidence.",
     },
     workspace: {
       workspaceId,
@@ -21,7 +21,7 @@ function createAgentContextHandoff(options = {}) {
       requiredBeforeFirstPrompt: true,
       attachInstructions: [
         `Workspace: ${workspaceId}`,
-        "Ask the agent to call HyprDuck MCP get_context_pack before answering.",
+        "Ask the agent to call Etyma MCP get_context_pack before answering.",
         "Use cited evidence refs and page/source refs from the returned context pack.",
       ],
     },

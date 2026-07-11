@@ -6,7 +6,7 @@ const {
 } = require("./agent-terminal-backend.cjs");
 const { createGhosttyNativeBackendFromEnv } = require("./agent-terminal-ghostty.cjs");
 
-const AGENT_TERMINAL_EVENT = "hyprduck://agent-terminal";
+const AGENT_TERMINAL_EVENT = "etyma://agent-terminal";
 
 async function registerIpcHandlers({
   getMainWindow,
@@ -65,7 +65,7 @@ async function registerIpcHandlers({
     return format ? { path: selectedPath, format } : null;
   }
 
-  ipcMain.handle("hyprduck:invoke", async (_event, command, args = {}) => {
+  ipcMain.handle("etyma:invoke", async (_event, command, args = {}) => {
     switch (command) {
       case "app_snapshot":
         return snapshot;
@@ -156,7 +156,7 @@ async function registerIpcHandlers({
       case "read_source_detail":
         return readSourceDetail(args);
       default:
-        throw new Error(`unknown HyprDuck command: ${command}`);
+        throw new Error(`unknown Etyma command: ${command}`);
     }
   });
 }

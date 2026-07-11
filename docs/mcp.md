@@ -1,29 +1,29 @@
 # MCP Context Server
 
-HyprDuck exposes local document context artifacts through an MCP stdio server:
+Etyma exposes local document context artifacts through an MCP stdio server:
 
 ```bash
-hyprduck mcp serve
+etyma mcp serve
 ```
 
 For production macOS installs, use the CLI bundled inside the installed app to
-register HyprDuck with Codex or Claude Code. Open HyprDuck once first; the app
-installs or refreshes the `hyprduck` shell command at `~/.local/bin/hyprduck`.
-If `command -v hyprduck` does not print a path, use the `~/.local/bin/hyprduck`
+register Etyma with Codex or Claude Code. Open Etyma once first; the app
+installs or refreshes the `etyma` shell command at `~/.local/bin/etyma`.
+If `command -v etyma` does not print a path, use the `~/.local/bin/etyma`
 fallback shown below or add `~/.local/bin` to `PATH`.
 
-If `~/.local/bin/hyprduck` already points at an unmanaged development binary,
-HyprDuck leaves it unchanged instead of overwriting an unrelated command. In
+If `~/.local/bin/etyma` already points at an unmanaged development binary,
+Etyma leaves it unchanged instead of overwriting an unrelated command. In
 that case, use the installed app-bundled CLI path directly for proof runs or
 refresh the shell command from the packaged app before claiming an installed-app
 shell-shim proof.
 
 ```bash
-hyprduck mcp install codex
-hyprduck mcp install claude-code
+etyma mcp install codex
+etyma mcp install claude-code
 ```
 
-That writes a `hyprduck` MCP server entry pointing at the installed app bundle,
+That writes a `etyma` MCP server entry pointing at the installed app bundle,
 so clients do not depend on a source checkout or `cargo run`.
 
 See [`docs/agents/mcp-client-setup.md`](agents/mcp-client-setup.md) for Codex,
@@ -32,15 +32,15 @@ Claude Code, and Cursor setup details.
 For local development, run the same server through Cargo:
 
 ```bash
-cargo run -p hyprduck-cli -- mcp serve
+cargo run -p etyma-cli -- mcp serve
 ```
 
 If your shell does not include `~/.local/bin` on `PATH`, use the shim path
 directly:
 
 ```bash
-~/.local/bin/hyprduck mcp install codex
-~/.local/bin/hyprduck mcp install claude-code
+~/.local/bin/etyma mcp install codex
+~/.local/bin/etyma mcp install claude-code
 ```
 
 ## Client Configuration
@@ -50,8 +50,8 @@ Example MCP client entry:
 ```json
 {
   "mcpServers": {
-    "hyprduck": {
-      "command": "hyprduck",
+    "etyma": {
+      "command": "etyma",
       "args": ["mcp", "serve"]
     }
   }
@@ -61,16 +61,16 @@ Example MCP client entry:
 ## Tools
 
 All tools accept an optional `workspaceId` argument. If omitted, `workspaceId`
-defaults to `default` and the engine resolves the local HyprDuck workspace root.
+defaults to `default` and the engine resolves the local Etyma workspace root.
 
 `rootDir` is a development-only escape hatch for tests and local fixtures. It is
 rejected unless the MCP server process is started with
-`HYPRDUCK_MCP_ALLOW_ROOT_DIR=1` and `HYPRDUCK_MCP_ALLOWED_ROOTS` contains the
-canonical workspace root. `HYPRDUCK_MCP_ALLOWED_ROOTS` uses the OS path-list
+`ETYMA_MCP_ALLOW_ROOT_DIR=1` and `ETYMA_MCP_ALLOWED_ROOTS` contains the
+canonical workspace root. `ETYMA_MCP_ALLOWED_ROOTS` uses the OS path-list
 format, so macOS and Linux development sessions separate multiple roots with
 `:`.
 
-Production clients should pass `workspaceId` and let HyprDuck resolve the
+Production clients should pass `workspaceId` and let Etyma resolve the
 canonical workspace root.
 
 Tool responses redact absolute local filesystem paths by default. Debug clients
@@ -78,9 +78,9 @@ can pass `includeLocalPaths: true` to tool calls when they explicitly need raw
 paths.
 
 `import_source` is disabled unless the MCP server process is started with
-`HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` set to one or more canonical import roots.
+`ETYMA_MCP_ALLOWED_IMPORT_ROOTS` set to one or more canonical import roots.
 The server canonicalizes `sourcePath`, requires it to be a regular file under
-one of those roots, and imports it into HyprDuck's managed workspace artifacts.
+one of those roots, and imports it into Etyma's managed workspace artifacts.
 This import allowlist is separate from the development-only `rootDir` allowlist.
 
 | Tool | Required arguments | Purpose |
@@ -101,7 +101,7 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `read_graph_history` | none | List prior materialized graph/wiki states, or pass optional lifecycle selectors for one graph node, relation, or wiki page. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |
-| `graph_patch_apply` | `graphPatch` | Auto-apply an agent-generated `hyprduck.graph_patch.v1` graph/wiki patch after validating source IDs, evidence refs, relation endpoints, claim refs, and wiki refs. |
+| `graph_patch_apply` | `graphPatch` | Auto-apply an agent-generated `etyma.graph_patch.v1` graph/wiki patch after validating source IDs, evidence refs, relation endpoints, claim refs, and wiki refs. |
 | `write_propose` | `contentType`, `title`, `body`, `evidenceRefs` | Stage an agent-proposed knowledge item after validating every evidence ref against the current workspace snapshot. |
 | `write_commit` | `proposalId` | Approve one pending proposal and persist it as a `MemoryAccepted` brain event. |
 | `write_commit_all` | `proposalIds` | Approve multiple pending proposals by explicit proposal ID list. |
@@ -115,21 +115,21 @@ tool calls:
 
 | Resource URI | MIME type | Purpose |
 | --- | --- | --- |
-| `hyprduck://brain/default/graph/snapshot` | `application/json` | Latest resolved materialized graph/wiki snapshot. |
-| `hyprduck://brain/default/wiki/index.md` | `text/markdown` | Current materialized wiki index. |
+| `etyma://brain/default/graph/snapshot` | `application/json` | Latest resolved materialized graph/wiki snapshot. |
+| `etyma://brain/default/wiki/index.md` | `text/markdown` | Current materialized wiki index. |
 
 Resource URIs may include `?rootDir=/path/to/workspace-root` only in the same
 explicit development mode described above. The server canonicalizes both
 `rootDir` and the configured allowed roots before accepting the override, which
 prevents symlink and path-prefix escapes. By default, resource reads resolve
-inside the application-supported HyprDuck workspace root and do not require full
-local paths. Resource responses return public HyprDuck resource URIs without
+inside the application-supported Etyma workspace root and do not require full
+local paths. Resource responses return public Etyma resource URIs without
 `rootDir` query parameters.
 
 ## Typed Evidence Contract
 
 New imports write `evidence_index.json` with
-`schemaVersion: "hyprduck.evidence_index.v1"`. Source Pack stays on v0. The
+`schemaVersion: "etyma.evidence_index.v1"`. Source Pack stays on v0. The
 Evidence Index v1 item contract adds `evidenceType` so agents can distinguish
 text evidence from tables, image regions, OCR, captions, summaries, claims, and
 relationships as those producers become available.
@@ -244,10 +244,10 @@ only the live projection.
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_context_pack","arguments":{"workspaceId":"default","query":"source-backed claims about agent context packs","budget":4000}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_documents","arguments":{"workspaceId":"default","query":"agent context pack","limit":5}}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_evidence","arguments":{"workspaceId":"default","sourceId":"source-example","page":1}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"graph_patch_apply","arguments":{"workspaceId":"default","agentId":"codex","graphPatch":{"schemaVersion":"hyprduck.graph_patch.v1","sourceIds":["source-example"],"evidenceRefs":["ev-source-example-p1-0001"],"nodes":[{"nodeId":"concept-agent-context","kind":"concept","label":"Agent context","sourceIds":["source-example"],"evidenceIds":["ev-source-example-p1-0001"]}],"relations":[{"relationId":"rel-source-agent-context","kind":"mentions","sourceNodeId":"source:source-example","targetNodeId":"concept-agent-context","label":"mentions","evidenceIds":["ev-source-example-p1-0001"]}]}}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"graph_patch_apply","arguments":{"workspaceId":"default","agentId":"codex","graphPatch":{"schemaVersion":"etyma.graph_patch.v1","sourceIds":["source-example"],"evidenceRefs":["ev-source-example-p1-0001"],"nodes":[{"nodeId":"concept-agent-context","kind":"concept","label":"Agent context","sourceIds":["source-example"],"evidenceIds":["ev-source-example-p1-0001"]}],"relations":[{"relationId":"rel-source-agent-context","kind":"mentions","sourceNodeId":"source:source-example","targetNodeId":"concept-agent-context","label":"mentions","evidenceIds":["ev-source-example-p1-0001"]}]}}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"read_graph_history","arguments":{"workspaceId":"default","recordKind":"node","recordId":"concept-agent-context","limit":5}}}
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"read_graph_history","arguments":{"workspaceId":"default","wikiPath":"wiki/index.md","includeDiff":true,"limit":5}}}
-{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved HyprDuck knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"write_propose","arguments":{"workspaceId":"default","contentType":"memory","title":"Context pack reuse note","body":"Agents can reuse approved Etyma knowledge through get_context_pack.","evidenceRefs":["ev-source-example-p1-0001"]}}}
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"write_commit","arguments":{"workspaceId":"default","proposalId":"proposal-id-from-write_propose"}}}
 ```
 
@@ -260,7 +260,7 @@ source evidence.
 A typical agent-chat approval flow for controlled graph/wiki/memory mutation is:
 
 1. Agent calls `write_propose` with evidence-backed content.
-2. HyprDuck validates `evidenceRefs` before staging the proposal.
+2. Etyma validates `evidenceRefs` before staging the proposal.
 3. The chat UI asks the user to approve, reject, or approve a visible batch.
 4. Approval maps to `write_commit` or `write_commit_all`; rejection maps to `write_reject`.
 5. Approved memory writes append `MemoryAccepted` events and update `memory/records.json`, so later `search_brain` and `get_context_pack` calls can retrieve the saved knowledge.
@@ -289,15 +289,15 @@ source, evidence, node, claim, relation, memory, and event IDs back to agents.
 | `write_commit_all` | Workspace and explicit proposal list scope | Each proposal evidence is revalidated before commit | Per-proposal `MemoryAccepted` brain event on success | Per-item committed or failed result with `errorCategory` |
 | `write_reject` | Workspace and proposal scope | Not applicable | Rejected proposal status without brain event | Already rejected or missing proposal IDs are stable `proposal_state` failures |
 
-Agent-facing MCP tool failures include a stable `hyprduckErrorCategory` in tool
+Agent-facing MCP tool failures include a stable `etymaErrorCategory` in tool
 result metadata when possible. Current categories are `path_policy`,
 `evidence_scope`, `schema`, `provider`, `graph_materialization`, `lifecycle`,
 `persistence`, and `unknown`. `write_commit_all` also returns per-item
 `errorCategory` values so agents can safely retry or surface partial failures.
 
-Hook automation installers may also read the HyprDuck-specific
-`hyprduckAutomationPolicy` annotation from `tools/list`. It classifies whether a
-known HyprDuck tool is eligible for automatic execution under the current
+Hook automation installers may also read the Etyma-specific
+`etymaAutomationPolicy` annotation from `tools/list`. It classifies whether a
+known Etyma tool is eligible for automatic execution under the current
 destructive-action boundary. Hooks must treat unknown tools and destructive
 removal or overwrite actions as approval-required instead of inventing their own
 allowlist.
@@ -305,7 +305,7 @@ allowlist.
 ## Security Notes
 
 - MCP is a controlled read/write agent workflow surface, not a read-only API.
-  Agents may propose evidence-backed changes to HyprDuck knowledge state,
+  Agents may propose evidence-backed changes to Etyma knowledge state,
   including memory proposals and direct evidence-backed graph patches. Mutating
   tools must be narrow, auditable, accurately annotated with
   `readOnlyHint: false`, and backed by source/evidence validation.
@@ -314,13 +314,13 @@ allowlist.
   `write_commit` / `write_commit_all` MCP calls, and rejected proposals are
   discarded without producing brain events.
 - `import_source` is a mutating tool. It accepts only regular files below
-  `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS`, never arbitrary agent-provided paths,
+  `ETYMA_MCP_ALLOWED_IMPORT_ROOTS`, never arbitrary agent-provided paths,
   and returns an import job with managed source/evidence IDs available through
   `import_status` once citation readiness is reached.
 - Workspace IDs must be single path segments. The engine rejects `..`, absolute
   path components, and symlink escapes after canonicalization.
 - `rootDir` is disabled by default and, when explicitly enabled for development,
-  must resolve under a canonical path in `HYPRDUCK_MCP_ALLOWED_ROOTS`.
+  must resolve under a canonical path in `ETYMA_MCP_ALLOWED_ROOTS`.
 - Existing materialized artifact reads are canonicalized under the workspace
   root before the engine reads them.
 - MCP tool responses redact absolute local filesystem paths unless

@@ -1,0 +1,14 @@
+[package]
+name = "etyma-engine-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+etyma-knowledge = { path = "../etyma-knowledge" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

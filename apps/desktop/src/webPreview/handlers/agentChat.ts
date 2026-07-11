@@ -24,7 +24,7 @@ function createWebAgentChatResult(request: AgentChatAskPayload): AgentChatAskRes
   }
   const now = Math.floor(Date.now() / 1000);
   return {
-    schemaVersion: "hyprduck.agent_chat.v1",
+    schemaVersion: "etyma.agent_chat.v1",
     conversationId: request.conversationId,
     answerMode: "evidence",
     assistantMessage: {

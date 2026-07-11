@@ -68,7 +68,7 @@ class EngineRuntime {
       if (this.child !== child) {
         return;
       }
-      this.failRuntime(`failed to spawn hyprduck-engine: ${error.message}`);
+      this.failRuntime(`failed to spawn etyma-engine: ${error.message}`);
     });
     child.on("close", (code) => {
       if (this.child !== child) {
@@ -76,7 +76,7 @@ class EngineRuntime {
       }
       const message = this.stopping
         ? "engine runtime stopped"
-        : `hyprduck-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
+        : `etyma-engine runtime exited${code === null ? "" : ` with status ${code}`}`;
       this.child = null;
       this.stdoutBuffer = "";
       this.stderrBuffer = "";
@@ -204,11 +204,11 @@ function runOneShotEngineCommand(expectedCommand, request, spawnEngine) {
       stderr += chunk;
     });
     child.on("error", (error) => {
-      reject(new Error(`failed to spawn hyprduck-engine: ${error.message}`));
+      reject(new Error(`failed to spawn etyma-engine: ${error.message}`));
     });
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(lastNonEmptyLine(stderr) ?? `hyprduck-engine exited with status ${code}`));
+        reject(new Error(lastNonEmptyLine(stderr) ?? `etyma-engine exited with status ${code}`));
         return;
       }
       try {

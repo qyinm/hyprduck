@@ -14,7 +14,7 @@ app.whenReady().then(async () => {
       label: "Shell",
       command: "sh",
       path: "/bin/sh",
-      launchArgs: ["-lc", "printf hyprduck-electron-pty-smoke"],
+      launchArgs: ["-lc", "printf etyma-electron-pty-smoke"],
     },
     handoff: {
       workspace: {

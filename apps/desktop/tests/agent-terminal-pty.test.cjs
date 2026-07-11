@@ -48,7 +48,7 @@ test("pty backend spawns the detected agent command and forwards lifecycle event
   assert.deepEqual(fakePty.spawnArgs.args, []);
   assert.equal(fakePty.spawnArgs.options.cols, 100);
   assert.equal(fakePty.spawnArgs.options.rows, 28);
-  assert.equal(fakePty.spawnArgs.options.env.HYPRDUCK_WORKSPACE_ID, "workspace-1");
+  assert.equal(fakePty.spawnArgs.options.env.ETYMA_WORKSPACE_ID, "workspace-1");
   assert.deepEqual(fakePty.process.writes, ["hello"]);
   assert.deepEqual(fakePty.process.resizes, [{ cols: 120, rows: 32 }]);
   assert.equal(events[0].data, "ready");
@@ -106,17 +106,17 @@ test("default agent terminal backend uses PTY when it is available", () => {
 
 test("packaged app resources are not mutated at runtime", () => {
   const originalResourcesPath = process.resourcesPath;
-  process.resourcesPath = "/Applications/HyprDuck.app/Contents/Resources";
+  process.resourcesPath = "/Applications/Etyma.app/Contents/Resources";
   try {
     assert.equal(
       isPackagedAppResource(
-        "/Applications/HyprDuck.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+        "/Applications/Etyma.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
       ),
       true,
     );
     assert.equal(
       isPackagedAppResource(
-        "/Users/hippoo/dev/HyprDuck/apps/desktop/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+        "/Users/hippoo/dev/Etyma/apps/desktop/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
       ),
       false,
     );

@@ -32,19 +32,19 @@ desktop-web-preview:
   VITE_PLATFORM=web bun run --cwd {{desktop_dir}} frontend:build
 
 core-test:
-  cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
+  cargo test -p etyma-engine-types -p etyma-engine-client -p etyma-engine -p etyma-cli
 
 cli-build:
-  cargo build -p hyprduck-cli --release
+  cargo build -p etyma-cli --release
 
 cli-dev:
-  cargo run -p hyprduck-cli
+  cargo run -p etyma-cli
 
 cli-check:
-  cargo check -p hyprduck-cli
+  cargo check -p etyma-cli
 
 cli-test:
-  cargo test -p hyprduck-cli
+  cargo test -p etyma-cli
 
 site-stage:
   bun run --cwd {{site_dir}} build

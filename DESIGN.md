@@ -1,10 +1,10 @@
-# HyprDuck — Design System
+# Etyma — Design System
 
 ## Overview
 
-HyprDuck is a local document parsing workspace for turning files into agent-ready markdown. The design is intentionally direct: a paper-white canvas, black primary actions, pill-shaped controls, native-feeling typography, and documentation-like rhythm. The product should read like a trustworthy local tool, not like a generic AI SaaS page.
+Etyma is a local document parsing workspace for turning files into agent-ready markdown. The design is intentionally direct: a paper-white canvas, black primary actions, pill-shaped controls, native-feeling typography, and documentation-like rhythm. The product should read like a trustworthy local tool, not like a generic AI SaaS page.
 
-The system is intentionally plain. A user should understand the workflow in seconds: import a PDF, DOCX, or DOC file; convert pages into images; run the configured provider; save linked markdown under `~/Documents/HyprDuck/`; inspect the evidence graph when available. The UI should not look like a generic AI SaaS dashboard.
+The system is intentionally plain. A user should understand the workflow in seconds: import a PDF, DOCX, or DOC file; convert pages into images; run the configured provider; save linked markdown under `~/Documents/Etyma/`; inspect the evidence graph when available. The UI should not look like a generic AI SaaS dashboard.
 
 **Key characteristics:**
 - Paper-white `{colors.canvas}` from edge to edge.
@@ -17,7 +17,7 @@ The system is intentionally plain. A user should understand the workflow in seco
 
 ## Similar Brands
 
-These brands are useful comparison points for tone and restraint. HyprDuck should not copy their layouts, assets, or product metaphors directly; use them to calibrate the level of polish, density, and confidence.
+These brands are useful comparison points for tone and restraint. Etyma should not copy their layouts, assets, or product metaphors directly; use them to calibrate the level of polish, density, and confidence.
 
 - **OpenAI:** calm monochrome surfaces, restrained hierarchy, clear prose, and product pages that feel serious without becoming visually heavy.
 - **Linear:** dense but elegant workspace UI, fast command-oriented interactions, crisp borders, compact sidebars, and strong attention to states.
@@ -45,7 +45,7 @@ These brands are useful comparison points for tone and restraint. HyprDuck shoul
 - **On Dark Mute** (`{colors.on-dark-mute}` — `rgba(255,255,255,0.7)`): secondary text on dark terminal/log panels.
 
 ### Semantic
-Semantic color should be sparse. HyprDuck is a local utility, not a status-heavy observability tool.
+Semantic color should be sparse. Etyma is a local utility, not a status-heavy observability tool.
 
 - **Terminal Red** (`{colors.terminal-red}` — `#ff5f56`): close-window dot inside terminal-like previews only.
 - **Terminal Yellow** (`{colors.terminal-yellow}` — `#ffbd2e`): minimize dot inside terminal-like previews only.
@@ -123,7 +123,7 @@ The dominant vocabulary is pills for interactive controls and 12px cards for fun
 
 ### Buttons
 
-**`button-primary`** — universal HyprDuck action
+**`button-primary`** — universal Etyma action
 - Background `{colors.primary}`, text `{colors.on-dark}`, type `{typography.button-md}`, padding `8px 20px`, height `36px`, rounded `{rounded.full}`.
 - Used for "Import document", "Start parse", "Retry failed pages", "Open output", and "Download desktop".
 - Pressed state: `{colors.ink-deep}` background.
@@ -152,11 +152,11 @@ The dominant vocabulary is pills for interactive controls and 12px cards for fun
 
 **`path-pill`** — output or local model path
 - Background `{colors.surface-soft}`, text `{colors.ink}`, type `{typography.code-sm}`, padding `8px 14px`, rounded `{rounded.full}`.
-- Used for `~/Documents/HyprDuck/...`, local model paths, and parse job identifiers.
+- Used for `~/Documents/Etyma/...`, local model paths, and parse job identifiers.
 
 **`command-snippet`** — local action preview
 - Background `{colors.surface-soft}`, text `{colors.ink}` in `{typography.code-md}`, padding `12px 20px`, min-height `48px`, rounded `{rounded.full}`.
-- Examples: `hyprduck parse ./report.pdf`, `local model ready`, `~/Documents/HyprDuck/project.md`.
+- Examples: `etyma parse ./report.pdf`, `local model ready`, `~/Documents/Etyma/project.md`.
 
 **`command-tag`**
 - Background `{colors.surface-soft}`, text `{colors.ink}` in `{typography.code-sm}`, padding `6px 12px`, rounded `{rounded.full}`.
@@ -208,7 +208,7 @@ The dominant vocabulary is pills for interactive controls and 12px cards for fun
 
 **`primary-nav`**
 - Background `{colors.canvas}`, text `{colors.ink}`, height 56px, type `{typography.body-sm-strong}`, rounded `{rounded.none}`.
-- Layout: HyprDuck mark/name left, links for Product / Docs / GitHub, optional search pill center, right cluster with "Download" or "Open app".
+- Layout: Etyma mark/name left, links for Product / Docs / GitHub, optional search pill center, right cluster with "Download" or "Open app".
 
 **Desktop sidebar**
 - Background `{colors.canvas}` or `{colors.surface-soft}`, 1px right border `{colors.hairline}`.
@@ -264,7 +264,7 @@ Interactive elements should sit in the 36-44px height range. Buttons and pills a
 
 ## Image Behavior
 
-HyprDuck may use a small duck/document mark, but the primary visual vocabulary is text, pills, terminal cards, file paths, markdown previews, and graph/evidence snippets. Treat brand art like a logo, not a hero illustration.
+Etyma may use a small duck/document mark, but the primary visual vocabulary is text, pills, terminal cards, file paths, markdown previews, and graph/evidence snippets. Treat brand art like a logo, not a hero illustration.
 
 ## Iteration Guide
 

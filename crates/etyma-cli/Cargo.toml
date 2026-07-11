@@ -1,0 +1,21 @@
+[package]
+name = "etyma-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "etyma"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+etyma-engine-client = { path = "../etyma-engine-client" }
+etyma-engine-types = { path = "../etyma-engine-types" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

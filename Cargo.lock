@@ -723,6 +723,73 @@ dependencies = [
 ]
 
 [[package]]
+name = "etyma-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "etyma-engine-client",
+ "etyma-engine-types",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "etyma-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-openai",
+ "base64",
+ "dirs",
+ "etyma-engine-types",
+ "futures",
+ "graphqlite",
+ "liteparse",
+ "reqwest 0.12.23",
+ "rig-core",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "etyma-engine-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "etyma-engine-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "etyma-engine-types"
+version = "0.1.0"
+dependencies = [
+ "etyma-knowledge",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "etyma-knowledge"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "eventsource-stream"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1146,73 +1213,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
-]
-
-[[package]]
-name = "hyprduck-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "hyprduck-engine-client",
- "hyprduck-engine-types",
- "ratatui",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "hyprduck-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-openai",
- "base64",
- "dirs",
- "futures",
- "graphqlite",
- "hyprduck-engine-types",
- "liteparse",
- "reqwest 0.12.23",
- "rig-core",
- "ring",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "hyprduck-engine-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hyprduck-engine-types",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "hyprduck-engine-types"
-version = "0.1.0"
-dependencies = [
- "hyprduck-knowledge",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "hyprduck-knowledge"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

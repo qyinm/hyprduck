@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "hyprduck-desktop",
+      "name": "etyma-desktop",
       "dependencies": {
         "@base-ui/react": "^1.3.0",
         "@fontsource-variable/geist": "^5.2.8",

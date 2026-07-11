@@ -1,6 +1,6 @@
 const { app, BrowserWindow, net, protocol, shell } = require("electron");
 const path = require("node:path");
-const { ensureHyprduckShellCommand } = require("./main/cli-shim.cjs");
+const { ensureEtymaShellCommand } = require("./main/cli-shim.cjs");
 const { createEngineRpc } = require("./main/engine-rpc.cjs");
 const { createSnapshotState } = require("./main/snapshot-state.cjs");
 const { createImportPipeline } = require("./main/import-pipeline.cjs");
@@ -29,7 +29,7 @@ const {
 
 const {
   brainReadScope,
-  ensureHyprduckApplicationSupportPath,
+  ensureEtymaApplicationSupportPath,
   getModelsForProvider,
   maybeImportLegacySwiftConfig,
   resetEngineRuntime,
@@ -47,7 +47,7 @@ const {
   protocol,
   net,
   shell,
-  ensureHyprduckApplicationSupportPath,
+  ensureEtymaApplicationSupportPath,
 });
 
 const {
@@ -66,7 +66,7 @@ const {
   runEngineCommand,
   runOneShotEngineCommand,
   resetEngineRuntime,
-  ensureHyprduckApplicationSupportPath,
+  ensureEtymaApplicationSupportPath,
   resolveKnownWorkspacePath,
 });
 
@@ -84,7 +84,7 @@ function createWindow() {
     height: 860,
     minWidth: 900,
     minHeight: 600,
-    title: "HyprDuck",
+    title: "Etyma",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     webPreferences: {
@@ -100,7 +100,7 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   }
-  if (process.env.HYPRDUCK_DEBUG_RENDERER_LOGS === "1") {
+  if (process.env.ETYMA_DEBUG_RENDERER_LOGS === "1") {
     mainWindow.webContents.on("did-fail-load", (_event, code, description, validatedURL) => {
       console.error("renderer failed to load:", { code, description, validatedURL });
     });
@@ -120,7 +120,7 @@ function startAutoUpdateChecks() {
   autoUpdateStarted = true;
   const { updateElectronApp } = require("update-electron-app");
   updateElectronApp({
-    repo: "qyinm/hyprduck",
+    repo: "qyinm/etyma",
     updateInterval: "10 minutes",
     logger: {
       log: console.error,
@@ -157,9 +157,9 @@ app.whenReady().then(async () => {
     console.error("legacy config migration skipped:", error);
   }
   try {
-    ensureHyprduckShellCommand(app);
+    ensureEtymaShellCommand(app);
   } catch (error) {
-    console.error("hyprduck shell command setup skipped:", error);
+    console.error("etyma shell command setup skipped:", error);
   }
   createWindow();
   startAutoUpdateChecks();

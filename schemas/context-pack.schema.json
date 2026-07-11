@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/context-pack.schema.json",
-  "title": "HyprDuck Context Pack v0",
+  "$id": "https://etyma.local/schemas/context-pack.schema.json",
+  "title": "Etyma Context Pack v0",
   "description": "Stable external agent-facing contract for query-time cited local context packs. Internal brain records may change without requiring agents to reverse-engineer them.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "hyprduck.context_pack.v0"
+      "const": "etyma.context_pack.v0"
     },
     "packId": {
       "$ref": "#/$defs/nonEmptyString"

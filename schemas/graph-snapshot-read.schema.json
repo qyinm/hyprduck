@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hyprduck.local/schemas/graph-snapshot-read.schema.json",
+  "$id": "https://etyma.local/schemas/graph-snapshot-read.schema.json",
   "title": "Graph Snapshot Read Contract",
   "description": "Live materialized graph/wiki snapshot returned to UI, MCP, and agent read paths. events/brain_events.jsonl remains the source of truth, while GraphQLite stores versioned graph records and relational SQLite stores wiki revisions; this contract describes only the current live projection.",
   "x-sourceOfTruth": "events/brain_events.jsonl",

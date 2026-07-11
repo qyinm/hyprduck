@@ -135,7 +135,7 @@ export function DocsWorkspace(props: DocsWorkspaceProps) {
             <div>
               <h1 className="text-lg font-semibold text-foreground">Add Sources</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Add files from your computer. HyprDuck will parse and index them for evidence.
+                Add files from your computer. Etyma will parse and index them for evidence.
               </p>
             </div>
             <Badge variant="secondary">{sources.length} sources</Badge>

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/hyprduck-disco.svg" width="120" alt="HyprDuck">
+  <img src="docs/assets/etyma-disco.svg" width="120" alt="Etyma">
 </p>
 
-<h1 align="center">HyprDuck</h1>
+<h1 align="center">Etyma</h1>
 
 <p align="center">
   <strong>Local document parsing for agent-ready knowledge.</strong>
@@ -19,7 +19,7 @@
 
 ## Overview
 
-HyprDuck turns private PDFs and Word files into reusable, cited local context
+Etyma turns private PDFs and Word files into reusable, cited local context
 packs for AI agents.
 
 The current wedge is local document ingestion: import PDF, DOCX, or DOC files,
@@ -37,13 +37,13 @@ private document
   -> same local context is reused in the next task
 ```
 
-HyprDuck is not a generic document chatbot, a memory OS, or an approval
+Etyma is not a generic document chatbot, a memory OS, or an approval
 dashboard. The product is built around durable local artifacts, visible
 provenance, and agent-readable context.
 
 ---
 
-## What HyprDuck Builds
+## What Etyma Builds
 
 ### Source Packs And Evidence Indexes
 - Keeps imported files as immutable source records
@@ -78,7 +78,7 @@ provenance, and agent-readable context.
 
 ## Current Status
 
-HyprDuck is in active development. The parser wedge, local workspace layout,
+Etyma is in active development. The parser wedge, local workspace layout,
 Source Pack/Evidence Index artifacts, Context Pack v1 with v0 compatibility,
 controlled MCP import/read/write surface, and document-context CLI aliases are
 implemented.
@@ -94,9 +94,9 @@ dogfood, and a second-client proof beyond Codex.
 ## How It Works
 
 1. Import a local document.
-2. HyprDuck saves source metadata and derived artifacts.
+2. Etyma saves source metadata and derived artifacts.
 3. The engine parses the document into markdown and page-level evidence.
-4. HyprDuck writes a source pack and evidence index.
+4. Etyma writes a source pack and evidence index.
 5. A query generates a schema-valid Context Pack v1.
 6. Agents consume context packs through CLI or MCP and cite source/page/evidence refs.
 
@@ -104,7 +104,7 @@ dogfood, and a second-client proof beyond Codex.
 
 ## Workspace Artifacts
 
-A HyprDuck workspace is designed around durable local document context files:
+A Etyma workspace is designed around durable local document context files:
 
 ```text
 artifacts/<source-id>/
@@ -132,7 +132,7 @@ Original sources remain separate from generated artifacts.
 
 ## AI Providers
 
-HyprDuck currently supports shared provider settings across parsing and
+Etyma currently supports shared provider settings across parsing and
 document-context workflows:
 
 - **OpenRouter** for flexible hosted model access
@@ -165,7 +165,7 @@ bun --cwd apps/desktop run build
 Run the Rust workspace verification:
 
 ```bash
-cargo test -p hyprduck-engine-types -p hyprduck-engine-client -p hyprduck-engine -p hyprduck-cli
+cargo test -p etyma-engine-types -p etyma-engine-client -p etyma-engine -p etyma-cli
 ```
 
 Stage the static site artifact locally:
@@ -185,11 +185,11 @@ just site-stage
 │   ├── desktop
 │   └── site
 ├── crates
-│   ├── hyprduck-cli
-│   ├── hyprduck-engine
-│   ├── hyprduck-engine-client
-│   ├── hyprduck-engine-types
-│   └── hyprduck-knowledge
+│   ├── etyma-cli
+│   ├── etyma-engine
+│   ├── etyma-engine-client
+│   ├── etyma-engine-types
+│   └── etyma-knowledge
 ├── packages
 ├── scripts
 └── release

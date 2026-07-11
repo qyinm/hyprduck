@@ -1,0 +1,29 @@
+[package]
+name = "etyma-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-openai.workspace = true
+base64.workspace = true
+dirs.workspace = true
+futures.workspace = true
+liteparse = { version = "=2.1.1", default-features = false }
+reqwest.workspace = true
+rig-core.workspace = true
+ring.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+etyma-engine-types = { path = "../etyma-engine-types" }
+graphqlite = "=0.5.0"
+
+[[bin]]
+name = "etyma-engine"
+path = "src/main.rs"

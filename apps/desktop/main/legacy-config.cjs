@@ -17,10 +17,10 @@ async function maybeImportLegacySwiftConfig(app, runEngineCommand) {
 }
 
 function engineConfigPath(app) {
-  if (process.env.HYPRDUCK_CONFIG_DIR) {
-    return path.join(process.env.HYPRDUCK_CONFIG_DIR, "engine-config.json");
+  if (process.env.ETYMA_CONFIG_DIR) {
+    return path.join(process.env.ETYMA_CONFIG_DIR, "engine-config.json");
   }
-  return path.join(app.getPath("home"), ".hyprduck", "engine-config.json");
+  return path.join(app.getPath("home"), ".etyma", "engine-config.json");
 }
 
 async function readLegacySwiftPayload(app) {
@@ -39,8 +39,8 @@ async function readLegacySwiftPayload(app) {
 function legacyPreferencePaths(app) {
   const home = app.getPath("home");
   return [
-    path.join(home, "Library", "Preferences", "app.HyprDuck.plist"),
-    path.join(home, "Library", "Preferences", "HyprDuck.plist"),
+    path.join(home, "Library", "Preferences", "app.Etyma.plist"),
+    path.join(home, "Library", "Preferences", "Etyma.plist"),
   ];
 }
 
@@ -103,9 +103,9 @@ function plutilExtractRaw(plistPath, key) {
 async function legacyApiKeyFromKeychain(providerSlug) {
   const service =
     providerSlug === "open_router"
-      ? "com.hyprduck.openrouter"
+      ? "com.etyma.openrouter"
       : providerSlug === "ollama"
-        ? "com.hyprduck.ollama"
+        ? "com.etyma.ollama"
         : null;
   if (!service) {
     return null;

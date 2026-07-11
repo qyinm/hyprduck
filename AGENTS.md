@@ -2,19 +2,19 @@
 
 ## OVERVIEW
 
-HyprDuck compiles private documents into reusable, cited local context packs for coding agents. The active stack is an Electron desktop shell in `apps/desktop`, a Rust engine/CLI workspace in `crates/`, local SQLite + GraphQLite knowledge storage, and MCP as the agent workflow surface.
+Etyma compiles private documents into reusable, cited local context packs for coding agents. The active stack is an Electron desktop shell in `apps/desktop`, a Rust engine/CLI workspace in `crates/`, local SQLite + GraphQLite knowledge storage, and MCP as the agent workflow surface.
 
 ## STRUCTURE
 
 ```text
-HyprDuck/
+Etyma/
 |-- apps/desktop/                 # Active Electron shell and graph workspace UI
 |-- apps/site/                    # Public Astro site
-|-- crates/hyprduck-engine/       # Parsing, providers, persistence, graph/wiki/materialization
-|-- crates/hyprduck-cli/          # CLI, MCP server, eval and TUI surfaces
-|-- crates/hyprduck-engine-types/ # Shared command, response, graph, artifact contracts
-|-- crates/hyprduck-engine-client/# Engine subprocess client
-|-- crates/hyprduck-knowledge/    # Shared knowledge/brain record types
+|-- crates/etyma-engine/       # Parsing, providers, persistence, graph/wiki/materialization
+|-- crates/etyma-cli/          # CLI, MCP server, eval and TUI surfaces
+|-- crates/etyma-engine-types/ # Shared command, response, graph, artifact contracts
+|-- crates/etyma-engine-client/# Engine subprocess client
+|-- crates/etyma-knowledge/    # Shared knowledge/brain record types
 |-- docs/agents/                  # Operational commands and agent setup docs
 |-- docs/solutions/               # Reusable fixes and architecture patterns
 |-- schemas/                      # External JSON schema contracts
@@ -27,9 +27,9 @@ HyprDuck/
 | --- | --- | --- |
 | Desktop import, settings, history, graph UI | `apps/desktop` | See its local `AGENTS.md`; keep it shell/UI only. |
 | Electron IPC or agent terminal behavior | `apps/desktop/main.cjs`, `apps/desktop/main/` | Main/preload are glue, not parser/provider logic. |
-| Parsing, artifacts, providers, graph/wiki state | `crates/hyprduck-engine` | See its local `AGENTS.md`; this owns runtime behavior. |
-| MCP tools, import status, agent mutations | `crates/hyprduck-cli/src/mcp.rs` | See `crates/hyprduck-cli/AGENTS.md` and `docs/mcp.md`. |
-| Engine command and artifact DTOs | `crates/hyprduck-engine-types/src/lib.rs`, `schemas/` | Keep Rust types and JSON schemas aligned. |
+| Parsing, artifacts, providers, graph/wiki state | `crates/etyma-engine` | See its local `AGENTS.md`; this owns runtime behavior. |
+| MCP tools, import status, agent mutations | `crates/etyma-cli/src/mcp.rs` | See `crates/etyma-cli/AGENTS.md` and `docs/mcp.md`. |
+| Engine command and artifact DTOs | `crates/etyma-engine-types/src/lib.rs`, `schemas/` | Keep Rust types and JSON schemas aligned. |
 | Build/test commands | `docs/agents/commands.md`, `justfile` | Commands belong in `docs/agents/`, not root instruction files. |
 | Prior fixes and reusable patterns | `docs/solutions/` | Check before re-solving integration or architecture issues. |
 | Public PR wording | `.github/PULL_REQUEST_TEMPLATE.md` | Keep public text to shipped code and verified behavior. |
@@ -40,7 +40,7 @@ HyprDuck/
 - Keep desktop first-run focused on `Add Docs -> Connect Agent -> Ask With Citations -> Verify Evidence -> Reuse`.
 - Keep the desktop app's graph canvas as a required inspection surface for document/source/concept relationships.
 - Treat graph, wiki, claims, memory, and event history as retrieval and inspection infrastructure, not first-run product promises or marketing claims.
-- Do not reframe HyprDuck as DeepSeek-only, generic PDF chat, graph-first, brain-first, generic memory OS, or a trust console.
+- Do not reframe Etyma as DeepSeek-only, generic PDF chat, graph-first, brain-first, generic memory OS, or a trust console.
 
 ## ARCHITECTURE BOUNDARIES
 
@@ -58,7 +58,7 @@ HyprDuck/
 - Treat Evidence Index as the materialized map from evidence IDs to source/page/span/region data.
 - Treat Context Pack as the query-time artifact external agents consume.
 - Generate markdown with durable image and page references.
-- Keep JSON schemas in `schemas/` synchronized with `crates/hyprduck-engine-types/src/lib.rs` tests.
+- Keep JSON schemas in `schemas/` synchronized with `crates/etyma-engine-types/src/lib.rs` tests.
 
 ## PROVIDER RULES
 

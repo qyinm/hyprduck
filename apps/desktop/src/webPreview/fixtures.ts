@@ -39,7 +39,7 @@ export const WEB_MOCK_CONFIG: EngineConfigPayload = {
 };
 
 export const WEB_MOCK_SAMPLE_FILE: FileSelection = {
-  path: "/tmp/hyprduck-sample.pdf",
+  path: "/tmp/etyma-sample.pdf",
   format: "pdf",
 };
 
@@ -62,7 +62,7 @@ export const WEB_MOCK_BASE_SNAPSHOT: UiSnapshot = {
     },
   ],
   lastResult: {
-    savedOutputPath: "~/Library/Application Support/HyprDuck/web-preview/sample.md",
+    savedOutputPath: "~/Library/Application Support/Etyma/web-preview/sample.md",
     successCount: 2,
     failedCount: 0,
     markdown: WEB_MOCK_MARKDOWN,

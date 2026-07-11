@@ -42,10 +42,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { WorkspaceProject, WorkspaceSourceSummary } from "@/features/workspace/types";
 
-const STORAGE_KEY = "hyprduck.agentChatThreads.v4";
-const STORAGE_EPOCH_KEY = "hyprduck.agentChatThreads.currentVersion";
+const STORAGE_KEY = "etyma.agentChatThreads.v4";
+const STORAGE_EPOCH_KEY = "etyma.agentChatThreads.currentVersion";
 const STORAGE_VERSION = 4;
-const AGENT_CHAT_SCHEMA_VERSION = "hyprduck.agent_chat.v1";
+const AGENT_CHAT_SCHEMA_VERSION = "etyma.agent_chat.v1";
 
 interface AgentThread {
   id: string;
@@ -127,9 +127,9 @@ export function AgentChatWorkspace(props: AgentChatWorkspaceProps) {
       setStorageReady(true);
       return;
     }
-    window.localStorage.removeItem("hyprduck.agentChatThreads.v1");
-    window.localStorage.removeItem("hyprduck.agentChatThreads.v2");
-    window.localStorage.removeItem("hyprduck.agentChatThreads.v3");
+    window.localStorage.removeItem("etyma.agentChatThreads.v1");
+    window.localStorage.removeItem("etyma.agentChatThreads.v2");
+    window.localStorage.removeItem("etyma.agentChatThreads.v3");
     window.localStorage.removeItem(STORAGE_KEY);
     window.localStorage.setItem(STORAGE_EPOCH_KEY, String(STORAGE_VERSION));
     setThreads([]);

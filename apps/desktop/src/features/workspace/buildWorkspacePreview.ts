@@ -84,7 +84,7 @@ export function buildWorkspacePreview(
     canonicalName: title,
     aliases: ["Latest import", "Preview project"],
     description:
-      "This workspace is a graph-first preview built from the latest import. HyprDuck is showing the latest automatic ingest preview with visible evidence before making strong claims.",
+      "This workspace is a graph-first preview built from the latest import. Etyma is showing the latest automatic ingest preview with visible evidence before making strong claims.",
     evidence: pageEvidence.slice(0, 3),
     actions: [],
     source: {
@@ -106,7 +106,7 @@ export function buildWorkspacePreview(
     },
   };
   answerByNodeId["source:preview"] = previewAnswer(
-    "HyprDuck can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before using this draft.",
+    "Etyma can already point you to the most relevant imported evidence, but grounded answer synthesis is still pending. Review the cited snippets before using this draft.",
     stale,
     pageEvidence.slice(0, 2),
     pageNodes.map((node) => node.id),
@@ -124,7 +124,7 @@ export function buildWorkspacePreview(
       actions: [],
     };
     answerByNodeId[node.id] = previewAnswer(
-      `${node.label} is available as a draft workspace node. HyprDuck is keeping the answer conservative until concept linking and confidence scoring are connected.`,
+      `${node.label} is available as a draft workspace node. Etyma is keeping the answer conservative until concept linking and confidence scoring are connected.`,
       stale,
       evidence,
       [node.id],

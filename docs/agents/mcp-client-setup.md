@@ -1,58 +1,58 @@
 # Agent MCP Client Setup
 
-HyprDuck's launch agent path is Codex first. Claude Code uses the same local
+Etyma's launch agent path is Codex first. Claude Code uses the same local
 MCP server but is an external validation target when the operator does not have
 a Claude Code subscription. Cursor remains a later manual setup target.
 
 The latest installed-app Codex proof is
 `docs/dogfood-reports/2026-06-02-codex-installed-app-distribution-proof.md`.
 It passed active Codex MCP reuse with the app-bundled CLI. The remaining
-distribution follow-up is the shell-command path: if `command -v hyprduck`
+distribution follow-up is the shell-command path: if `command -v etyma`
 resolves to an unmanaged development symlink, use the app-bundled CLI directly
 or refresh the installed app shell command before claiming a shell-shim proof.
 
 ## Codex Required Path
 
-Register HyprDuck with Codex:
+Register Etyma with Codex:
 
 ```bash
-hyprduck mcp install codex
+etyma mcp install codex
 ```
 
-Enable HyprDuck hook automation for Codex:
+Enable Etyma hook automation for Codex:
 
 ```bash
-hyprduck hooks install codex
+etyma hooks install codex
 ```
 
 The hook install keeps MCP as the tool surface and adds Codex lifecycle hooks
-that remind Codex to use HyprDuck automatically at session and prompt time. It
-also configures known non-destructive HyprDuck MCP tools for automatic approval
+that remind Codex to use Etyma automatically at session and prompt time. It
+also configures known non-destructive Etyma MCP tools for automatic approval
 while keeping destructive removal or overwrite actions prompt-gated. After
-installing, open `/hooks` in Codex and trust the HyprDuck command hooks.
+installing, open `/hooks` in Codex and trust the Etyma command hooks.
 
 Inspect hook setup:
 
 ```bash
-hyprduck hooks status codex
+etyma hooks status codex
 ```
 
 For a proof that uses MCP `import_source`, register the approved import root at
-install time so Codex launches HyprDuck with the import allowlist:
+install time so Codex launches Etyma with the import allowlist:
 
 ```bash
-HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
-  hyprduck mcp install codex
+ETYMA_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
+  etyma mcp install codex
 ```
 
 Development proofs that pass `rootDir` also need the development workspace root
 allowlist:
 
 ```bash
-HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
-HYPRDUCK_MCP_ALLOW_ROOT_DIR=1 \
-HYPRDUCK_MCP_ALLOWED_ROOTS=/path/to/hyprduck/workspace \
-  hyprduck mcp install codex
+ETYMA_MCP_ALLOWED_IMPORT_ROOTS=/path/to/approved/imports \
+ETYMA_MCP_ALLOW_ROOT_DIR=1 \
+ETYMA_MCP_ALLOWED_ROOTS=/path/to/etyma/workspace \
+  etyma mcp install codex
 ```
 
 Rerun the install command after changing an import root; Codex stores the MCP
@@ -61,27 +61,27 @@ server environment in its MCP entry.
 If the shell command is not on `PATH`, use the shim directly:
 
 ```bash
-~/.local/bin/hyprduck mcp install codex
+~/.local/bin/etyma mcp install codex
 ```
 
 Verify registration:
 
 ```bash
-command -v hyprduck
+command -v etyma
 codex mcp list
 ```
 
-The Codex entry should be named `hyprduck` and run the canonical binary path
+The Codex entry should be named `etyma` and run the canonical binary path
 that performed installation:
 
 ```text
-<HyprDuck binary> mcp serve
+<Etyma binary> mcp serve
 ```
 
-Then ask Codex to use HyprDuck:
+Then ask Codex to use Etyma:
 
 ```text
-Use HyprDuck to answer from my local document context. Start with
+Use Etyma to answer from my local document context. Start with
 get_context_pack, cite sourceId, page, and evidenceRef for every claim, then ask
 a second question against the same source set.
 ```
@@ -89,19 +89,19 @@ a second question against the same source set.
 The first successful proof must record:
 
 - time from install command to first successful `get_context_pack`;
-- `command -v hyprduck` resolves to a managed installed-app shell command, or
+- `command -v etyma` resolves to a managed installed-app shell command, or
   the proof explicitly records that the app-bundled CLI was used instead;
 - `tools/list` includes `import_source`, `import_status`, `import_cancel`,
   `import_retry_graph`, `get_context_pack`, `search_documents`, `read_source`,
   `read_page_evidence`, and `graph_patch_apply`;
-- if MCP import is part of the proof, `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` is set
+- if MCP import is part of the proof, `ETYMA_MCP_ALLOWED_IMPORT_ROOTS` is set
   and `import_source` returns a `jobId` without leaking local paths; polling
   `import_status` reaches a citation-ready state with `citationReady: true`,
   returns a `sourceId`, and reports nonzero evidence count without leaking local
   paths;
 - first answer includes at least one `sourceId`, page, and `evidenceRef`;
 - `get_context_pack` returns `contextPack.schemaVersion` as
-  `hyprduck.context_pack.v1`, includes `selectedEvidence[].evidenceType`, and
+  `etyma.context_pack.v1`, includes `selectedEvidence[].evidenceType`, and
   includes `retrievalTrace.evidenceTypeTrace`;
 - when graph context exists, `contextPackV1.selectedEvidence[].graphTrail`
   includes read-only follow-up handles with `tool`, `handleType`, `arguments`,
@@ -113,7 +113,7 @@ The first successful proof must record:
 
 For agent-generated graph proof, call `import_source` with
 `skipGraphGeneration: true`, read the imported source/evidence, have the calling
-agent construct a `hyprduck.graph_patch.v1` payload, then call
+agent construct a `etyma.graph_patch.v1` payload, then call
 `graph_patch_apply`. A passing proof records that `graph_patch_apply` returns
 `status: applied`, `graphReady: true`, `read_graph_snapshot` includes the new
 node/relation, and `read_node` returns the cited evidence. This path keeps the
@@ -127,7 +127,7 @@ Polling `import_status` should move through:
 imported -> parsing -> packaging -> citation_ready -> context_ready
 ```
 
-`citation_ready` is the key HyprDuck import milestone: the source has evidence
+`citation_ready` is the key Etyma import milestone: the source has evidence
 refs an agent can use with citations. `context_ready` is later context/graph
 readiness and should not block citation-backed source inspection.
 
@@ -160,10 +160,10 @@ Use one of these labels in setup verification logs:
 
 | Class | Meaning | User-facing next action |
 | --- | --- | --- |
-| `mcp_registration` | Codex has no enabled `hyprduck` MCP entry or cannot launch it. | Run `hyprduck mcp install codex`, then restart Codex if needed. |
-| `path` | The `hyprduck` shell command or registered binary path is missing. | Use `~/.local/bin/hyprduck` or reopen HyprDuck to refresh the shim. |
+| `mcp_registration` | Codex has no enabled `etyma` MCP entry or cannot launch it. | Run `etyma mcp install codex`, then restart Codex if needed. |
+| `path` | The `etyma` shell command or registered binary path is missing. | Use `~/.local/bin/etyma` or reopen Etyma to refresh the shim. |
 | `provider_config` | Hosted provider settings block import or extraction. | Open Settings and fix the provider validation issue, or use Ollama for local-only setup. |
-| `import_allowlist` | MCP `import_source` was called with a path outside `HYPRDUCK_MCP_ALLOWED_IMPORT_ROOTS` or with no import roots configured. | Configure an approved import root or import through the desktop picker. |
+| `import_allowlist` | MCP `import_source` was called with a path outside `ETYMA_MCP_ALLOWED_IMPORT_ROOTS` or with no import roots configured. | Configure an approved import root or import through the desktop picker. |
 | `parsing` | No usable source artifacts exist for the workspace. | Add a PDF, DOCX, DOC, Markdown, or image file and poll `import_status` until `citation_ready` with `citationReady: true`. |
 | `citation` | `get_context_pack` succeeds but returns no source/page/evidence refs. | Re-import the source or inspect `read_health` before using the answer. |
 | `graph_pending` | `import_status` is `citation_ready_graph_pending` or `read_health` reports `citation_ready_graph_pending`. | Use citation-backed reads immediately; wait for retry or call `import_retry_graph` when `manualRetryAvailable` is true. |
@@ -171,10 +171,10 @@ Use one of these labels in setup verification logs:
 
 ## Claude Code External Path
 
-Register HyprDuck with Claude Code:
+Register Etyma with Claude Code:
 
 ```bash
-hyprduck mcp install claude-code
+etyma mcp install claude-code
 ```
 
 Local Claude Code validation is not a required release gate when the operator
