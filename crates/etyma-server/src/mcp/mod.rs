@@ -57,7 +57,7 @@ async fn mcp_handler(
             }
         }))),
         "tools/call" => {
-            let workspace_id = resolve_bearer_workspace(&state, &headers)?;
+            let workspace_id = resolve_bearer_workspace(&state, &headers).await?;
             let name = req
                 .params
                 .get("name")
@@ -82,6 +82,7 @@ async fn mcp_handler(
                 &workspace_id,
                 &query,
             )
+            .await
             .map_err(store_err)?;
             let text = serde_json::to_string_pretty(&pack)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

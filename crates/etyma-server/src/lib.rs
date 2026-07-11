@@ -20,20 +20,25 @@ use tower_http::trace::TraceLayer;
 
 /// Build the HTTP/MCP router.
 ///
-/// In [`StorageMode::PostgresFoundation`], connects a pool and applies migrations
-/// before serving. Product metadata remains on the SQLite `Store` until S-PG2.
+/// In [`StorageMode::PostgresFoundation`], connects a pool, applies migrations, and
+/// opens a hybrid store (control on Postgres, sources/evidence on local SQLite).
+/// Spike mode keeps the full product schema on SQLite only.
 pub async fn build_app(config: &ServerConfig) -> Result<Router> {
-    let pg_pool = match &config.storage {
-        StorageMode::PostgresFoundation { database_url } => Some(
-            db::connect_and_migrate(database_url)
+    let (store, pg_pool) = match &config.storage {
+        StorageMode::PostgresFoundation { database_url } => {
+            let pool = db::connect_and_migrate(database_url)
                 .await
-                .context("postgres connect/migrate")?,
-        ),
-        StorageMode::SpikeSqlite => None,
+                .context("postgres connect/migrate")?;
+            let store = Store::open_hybrid(pool.clone(), &config.database_path)
+                .context("open hybrid store (control=pg, knowledge=sqlite)")?;
+            (store, Some(pool))
+        }
+        StorageMode::SpikeSqlite => {
+            let store = Store::open(&config.database_path).context("open server store")?;
+            (store, None)
+        }
     };
 
-    // Spike product metadata stays on SQLite regardless of Postgres pool presence.
-    let store = Store::open(&config.database_path).context("open server store")?;
     let blobs = LocalFsBlobStore::open(&config.blob_root).context("open blob store")?;
     let state = AppState {
         store: Arc::new(store),
@@ -56,7 +61,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         .with_context(|| format!("bind {}", config.bind))?;
     match &config.storage {
         StorageMode::PostgresFoundation { .. } => {
-            tracing::info!("postgres pool ready (migrations applied)");
+            tracing::info!("postgres pool ready (migrations applied); control on pg, knowledge on sqlite");
         }
         StorageMode::SpikeSqlite => {
             tracing::info!("postgres pool skipped (spike SQLite metadata path)");

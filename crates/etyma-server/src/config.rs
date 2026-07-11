@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
-/// How the process boots storage for S-PG1.
+/// How the process boots storage for S-PG1/S-PG2.
 ///
-/// Product metadata still lives in the SQLite [`crate::store::Store`] until S-PG2.
-/// This enum only models whether Postgres foundation (pool + migrate) is required.
+/// - Spike: full product schema on SQLite.
+/// - Postgres foundation: control plane on Postgres; sources/evidence still on SQLite (S-PG2 hybrid).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMode {
-    /// Spike/dev: no Postgres pool; SQLite product meta only.
+    /// Spike/dev: no Postgres pool; full SQLite product meta.
     SpikeSqlite,
-    /// Cloud foundation: connect + migrate plane schemas; product meta still SQLite.
+    /// Cloud foundation: connect + migrate; hybrid Store (control=PG, knowledge=SQLite).
     PostgresFoundation { database_url: String },
 }
 
@@ -125,7 +125,7 @@ impl ServerConfig {
                 }
                 bail!(
                     "ETYMA_DATABASE_URL is required when ETYMA_ALLOW_SQLITE is false \
-                     (refuses SQLite-only boot; product Store still uses SQLite until S-PG2)"
+                     (refuses SQLite-only boot; hybrid Store needs Postgres for control)"
                 );
             }
             None => StorageMode::SpikeSqlite,

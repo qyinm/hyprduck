@@ -22,13 +22,13 @@ Acceptance: token for workspace A cannot read workspace B.
 /// Uses [`ingest_source`] (blob first, then metadata). Idempotent when sources already exist.
 ///
 /// Coarse idempotency: any existing source count skips re-seed (partial seed is not repaired).
-pub fn seed_multi_source_workspace(
+pub async fn seed_multi_source_workspace(
     store: &Store,
     blobs: &dyn BlobStore,
     workspace_id: &str,
 ) -> StoreResult<usize> {
-    store.require_workspace(workspace_id)?;
-    let existing = store.source_count(workspace_id)?;
+    store.require_workspace(workspace_id).await?;
+    let existing = store.source_count(workspace_id).await?;
     if existing > 0 {
         return Ok(existing);
     }
@@ -42,14 +42,17 @@ pub fn seed_multi_source_workspace(
         DOCUMENT_BODY.as_bytes(),
         "text/markdown",
         None,
-    )?;
-    store.insert_evidence(
-        workspace_id,
-        &doc.id,
-        "document",
-        "Agents must present a workspace-scoped alpha-token before reading evidence.",
-        "page:1",
-    )?;
+    )
+    .await?;
+    store
+        .insert_evidence(
+            workspace_id,
+            &doc.id,
+            "document",
+            "Agents must present a workspace-scoped alpha-token before reading evidence.",
+            "page:1",
+        )
+        .await?;
 
     let issue = ingest_source(
         store,
@@ -60,15 +63,18 @@ pub fn seed_multi_source_workspace(
         ISSUE_BODY.as_bytes(),
         "text/markdown",
         Some("ENG-42"),
-    )?;
-    store.insert_evidence(
-        workspace_id,
-        &issue.id,
-        "issue",
-        "We need alpha-token binding so packs never leak across workspaces.",
-        "issue:ENG-42",
-    )?;
-    store.source_count(workspace_id)
+    )
+    .await?;
+    store
+        .insert_evidence(
+            workspace_id,
+            &issue.id,
+            "issue",
+            "We need alpha-token binding so packs never leak across workspaces.",
+            "issue:ENG-42",
+        )
+        .await?;
+    store.source_count(workspace_id).await
 }
 
 #[cfg(test)]
@@ -77,16 +83,18 @@ mod tests {
     use crate::blob::{BlobStore, LocalFsBlobStore};
     use tempfile::tempdir;
 
-    #[test]
-    fn seed_writes_blob_then_meta() {
+    #[tokio::test]
+    async fn seed_writes_blob_then_meta() {
         let dir = tempdir().unwrap();
         let store = Store::open(&dir.path().join("db.sqlite3")).unwrap();
         let blobs = LocalFsBlobStore::open(dir.path().join("blobs")).unwrap();
-        store.create_org("org1", "Test").unwrap();
-        store.create_workspace("org1", "ws").unwrap();
-        let n = seed_multi_source_workspace(&store, &blobs, "ws").unwrap();
+        store.create_org("org1", "Test").await.unwrap();
+        store.create_workspace("org1", "ws").await.unwrap();
+        let n = seed_multi_source_workspace(&store, &blobs, "ws")
+            .await
+            .unwrap();
         assert_eq!(n, 2);
-        let sources = store.list_sources("ws").unwrap();
+        let sources = store.list_sources("ws").await.unwrap();
         assert_eq!(sources.len(), 2);
         for src in &sources {
             assert!(!src.blob_key.is_empty());
@@ -101,6 +109,11 @@ mod tests {
             );
         }
         // idempotent
-        assert_eq!(seed_multi_source_workspace(&store, &blobs, "ws").unwrap(), 2);
+        assert_eq!(
+            seed_multi_source_workspace(&store, &blobs, "ws")
+                .await
+                .unwrap(),
+            2
+        );
     }
 }
