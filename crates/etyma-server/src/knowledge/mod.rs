@@ -50,6 +50,7 @@ pub struct ImportJobRow {
     pub available_at: i64,
     pub lease_owner: Option<String>,
     pub lease_expires_at: Option<i64>,
+    pub lease_token: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -251,7 +252,7 @@ impl KnowledgeStore {
             VALUES ($1, $2, $3, $4, 'queued', 0, $5, $6, $7, $7)
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
-                      lease_expires_at, created_at, updated_at
+                      lease_expires_at, lease_token, created_at, updated_at
             "#,
         )
         .bind(&id)
@@ -270,9 +271,19 @@ impl KnowledgeStore {
         &self,
         workspace_id: &str,
         lease_owner: &str,
-        now: i64,
-        lease_expires_at: i64,
+        lease_duration_seconds: i64,
     ) -> KnowledgeResult<Option<ImportJobRow>> {
+        if lease_owner.trim().is_empty() {
+            return Err(KnowledgeError::Conflict(
+                "import job lease owner is required".into(),
+            ));
+        }
+        if !(1..=86_400).contains(&lease_duration_seconds) {
+            return Err(KnowledgeError::Conflict(
+                "import job lease duration must be between 1 and 86400 seconds".into(),
+            ));
+        }
+        let lease_token = format!("lease_{}", Uuid::now_v7().simple());
         let mut transaction = self.pool.begin().await.map_err(map_read)?;
         sqlx::query(
             r#"
@@ -281,15 +292,15 @@ impl KnowledgeStore {
                 last_error = 'maximum attempts exhausted after lease expiry',
                 lease_owner = NULL,
                 lease_expires_at = NULL,
-                updated_at = $2
+                lease_token = NULL,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1
               AND status = 'running'
-              AND lease_expires_at <= $2
+              AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
               AND attempts >= max_attempts
             "#,
         )
         .bind(workspace_id)
-        .bind(now)
         .execute(&mut *transaction)
         .await
         .map_err(map_read)?;
@@ -302,8 +313,14 @@ impl KnowledgeStore {
               WHERE workspace_id = $1
                 AND attempts < max_attempts
                 AND (
-                  (status = 'queued' AND available_at <= $3)
-                  OR (status = 'running' AND lease_expires_at <= $3)
+                  (
+                    status = 'queued'
+                    AND available_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                  )
+                  OR (
+                    status = 'running'
+                    AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                  )
                 )
               ORDER BY available_at, created_at, id
               FOR UPDATE SKIP LOCKED
@@ -314,20 +331,23 @@ impl KnowledgeStore {
                 attempts = jobs.attempts + 1,
                 last_error = NULL,
                 lease_owner = $2,
-                lease_expires_at = $4,
-                updated_at = $3
+                lease_expires_at =
+                  EXTRACT(EPOCH FROM clock_timestamp())::BIGINT + $3,
+                lease_token = $4,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             FROM candidate
             WHERE jobs.id = candidate.id
             RETURNING jobs.id, jobs.workspace_id, jobs.source_id, jobs.kind,
                       jobs.status, jobs.attempts, jobs.max_attempts,
                       jobs.last_error, jobs.available_at, jobs.lease_owner,
-                      jobs.lease_expires_at, jobs.created_at, jobs.updated_at
+                      jobs.lease_expires_at, jobs.lease_token,
+                      jobs.created_at, jobs.updated_at
             "#,
         )
         .bind(workspace_id)
         .bind(lease_owner)
-        .bind(now)
-        .bind(lease_expires_at)
+        .bind(lease_duration_seconds)
+        .bind(lease_token)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(map_read)?;
@@ -340,24 +360,26 @@ impl KnowledgeStore {
         workspace_id: &str,
         job_id: &str,
         lease_owner: &str,
+        lease_token: &str,
     ) -> KnowledgeResult<ImportJobRow> {
         sqlx::query_as::<_, ImportJobRow>(
             r#"
             UPDATE knowledge.import_jobs
             SET status = 'succeeded', lease_owner = NULL,
-                lease_expires_at = NULL, last_error = NULL,
-                updated_at = $4
+                lease_expires_at = NULL, lease_token = NULL,
+                last_error = NULL,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
-              AND status = 'running' AND lease_owner = $3
+              AND status = 'running' AND lease_owner = $3 AND lease_token = $4
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
-                      lease_expires_at, created_at, updated_at
+                      lease_expires_at, lease_token, created_at, updated_at
             "#,
         )
         .bind(workspace_id)
         .bind(job_id)
         .bind(lease_owner)
-        .bind(unix_now())
+        .bind(lease_token)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_read)?
@@ -369,6 +391,7 @@ impl KnowledgeStore {
         workspace_id: &str,
         job_id: &str,
         lease_owner: &str,
+        lease_token: &str,
         error: &str,
         available_at: i64,
     ) -> KnowledgeResult<ImportJobRow> {
@@ -381,21 +404,22 @@ impl KnowledgeStore {
                   ELSE 'queued'
                 END,
                 lease_owner = NULL,
-                lease_expires_at = NULL, last_error = $4,
-                available_at = $5, updated_at = $6
+                lease_expires_at = NULL, lease_token = NULL,
+                last_error = $5, available_at = $6,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
-              AND status = 'running' AND lease_owner = $3
+              AND status = 'running' AND lease_owner = $3 AND lease_token = $4
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
-                      lease_expires_at, created_at, updated_at
+                      lease_expires_at, lease_token, created_at, updated_at
             "#,
         )
         .bind(workspace_id)
         .bind(job_id)
         .bind(lease_owner)
+        .bind(lease_token)
         .bind(error)
         .bind(available_at)
-        .bind(unix_now())
         .fetch_optional(&self.pool)
         .await
         .map_err(map_read)?
@@ -407,6 +431,7 @@ impl KnowledgeStore {
         workspace_id: &str,
         job_id: &str,
         lease_owner: &str,
+        lease_token: &str,
         error: &str,
     ) -> KnowledgeResult<ImportJobRow> {
         let error = bounded_error(error);
@@ -414,20 +439,21 @@ impl KnowledgeStore {
             r#"
             UPDATE knowledge.import_jobs
             SET status = 'failed', lease_owner = NULL,
-                lease_expires_at = NULL, last_error = $4,
-                updated_at = $5
+                lease_expires_at = NULL, lease_token = NULL,
+                last_error = $5,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
-              AND status = 'running' AND lease_owner = $3
+              AND status = 'running' AND lease_owner = $3 AND lease_token = $4
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
-                      lease_expires_at, created_at, updated_at
+                      lease_expires_at, lease_token, created_at, updated_at
             "#,
         )
         .bind(workspace_id)
         .bind(job_id)
         .bind(lease_owner)
+        .bind(lease_token)
         .bind(error)
-        .bind(unix_now())
         .fetch_optional(&self.pool)
         .await
         .map_err(map_read)?
@@ -443,7 +469,7 @@ impl KnowledgeStore {
             r#"
             SELECT id, workspace_id, source_id, kind, status, attempts,
                    max_attempts, last_error, available_at, lease_owner,
-                   lease_expires_at, created_at, updated_at
+                   lease_expires_at, lease_token, created_at, updated_at
             FROM knowledge.import_jobs
             WHERE workspace_id = $1 AND id = $2
             "#,
@@ -613,7 +639,7 @@ mod tests {
             .expect("connect and migrate");
         let suffix = uuid::Uuid::now_v7().simple().to_string();
         let workspace = create_workspace(&pool, &format!("{suffix}_jobs")).await;
-        let store = KnowledgeStore::new(pool);
+        let store = KnowledgeStore::new(pool.clone());
         let created = store
             .create_import_job(&workspace, None, "upload", 3, 10)
             .await
@@ -624,17 +650,22 @@ mod tests {
         let workspace_a = workspace.clone();
         let workspace_b = workspace.clone();
         let (claim_a, claim_b) = tokio::join!(
-            store_a.claim_import_job(&workspace_a, "worker-a", 10, 20),
-            store_b.claim_import_job(&workspace_b, "worker-b", 10, 20),
+            store_a.claim_import_job(&workspace_a, "worker-a", 60),
+            store_b.claim_import_job(&workspace_b, "worker-b", 60),
         );
         let claims = [claim_a.expect("claim A"), claim_b.expect("claim B")];
         assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
         let first = claims.into_iter().flatten().next().expect("one claim");
         assert_eq!(first.id, created.id);
         assert_eq!(first.attempts, 1);
+        sqlx::query("UPDATE knowledge.import_jobs SET lease_expires_at = 0 WHERE id = $1")
+            .bind(&created.id)
+            .execute(&pool)
+            .await
+            .expect("expire first lease");
 
         let reclaimed = store
-            .claim_import_job(&workspace, "worker-c", 21, 31)
+            .claim_import_job(&workspace, "worker-c", 60)
             .await
             .expect("reclaim")
             .expect("expired lease is claimable");
@@ -642,10 +673,12 @@ mod tests {
         assert_eq!(reclaimed.attempts, 2);
 
         let first_worker = first.lease_owner.expect("claimed worker");
-        let stale = store.succeed_import_job(&workspace, &created.id, &first_worker);
+        let first_token = first.lease_token.expect("first lease token");
+        let stale = store.succeed_import_job(&workspace, &created.id, &first_worker, &first_token);
         assert!(stale.await.is_err());
+        let reclaimed_token = reclaimed.lease_token.expect("reclaimed lease token");
         store
-            .succeed_import_job(&workspace, &created.id, "worker-c")
+            .succeed_import_job(&workspace, &created.id, "worker-c", &reclaimed_token)
             .await
             .expect("active worker completes");
 
@@ -672,39 +705,54 @@ mod tests {
             .expect("connect and migrate");
         let suffix = uuid::Uuid::now_v7().simple().to_string();
         let workspace = create_workspace(&pool, &format!("{suffix}_retry")).await;
-        let store = KnowledgeStore::new(pool);
+        let store = KnowledgeStore::new(pool.clone());
         let job = store
             .create_import_job(&workspace, None, "connector", 3, 100)
             .await
             .expect("create job");
-        store
-            .claim_import_job(&workspace, "worker-a", 100, 110)
+        let claimed = store
+            .claim_import_job(&workspace, "worker-a", 60)
             .await
             .expect("claim")
             .expect("job claimed");
+        let first_token = claimed.lease_token.expect("first lease token");
 
+        let next_available = unix_now() + 60;
         let retried = store
-            .retry_import_job(&workspace, &job.id, "worker-a", "temporary", 120)
+            .retry_import_job(
+                &workspace,
+                &job.id,
+                "worker-a",
+                &first_token,
+                "temporary",
+                next_available,
+            )
             .await
             .expect("retry job");
         assert_eq!(retried.status, ImportJobStatus::Queued);
         assert_eq!(retried.last_error.as_deref(), Some("temporary"));
-        assert_eq!(retried.available_at, 120);
+        assert_eq!(retried.available_at, next_available);
         assert!(retried.lease_owner.is_none());
         assert!(store
-            .claim_import_job(&workspace, "worker-b", 119, 130)
+            .claim_import_job(&workspace, "worker-b", 60)
             .await
             .expect("early claim")
             .is_none());
-        store
-            .claim_import_job(&workspace, "worker-b", 120, 130)
+        sqlx::query("UPDATE knowledge.import_jobs SET available_at = 0 WHERE id = $1")
+            .bind(&job.id)
+            .execute(&pool)
+            .await
+            .expect("make retry available");
+        let second = store
+            .claim_import_job(&workspace, "worker-b", 60)
             .await
             .expect("second claim")
             .expect("retry became available");
+        let second_token = second.lease_token.expect("second lease token");
 
         let oversized = "x".repeat(5000);
         let failed = store
-            .fail_import_job(&workspace, &job.id, "worker-b", &oversized)
+            .fail_import_job(&workspace, &job.id, "worker-b", &second_token, &oversized)
             .await
             .expect("terminal failure");
         assert_eq!(failed.status, ImportJobStatus::Failed);
@@ -740,19 +788,24 @@ mod tests {
             .expect("connect and migrate");
         let suffix = uuid::Uuid::now_v7().simple().to_string();
         let workspace = create_workspace(&pool, &format!("{suffix}_exhausted")).await;
-        let store = KnowledgeStore::new(pool);
+        let store = KnowledgeStore::new(pool.clone());
         let job = store
             .create_import_job(&workspace, None, "upload", 1, 10)
             .await
             .expect("create job");
         store
-            .claim_import_job(&workspace, "worker-a", 10, 20)
+            .claim_import_job(&workspace, "worker-a", 60)
             .await
             .expect("claim")
             .expect("job claimed");
+        sqlx::query("UPDATE knowledge.import_jobs SET lease_expires_at = 0 WHERE id = $1")
+            .bind(&job.id)
+            .execute(&pool)
+            .await
+            .expect("expire final lease");
 
         assert!(store
-            .claim_import_job(&workspace, "worker-b", 21, 31)
+            .claim_import_job(&workspace, "worker-b", 60)
             .await
             .expect("claim after final lease")
             .is_none());
@@ -781,18 +834,96 @@ mod tests {
             .create_import_job(&workspace, None, "upload", 1, 10)
             .await
             .expect("create job");
-        store
-            .claim_import_job(&workspace, "worker-a", 10, 20)
+        let claimed = store
+            .claim_import_job(&workspace, "worker-a", 60)
             .await
             .expect("claim")
             .expect("job claimed");
+        let lease_token = claimed.lease_token.expect("lease token");
 
         let exhausted = store
-            .retry_import_job(&workspace, &job.id, "worker-a", "still broken", 30)
+            .retry_import_job(
+                &workspace,
+                &job.id,
+                "worker-a",
+                &lease_token,
+                "still broken",
+                unix_now() + 30,
+            )
             .await
             .expect("record final retry failure");
         assert_eq!(exhausted.status, ImportJobStatus::Failed);
         assert_eq!(exhausted.last_error.as_deref(), Some("still broken"));
         assert!(exhausted.lease_owner.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn reclaimed_job_rejects_stale_completion_from_same_worker_id() {
+        let pool = crate::db::connect_and_migrate(&require_database_url())
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_same_worker")).await;
+        let store = KnowledgeStore::new(pool.clone());
+        let job = store
+            .create_import_job(&workspace, None, "upload", 3, 0)
+            .await
+            .expect("create job");
+        let first = store
+            .claim_import_job(&workspace, "worker-a", 60)
+            .await
+            .expect("first claim")
+            .expect("job claimed");
+        sqlx::query("UPDATE knowledge.import_jobs SET lease_expires_at = 0 WHERE id = $1")
+            .bind(&job.id)
+            .execute(&pool)
+            .await
+            .expect("expire first lease");
+        let second = store
+            .claim_import_job(&workspace, "worker-a", 60)
+            .await
+            .expect("second claim")
+            .expect("job reclaimed");
+        assert_ne!(first.lease_token, second.lease_token);
+
+        let stale = store
+            .succeed_import_job(
+                &workspace,
+                &job.id,
+                "worker-a",
+                first.lease_token.as_deref().expect("first token"),
+            )
+            .await;
+        assert!(stale.is_err());
+        store
+            .succeed_import_job(
+                &workspace,
+                &job.id,
+                "worker-a",
+                second.lease_token.as_deref().expect("second token"),
+            )
+            .await
+            .expect("current lease succeeds");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn claim_rejects_non_positive_lease_duration() {
+        let pool = crate::db::connect_and_migrate(&require_database_url())
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_lease_duration")).await;
+        let store = KnowledgeStore::new(pool);
+        store
+            .create_import_job(&workspace, None, "upload", 3, 0)
+            .await
+            .expect("create job");
+
+        assert!(store
+            .claim_import_job(&workspace, "worker-a", 0)
+            .await
+            .is_err());
     }
 }

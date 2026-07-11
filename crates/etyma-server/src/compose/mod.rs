@@ -10,7 +10,7 @@ use etyma_engine_types::{
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// Compose a cited V1 pack from server-owned multi-source evidence (spike path).
+/// Compose a cited V1 pack from server-owned Postgres evidence.
 /// Source body text is loaded from the blob backend when needed for title/body matching.
 pub async fn compose_pack(
     knowledge: &KnowledgeStore,

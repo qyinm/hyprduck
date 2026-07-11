@@ -150,7 +150,8 @@ mod tests {
             vec![
                 "idx_knowledge_evidence_workspace_created",
                 "idx_knowledge_evidence_workspace_source_created",
-                "idx_knowledge_import_jobs_claimable",
+                "idx_knowledge_import_jobs_queued_claimable",
+                "idx_knowledge_import_jobs_running_expired",
                 "idx_knowledge_import_jobs_workspace_created",
                 "idx_knowledge_import_jobs_workspace_source",
                 "idx_knowledge_sources_workspace_created",
