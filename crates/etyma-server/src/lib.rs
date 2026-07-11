@@ -3,6 +3,7 @@ pub mod blob;
 pub mod compose;
 pub mod config;
 pub mod http;
+pub mod ingest;
 pub mod mcp;
 pub mod seed;
 pub mod store;

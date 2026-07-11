@@ -2,6 +2,11 @@
 //!
 //! Key scheme (v1): `w/{workspace_id}/sha256/{hex}`
 //! Content hash form: `sha256:{hex}` (full SHA-256 of raw bytes).
+//!
+//! Integrity model:
+//! - Writes are content-addressed: the key embeds the hash of the bytes.
+//! - `put_with_expected_hash` rejects caller-supplied hashes that do not match the payload.
+//! - `get_verified` re-hashes on read when the key is content-addressed.
 
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -69,23 +74,15 @@ pub struct BlobPutMeta {
     pub byte_size: u64,
 }
 
-/// Hash bytes, verify integrity, put under the standard key scheme, return meta.
+/// Hash once, put under the content-addressed key, return meta for source rows.
 pub fn put_bytes(
     blobs: &dyn BlobStore,
     workspace_id: &str,
     bytes: &[u8],
 ) -> BlobResult<BlobPutMeta> {
     let content_hash = content_hash_sha256(bytes);
-    // B6: integrity check on write (hash of payload must match stored hash).
-    let verify = content_hash_sha256(bytes);
-    if verify != content_hash {
-        return Err(BlobError::Integrity {
-            expected: content_hash,
-            actual: verify,
-        });
-    }
     let blob_key = blob_key_for(workspace_id, &content_hash);
-    put_with_expected_hash(blobs, &blob_key, &content_hash, bytes)?;
+    blobs.put(&blob_key, bytes)?;
     Ok(BlobPutMeta {
         blob_key,
         content_hash,
@@ -94,6 +91,7 @@ pub fn put_bytes(
 }
 
 /// Put bytes only if their SHA-256 matches `expected_hash` (`sha256:…`).
+/// Use when the caller supplies a hash (e.g. future upload clients), not for self-derived hashes.
 pub fn put_with_expected_hash(
     blobs: &dyn BlobStore,
     key: &str,
@@ -107,7 +105,39 @@ pub fn put_with_expected_hash(
             actual,
         });
     }
+    // Content-addressed keys must embed the same hash.
+    if let Some(key_hash) = hash_from_content_addressed_key(key) {
+        if key_hash != expected_hash {
+            return Err(BlobError::Integrity {
+                expected: expected_hash.to_string(),
+                actual: key_hash,
+            });
+        }
+    }
     blobs.put(key, bytes)
+}
+
+/// Read bytes and, for content-addressed keys, verify payload hash matches the key.
+pub fn get_verified(blobs: &dyn BlobStore, key: &str) -> BlobResult<Vec<u8>> {
+    let bytes = blobs.get(key)?;
+    if let Some(expected) = hash_from_content_addressed_key(key) {
+        let actual = content_hash_sha256(&bytes);
+        if actual != expected {
+            return Err(BlobError::Integrity { expected, actual });
+        }
+    }
+    Ok(bytes)
+}
+
+/// Parse `sha256:{hex}` from keys shaped like `w/{workspace}/sha256/{hex}`.
+fn hash_from_content_addressed_key(key: &str) -> Option<String> {
+    let parts: Vec<&str> = key.split('/').collect();
+    // w / {workspace} / sha256 / {hex}
+    if parts.len() == 4 && parts[0] == "w" && parts[2] == "sha256" && !parts[3].is_empty() {
+        Some(format!("sha256:{}", parts[3]))
+    } else {
+        None
+    }
 }
 
 /// Local filesystem blob adapter (`ETYMA_BLOB_ROOT`).
@@ -134,33 +164,9 @@ impl LocalFsBlobStore {
 
     fn resolve(&self, key: &str) -> BlobResult<PathBuf> {
         validate_blob_key(key)?;
-        // Key is already slash-separated segments; join under root.
         let mut path = self.root.clone();
         for segment in key.split('/') {
             path.push(segment);
-        }
-        // Ensure resolved path stays under root (no escape after join).
-        let root_canon = self.root.canonicalize().unwrap_or_else(|_| self.root.clone());
-        if let Ok(canon) = path.canonicalize() {
-            if !canon.starts_with(&root_canon) {
-                return Err(BlobError::InvalidKey(format!(
-                    "path escapes blob root: {key}"
-                )));
-            }
-        } else {
-            // Parent may not exist yet; check parent prefix against root.
-            if let Some(parent) = path.parent() {
-                if parent.exists() {
-                    let parent_canon = parent.canonicalize().map_err(|e| {
-                        BlobError::Io(format!("canonicalize {}: {e}", parent.display()))
-                    })?;
-                    if !parent_canon.starts_with(&root_canon) {
-                        return Err(BlobError::InvalidKey(format!(
-                            "path escapes blob root: {key}"
-                        )));
-                    }
-                }
-            }
         }
         Ok(path)
     }
@@ -192,11 +198,9 @@ impl BlobStore for LocalFsBlobStore {
         let path = self.resolve(key)?;
         match fs::read(&path) {
             Ok(bytes) => Ok(bytes),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                Err(BlobError::NotFound {
-                    key: key.to_string(),
-                })
-            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Err(BlobError::NotFound {
+                key: key.to_string(),
+            }),
             Err(e) => Err(BlobError::Io(format!("read {}: {e}", path.display()))),
         }
     }
@@ -258,6 +262,7 @@ mod tests {
         assert_eq!(meta.byte_size, bytes.len() as u64);
         assert!(store.exists(&meta.blob_key).unwrap());
         assert_eq!(store.get(&meta.blob_key).unwrap(), bytes);
+        assert_eq!(get_verified(&store, &meta.blob_key).unwrap(), bytes);
         store.delete(&meta.blob_key).unwrap();
         assert!(!store.exists(&meta.blob_key).unwrap());
         assert!(matches!(
@@ -274,6 +279,21 @@ mod tests {
             &store,
             "w/ws1/sha256/deadbeef",
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            b"payload",
+        )
+        .unwrap_err();
+        assert!(matches!(err, BlobError::Integrity { .. }));
+    }
+
+    #[test]
+    fn put_rejects_key_hash_mismatch() {
+        let dir = tempdir().unwrap();
+        let store = LocalFsBlobStore::open(dir.path()).unwrap();
+        let hash = content_hash_sha256(b"payload");
+        let err = put_with_expected_hash(
+            &store,
+            "w/ws1/sha256/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            &hash,
             b"payload",
         )
         .unwrap_err();
@@ -310,5 +330,19 @@ mod tests {
         .unwrap();
         assert_eq!(a.blob_key, b.blob_key);
         assert_eq!(a.content_hash, b.content_hash);
+    }
+
+    #[test]
+    fn get_verified_detects_tamper() {
+        let dir = tempdir().unwrap();
+        let store = LocalFsBlobStore::open(dir.path()).unwrap();
+        let meta = put_bytes(&store, "ws1", b"original").unwrap();
+        // Overwrite file behind the API with wrong bytes at same path.
+        let path = store.resolve(&meta.blob_key).unwrap();
+        fs::write(&path, b"tampered").unwrap();
+        assert!(matches!(
+            get_verified(&store, &meta.blob_key),
+            Err(BlobError::Integrity { .. })
+        ));
     }
 }

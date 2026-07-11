@@ -1,5 +1,5 @@
-use crate::blob::BlobStore;
-use crate::store::{EvidenceRow, Store, StoreError, StoreResult};
+use crate::blob::{get_verified, BlobStore};
+use crate::store::{EvidenceRow, Store, StoreResult};
 use etyma_engine_types::{
     ContextPackEvidenceV1, ContextPackFindingStatus, ContextPackFindingV0,
     ContextPackParseConfidence, ContextPackRetrievalTraceV1, ContextPackSourceV0,
@@ -120,9 +120,7 @@ fn load_source_text(
     blobs: &dyn BlobStore,
     source: &crate::store::SourceRow,
 ) -> StoreResult<String> {
-    let bytes = blobs
-        .get(&source.blob_key)
-        .map_err(|e| StoreError::Internal(e.to_string()))?;
+    let bytes = get_verified(blobs, &source.blob_key)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -171,7 +169,7 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
     use crate::blob::LocalFsBlobStore;
-    use crate::seed::ingest_source;
+    use crate::ingest::ingest_source;
     use crate::store::Store;
     use tempfile::tempdir;
 

@@ -42,7 +42,9 @@ rm -rf "${ETYMA_BLOB_ROOT:-./.etyma-server-data/blobs}"
 
 After a wipe, recreate org → workspace → token → seed.
 
-Blob object keys use: `w/{workspace_id}/sha256/{hex}` with content hash `sha256:{hex}` of the raw bytes. Writes verify hash integrity before persist.
+Blob object keys use: `w/{workspace_id}/sha256/{hex}` with content hash `sha256:{hex}` of the raw bytes. Keys are content-addressed (hash embedded in the key); caller-supplied hashes are checked on write, and content-addressed reads can re-verify on get.
+
+Ingest is **blob put then SQLite meta** and is not a single transaction. If meta insert fails after put, an orphan blob may remain until you wipe the data dir.
 
 ## Run
 
@@ -108,4 +110,4 @@ cargo test -p etyma-server
 
 ## Out of scope (intentionally)
 
-OIDC, org members/invites/roles, org-scoped tokens, personal-org auto-provision, real GitHub OAuth, full MCP catalog, desktop cloud client default, S3/presign upload (B8/B9), human upload UI.
+OIDC, org members/invites/roles, org-scoped tokens, personal-org auto-provision, real GitHub OAuth, full MCP catalog, desktop cloud client default, S3/presign upload, human upload UI.

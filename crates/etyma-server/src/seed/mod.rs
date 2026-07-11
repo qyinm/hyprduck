@@ -1,5 +1,6 @@
-use crate::blob::{put_bytes, BlobStore};
-use crate::store::{SourceRow, Store, StoreError, StoreResult};
+use crate::blob::BlobStore;
+use crate::ingest::ingest_source;
+use crate::store::{Store, StoreResult};
 
 pub const FIXTURE_TERM: &str = "alpha-token";
 
@@ -17,33 +18,10 @@ We need alpha-token binding so packs never leak across workspaces.
 Acceptance: token for workspace A cannot read workspace B.
 "#;
 
-/// Write original bytes to the blob backend, then insert source metadata (B3).
-pub fn ingest_source(
-    store: &Store,
-    blobs: &dyn BlobStore,
-    workspace_id: &str,
-    kind: &str,
-    title: &str,
-    bytes: &[u8],
-    content_type: &str,
-    external_id: Option<&str>,
-) -> StoreResult<SourceRow> {
-    store.require_workspace(workspace_id)?;
-    let meta = put_bytes(blobs, workspace_id, bytes).map_err(blob_err)?;
-    store.insert_source(
-        workspace_id,
-        kind,
-        title,
-        &meta.blob_key,
-        &meta.content_hash,
-        meta.byte_size as i64,
-        content_type,
-        external_id,
-    )
-}
-
 /// Seed document + synthetic issue rows into the workspace tenant.
-/// Writes blobs first, then metadata. Idempotent when sources already exist.
+/// Uses [`ingest_source`] (blob first, then metadata). Idempotent when sources already exist.
+///
+/// Coarse idempotency: any existing source count skips re-seed (partial seed is not repaired).
 pub fn seed_multi_source_workspace(
     store: &Store,
     blobs: &dyn BlobStore,
@@ -93,14 +71,10 @@ pub fn seed_multi_source_workspace(
     store.source_count(workspace_id)
 }
 
-fn blob_err(err: crate::blob::BlobError) -> StoreError {
-    StoreError::Internal(err.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::LocalFsBlobStore;
+    use crate::blob::{BlobStore, LocalFsBlobStore};
     use tempfile::tempdir;
 
     #[test]

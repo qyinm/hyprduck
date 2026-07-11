@@ -115,6 +115,7 @@ fn store_err(err: StoreError) -> (StatusCode, String) {
     let status = match &err {
         StoreError::NotFound { .. } => StatusCode::NOT_FOUND,
         StoreError::Conflict(_) => StatusCode::CONFLICT,
+        StoreError::Integrity(_) => StatusCode::BAD_REQUEST,
         StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, err.to_string())

@@ -1,3 +1,4 @@
+use crate::blob::{BlobError, BlobPutMeta};
 use rusqlite::{params, Connection, ErrorCode};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -45,6 +46,8 @@ pub struct EvidenceRow {
 pub enum StoreError {
     NotFound { entity: &'static str, id: String },
     Conflict(String),
+    /// Blob integrity / invalid key / hash mismatch.
+    Integrity(String),
     Internal(String),
 }
 
@@ -53,12 +56,29 @@ impl fmt::Display for StoreError {
         match self {
             Self::NotFound { entity, id } => write!(f, "{entity} not found: {id}"),
             Self::Conflict(msg) => write!(f, "{msg}"),
+            Self::Integrity(msg) => write!(f, "{msg}"),
             Self::Internal(msg) => write!(f, "{msg}"),
         }
     }
 }
 
 impl std::error::Error for StoreError {}
+
+impl From<BlobError> for StoreError {
+    fn from(err: BlobError) -> Self {
+        match err {
+            BlobError::NotFound { key } => Self::NotFound {
+                entity: "blob",
+                id: key,
+            },
+            BlobError::Integrity { expected, actual } => Self::Integrity(format!(
+                "blob integrity mismatch: expected {expected}, got {actual}"
+            )),
+            BlobError::InvalidKey(msg) => Self::Integrity(format!("invalid blob key: {msg}")),
+            BlobError::Io(msg) => Self::Internal(format!("blob io: {msg}")),
+        }
+    }
+}
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
@@ -304,20 +324,20 @@ impl Store {
         }
     }
 
-    /// Insert source metadata only. Caller must write blob bytes first (B3).
+    /// Insert source metadata only. Prefer [`crate::ingest::ingest_source`] so blob
+    /// bytes are written first; orphan blobs are possible if this fails after put.
     pub fn insert_source(
         &self,
         workspace_id: &str,
         kind: &str,
         title: &str,
-        blob_key: &str,
-        content_hash: &str,
-        byte_size: i64,
+        blob: &BlobPutMeta,
         content_type: &str,
         external_id: Option<&str>,
     ) -> StoreResult<SourceRow> {
         let id = format!("src_{}", Uuid::now_v7().simple());
         let now = unix_now();
+        let byte_size = blob.byte_size as i64;
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO sources (
@@ -328,8 +348,8 @@ impl Store {
                 workspace_id,
                 kind,
                 title,
-                blob_key,
-                content_hash,
+                blob.blob_key,
+                blob.content_hash,
                 byte_size,
                 content_type,
                 external_id,
@@ -342,8 +362,8 @@ impl Store {
             workspace_id: workspace_id.to_string(),
             kind: kind.to_string(),
             title: title.to_string(),
-            blob_key: blob_key.to_string(),
-            content_hash: content_hash.to_string(),
+            blob_key: blob.blob_key.clone(),
+            content_hash: blob.content_hash.clone(),
             byte_size,
             content_type: content_type.to_string(),
             external_id: external_id.map(str::to_string),
@@ -514,17 +534,13 @@ mod tests {
         let store = Store::open(&dir.path().join("t.sqlite3")).unwrap();
         store.create_org("org1", "Acme").unwrap();
         store.create_workspace("org1", "ws1").unwrap();
+        let blob = BlobPutMeta {
+            blob_key: "w/ws1/sha256/abc".into(),
+            content_hash: "sha256:abc".into(),
+            byte_size: 42,
+        };
         let src = store
-            .insert_source(
-                "ws1",
-                "document",
-                "spec.md",
-                "w/ws1/sha256/abc",
-                "sha256:abc",
-                42,
-                "text/markdown",
-                None,
-            )
+            .insert_source("ws1", "document", "spec.md", &blob, "text/markdown", None)
             .unwrap();
         assert_eq!(src.blob_key, "w/ws1/sha256/abc");
         assert_eq!(src.content_hash, "sha256:abc");
