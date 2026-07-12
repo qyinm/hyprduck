@@ -1,6 +1,7 @@
-use crate::blob::{get_verified, BlobStore};
+use crate::blob::BlobStore;
 use crate::graph::GraphStore;
-use crate::knowledge::{EvidenceRow, KnowledgeStore, SourceRow};
+use crate::knowledge::{EvidenceRow, KnowledgeStore};
+use crate::retrieval::retrieve_evidence;
 use crate::store::{StoreError, StoreResult};
 use etyma_engine_types::{
     ContextPackEvidenceV1, ContextPackFindingStatus, ContextPackFindingV0,
@@ -24,44 +25,29 @@ pub async fn compose_pack(
     workspace_id: &str,
     query: &str,
 ) -> StoreResult<ContextPackV1> {
-    let sources = knowledge
-        .list_sources(workspace_id)
-        .await
-        .map_err(StoreError::from)?;
-    let evidence = knowledge
-        .list_evidence(workspace_id)
-        .await
-        .map_err(StoreError::from)?;
-    let terms = query_terms(query);
-    let mut hits: Vec<&EvidenceRow> = evidence
-        .iter()
-        .filter(|ev| matches_terms(&ev.quote, &terms) || matches_terms(&ev.locator, &terms))
-        .collect();
-    if hits.is_empty() {
-        for source in &sources {
-            let body = load_source_text(blobs, source)?;
-            if matches_terms(&body, &terms) || matches_terms(&source.title, &terms) {
-                if let Some(ev) = evidence.iter().find(|e| e.source_id == source.id) {
-                    hits.push(ev);
-                }
-            }
-        }
-    }
+    let retrieval = retrieve_evidence(knowledge, blobs, workspace_id, query, 16).await?;
 
     let pack_id = format!("ctx_{}", Uuid::now_v7().simple());
     let generated_at = format!("{}", unix_now());
-    let source_by_id: BTreeMap<_, _> = sources.iter().map(|s| (s.id.as_str(), s)).collect();
+    let source_by_id: BTreeMap<_, _> = retrieval
+        .sources
+        .iter()
+        .map(|source| (source.id.as_str(), source))
+        .collect();
     let mut selected_evidence = Vec::new();
     let mut findings = Vec::new();
     let mut source_set = BTreeMap::new();
-    let evidence_pool = evidence.len();
 
-    let selected: Vec<&EvidenceRow> = hits.into_iter().take(16).collect();
-    let trail_index = load_graph_trail_index(graph, workspace_id, &selected).await?;
+    let trail_index =
+        load_graph_trail_index(graph, workspace_id, &retrieval.selected_evidence).await?;
 
-    for (idx, ev) in selected.into_iter().enumerate() {
-        let page = parse_page(&ev.locator).unwrap_or(1);
-        let evidence_type = evidence_type_for_kind(&ev.source_kind);
+    for (idx, ev) in retrieval.selected_evidence.iter().enumerate() {
+        let page = ev
+            .page
+            .map(|value| value as usize)
+            .or_else(|| parse_page(&ev.locator))
+            .unwrap_or(1);
+        let evidence_type = evidence_type_for_row(ev);
         let content_hash = ev.content_hash.clone();
         let graph_trail = trail_index.get(ev.id.as_str()).cloned();
         selected_evidence.push(ContextPackEvidenceV1 {
@@ -125,7 +111,7 @@ pub async fn compose_pack(
         warnings,
         retrieval_trace: ContextPackRetrievalTraceV1 {
             strategy: "etyma-server-postgres-term-match".into(),
-            chunks_considered: evidence_pool,
+            chunks_considered: retrieval.chunks_considered,
             chunks_selected,
             budget_requested: 8000,
             budget_used: chunks_selected.saturating_mul(120),
@@ -139,7 +125,7 @@ pub async fn compose_pack(
 async fn load_graph_trail_index(
     graph: &GraphStore,
     workspace_id: &str,
-    selected: &[&EvidenceRow],
+    selected: &[EvidenceRow],
 ) -> StoreResult<BTreeMap<String, ContextPackGraphTrailV1>> {
     if selected.is_empty() {
         return Ok(BTreeMap::new());
@@ -217,35 +203,11 @@ async fn load_graph_trail_index(
     Ok(out)
 }
 
-fn load_source_text(blobs: &dyn BlobStore, source: &SourceRow) -> StoreResult<String> {
-    let bytes = get_verified(blobs, &source.blob_key)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn evidence_type_for_kind(kind: &str) -> EvidenceType {
-    match kind {
-        "issue" | "pull_request" => EvidenceType::Claim,
+fn evidence_type_for_row(row: &EvidenceRow) -> EvidenceType {
+    match row.evidence_type.as_str() {
+        "claim" | "issue" | "pull_request" => EvidenceType::Claim,
         _ => EvidenceType::Text,
     }
-}
-
-fn query_terms(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(|t| {
-            t.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .filter(|t| t.len() >= 2)
-        .collect()
-}
-
-fn matches_terms(haystack: &str, terms: &[String]) -> bool {
-    if terms.is_empty() {
-        return false;
-    }
-    let lower = haystack.to_lowercase();
-    terms.iter().any(|t| lower.contains(t))
 }
 
 fn parse_page(locator: &str) -> Option<usize> {
