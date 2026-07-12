@@ -14,6 +14,7 @@ use axum::http::{header, HeaderMap};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use etyma_engine_types::ContextPackV1;
+use mime::Mime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -529,10 +530,13 @@ fn optional_content_type(headers: &HeaderMap) -> Result<String, (StatusCode, Str
                 .to_str()
                 .map_err(|_| (StatusCode::BAD_REQUEST, "content-type is invalid".into()))?
                 .trim();
-            if value.is_empty() {
+            if value.is_empty() || value.len() > 255 {
                 return Err((StatusCode::BAD_REQUEST, "content-type is invalid".into()));
             }
-            Ok(value.to_owned())
+            let parsed: Mime = value
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, "content-type is invalid".into()))?;
+            Ok(parsed.to_string())
         }
         None => Ok("application/octet-stream".into()),
     }

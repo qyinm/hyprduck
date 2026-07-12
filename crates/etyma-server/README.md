@@ -110,6 +110,8 @@ curl -sS \
 Job status is stored in Postgres, source bytes live in the blob adapter, and
 the S2 soft path writes one page-1 evidence record for UTF-8 content. Full
 binary parsing and GraphQLite materialization belong to PON-11 / PON-19.
+Queued and lease-expired running upload jobs are re-dispatched by a bounded
+server recovery loop after startup.
 
 ## Tests
 

@@ -35,11 +35,13 @@ pub async fn build_app(config: &ServerConfig) -> Result<Router> {
     let blobs = LocalFsBlobStore::open(&config.blob_root).context("open blob store")?;
     let knowledge = KnowledgeStore::new(pool.clone());
     let graph = GraphStore::new(pool.clone());
+    let blobs = Arc::new(blobs);
+    import_job::spawn_upload_recovery_loop(knowledge.clone(), blobs.clone());
     let state = AppState {
         store: Arc::new(store),
         knowledge,
         graph,
-        blobs: Arc::new(blobs),
+        blobs,
         spike_admin_token: config.spike_admin_token.clone(),
         host_mode: config.storage.host_mode(),
         pg_pool: pool,

@@ -40,16 +40,40 @@ async fn upload_raw_source(
     workspace_id: &str,
     admin: &str,
 ) -> reqwest::Response {
-    client
+    upload_source_with(
+        client,
+        base,
+        workspace_id,
+        admin,
+        "upload.md",
+        Some("document"),
+        Some("text/markdown"),
+        b"# alpha upload\n\nworkspace-scoped evidence".to_vec(),
+    )
+    .await
+}
+
+async fn upload_source_with(
+    client: &reqwest::Client,
+    base: &str,
+    workspace_id: &str,
+    admin: &str,
+    title: &str,
+    kind: Option<&str>,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> reqwest::Response {
+    let mut request = client
         .post(format!("{base}/v1/spike/workspaces/{workspace_id}/sources"))
         .header("x-etyma-admin-token", admin)
-        .header("x-etyma-source-title", "upload.md")
-        .header("x-etyma-source-kind", "document")
-        .header("content-type", "text/markdown")
-        .body("# alpha upload\n\nworkspace-scoped evidence")
-        .send()
-        .await
-        .unwrap()
+        .header("x-etyma-source-title", title);
+    if let Some(kind) = kind {
+        request = request.header("x-etyma-source-kind", kind);
+    }
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    request.body(body).send().await.unwrap()
 }
 
 async fn wait_for_job(
@@ -130,6 +154,7 @@ async fn run_isolation_suite(
     let t2 = store.mint_token(&w2, Some("b")).await.unwrap();
 
     let app = {
+        etyma_server::import_job::spawn_upload_recovery_loop(knowledge.clone(), blobs.clone());
         let state = AppState {
             store: store.clone(),
             knowledge: knowledge.clone(),
@@ -378,16 +403,6 @@ async fn run_isolation_suite(
         .unwrap();
     assert_eq!(denied.status(), 401);
 
-    let missing_job = client
-        .get(format!(
-            "{base}/v1/spike/workspaces/{w1}/import-jobs/job-from-other-workspace"
-        ))
-        .header("x-etyma-admin-token", admin)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(missing_job.status(), 404);
-
     // MCP scoped to w1
     let mcp = client
         .post(format!("{base}/v1/mcp"))
@@ -449,6 +464,15 @@ async fn run_isolation_suite(
 
     let job_one = body_one["job"]["id"].as_str().unwrap();
     let job_two = body_two["job"]["id"].as_str().unwrap();
+    let sibling_job = client
+        .get(format!(
+            "{base}/v1/spike/workspaces/{w1}/import-jobs/{job_two}"
+        ))
+        .header("x-etyma-admin-token", admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sibling_job.status(), 404);
     let (status_one, status_two) = tokio::join!(
         wait_for_succeeded_job(&client, &base, &w1, job_one, admin),
         wait_for_succeeded_job(&client, &base, &w2, job_two, admin)
@@ -539,12 +563,14 @@ async fn run_isolation_suite(
         .as_str()
         .unwrap()
         .contains("UTF-8"));
-    assert!(invalid_status["lastError"]
-        .as_str()
-        .unwrap()
-        .chars()
-        .count()
-        <= 4096);
+    assert!(
+        invalid_status["lastError"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count()
+            <= 4096
+    );
 
     let failed_source = knowledge
         .get_source(&ws_http, invalid_source_id)
@@ -553,7 +579,74 @@ async fn run_isolation_suite(
         .expect("failed upload source row exists");
     assert!(blobs.exists(&failed_source.blob_key).unwrap());
     let failed_evidence = knowledge.list_evidence(&ws_http).await.unwrap();
-    assert!(!failed_evidence.iter().any(|e| e.source_id == invalid_source_id));
+    assert!(!failed_evidence
+        .iter()
+        .any(|e| e.source_id == invalid_source_id));
+
+    let accepted_boundary = upload_source_with(
+        &client,
+        &base,
+        &ws_http,
+        admin,
+        &"t".repeat(512),
+        None,
+        Some("text/plain; charset=utf-8"),
+        b"title boundary".to_vec(),
+    )
+    .await;
+    assert_eq!(accepted_boundary.status(), 202);
+
+    let oversized_title = upload_source_with(
+        &client,
+        &base,
+        &ws_http,
+        admin,
+        &"t".repeat(513),
+        None,
+        Some("text/plain"),
+        b"title too long".to_vec(),
+    )
+    .await;
+    assert_eq!(oversized_title.status(), 400);
+
+    let empty_body = upload_source_with(
+        &client,
+        &base,
+        &ws_http,
+        admin,
+        "empty.md",
+        None,
+        Some("text/plain"),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(empty_body.status(), 400);
+
+    let malformed_content_type = upload_source_with(
+        &client,
+        &base,
+        &ws_http,
+        admin,
+        "bad-type.md",
+        None,
+        Some("text plain"),
+        b"bad content type".to_vec(),
+    )
+    .await;
+    assert_eq!(malformed_content_type.status(), 400);
+
+    let malformed_content_type_params = upload_source_with(
+        &client,
+        &base,
+        &ws_http,
+        admin,
+        "bad-type-params.md",
+        None,
+        Some("text/plain; charset==utf-8"),
+        b"bad content type params".to_vec(),
+    )
+    .await;
+    assert_eq!(malformed_content_type_params.status(), 400);
 }
 
 #[tokio::test]
