@@ -193,13 +193,10 @@ mod tests {
             graph_indexes,
             vec![
                 "idx_graph_claims_live",
-                "idx_graph_claims_workspace_live",
                 "idx_graph_nodes_live",
                 "idx_graph_nodes_workspace_evidence",
-                "idx_graph_nodes_workspace_live",
                 "idx_graph_relations_live",
                 "idx_graph_relations_workspace_endpoints",
-                "idx_graph_relations_workspace_live",
             ]
         );
     }
