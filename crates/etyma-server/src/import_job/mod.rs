@@ -1,5 +1,7 @@
-use crate::blob::{get_verified, BlobStore};
+use crate::blob::BlobStore;
+use crate::graph::GraphStore;
 use crate::knowledge::{KnowledgeStore, SourceRow};
+use crate::materialize::materialize_source;
 use std::sync::Arc;
 use tokio::time::{self, Duration, MissedTickBehavior};
 use uuid::Uuid;
@@ -10,14 +12,22 @@ const RECOVERY_BATCH_LIMIT: usize = 16;
 
 pub fn spawn_upload_job(
     knowledge: KnowledgeStore,
+    graph: GraphStore,
     blobs: Arc<dyn BlobStore>,
     workspace_id: String,
     source: SourceRow,
     job_id: String,
 ) {
     tokio::spawn(async move {
-        if let Err(error) =
-            run_upload_job(&knowledge, blobs.as_ref(), &workspace_id, &source, &job_id).await
+        if let Err(error) = run_upload_job(
+            &knowledge,
+            &graph,
+            blobs.as_ref(),
+            &workspace_id,
+            &source,
+            &job_id,
+        )
+        .await
         {
             tracing::warn!(
                 workspace_id,
@@ -30,14 +40,19 @@ pub fn spawn_upload_job(
     });
 }
 
-pub fn spawn_upload_recovery_loop(knowledge: KnowledgeStore, blobs: Arc<dyn BlobStore>) {
+pub fn spawn_upload_recovery_loop(
+    knowledge: KnowledgeStore,
+    graph: GraphStore,
+    blobs: Arc<dyn BlobStore>,
+) {
     tokio::spawn(async move {
         let mut interval = time::interval(RECOVERY_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         interval.tick().await;
         loop {
             if let Err(error) =
-                recover_upload_jobs_once(&knowledge, blobs.clone(), RECOVERY_BATCH_LIMIT).await
+                recover_upload_jobs_once(&knowledge, &graph, blobs.clone(), RECOVERY_BATCH_LIMIT)
+                    .await
             {
                 tracing::warn!(error = %error, "upload job recovery scan failed");
             }
@@ -48,6 +63,7 @@ pub fn spawn_upload_recovery_loop(knowledge: KnowledgeStore, blobs: Arc<dyn Blob
 
 pub async fn recover_upload_jobs_once(
     knowledge: &KnowledgeStore,
+    graph: &GraphStore,
     blobs: Arc<dyn BlobStore>,
     limit: usize,
 ) -> Result<usize, String> {
@@ -60,6 +76,7 @@ pub async fn recover_upload_jobs_once(
         let source = job.clone().source();
         spawn_upload_job(
             knowledge.clone(),
+            graph.clone(),
             blobs.clone(),
             job.workspace_id.clone(),
             source,
@@ -71,6 +88,7 @@ pub async fn recover_upload_jobs_once(
 
 pub async fn run_upload_job(
     knowledge: &KnowledgeStore,
+    graph: &GraphStore,
     blobs: &dyn BlobStore,
     workspace_id: &str,
     source: &SourceRow,
@@ -111,7 +129,7 @@ pub async fn run_upload_job(
         .as_deref()
         .ok_or_else(|| "claimed import job missing lease token".to_string())?;
 
-    match soft_materialize_source(knowledge, blobs, source).await {
+    match materialize_source(knowledge, graph, blobs, source).await {
         Ok(_) => {
             knowledge
                 .succeed_import_job(workspace_id, job_id, &owner, lease_token)
@@ -127,31 +145,6 @@ pub async fn run_upload_job(
             Err(error)
         }
     }
-}
-
-pub async fn soft_materialize_source(
-    knowledge: &KnowledgeStore,
-    blobs: &dyn BlobStore,
-    source: &SourceRow,
-) -> Result<usize, String> {
-    let bytes = get_verified(blobs, &source.blob_key).map_err(|error| error.to_string())?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|error| format!("source blob is not valid UTF-8: {error}"))?;
-    if text.trim().is_empty() {
-        return Err("source blob is empty".into());
-    }
-    knowledge
-        .upsert_evidence(
-            &source.workspace_id,
-            &format!("ev_{}_root", source.id),
-            &source.id,
-            &source.kind,
-            text,
-            "page:1",
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(1)
 }
 
 #[cfg(test)]
@@ -220,6 +213,7 @@ mod tests {
         let suffix = Uuid::now_v7().simple().to_string();
         let workspace = create_workspace(&pool, &format!("{suffix}_recover")).await;
         let store = KnowledgeStore::new(pool.clone());
+        let graph = GraphStore::new(pool.clone());
         let blob_dir = tempfile::tempdir().expect("temp blob dir");
         let blobs = Arc::new(LocalFsBlobStore::open(blob_dir.path()).expect("open blob store"));
 
@@ -289,7 +283,7 @@ mod tests {
             .await
             .expect("expire running upload job");
 
-        let dispatched = recover_upload_jobs_once(&store, blobs.clone(), 16)
+        let dispatched = recover_upload_jobs_once(&store, &graph, blobs.clone(), 16)
             .await
             .expect("recover upload jobs");
         assert_eq!(dispatched, 2);

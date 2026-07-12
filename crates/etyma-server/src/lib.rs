@@ -8,7 +8,9 @@ pub mod http;
 pub mod import_job;
 pub mod ingest;
 pub mod knowledge;
+pub mod materialize;
 pub mod mcp;
+pub mod retrieval;
 pub mod seed;
 pub mod store;
 
@@ -41,7 +43,7 @@ pub async fn build_app(config: &ServerConfig) -> Result<Router> {
     let knowledge = KnowledgeStore::new(pool.clone());
     let graph = GraphStore::new(pool.clone());
     let blobs = Arc::new(blobs);
-    import_job::spawn_upload_recovery_loop(knowledge.clone(), blobs.clone());
+    import_job::spawn_upload_recovery_loop(knowledge.clone(), graph.clone(), blobs.clone());
     let state = AppState {
         auth,
         store,
