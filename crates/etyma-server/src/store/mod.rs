@@ -19,6 +19,67 @@ pub struct WorkspaceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MembershipRole {
+    Owner,
+    Member,
+}
+
+impl MembershipRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+        }
+    }
+
+    fn parse(value: String) -> StoreResult<Self> {
+        match value.as_str() {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            _ => Err(StoreError::Integrity(format!(
+                "unsupported membership role: {value}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipRow {
+    pub org_id: String,
+    pub user_id: String,
+    pub role: MembershipRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserOrgRow {
+    pub org_id: String,
+    pub name: String,
+    pub role: MembershipRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserWorkspaceRow {
+    pub workspace_id: String,
+    pub org_id: String,
+    pub role: MembershipRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiTokenRow {
+    pub id: String,
+    pub workspace_id: String,
+    pub label: Option<String>,
+    pub created_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintedApiToken {
+    pub token: ApiTokenRow,
+    pub raw_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserRow {
     pub id: String,
     pub email: Option<String>,
@@ -216,6 +277,83 @@ impl Store {
                 .collect()
         })
         .map_err(pg_err)
+    }
+
+    pub async fn get_membership_for_workspace(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+    ) -> StoreResult<Option<MembershipRow>> {
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT m.org_id, m.user_id, m.role
+             FROM control.memberships m
+             JOIN control.workspaces w ON w.org_id = m.org_id
+             WHERE m.user_id = $1 AND w.id = $2",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        row.map(|(org_id, user_id, role)| {
+            Ok(MembershipRow {
+                org_id,
+                user_id,
+                role: MembershipRole::parse(role)?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn list_user_orgs(&self, user_id: &str) -> StoreResult<Vec<UserOrgRow>> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT o.id, o.name, m.role
+             FROM control.memberships m
+             JOIN control.orgs o ON o.id = m.org_id
+             WHERE m.user_id = $1
+             ORDER BY o.created_at, o.id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        rows.into_iter()
+            .map(|(org_id, name, role)| {
+                Ok(UserOrgRow {
+                    org_id,
+                    name,
+                    role: MembershipRole::parse(role)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn list_user_workspaces(
+        &self,
+        user_id: &str,
+        org_id: &str,
+    ) -> StoreResult<Vec<UserWorkspaceRow>> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT w.id, w.org_id, m.role
+             FROM control.workspaces w
+             JOIN control.memberships m ON m.org_id = w.org_id
+             WHERE m.user_id = $1 AND w.org_id = $2
+             ORDER BY w.created_at, w.id",
+        )
+        .bind(user_id)
+        .bind(org_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        rows.into_iter()
+            .map(|(workspace_id, org_id, role)| {
+                Ok(UserWorkspaceRow {
+                    workspace_id,
+                    org_id,
+                    role: MembershipRole::parse(role)?,
+                })
+            })
+            .collect()
     }
 
     pub async fn create_oidc_login_state(
@@ -462,25 +600,96 @@ impl Store {
         Ok(result.rows_affected() == 1)
     }
 
-    pub async fn mint_token(&self, workspace_id: &str, label: Option<&str>) -> StoreResult<String> {
+    pub async fn mint_token_with_metadata(
+        &self,
+        workspace_id: &str,
+        label: Option<&str>,
+    ) -> StoreResult<MintedApiToken> {
         self.require_workspace(workspace_id).await?;
         let raw = format!("etyma_{}", Uuid::now_v7().simple());
+        let token_id = format!("tok_{}", Uuid::now_v7().simple());
+        let created_at = unix_now();
         sqlx::query(
-            "INSERT INTO control.api_tokens (token_hash, workspace_id, label, created_at) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO control.api_tokens (id, token_hash, workspace_id, label, created_at) VALUES ($1, $2, $3, $4, $5)",
         )
+        .bind(&token_id)
         .bind(hash_token(&raw))
         .bind(workspace_id)
         .bind(label)
-        .bind(unix_now())
+        .bind(created_at)
         .execute(&self.pool)
         .await
         .map_err(pg_err)?;
-        Ok(raw)
+        Ok(MintedApiToken {
+            token: ApiTokenRow {
+                id: token_id,
+                workspace_id: workspace_id.to_owned(),
+                label: label.map(str::to_owned),
+                created_at,
+                revoked_at: None,
+            },
+            raw_token: raw,
+        })
+    }
+
+    pub async fn mint_token(&self, workspace_id: &str, label: Option<&str>) -> StoreResult<String> {
+        Ok(self
+            .mint_token_with_metadata(workspace_id, label)
+            .await?
+            .raw_token)
+    }
+
+    pub async fn list_tokens(&self, workspace_id: &str) -> StoreResult<Vec<ApiTokenRow>> {
+        self.require_workspace(workspace_id).await?;
+        sqlx::query_as::<_, (String, String, Option<String>, i64, Option<i64>)>(
+            "SELECT id, workspace_id, label, created_at, revoked_at
+             FROM control.api_tokens
+             WHERE workspace_id = $1
+             ORDER BY created_at, id",
+        )
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(
+                    |(id, workspace_id, label, created_at, revoked_at)| ApiTokenRow {
+                        id,
+                        workspace_id,
+                        label,
+                        created_at,
+                        revoked_at,
+                    },
+                )
+                .collect()
+        })
+        .map_err(pg_err)
+    }
+
+    pub async fn revoke_token(
+        &self,
+        workspace_id: &str,
+        token_id: &str,
+        now: i64,
+    ) -> StoreResult<bool> {
+        self.require_workspace(workspace_id).await?;
+        let result = sqlx::query(
+            "UPDATE control.api_tokens
+             SET revoked_at = $3
+             WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(token_id)
+        .bind(workspace_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn resolve_token(&self, raw_token: &str) -> StoreResult<Option<String>> {
         sqlx::query_scalar::<_, String>(
-            "SELECT workspace_id FROM control.api_tokens WHERE token_hash = $1",
+            "SELECT workspace_id FROM control.api_tokens WHERE token_hash = $1 AND revoked_at IS NULL",
         )
         .bind(hash_token(raw_token))
         .fetch_optional(&self.pool)
@@ -536,20 +745,26 @@ mod tests {
                 .expect("live session"),
             first
         );
-        assert!(store
-            .resolve_session(&raw_token, 2_000_000_001)
-            .await
-            .expect("expired lookup")
-            .is_none());
-        assert!(store
-            .revoke_session(&raw_token, 1_900_000_001)
-            .await
-            .expect("revoke"));
-        assert!(store
-            .resolve_session(&raw_token, 1_900_000_002)
-            .await
-            .expect("revoked lookup")
-            .is_none());
+        assert!(
+            store
+                .resolve_session(&raw_token, 2_000_000_001)
+                .await
+                .expect("expired lookup")
+                .is_none()
+        );
+        assert!(
+            store
+                .revoke_session(&raw_token, 1_900_000_001)
+                .await
+                .expect("revoke")
+        );
+        assert!(
+            store
+                .resolve_session(&raw_token, 1_900_000_002)
+                .await
+                .expect("revoked lookup")
+                .is_none()
+        );
     }
 }
 
