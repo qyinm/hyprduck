@@ -52,7 +52,7 @@ async fn upload_raw_source(
         .unwrap()
 }
 
-async fn wait_for_succeeded_job(
+async fn wait_for_job(
     client: &reqwest::Client,
     base: &str,
     workspace_id: &str,
@@ -71,13 +71,25 @@ async fn wait_for_succeeded_job(
             .unwrap();
         assert_eq!(response.status(), 200);
         last = response.json().await.unwrap();
-        if last["status"] == "succeeded" {
+        if matches!(last["status"].as_str(), Some("succeeded" | "failed")) {
             return last;
         }
-        assert_ne!(last["status"], "failed", "upload job failed: {last}");
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    panic!("upload job did not succeed: {last}");
+    panic!("upload job did not finish: {last}");
+}
+
+async fn wait_for_succeeded_job(
+    client: &reqwest::Client,
+    base: &str,
+    workspace_id: &str,
+    job_id: &str,
+    admin: &str,
+) -> serde_json::Value {
+    let last = wait_for_job(client, base, workspace_id, job_id, admin).await;
+    assert_ne!(last["status"], "failed", "upload job failed: {last}");
+    assert_eq!(last["status"], "succeeded");
+    last
 }
 
 /// Full workspace isolation + spike operator flow against an already-open store.
@@ -237,9 +249,11 @@ async fn run_isolation_suite(
     assert_eq!(pack.status(), 200);
     let pack: serde_json::Value = pack.json().await.unwrap();
     assert_eq!(pack["workspaceId"], ws_http);
-    assert!(pack["selectedEvidence"].as_array().unwrap().iter().any(
-        |e| e["sourceId"] == upload_body["source"]["id"]
-    ));
+    assert!(pack["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["sourceId"] == upload_body["source"]["id"]));
 
     // Multi-source pack for w1
     let pack_res = client
@@ -346,6 +360,16 @@ async fn run_isolation_suite(
 
     // Invalid token
     let denied = client
+        .post(format!("{base}/v1/spike/workspaces/{ws_http}/sources"))
+        .header("x-etyma-source-title", "denied.md")
+        .header("content-type", "text/markdown")
+        .body("denied")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+
+    let denied = client
         .post(format!("{base}/v1/packs"))
         .header("Authorization", "Bearer etyma_invalid")
         .json(&serde_json::json!({ "query": "alpha-token" }))
@@ -353,6 +377,16 @@ async fn run_isolation_suite(
         .await
         .unwrap();
     assert_eq!(denied.status(), 401);
+
+    let missing_job = client
+        .get(format!(
+            "{base}/v1/spike/workspaces/{w1}/import-jobs/job-from-other-workspace"
+        ))
+        .header("x-etyma-admin-token", admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_job.status(), 404);
 
     // MCP scoped to w1
     let mcp = client
@@ -381,6 +415,145 @@ async fn run_isolation_suite(
         !text.contains(&format!("\"workspaceId\": \"{w2}\"")),
         "{mcp_body}"
     );
+
+    let upload_one = client
+        .post(format!("{base}/v1/spike/workspaces/{w1}/sources"))
+        .header("x-etyma-admin-token", admin)
+        .header("x-etyma-source-title", "alpha.md")
+        .header("content-type", "text/markdown")
+        .body("alpha private evidence")
+        .send();
+    let upload_two = client
+        .post(format!("{base}/v1/spike/workspaces/{w2}/sources"))
+        .header("x-etyma-admin-token", admin)
+        .header("x-etyma-source-title", "beta.md")
+        .header("content-type", "text/markdown")
+        .body("beta private evidence")
+        .send();
+    let (response_one, response_two) = tokio::join!(upload_one, upload_two);
+    let response_one = response_one.unwrap();
+    let response_two = response_two.unwrap();
+    assert_eq!(response_one.status(), 202);
+    assert_eq!(response_two.status(), 202);
+    let body_one: serde_json::Value = response_one.json().await.unwrap();
+    let body_two: serde_json::Value = response_two.json().await.unwrap();
+    assert_ne!(body_one["source"]["id"], body_two["source"]["id"]);
+    assert!(body_one["source"]["blobKey"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("w/{w1}/")));
+    assert!(body_two["source"]["blobKey"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("w/{w2}/")));
+
+    let job_one = body_one["job"]["id"].as_str().unwrap();
+    let job_two = body_two["job"]["id"].as_str().unwrap();
+    let (status_one, status_two) = tokio::join!(
+        wait_for_succeeded_job(&client, &base, &w1, job_one, admin),
+        wait_for_succeeded_job(&client, &base, &w2, job_two, admin)
+    );
+    assert_eq!(status_one["status"], "succeeded");
+    assert_eq!(status_two["status"], "succeeded");
+
+    let pack_w1_private = client
+        .post(format!("{base}/v1/packs"))
+        .header("Authorization", format!("Bearer {t1}"))
+        .json(&serde_json::json!({ "query": "alpha private evidence" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pack_w1_private.status(), 200);
+    let pack_w1_private: serde_json::Value = pack_w1_private.json().await.unwrap();
+    let pack_w2_private = client
+        .post(format!("{base}/v1/packs"))
+        .header("Authorization", format!("Bearer {t2}"))
+        .json(&serde_json::json!({ "query": "beta private evidence" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pack_w2_private.status(), 200);
+    let pack_w2_private: serde_json::Value = pack_w2_private.json().await.unwrap();
+    let w1_uploaded_source = body_one["source"]["id"].as_str().unwrap();
+    let w2_uploaded_source = body_two["source"]["id"].as_str().unwrap();
+    assert!(pack_w1_private["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["sourceId"] == body_one["source"]["id"]
+            && e["quotedText"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("alpha private evidence")));
+    assert!(!pack_w1_private["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["sourceId"] == body_two["source"]["id"]
+            || e["quotedText"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("beta private evidence")));
+    assert!(pack_w2_private["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["sourceId"] == body_two["source"]["id"]
+            && e["quotedText"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("beta private evidence")));
+    assert!(!pack_w2_private["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["sourceId"] == body_one["source"]["id"]
+            || e["quotedText"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("alpha private evidence")));
+    for source in pack_w1_private["sourceSet"].as_array().unwrap_or(&vec![]) {
+        assert_ne!(source["sourceId"], w2_uploaded_source);
+    }
+    for source in pack_w2_private["sourceSet"].as_array().unwrap_or(&vec![]) {
+        assert_ne!(source["sourceId"], w1_uploaded_source);
+    }
+
+    let invalid_upload = client
+        .post(format!("{base}/v1/spike/workspaces/{ws_http}/sources"))
+        .header("x-etyma-admin-token", admin)
+        .header("x-etyma-source-title", "invalid.bin")
+        .header("content-type", "application/octet-stream")
+        .body(vec![0xff, 0xfe, 0xfd])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_upload.status(), 202);
+    let invalid_upload: serde_json::Value = invalid_upload.json().await.unwrap();
+    let invalid_job_id = invalid_upload["job"]["id"].as_str().unwrap();
+    let invalid_source_id = invalid_upload["source"]["id"].as_str().unwrap();
+    let invalid_status = wait_for_job(&client, &base, &ws_http, invalid_job_id, admin).await;
+    assert_eq!(invalid_status["status"], "failed");
+    assert_eq!(invalid_status["attempts"], 1);
+    assert!(invalid_status["lastError"]
+        .as_str()
+        .unwrap()
+        .contains("UTF-8"));
+    assert!(invalid_status["lastError"]
+        .as_str()
+        .unwrap()
+        .chars()
+        .count()
+        <= 4096);
+
+    let failed_source = knowledge
+        .get_source(&ws_http, invalid_source_id)
+        .await
+        .unwrap()
+        .expect("failed upload source row exists");
+    assert!(blobs.exists(&failed_source.blob_key).unwrap());
+    let failed_evidence = knowledge.list_evidence(&ws_http).await.unwrap();
+    assert!(!failed_evidence.iter().any(|e| e.source_id == invalid_source_id));
 }
 
 #[tokio::test]
