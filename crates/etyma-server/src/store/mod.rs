@@ -338,6 +338,32 @@ impl Store {
         .transpose()
     }
 
+    pub async fn create_membership(
+        &self,
+        org_id: &str,
+        user_id: &str,
+        role: MembershipRole,
+    ) -> StoreResult<MembershipRow> {
+        self.require_org(org_id).await?;
+        let membership_id = format!("mem_{}", Uuid::now_v7().simple());
+        sqlx::query(
+            "INSERT INTO control.memberships (id, org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(membership_id)
+        .bind(org_id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .bind(unix_now())
+        .execute(&self.pool)
+        .await
+        .map_err(|error| map_pg_write(error, &format!("membership for user {user_id}")))?;
+        Ok(MembershipRow {
+            org_id: org_id.to_owned(),
+            user_id: user_id.to_owned(),
+            role,
+        })
+    }
+
     pub async fn list_user_orgs(&self, user_id: &str) -> StoreResult<Vec<UserOrgRow>> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "SELECT o.id, o.name, m.role

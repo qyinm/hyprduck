@@ -1,8 +1,9 @@
 use crate::auth::{
     AppState, AuthError, AuthenticatedUser, AuthenticatedWorkspace, authorize_human_org,
-    build_clear_cookie, build_clear_login_transaction_cookie, build_login_transaction_cookie,
-    build_session_cookie, parse_login_transaction_cookie, parse_session_cookie, require_admin,
-    validate_org_id, validate_workspace_id,
+    authorize_human_workspace, build_clear_cookie, build_clear_login_transaction_cookie,
+    build_login_transaction_cookie, build_session_cookie, parse_login_transaction_cookie,
+    parse_session_cookie, require_admin, validate_org_id, validate_tenant_id,
+    validate_workspace_id,
 };
 use crate::compose::compose_pack;
 use crate::ingest::ingest_source;
@@ -16,7 +17,7 @@ use axum::http::header::{COOKIE, HeaderValue, LOCATION, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use etyma_engine_types::ContextPackV1;
 use mime::Mime;
@@ -36,6 +37,14 @@ pub fn router() -> Router<AppState> {
         .route("/v1/orgs", get(list_my_orgs))
         .route("/v1/orgs/{org_id}/members", get(list_my_org_members))
         .route("/v1/orgs/{org_id}/workspaces", get(list_my_workspaces))
+        .route(
+            "/v1/workspaces/{workspace_id}/tokens",
+            get(list_human_tokens).post(mint_human_token),
+        )
+        .route(
+            "/v1/workspaces/{workspace_id}/tokens/{token_id}",
+            delete(revoke_human_token),
+        )
         .route("/v1/sources", get(list_sources))
         .route("/v1/graph/snapshot", get(graph_snapshot))
         .route("/v1/packs", post(create_pack))
@@ -226,6 +235,106 @@ async fn list_my_workspaces(
             "role": workspace.role.as_str(),
         })).collect::<Vec<_>>(),
     })))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanTokenBody {
+    token_id: String,
+    workspace_id: String,
+    label: Option<String>,
+    created_at: i64,
+    revoked_at: Option<i64>,
+}
+
+impl From<crate::store::ApiTokenRow> for HumanTokenBody {
+    fn from(token: crate::store::ApiTokenRow) -> Self {
+        Self {
+            token_id: token.id,
+            workspace_id: token.workspace_id,
+            label: token.label,
+            created_at: token.created_at,
+            revoked_at: token.revoked_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanMintTokenResponse {
+    token_id: String,
+    workspace_id: String,
+    token: String,
+    label: Option<String>,
+    created_at: i64,
+}
+
+fn normalize_token_label(label: Option<&str>) -> Result<Option<String>, (StatusCode, String)> {
+    let label = label.map(str::trim).filter(|label| !label.is_empty());
+    if label.is_some_and(|label| label.chars().count() > 128) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "token label must be at most 128 characters".into(),
+        ));
+    }
+    Ok(label.map(str::to_owned))
+}
+
+async fn mint_human_token(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<String>,
+    Json(body): Json<MintTokenRequest>,
+) -> Result<Json<HumanMintTokenResponse>, (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    authorize_human_workspace(&state, &auth.user.id, &workspace_id, true).await?;
+    let label = normalize_token_label(body.label.as_deref())?;
+    let minted = state
+        .store
+        .mint_token_with_metadata(&workspace_id, label.as_deref())
+        .await
+        .map_err(store_err)?;
+    Ok(Json(HumanMintTokenResponse {
+        token_id: minted.token.id,
+        workspace_id: minted.token.workspace_id,
+        token: minted.raw_token,
+        label: minted.token.label,
+        created_at: minted.token.created_at,
+    }))
+}
+
+async fn list_human_tokens(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(workspace_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    authorize_human_workspace(&state, &auth.user.id, &workspace_id, true).await?;
+    let tokens = state
+        .store
+        .list_tokens(&workspace_id)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(json!({
+        "workspaceId": workspace_id,
+        "tokens": tokens.into_iter().map(HumanTokenBody::from).collect::<Vec<_>>(),
+    })))
+}
+
+async fn revoke_human_token(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((workspace_id, token_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    validate_tenant_id("token", &token_id)?;
+    authorize_human_workspace(&state, &auth.user.id, &workspace_id, true).await?;
+    state
+        .store
+        .revoke_token(&workspace_id, &token_id, current_unix_seconds())
+        .await
+        .map_err(store_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn auth_logout(
@@ -829,4 +938,11 @@ fn knowledge_err(err: crate::knowledge::KnowledgeError) -> (StatusCode, String) 
 
 fn graph_err(err: crate::graph::GraphError) -> (StatusCode, String) {
     store_err(err.into())
+}
+
+fn current_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }

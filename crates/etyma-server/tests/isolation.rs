@@ -150,7 +150,12 @@ async fn run_isolation_suite(
         assert!(src.content_hash.starts_with("sha256:"));
     }
 
-    let t1 = store.mint_token(&w1, Some("a")).await.unwrap();
+    let minted_t1 = store
+        .mint_token_with_metadata(&w1, Some("a"))
+        .await
+        .unwrap();
+    let t1 = minted_t1.raw_token;
+    let t1_id = minted_t1.token.id;
     let t2 = store.mint_token(&w2, Some("b")).await.unwrap();
 
     let app = {
@@ -648,6 +653,34 @@ async fn run_isolation_suite(
     )
     .await;
     assert_eq!(malformed_content_type_params.status(), 400);
+
+    assert!(store
+        .revoke_token(&w1, &t1_id, 1_900_000_000)
+        .await
+        .unwrap());
+    let revoked_rest = client
+        .get(format!("{base}/v1/sources"))
+        .header("Authorization", format!("Bearer {t1}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked_rest.status(), 401);
+    let revoked_mcp = client
+        .post(format!("{base}/v1/mcp"))
+        .header("Authorization", format!("Bearer {t1}"))
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": { "query": "alpha-token" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked_mcp.status(), 401);
 }
 
 #[tokio::test]

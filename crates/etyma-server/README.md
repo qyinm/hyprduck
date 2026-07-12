@@ -95,9 +95,25 @@ export ETYMA_AUTH_COOKIE_SECURE=false
 
 The session cookie is `HttpOnly`, `SameSite=Lax`, scoped to `/`, and secure
 when `ETYMA_AUTH_COOKIE_SECURE=true`. Human sessions do not grant workspace
-access: `/v1/packs`, `/v1/sources`, `/v1/graph/snapshot`, and `/v1/mcp` continue
-to require workspace API bearer tokens. `/v1/spike/*` continues to use
-`x-etyma-admin-token` until S4 adds user membership and workspace roles.
+agent access: `/v1/packs`, `/v1/sources`, `/v1/graph/snapshot`, and `/v1/mcp`
+continue to require workspace API bearer tokens. S4 human routes use the
+session cookie and organization membership:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/v1/orgs` | Lists the authenticated user's organizations and roles |
+| `GET` | `/v1/orgs/{org_id}/members` | Lists members for an authorized organization |
+| `GET` | `/v1/orgs/{org_id}/workspaces` | Lists workspaces in an authorized organization |
+| `POST` | `/v1/workspaces/{workspace_id}/tokens` | Owner-only token mint; raw secret is returned once |
+| `GET` | `/v1/workspaces/{workspace_id}/tokens` | Owner-only token metadata, without secrets or hashes |
+| `DELETE` | `/v1/workspaces/{workspace_id}/tokens/{token_id}` | Owner-only idempotent token revocation |
+
+OIDC signup provisions one personal organization and an `owner` membership in
+the same Postgres transaction as the new identity. Members can discover their
+organizations and workspaces but cannot manage tokens. Requests for a workspace
+outside the session user's memberships return a scoped `404`; insufficient
+organization roles return `403`. `/v1/spike/*` continues to use
+`x-etyma-admin-token` for operator bootstrap compatibility.
 
 ## Operator and pack flow
 
