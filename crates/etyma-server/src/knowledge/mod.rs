@@ -587,6 +587,7 @@ impl KnowledgeStore {
                 updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
               AND status = 'running' AND lease_owner = $3 AND lease_token = $4
+              AND lease_expires_at > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
                       lease_expires_at, lease_token, created_at, updated_at
