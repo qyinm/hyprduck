@@ -78,6 +78,7 @@ async fn mcp_handler(
             }
             let pack = compose_pack(
                 &state.knowledge,
+                &state.graph,
                 state.blobs.as_ref(),
                 &workspace_id,
                 &query,

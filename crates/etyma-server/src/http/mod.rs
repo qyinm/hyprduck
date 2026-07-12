@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/health", get(health))
         .route("/healthz", get(health))
         .route("/v1/sources", get(list_sources))
+        .route("/v1/graph/snapshot", get(graph_snapshot))
         .route("/v1/packs", post(create_pack))
         .route("/v1/spike/orgs", post(create_org).get(list_orgs))
         .route(
@@ -99,6 +100,79 @@ struct PackRequest {
     query: String,
 }
 
+async fn graph_snapshot(
+    State(state): State<AppState>,
+    auth: AuthenticatedWorkspace,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let snap = state
+        .graph
+        .live_snapshot(&auth.workspace_id)
+        .await
+        .map_err(graph_err)?;
+    let nodes: Vec<Value> = snap
+        .nodes
+        .into_iter()
+        .map(|n| {
+            json!({
+                "versionId": n.version_id,
+                "id": n.logical_id,
+                "kind": n.kind,
+                "label": n.label,
+                "scope": n.scope,
+                "aliases": n.aliases,
+                "evidenceIds": n.evidence_ids,
+                "sourceIds": n.source_ids,
+                "confidence": n.confidence,
+                "createdByEventId": n.created_by_event_id,
+                "validFrom": n.valid_from,
+            })
+        })
+        .collect();
+    let relations: Vec<Value> = snap
+        .relations
+        .into_iter()
+        .map(|r| {
+            json!({
+                "versionId": r.version_id,
+                "id": r.logical_id,
+                "kind": r.kind,
+                "sourceNodeId": r.source_logical_id,
+                "targetNodeId": r.target_logical_id,
+                "label": r.label,
+                "evidenceIds": r.evidence_ids,
+                "confidence": r.confidence,
+                "createdByEventId": r.created_by_event_id,
+                "validFrom": r.valid_from,
+            })
+        })
+        .collect();
+    let claims: Vec<Value> = snap
+        .claims
+        .into_iter()
+        .map(|c| {
+            json!({
+                "versionId": c.version_id,
+                "id": c.logical_id,
+                "statement": c.statement,
+                "status": c.status,
+                "topicRefs": c.topic_refs,
+                "sourceRefs": c.source_refs,
+                "evidenceRefs": c.evidence_refs,
+                "createdByEventId": c.created_by_event_id,
+                "validFrom": c.valid_from,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "workspaceId": snap.workspace_id,
+        "projection": "live",
+        "store": "postgres.graph",
+        "nodes": nodes,
+        "relations": relations,
+        "claims": claims,
+    })))
+}
+
 async fn create_pack(
     State(state): State<AppState>,
     auth: AuthenticatedWorkspace,
@@ -106,6 +180,7 @@ async fn create_pack(
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
     let pack = compose_pack(
         &state.knowledge,
+        &state.graph,
         state.blobs.as_ref(),
         &auth.workspace_id,
         &body.query,
@@ -316,5 +391,9 @@ fn store_err(err: StoreError) -> (StatusCode, String) {
 }
 
 fn knowledge_err(err: crate::knowledge::KnowledgeError) -> (StatusCode, String) {
+    store_err(err.into())
+}
+
+fn graph_err(err: crate::graph::GraphError) -> (StatusCode, String) {
     store_err(err.into())
 }
