@@ -13,7 +13,8 @@ mod session;
 
 pub use oidc::{AuthError, AuthService, AuthenticatedSession, OidcBackend, OidcFuture};
 pub use session::{
-    build_clear_cookie, build_session_cookie, parse_session_cookie, AuthenticatedUser,
+    build_clear_cookie, build_clear_login_transaction_cookie, build_login_transaction_cookie,
+    build_session_cookie, parse_login_transaction_cookie, parse_session_cookie, AuthenticatedUser,
     SESSION_COOKIE_NAME,
 };
 

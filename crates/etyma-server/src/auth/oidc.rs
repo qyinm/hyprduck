@@ -158,6 +158,11 @@ pub struct AuthenticatedSession {
     pub max_age_seconds: i64,
 }
 
+pub struct LoginStart {
+    pub authorization_url: String,
+    pub browser_binding: String,
+}
+
 #[derive(Clone)]
 pub struct AuthService {
     store: Arc<Store>,
@@ -201,33 +206,43 @@ impl AuthService {
         }
     }
 
-    pub async fn begin_login(&self) -> Result<String, AuthError> {
+    pub async fn begin_login(&self) -> Result<LoginStart, AuthError> {
         let backend = self.backend.as_ref().ok_or(AuthError::Disabled)?;
         let state = new_opaque_value();
         let nonce = new_opaque_value();
         let pkce_verifier = new_pkce_verifier();
+        let browser_binding = new_opaque_value();
         let authorization_url = backend.authorization_url(&state, &nonce, &pkce_verifier)?;
         self.store
             .create_oidc_login_state(
                 &hash_token(&state),
                 &nonce,
                 &pkce_verifier,
+                &hash_token(&browser_binding),
                 now_unix_seconds() + 300,
             )
             .await?;
-        Ok(authorization_url)
+        Ok(LoginStart {
+            authorization_url,
+            browser_binding,
+        })
     }
 
     pub async fn finish_login(
         &self,
         code: &str,
         state: &str,
+        browser_binding: &str,
     ) -> Result<AuthenticatedSession, AuthError> {
         let backend = self.backend.as_ref().ok_or(AuthError::Disabled)?;
         validate_callback_inputs(code, state)?;
         let login_state = self
             .store
-            .consume_oidc_login_state(&hash_token(state), now_unix_seconds())
+            .consume_oidc_login_state(
+                &hash_token(state),
+                &hash_token(browser_binding),
+                now_unix_seconds(),
+            )
             .await?
             .ok_or(AuthError::InvalidState)?;
         let profile = backend

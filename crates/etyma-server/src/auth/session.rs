@@ -5,6 +5,7 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 
 pub const SESSION_COOKIE_NAME: &str = "etyma_session";
+pub const LOGIN_TRANSACTION_COOKIE_NAME: &str = "etyma_login";
 
 pub fn build_session_cookie(raw_token: &str, max_age_seconds: i64, secure: bool) -> String {
     let secure_attribute = if secure { "; Secure" } else { "" };
@@ -21,9 +22,31 @@ pub fn build_clear_cookie(secure: bool) -> String {
 }
 
 pub fn parse_session_cookie(header: &str) -> Option<String> {
+    parse_cookie(header, SESSION_COOKIE_NAME)
+}
+
+pub fn build_login_transaction_cookie(raw_binding: &str, secure: bool) -> String {
+    let secure_attribute = if secure { "; Secure" } else { "" };
+    format!(
+        "{LOGIN_TRANSACTION_COOKIE_NAME}={raw_binding}; Max-Age=300; Path=/v1/auth/callback; HttpOnly; SameSite=Lax{secure_attribute}"
+    )
+}
+
+pub fn build_clear_login_transaction_cookie(secure: bool) -> String {
+    let secure_attribute = if secure { "; Secure" } else { "" };
+    format!(
+        "{LOGIN_TRANSACTION_COOKIE_NAME}=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/v1/auth/callback; HttpOnly; SameSite=Lax{secure_attribute}"
+    )
+}
+
+pub fn parse_login_transaction_cookie(header: &str) -> Option<String> {
+    parse_cookie(header, LOGIN_TRANSACTION_COOKIE_NAME)
+}
+
+fn parse_cookie(header: &str, expected_name: &str) -> Option<String> {
     header.split(';').find_map(|pair| {
         let (name, value) = pair.split_once('=')?;
-        if name.trim() != SESSION_COOKIE_NAME {
+        if name.trim() != expected_name {
             return None;
         }
         let value = value.trim();
@@ -98,5 +121,30 @@ mod tests {
             Some("opaque".into())
         );
         assert_eq!(parse_session_cookie("theme=dark"), None);
+    }
+
+    #[test]
+    fn login_transaction_cookie_is_short_lived_and_separate_from_session() {
+        let header = build_login_transaction_cookie("browser-binding", true);
+        assert!(header.contains("etyma_login=browser-binding"));
+        assert!(header.contains("Max-Age=300"));
+        assert!(header.contains("Path=/v1/auth/callback"));
+        assert!(header.contains("HttpOnly"));
+        assert!(header.contains("SameSite=Lax"));
+        assert!(header.contains("Secure"));
+        assert_eq!(
+            parse_login_transaction_cookie(
+                "theme=dark; etyma_login=browser-binding; etyma_session=session"
+            ),
+            Some("browser-binding".into())
+        );
+    }
+
+    #[test]
+    fn clear_login_transaction_cookie_matches_callback_scope() {
+        let header = build_clear_login_transaction_cookie(true);
+        assert!(header.contains("etyma_login="));
+        assert!(header.contains("Max-Age=0"));
+        assert!(header.contains("Path=/v1/auth/callback"));
     }
 }

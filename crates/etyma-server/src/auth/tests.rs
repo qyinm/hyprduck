@@ -171,6 +171,16 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("login");
     assert_eq!(login.status(), reqwest::StatusCode::FOUND);
+    let login_cookie = login
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .expect("login transaction cookie")
+        .to_str()
+        .expect("login cookie text")
+        .split(';')
+        .next()
+        .expect("login cookie pair")
+        .to_owned();
     let location = login
         .headers()
         .get(reqwest::header::LOCATION)
@@ -185,14 +195,37 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .expect("state")
         .to_owned();
 
+    let swapped_browser = client
+        .get(format!(
+            "{base}/v1/auth/callback?code=code-ok&state={state}"
+        ))
+        .header(reqwest::header::COOKIE, "etyma_login=attacker-binding")
+        .send()
+        .await
+        .expect("swapped browser callback");
+    assert_eq!(swapped_browser.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(swapped_browser
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0")));
+
     let callback = client
         .get(format!(
             "{base}/v1/auth/callback?code=code-ok&state={state}"
         ))
+        .header(reqwest::header::COOKIE, &login_cookie)
         .send()
         .await
         .expect("callback");
     assert_eq!(callback.status(), reqwest::StatusCode::SEE_OTHER);
+    assert!(callback
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0")));
     let set_cookie = callback
         .headers()
         .get(reqwest::header::SET_COOKIE)
@@ -234,6 +267,7 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .get(format!(
             "{base}/v1/auth/callback?code=code-ok&state={state}"
         ))
+        .header(reqwest::header::COOKIE, &login_cookie)
         .send()
         .await
         .expect("reused callback");

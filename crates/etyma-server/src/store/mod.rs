@@ -223,15 +223,17 @@ impl Store {
         state_hash: &str,
         nonce: &str,
         pkce_verifier: &str,
+        browser_binding_hash: &str,
         expires_at: i64,
     ) -> StoreResult<()> {
         let now = unix_now();
         sqlx::query(
-            "INSERT INTO control.oidc_login_states (state_hash, nonce, pkce_verifier, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO control.oidc_login_states (state_hash, nonce, pkce_verifier, browser_binding_hash, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(state_hash)
         .bind(nonce)
         .bind(pkce_verifier)
+        .bind(browser_binding_hash)
         .bind(expires_at)
         .bind(now)
         .execute(&self.pool)
@@ -243,12 +245,14 @@ impl Store {
     pub async fn consume_oidc_login_state(
         &self,
         state_hash: &str,
+        browser_binding_hash: &str,
         now: i64,
     ) -> StoreResult<Option<OidcLoginStateRow>> {
         sqlx::query_as::<_, (String, String)>(
-            "UPDATE control.oidc_login_states SET consumed_at = $2 WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > $2 RETURNING nonce, pkce_verifier",
+            "UPDATE control.oidc_login_states SET consumed_at = $3 WHERE state_hash = $1 AND browser_binding_hash = $2 AND consumed_at IS NULL AND expires_at > $3 RETURNING nonce, pkce_verifier",
         )
         .bind(state_hash)
+        .bind(browser_binding_hash)
         .bind(now)
         .fetch_optional(&self.pool)
         .await
