@@ -1,6 +1,6 @@
-use etyma_server::auth::AppState;
+use etyma_server::auth::{AppState, AuthService};
 use etyma_server::blob::{BlobStore, LocalFsBlobStore};
-use etyma_server::config::HostMode;
+use etyma_server::config::{AuthConfig, HostMode};
 use etyma_server::graph::GraphStore;
 use etyma_server::knowledge::KnowledgeStore;
 use etyma_server::seed::seed_multi_source_workspace;
@@ -156,6 +156,7 @@ async fn run_isolation_suite(
     let app = {
         etyma_server::import_job::spawn_upload_recovery_loop(knowledge.clone(), blobs.clone());
         let state = AppState {
+            auth: Arc::new(AuthService::disabled(store.clone(), AuthConfig::default())),
             store: store.clone(),
             knowledge: knowledge.clone(),
             graph,

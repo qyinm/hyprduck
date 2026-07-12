@@ -25,6 +25,12 @@ cargo check -p etyma-cli
 # Local Postgres (mandatory SaaS storage)
 docker compose up -d
 export ETYMA_DATABASE_URL=postgres://etyma:etyma@127.0.0.1:5432/etyma
+# Optional generic OIDC login; client id/secret come from the deployment secret manager.
+export ETYMA_OIDC_ISSUER_URL=https://accounts.google.com
+export ETYMA_OIDC_CLIENT_ID="$OIDC_CLIENT_ID"
+export ETYMA_OIDC_CLIENT_SECRET="$OIDC_CLIENT_SECRET"
+export ETYMA_OIDC_REDIRECT_URL=http://127.0.0.1:8787/v1/auth/callback
+export ETYMA_AUTH_COOKIE_SECURE=false
 cargo test -p etyma-server -- --include-ignored
 cargo run -p etyma-server
 ```
@@ -33,6 +39,12 @@ cargo run -p etyma-server
 source/evidence metadata, import jobs, and the cloud graph projection live in
 Postgres; original bytes live in the configured blob backend. GraphQLite is
 local/engine only. Ignored integration tests require the DSN.
+
+OIDC configuration is optional for the spike. When enabled, all four
+`ETYMA_OIDC_*` variables are required together and the callback must be
+registered as `/v1/auth/callback` at the configured public origin. The login
+cookie flow is documented in `crates/etyma-server/README.md`; human sessions
+identify `/v1/me` but do not replace workspace API bearer tokens.
 
 ## Site
 
