@@ -30,8 +30,9 @@ cargo run -p etyma-server
 ```
 
 `etyma-server` refuses to start without `ETYMA_DATABASE_URL`. Control,
-source/evidence metadata, and import jobs live in Postgres; original bytes live
-in the configured blob backend. Ignored integration tests require the DSN.
+source/evidence metadata, import jobs, and the cloud graph projection live in
+Postgres; original bytes live in the configured blob backend. GraphQLite is
+local/engine only. Ignored integration tests require the DSN.
 
 ## Site
 
