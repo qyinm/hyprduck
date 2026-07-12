@@ -1,6 +1,6 @@
 //! Postgres pool connect, migrations, and lightweight health probe.
 //!
-//! S-PG1: plane schemas. S-PG2: control product tables. knowledge/graph tables in S-PG3/4.
+//! S-PG1: plane schemas. S-PG2: control. S-PG3: knowledge. S-PG4: graph projection.
 
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
@@ -171,9 +171,33 @@ mod tests {
         .fetch_all(&pool2)
         .await
         .expect("list graph product tables");
-        assert!(
-            graph_tables.is_empty(),
-            "S-PG4 graph tables must not exist yet"
+        assert_eq!(
+            graph_tables,
+            vec!["claims", "nodes", "relations"],
+            "expected S-PG4 graph product tables"
+        );
+
+        let graph_indexes: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'graph'
+              AND indexname LIKE 'idx_graph_%'
+            ORDER BY indexname
+            "#,
+        )
+        .fetch_all(&pool2)
+        .await
+        .expect("list graph indexes");
+        assert_eq!(
+            graph_indexes,
+            vec![
+                "idx_graph_claims_live",
+                "idx_graph_nodes_live",
+                "idx_graph_nodes_workspace_evidence",
+                "idx_graph_relations_live",
+                "idx_graph_relations_workspace_endpoints",
+            ]
         );
     }
 }

@@ -1,8 +1,12 @@
 use crate::blob::{get_verified, BlobStore};
+use crate::graph::GraphStore;
 use crate::knowledge::{EvidenceRow, KnowledgeStore, SourceRow};
 use crate::store::{StoreError, StoreResult};
 use etyma_engine_types::{
     ContextPackEvidenceV1, ContextPackFindingStatus, ContextPackFindingV0,
+    ContextPackGraphFollowUpArgumentsV1, ContextPackGraphFollowUpToolV1,
+    ContextPackGraphFollowUpV1, ContextPackGraphHandleTypeV1, ContextPackGraphReadNodeArgumentsV1,
+    ContextPackGraphRecordKindV1, ContextPackGraphRecordV1, ContextPackGraphTrailV1,
     ContextPackParseConfidence, ContextPackRetrievalTraceV1, ContextPackSourceV0,
     ContextPackStaleness, ContextPackV1, ContextPackWarningSeverity, ContextPackWarningV0,
     EvidenceType, CONTEXT_PACK_V1_SCHEMA_VERSION,
@@ -12,8 +16,10 @@ use uuid::Uuid;
 
 /// Compose a cited V1 pack from server-owned Postgres evidence.
 /// Source body text is loaded from the blob backend when needed for title/body matching.
+/// Graph trails (when present) come from the Postgres graph live projection — never GraphQLite.
 pub async fn compose_pack(
     knowledge: &KnowledgeStore,
+    graph: &GraphStore,
     blobs: &dyn BlobStore,
     workspace_id: &str,
     query: &str,
@@ -50,10 +56,14 @@ pub async fn compose_pack(
     let mut source_set = BTreeMap::new();
     let evidence_pool = evidence.len();
 
-    for (idx, ev) in hits.into_iter().take(16).enumerate() {
+    let selected: Vec<&EvidenceRow> = hits.into_iter().take(16).collect();
+    let trail_index = load_graph_trail_index(graph, workspace_id, &selected).await?;
+
+    for (idx, ev) in selected.into_iter().enumerate() {
         let page = parse_page(&ev.locator).unwrap_or(1);
         let evidence_type = evidence_type_for_kind(&ev.source_kind);
         let content_hash = ev.content_hash.clone();
+        let graph_trail = trail_index.get(ev.id.as_str()).cloned();
         selected_evidence.push(ContextPackEvidenceV1 {
             evidence_ref: ev.id.clone(),
             source_id: ev.source_id.clone(),
@@ -65,7 +75,7 @@ pub async fn compose_pack(
             selection_reason: format!("matched query terms in {} source", ev.source_kind),
             content_hash,
             evidence_type,
-            graph_trail: None,
+            graph_trail,
         });
         findings.push(ContextPackFindingV0 {
             finding_id: format!("f_{idx}"),
@@ -123,6 +133,88 @@ pub async fn compose_pack(
         },
         suggested_next_reads: vec![],
     })
+}
+
+/// Batch graph trail load: at most two queries for the whole selected set.
+async fn load_graph_trail_index(
+    graph: &GraphStore,
+    workspace_id: &str,
+    selected: &[&EvidenceRow],
+) -> StoreResult<BTreeMap<String, ContextPackGraphTrailV1>> {
+    if selected.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let evidence_ids: Vec<String> = selected.iter().map(|ev| ev.id.clone()).collect();
+    let nodes = graph
+        .live_nodes_for_evidence_ids(workspace_id, &evidence_ids)
+        .await
+        .map_err(StoreError::from)?;
+    if nodes.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let by_evidence = GraphStore::index_nodes_by_evidence(&nodes);
+    let all_node_ids: Vec<String> = nodes.iter().map(|n| n.logical_id.clone()).collect();
+    let relations = graph
+        .live_relations_touching(workspace_id, &all_node_ids)
+        .await
+        .map_err(StoreError::from)?;
+
+    let mut out = BTreeMap::new();
+    for ev_id in &evidence_ids {
+        let Some(linked) = by_evidence.get(ev_id) else {
+            continue;
+        };
+        if linked.is_empty() {
+            continue;
+        }
+        let linked_ids: std::collections::HashSet<&str> =
+            linked.iter().map(|n| n.logical_id.as_str()).collect();
+        let direct = linked
+            .iter()
+            .map(|node| ContextPackGraphRecordV1 {
+                record_type: ContextPackGraphRecordKindV1::Node,
+                id: node.logical_id.clone(),
+                reason: format!("live graph node cites evidence {ev_id}"),
+            })
+            .collect::<Vec<_>>();
+        let adjacent = relations
+            .iter()
+            .filter(|rel| {
+                linked_ids.contains(rel.source_logical_id.as_str())
+                    || linked_ids.contains(rel.target_logical_id.as_str())
+            })
+            .map(|rel| ContextPackGraphRecordV1 {
+                record_type: ContextPackGraphRecordKindV1::Relation,
+                id: rel.logical_id.clone(),
+                reason: "live relation adjacent to evidence-linked nodes".into(),
+            })
+            .collect::<Vec<_>>();
+        let follow_up = linked
+            .iter()
+            .take(3)
+            .map(|node| ContextPackGraphFollowUpV1 {
+                tool: ContextPackGraphFollowUpToolV1::ReadNode,
+                handle_type: ContextPackGraphHandleTypeV1::Node,
+                arguments: ContextPackGraphFollowUpArgumentsV1::ReadNode(
+                    ContextPackGraphReadNodeArgumentsV1 {
+                        node_id: node.logical_id.clone(),
+                    },
+                ),
+                reason: "inspect live cloud graph node".into(),
+            })
+            .collect();
+        out.insert(
+            ev_id.clone(),
+            ContextPackGraphTrailV1 {
+                direct,
+                adjacent,
+                follow_up,
+                unavailable_reason: None,
+            },
+        );
+    }
+    Ok(out)
 }
 
 fn load_source_text(blobs: &dyn BlobStore, source: &SourceRow) -> StoreResult<String> {

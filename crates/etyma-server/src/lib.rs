@@ -3,6 +3,7 @@ pub mod blob;
 pub mod compose;
 pub mod config;
 pub mod db;
+pub mod graph;
 pub mod http;
 pub mod ingest;
 pub mod knowledge;
@@ -13,6 +14,7 @@ pub mod store;
 use crate::auth::AppState;
 use crate::blob::LocalFsBlobStore;
 use crate::config::ServerConfig;
+use crate::graph::GraphStore;
 use crate::knowledge::KnowledgeStore;
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -22,7 +24,7 @@ use tower_http::trace::TraceLayer;
 
 /// Build the HTTP/MCP router.
 ///
-/// Connects Postgres, applies control/knowledge migrations, and builds the SaaS router.
+/// Connects Postgres, applies control/knowledge/graph migrations, and builds the SaaS router.
 pub async fn build_app(config: &ServerConfig) -> Result<Router> {
     let pool = db::connect_and_migrate(config.storage.postgres_url())
         .await
@@ -31,9 +33,11 @@ pub async fn build_app(config: &ServerConfig) -> Result<Router> {
 
     let blobs = LocalFsBlobStore::open(&config.blob_root).context("open blob store")?;
     let knowledge = KnowledgeStore::new(pool.clone());
+    let graph = GraphStore::new(pool.clone());
     let state = AppState {
         store: Arc::new(store),
         knowledge,
+        graph,
         blobs: Arc::new(blobs),
         spike_admin_token: config.spike_admin_token.clone(),
         host_mode: config.storage.host_mode(),
@@ -51,7 +55,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind)
         .await
         .with_context(|| format!("bind {}", config.bind))?;
-    tracing::info!("postgres pool ready (control and knowledge migrations applied)");
+    tracing::info!("postgres pool ready (control/knowledge/graph migrations applied)");
     tracing::info!(%config.bind, "etyma-server listening");
     axum::serve(listener, app).await.context("serve")?;
     Ok(())

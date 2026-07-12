@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/health", get(health))
         .route("/healthz", get(health))
         .route("/v1/sources", get(list_sources))
+        .route("/v1/graph/snapshot", get(graph_snapshot))
         .route("/v1/packs", post(create_pack))
         .route("/v1/spike/orgs", post(create_org).get(list_orgs))
         .route(
@@ -99,6 +100,18 @@ struct PackRequest {
     query: String,
 }
 
+async fn graph_snapshot(
+    State(state): State<AppState>,
+    auth: AuthenticatedWorkspace,
+) -> Result<Json<crate::graph::GraphSnapshotResponse>, (StatusCode, String)> {
+    let snap = state
+        .graph
+        .live_snapshot(&auth.workspace_id)
+        .await
+        .map_err(graph_err)?;
+    Ok(Json(crate::graph::GraphSnapshotResponse::from(snap)))
+}
+
 async fn create_pack(
     State(state): State<AppState>,
     auth: AuthenticatedWorkspace,
@@ -106,6 +119,7 @@ async fn create_pack(
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
     let pack = compose_pack(
         &state.knowledge,
+        &state.graph,
         state.blobs.as_ref(),
         &auth.workspace_id,
         &body.query,
@@ -316,5 +330,9 @@ fn store_err(err: StoreError) -> (StatusCode, String) {
 }
 
 fn knowledge_err(err: crate::knowledge::KnowledgeError) -> (StatusCode, String) {
+    store_err(err.into())
+}
+
+fn graph_err(err: crate::graph::GraphError) -> (StatusCode, String) {
     store_err(err.into())
 }
