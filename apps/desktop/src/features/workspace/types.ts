@@ -300,3 +300,51 @@ export interface GraphMaterializationReportSummary {
   prunedSourceGraphRelationCount?: number;
   compactionStatus?: string | null;
 }
+
+export interface CloudGraphSnapshotNode {
+  versionId: string;
+  id: string;
+  kind: string;
+  label: string;
+  scope: string;
+  aliases: string[];
+  evidenceIds: string[];
+  sourceIds: string[];
+  confidence?: number | null;
+  createdByEventId?: string | null;
+  validFrom: number;
+}
+
+export interface CloudGraphSnapshotRelation {
+  versionId: string;
+  id: string;
+  kind: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  label: string;
+  evidenceIds: string[];
+  confidence?: number | null;
+  createdByEventId?: string | null;
+  validFrom: number;
+}
+
+export interface CloudGraphSnapshotClaim {
+  versionId: string;
+  id: string;
+  statement: string;
+  status: string;
+  topicRefs: string[];
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  createdByEventId?: string | null;
+  validFrom: number;
+}
+
+export interface CloudGraphSnapshotResponse {
+  workspaceId: string;
+  projection: "live" | string;
+  store: "postgres.graph" | string;
+  nodes: CloudGraphSnapshotNode[];
+  relations: CloudGraphSnapshotRelation[];
+  claims: CloudGraphSnapshotClaim[];
+}

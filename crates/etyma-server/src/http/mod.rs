@@ -621,6 +621,7 @@ async fn upload_source(
         ))?;
     crate::import_job::spawn_upload_job(
         state.knowledge.clone(),
+        state.graph.clone(),
         state.blobs.clone(),
         workspace_id.clone(),
         source.clone(),

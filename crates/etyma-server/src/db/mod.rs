@@ -152,6 +152,7 @@ mod tests {
             knowledge_indexes,
             vec![
                 "idx_knowledge_evidence_workspace_created",
+                "idx_knowledge_evidence_workspace_retrieval",
                 "idx_knowledge_evidence_workspace_source_created",
                 "idx_knowledge_import_jobs_queued_claimable",
                 "idx_knowledge_import_jobs_running_expired",

@@ -27,6 +27,13 @@ pub struct EvidenceRow {
     pub quote: String,
     pub locator: String,
     pub content_hash: String,
+    pub evidence_type: String,
+    pub page: Option<i32>,
+    pub region: Option<String>,
+    pub span_start: Option<i64>,
+    pub span_end: Option<i64>,
+    pub parse_warnings: Vec<String>,
+    pub retrieval_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
@@ -174,39 +181,80 @@ impl KnowledgeStore {
         quote: &str,
         locator: &str,
     ) -> KnowledgeResult<EvidenceRow> {
+        self.upsert_evidence_record(&EvidenceWrite {
+            workspace_id,
+            id,
+            source_id,
+            source_kind,
+            quote,
+            locator,
+            evidence_type: "text_evidence",
+            page: parse_locator_page(locator),
+            region: Some(locator),
+            span_start: None,
+            span_end: None,
+            parse_warnings: &[],
+            retrieval_text: Some(quote),
+        })
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_evidence_record(
+        &self,
+        input: &EvidenceWrite<'_>,
+    ) -> KnowledgeResult<EvidenceRow> {
         let now = unix_now();
-        let content_hash = hash_text(quote);
+        let content_hash = hash_text(input.quote);
         sqlx::query_as::<_, EvidenceRow>(
             r#"
             INSERT INTO knowledge.evidence (
               id, workspace_id, source_id, source_kind, quote, locator,
-              content_hash, created_at, updated_at
+              content_hash, evidence_type, page, region, span_start, span_end,
+              parse_warnings, retrieval_text, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)
             ON CONFLICT (id) DO UPDATE SET
               source_kind = EXCLUDED.source_kind,
               quote = EXCLUDED.quote,
               locator = EXCLUDED.locator,
               content_hash = EXCLUDED.content_hash,
+              evidence_type = EXCLUDED.evidence_type,
+              page = EXCLUDED.page,
+              region = EXCLUDED.region,
+              span_start = EXCLUDED.span_start,
+              span_end = EXCLUDED.span_end,
+              parse_warnings = EXCLUDED.parse_warnings,
+              retrieval_text = EXCLUDED.retrieval_text,
               updated_at = EXCLUDED.updated_at
             WHERE knowledge.evidence.workspace_id = EXCLUDED.workspace_id
               AND knowledge.evidence.source_id = EXCLUDED.source_id
             RETURNING id, workspace_id, source_id, source_kind, quote, locator,
-                      content_hash
+                      content_hash, evidence_type, page, region, span_start,
+                      span_end, parse_warnings, retrieval_text
             "#,
         )
-        .bind(id)
-        .bind(workspace_id)
-        .bind(source_id)
-        .bind(source_kind)
-        .bind(quote)
-        .bind(locator)
+        .bind(input.id)
+        .bind(input.workspace_id)
+        .bind(input.source_id)
+        .bind(input.source_kind)
+        .bind(input.quote)
+        .bind(input.locator)
         .bind(content_hash)
+        .bind(input.evidence_type)
+        .bind(input.page)
+        .bind(input.region)
+        .bind(input.span_start)
+        .bind(input.span_end)
+        .bind(input.parse_warnings)
+        .bind(input.retrieval_text)
         .bind(now)
         .fetch_optional(&self.pool)
         .await
         .map_err(|error| map_write(error, "evidence"))?
-        .ok_or_else(|| KnowledgeError::Conflict(format!("evidence identity conflict: {id}")))
+        .ok_or_else(|| {
+            KnowledgeError::Conflict(format!("evidence identity conflict: {}", input.id))
+        })
     }
 
     pub async fn insert_evidence(
@@ -262,13 +310,36 @@ impl KnowledgeStore {
         sqlx::query_as::<_, EvidenceRow>(
             r#"
             SELECT id, workspace_id, source_id, source_kind, quote, locator,
-                   content_hash
+                   content_hash, evidence_type, page, region, span_start,
+                   span_end, parse_warnings, retrieval_text
             FROM knowledge.evidence
             WHERE workspace_id = $1
             ORDER BY created_at, id
             "#,
         )
         .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_read)
+    }
+
+    pub async fn list_evidence_for_source(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> KnowledgeResult<Vec<EvidenceRow>> {
+        sqlx::query_as::<_, EvidenceRow>(
+            r#"
+            SELECT id, workspace_id, source_id, source_kind, quote, locator,
+                   content_hash, evidence_type, page, region, span_start,
+                   span_end, parse_warnings, retrieval_text
+            FROM knowledge.evidence
+            WHERE workspace_id = $1 AND source_id = $2
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(source_id)
         .fetch_all(&self.pool)
         .await
         .map_err(map_read)
@@ -626,6 +697,22 @@ impl KnowledgeStore {
     }
 }
 
+pub struct EvidenceWrite<'a> {
+    pub workspace_id: &'a str,
+    pub id: &'a str,
+    pub source_id: &'a str,
+    pub source_kind: &'a str,
+    pub quote: &'a str,
+    pub locator: &'a str,
+    pub evidence_type: &'a str,
+    pub page: Option<i32>,
+    pub region: Option<&'a str>,
+    pub span_start: Option<i64>,
+    pub span_end: Option<i64>,
+    pub parse_warnings: &'a [String],
+    pub retrieval_text: Option<&'a str>,
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -637,6 +724,12 @@ fn hash_text(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn parse_locator_page(locator: &str) -> Option<i32> {
+    locator
+        .strip_prefix("page:")
+        .and_then(|value| value.parse().ok())
 }
 
 fn bounded_error(error: &str) -> String {
@@ -922,6 +1015,7 @@ mod tests {
         let suffix = uuid::Uuid::now_v7().simple().to_string();
         let workspace = create_workspace(&pool, &format!("{suffix}_targeted_worker")).await;
         let store = KnowledgeStore::new(pool.clone());
+        let graph = crate::graph::GraphStore::new(pool.clone());
         let blob_dir = tempfile::tempdir().expect("temp blob dir");
         let blobs = crate::blob::LocalFsBlobStore::open(blob_dir.path()).expect("open blob store");
 
@@ -964,6 +1058,7 @@ mod tests {
 
         crate::import_job::run_upload_job(
             &store,
+            &graph,
             &blobs,
             &workspace,
             &target_source,
