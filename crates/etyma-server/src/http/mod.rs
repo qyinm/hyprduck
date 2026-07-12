@@ -291,9 +291,13 @@ async fn mint_human_token(
     let label = normalize_token_label(body.label.as_deref())?;
     let minted = state
         .store
-        .mint_token_with_metadata(&workspace_id, label.as_deref())
+        .mint_token_for_user(&auth.user.id, &workspace_id, label.as_deref())
         .await
-        .map_err(store_err)?;
+        .map_err(store_err)?
+        .ok_or((
+            StatusCode::FORBIDDEN,
+            "organization role is not authorized for this action".into(),
+        ))?;
     Ok(Json(HumanMintTokenResponse {
         token_id: minted.token.id,
         workspace_id: minted.token.workspace_id,
@@ -312,9 +316,13 @@ async fn list_human_tokens(
     authorize_human_workspace(&state, &auth.user.id, &workspace_id, true).await?;
     let tokens = state
         .store
-        .list_tokens(&workspace_id)
+        .list_tokens_for_user(&auth.user.id, &workspace_id)
         .await
-        .map_err(store_err)?;
+        .map_err(store_err)?
+        .ok_or((
+            StatusCode::FORBIDDEN,
+            "organization role is not authorized for this action".into(),
+        ))?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "tokens": tokens.into_iter().map(HumanTokenBody::from).collect::<Vec<_>>(),
@@ -331,9 +339,18 @@ async fn revoke_human_token(
     authorize_human_workspace(&state, &auth.user.id, &workspace_id, true).await?;
     state
         .store
-        .revoke_token(&workspace_id, &token_id, current_unix_seconds())
+        .revoke_token_for_user(
+            &auth.user.id,
+            &workspace_id,
+            &token_id,
+            current_unix_seconds(),
+        )
         .await
-        .map_err(store_err)?;
+        .map_err(store_err)?
+        .ok_or((
+            StatusCode::FORBIDDEN,
+            "organization role is not authorized for this action".into(),
+        ))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

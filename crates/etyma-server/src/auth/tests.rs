@@ -327,6 +327,57 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .create_session(&member.id, &member_session, 2_000_000_000)
         .await
         .expect("member session");
+    let member_orgs = client
+        .get(format!("{base}/v1/orgs"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member org discovery");
+    assert_eq!(member_orgs.status(), reqwest::StatusCode::OK);
+    let member_orgs: serde_json::Value = member_orgs.json().await.expect("member org json");
+    assert!(
+        member_orgs["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|org| { org["orgId"] == personal_org_id && org["role"] == "member" })
+    );
+    let member_members = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/members"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member member discovery");
+    assert_eq!(member_members.status(), reqwest::StatusCode::OK);
+    let member_members: serde_json::Value = member_members.json().await.expect("member list");
+    assert_eq!(member_members["members"].as_array().map(Vec::len), Some(2));
+    let member_workspaces = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/workspaces"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member workspace discovery");
+    assert_eq!(member_workspaces.status(), reqwest::StatusCode::OK);
+    let member_workspaces: serde_json::Value = member_workspaces
+        .json()
+        .await
+        .expect("member workspace list");
+    assert!(
+        member_workspaces["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|workspace| workspace["workspaceId"] == human_workspace_id)
+    );
     let member_token_attempt = client
         .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
         .header(
@@ -337,7 +388,10 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .send()
         .await
         .expect("member token attempt");
-    assert_eq!(member_token_attempt.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(
+        member_token_attempt.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
 
     let outsider_profile = OidcIdentityProfile {
         issuer: "https://idp.example".into(),
@@ -366,12 +420,15 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .send()
         .await
         .expect("outsider token attempt");
-    assert_eq!(outsider_token_attempt.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(
+        outsider_token_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
 
     let minted = client
         .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
         .header(reqwest::header::COOKIE, cookie)
-        .json(&serde_json::json!({ "label": "human-test" }))
+        .json(&serde_json::json!({ "label": "  human-test  " }))
         .send()
         .await
         .expect("human token mint");
@@ -387,7 +444,17 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .to_owned();
     assert!(human_token.starts_with("etyma_"));
     assert!(human_token_id.starts_with("tok_"));
+    assert_eq!(minted["label"], "human-test");
     assert!(minted.get("tokenHash").is_none());
+
+    let too_long_label = client
+        .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .json(&serde_json::json!({ "label": "x".repeat(129) }))
+        .send()
+        .await
+        .expect("overlong token label");
+    assert_eq!(too_long_label.status(), reqwest::StatusCode::BAD_REQUEST);
 
     let token_list = client
         .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
@@ -400,6 +467,60 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
     assert_eq!(token_list["tokens"].as_array().map(Vec::len), Some(1));
     assert!(token_list["tokens"][0].get("token").is_none());
     assert!(token_list["tokens"][0].get("tokenHash").is_none());
+
+    let member_list_attempt = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member token list attempt");
+    assert_eq!(member_list_attempt.status(), reqwest::StatusCode::FORBIDDEN);
+    let member_revoke_attempt = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member token revoke attempt");
+    assert_eq!(
+        member_revoke_attempt.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let outsider_list_attempt = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={outsider_session}"),
+        )
+        .send()
+        .await
+        .expect("outsider token list attempt");
+    assert_eq!(
+        outsider_list_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let outsider_revoke_attempt = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={outsider_session}"),
+        )
+        .send()
+        .await
+        .expect("outsider token revoke attempt");
+    assert_eq!(
+        outsider_revoke_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
 
     let agent_sources = client
         .get(format!("{base}/v1/sources"))
@@ -424,6 +545,22 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .expect("human token revoke");
     assert_eq!(revoked.status(), reqwest::StatusCode::NO_CONTENT);
 
+    let after_revoke = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("revoked token metadata");
+    assert_eq!(after_revoke.status(), reqwest::StatusCode::OK);
+    let after_revoke: serde_json::Value = after_revoke.json().await.expect("revoked token list");
+    let revoked_metadata = after_revoke["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|token| token["tokenId"] == human_token_id)
+        .expect("revoked token metadata row");
+    assert!(revoked_metadata["revokedAt"].as_i64().is_some());
+
     let repeat_revoke = client
         .delete(format!(
             "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
@@ -444,6 +581,25 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("revoked agent request");
     assert_eq!(revoked_agent.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let revoked_mcp = client
+        .post(format!("{base}/v1/mcp"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {human_token}"),
+        )
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": { "query": "alpha-token" }
+            }
+        }))
+        .send()
+        .await
+        .expect("revoked MCP request");
+    assert_eq!(revoked_mcp.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     let pack = client
         .post(format!("{base}/v1/packs"))

@@ -742,6 +742,56 @@ impl Store {
         })
     }
 
+    pub async fn mint_token_for_user(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        label: Option<&str>,
+    ) -> StoreResult<Option<MintedApiToken>> {
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
+        let role = sqlx::query_scalar::<_, String>(
+            "SELECT m.role
+             FROM control.memberships m
+             JOIN control.workspaces w ON w.org_id = m.org_id
+             WHERE m.user_id = $1 AND w.id = $2
+             FOR UPDATE OF m",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        if role.as_deref() != Some(MembershipRole::Owner.as_str()) {
+            return Ok(None);
+        }
+
+        let raw = format!("etyma_{}", Uuid::now_v7().simple());
+        let token_id = format!("tok_{}", Uuid::now_v7().simple());
+        let created_at = unix_now();
+        sqlx::query(
+            "INSERT INTO control.api_tokens (id, token_hash, workspace_id, label, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&token_id)
+        .bind(hash_token(&raw))
+        .bind(workspace_id)
+        .bind(label)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)?;
+        Ok(Some(MintedApiToken {
+            token: ApiTokenRow {
+                id: token_id,
+                workspace_id: workspace_id.to_owned(),
+                label: label.map(str::to_owned),
+                created_at,
+                revoked_at: None,
+            },
+            raw_token: raw,
+        }))
+    }
+
     pub async fn mint_token(&self, workspace_id: &str, label: Option<&str>) -> StoreResult<String> {
         Ok(self
             .mint_token_with_metadata(workspace_id, label)
@@ -776,6 +826,53 @@ impl Store {
         .map_err(pg_err)
     }
 
+    pub async fn list_tokens_for_user(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+    ) -> StoreResult<Option<Vec<ApiTokenRow>>> {
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
+        let role = sqlx::query_scalar::<_, String>(
+            "SELECT m.role
+             FROM control.memberships m
+             JOIN control.workspaces w ON w.org_id = m.org_id
+             WHERE m.user_id = $1 AND w.id = $2
+             FOR UPDATE OF m",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        if role.as_deref() != Some(MembershipRole::Owner.as_str()) {
+            return Ok(None);
+        }
+        let rows = sqlx::query_as::<_, (String, String, Option<String>, i64, Option<i64>)>(
+            "SELECT id, workspace_id, label, created_at, revoked_at
+             FROM control.api_tokens
+             WHERE workspace_id = $1
+             ORDER BY created_at, id",
+        )
+        .bind(workspace_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)?;
+        Ok(Some(
+            rows.into_iter()
+                .map(
+                    |(id, workspace_id, label, created_at, revoked_at)| ApiTokenRow {
+                        id,
+                        workspace_id,
+                        label,
+                        created_at,
+                        revoked_at,
+                    },
+                )
+                .collect(),
+        ))
+    }
+
     pub async fn revoke_token(
         &self,
         workspace_id: &str,
@@ -795,6 +892,44 @@ impl Store {
         .await
         .map_err(pg_err)?;
         Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn revoke_token_for_user(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        token_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<bool>> {
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
+        let role = sqlx::query_scalar::<_, String>(
+            "SELECT m.role
+             FROM control.memberships m
+             JOIN control.workspaces w ON w.org_id = m.org_id
+             WHERE m.user_id = $1 AND w.id = $2
+             FOR UPDATE OF m",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        if role.as_deref() != Some(MembershipRole::Owner.as_str()) {
+            return Ok(None);
+        }
+        let result = sqlx::query(
+            "UPDATE control.api_tokens
+             SET revoked_at = $3
+             WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(token_id)
+        .bind(workspace_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)?;
+        Ok(Some(result.rows_affected() == 1))
     }
 
     pub async fn resolve_token(&self, raw_token: &str) -> StoreResult<Option<String>> {
@@ -903,6 +1038,82 @@ mod tests {
         let repeated = store.upsert_oidc_identity(&profile).await.expect("repeat");
         assert_eq!(repeated.id, user.id);
         assert_eq!(store.list_user_orgs(&user.id).await.expect("orgs").len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn concurrent_first_oidc_logins_converge_on_one_personal_org() {
+        let url = std::env::var("ETYMA_DATABASE_URL")
+            .expect("ETYMA_DATABASE_URL required for ignored Postgres tests");
+        let pool = crate::db::connect_and_migrate(&url).await.expect("migrate");
+        let store = Store::new(pool);
+        let suffix = Uuid::now_v7().simple().to_string();
+        let profile = OidcIdentityProfile {
+            issuer: "https://accounts.example.com".into(),
+            subject: format!("concurrent-{suffix}"),
+            email: Some(format!("concurrent-{suffix}@example.com")),
+            display_name: Some("Concurrent User".into()),
+            avatar_url: None,
+            email_verified: true,
+        };
+
+        let (first, second) = tokio::join!(
+            store.upsert_oidc_identity(&profile),
+            store.upsert_oidc_identity(&profile)
+        );
+        let first = first.expect("first concurrent user");
+        let second = second.expect("second concurrent user");
+        assert_eq!(first.id, second.id);
+        let orgs = store.list_user_orgs(&first.id).await.expect("orgs");
+        assert_eq!(orgs.len(), 1);
+        assert_eq!(orgs[0].role, MembershipRole::Owner);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn token_revocation_is_bound_to_the_workspace() {
+        let url = std::env::var("ETYMA_DATABASE_URL")
+            .expect("ETYMA_DATABASE_URL required for ignored Postgres tests");
+        let pool = crate::db::connect_and_migrate(&url).await.expect("migrate");
+        let store = Store::new(pool);
+        let suffix = Uuid::now_v7().simple().to_string();
+        let org_id = format!("revoke_org_{suffix}");
+        let first_workspace = format!("revoke_ws_a_{suffix}");
+        let second_workspace = format!("revoke_ws_b_{suffix}");
+        store.create_org(&org_id, "Revoke Test Org").await.expect("org");
+        store
+            .create_workspace(&org_id, &first_workspace)
+            .await
+            .expect("first workspace");
+        store
+            .create_workspace(&org_id, &second_workspace)
+            .await
+            .expect("second workspace");
+        let minted = store
+            .mint_token_with_metadata(&first_workspace, Some("revoke"))
+            .await
+            .expect("token");
+        assert!(!store
+            .revoke_token(&second_workspace, &minted.token.id, 1_900_000_000)
+            .await
+            .expect("wrong workspace revoke"));
+        assert_eq!(
+            store
+                .resolve_token(&minted.raw_token)
+                .await
+                .expect("active token")
+                .as_deref(),
+            Some(first_workspace.as_str())
+        );
+        assert!(store
+            .revoke_token(&first_workspace, &minted.token.id, 1_900_000_001)
+            .await
+            .expect("correct workspace revoke"));
+        assert!(store
+            .resolve_token(&minted.raw_token)
+            .await
+            .expect("revoked token")
+            .is_none());
     }
 }
 

@@ -115,6 +115,42 @@ outside the session user's memberships return a scoped `404`; insufficient
 organization roles return `403`. `/v1/spike/*` continues to use
 `x-etyma-admin-token` for operator bootstrap compatibility.
 
+### S4 migration rollout
+
+Migration `0009_org_membership_workspace_tokens.sql` backfills deterministic
+token IDs, provisions personal organizations for existing users without an
+owner membership, and installs a temporary-compatible token ID trigger so old
+instances can still insert tokens during a rolling deployment. Unsupported
+legacy membership roles intentionally stop the migration with an actionable
+error; they must be repaired before retrying.
+
+Before deploying, record the following read-only checks and stop if any result
+violates the expected condition:
+
+```sql
+SELECT role, COUNT(*) FROM control.memberships GROUP BY role;
+SELECT COUNT(*) FROM control.memberships WHERE role NOT IN ('owner', 'member');
+SELECT COUNT(*) AS token_rows,
+       COUNT(*) FILTER (WHERE id IS NULL) AS token_rows_to_rewrite
+FROM control.api_tokens;
+SELECT md5(token_hash || ':' || created_at::TEXT), COUNT(*)
+FROM control.api_tokens
+GROUP BY 1
+HAVING COUNT(*) > 1;
+SELECT u.id
+FROM control.users u
+JOIN control.user_identities i ON i.user_id = u.id
+LEFT JOIN control.memberships m ON m.user_id = u.id
+WHERE m.user_id IS NULL;
+```
+
+After migration, verify that `control.api_tokens.id` has no nulls, token counts
+per workspace are unchanged, every migrated user has an owner membership, and
+the server's token-auth `401` rate plus OIDC callback errors remain normal.
+Migration DDL is blocking and rollback is only partial after successful
+application: restore from the pre-deploy database backup if the migration must
+be reversed.
+
 ## Operator and pack flow
 
 ```bash
