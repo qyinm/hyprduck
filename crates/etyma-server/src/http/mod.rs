@@ -1,6 +1,8 @@
 use crate::auth::{
-    build_clear_cookie, build_session_cookie, parse_session_cookie, require_admin, validate_org_id,
-    validate_workspace_id, AppState, AuthError, AuthenticatedUser, AuthenticatedWorkspace,
+    build_clear_cookie, build_clear_login_transaction_cookie, build_login_transaction_cookie,
+    build_session_cookie, parse_login_transaction_cookie, parse_session_cookie, require_admin,
+    validate_org_id, validate_workspace_id, AppState, AuthError, AuthenticatedUser,
+    AuthenticatedWorkspace,
 };
 use crate::compose::compose_pack;
 use crate::seed::seed_multi_source_workspace;
@@ -45,14 +47,27 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn auth_login(State(state): State<AppState>) -> Result<Response, (StatusCode, String)> {
-    let location = state.auth.begin_login().await.map_err(auth_error)?;
+    let login = state.auth.begin_login().await.map_err(auth_error)?;
     let mut response = StatusCode::FOUND.into_response();
     response.headers_mut().insert(
         LOCATION,
-        HeaderValue::from_str(&location).map_err(|_| {
+        HeaderValue::from_str(&login.authorization_url).map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "invalid login redirect".into(),
+            )
+        })?,
+    );
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&build_login_transaction_cookie(
+            &login.browser_binding,
+            state.auth.session_cookie_secure(),
+        ))
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid login transaction cookie".into(),
             )
         })?,
     );
@@ -70,37 +85,58 @@ struct AuthCallbackQuery {
 
 async fn auth_callback(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(query): axum::extract::Query<AuthCallbackQuery>,
-) -> Result<Response, (StatusCode, String)> {
-    if query.error.is_some() || query.error_description.is_some() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "OIDC provider rejected authentication".into(),
-        ));
-    }
-    let code = query.code.as_deref().unwrap_or_default();
-    let state_value = query.state.as_deref().unwrap_or_default();
-    let session = state
-        .auth
-        .finish_login(code, state_value)
-        .await
-        .map_err(auth_error)?;
-    let mut response = axum::response::Redirect::to(state.auth.success_redirect()).into_response();
-    response.headers_mut().insert(
-        SET_COOKIE,
-        HeaderValue::from_str(&build_session_cookie(
-            &session.raw_token,
-            session.max_age_seconds,
-            state.auth.session_cookie_secure(),
-        ))
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid session cookie".into(),
+) -> Response {
+    let secure = state.auth.session_cookie_secure();
+    let result: Result<Response, (StatusCode, String)> = async {
+        if query.error.is_some() || query.error_description.is_some() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "OIDC provider rejected authentication".into(),
+            ));
+        }
+        let browser_binding = headers
+            .get(COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_login_transaction_cookie)
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                "invalid authentication callback".into(),
+            ))?;
+        let session = state
+            .auth
+            .finish_login(
+                query.code.as_deref().unwrap_or_default(),
+                query.state.as_deref().unwrap_or_default(),
+                &browser_binding,
             )
-        })?,
-    );
-    Ok(response)
+            .await
+            .map_err(auth_error)?;
+        let mut response =
+            axum::response::Redirect::to(state.auth.success_redirect()).into_response();
+        response.headers_mut().append(
+            SET_COOKIE,
+            HeaderValue::from_str(&build_session_cookie(
+                &session.raw_token,
+                session.max_age_seconds,
+                secure,
+            ))
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid session cookie".into(),
+                )
+            })?,
+        );
+        Ok(response)
+    }
+    .await;
+    let mut response = result.unwrap_or_else(IntoResponse::into_response);
+    if let Ok(clear_cookie) = HeaderValue::from_str(&build_clear_login_transaction_cookie(secure)) {
+        response.headers_mut().append(SET_COOKIE, clear_cookie);
+    }
+    response
 }
 
 async fn me(auth: AuthenticatedUser) -> Result<Json<MeResponse>, (StatusCode, String)> {
