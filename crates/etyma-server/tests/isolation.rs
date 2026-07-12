@@ -154,7 +154,11 @@ async fn run_isolation_suite(
     let t2 = store.mint_token(&w2, Some("b")).await.unwrap();
 
     let app = {
-        etyma_server::import_job::spawn_upload_recovery_loop(knowledge.clone(), blobs.clone());
+        etyma_server::import_job::spawn_upload_recovery_loop(
+            knowledge.clone(),
+            graph.clone(),
+            blobs.clone(),
+        );
         let state = AppState {
             auth: Arc::new(AuthService::disabled(store.clone(), AuthConfig::default())),
             store: store.clone(),
@@ -280,6 +284,47 @@ async fn run_isolation_suite(
         .unwrap()
         .iter()
         .any(|e| e["sourceId"] == upload_body["source"]["id"]));
+    let uploaded_evidence_id = pack["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["sourceId"] == upload_body["source"]["id"])
+        .and_then(|e| e["evidenceRef"].as_str())
+        .expect("uploaded evidence selected")
+        .to_string();
+
+    let graph_snapshot = client
+        .get(format!("{base}/v1/graph/snapshot"))
+        .header("Authorization", format!("Bearer {t_http}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(graph_snapshot.status(), 200);
+    let graph_snapshot: serde_json::Value = graph_snapshot.json().await.unwrap();
+    assert_eq!(graph_snapshot["workspaceId"], ws_http);
+    assert_eq!(graph_snapshot["store"], "postgres.graph");
+    assert!(graph_snapshot["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|node| node["sourceIds"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|source_id| source_id == &upload_body["source"]["id"])
+            && node["evidenceIds"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .any(|evidence_id| evidence_id == &uploaded_evidence_id)));
+    assert!(pack["selectedEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["evidenceRef"] == uploaded_evidence_id
+            && e.get("graphTrail")
+                .and_then(|trail| trail["direct"].as_array())
+                .is_some_and(|direct| !direct.is_empty())));
 
     // Multi-source pack for w1
     let pack_res = client
