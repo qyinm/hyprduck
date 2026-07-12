@@ -8,8 +8,21 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use std::sync::Arc;
 
+mod oidc;
+mod session;
+
+pub use oidc::{AuthError, AuthService, AuthenticatedSession, OidcBackend, OidcFuture};
+pub use session::{
+    build_clear_cookie, build_session_cookie, parse_session_cookie, AuthenticatedUser,
+    SESSION_COOKIE_NAME,
+};
+
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub struct AppState {
+    pub auth: Arc<AuthService>,
     pub store: Arc<Store>,
     pub knowledge: KnowledgeStore,
     pub graph: GraphStore,

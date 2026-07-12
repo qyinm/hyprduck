@@ -11,7 +11,7 @@ pub mod mcp;
 pub mod seed;
 pub mod store;
 
-use crate::auth::AppState;
+use crate::auth::{AppState, AuthService};
 use crate::blob::LocalFsBlobStore;
 use crate::config::ServerConfig;
 use crate::graph::GraphStore;
@@ -29,13 +29,19 @@ pub async fn build_app(config: &ServerConfig) -> Result<Router> {
     let pool = db::connect_and_migrate(config.storage.postgres_url())
         .await
         .context("postgres connect/migrate")?;
-    let store = Store::new(pool.clone());
+    let store = Arc::new(Store::new(pool.clone()));
+    let auth = Arc::new(
+        AuthService::initialize(store.clone(), config.auth.clone())
+            .await
+            .context("initialize authentication")?,
+    );
 
     let blobs = LocalFsBlobStore::open(&config.blob_root).context("open blob store")?;
     let knowledge = KnowledgeStore::new(pool.clone());
     let graph = GraphStore::new(pool.clone());
     let state = AppState {
-        store: Arc::new(store),
+        auth,
+        store,
         knowledge,
         graph,
         blobs: Arc::new(blobs),

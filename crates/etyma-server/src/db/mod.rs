@@ -108,11 +108,14 @@ mod tests {
                 "api_tokens",
                 "audit_events",
                 "memberships",
+                "oidc_login_states",
                 "orgs",
+                "sessions",
+                "user_identities",
                 "users",
                 "workspaces",
             ],
-            "expected S-PG2 control product tables"
+            "expected S3 control product tables"
         );
 
         let knowledge_tables: Vec<String> = sqlx::query_scalar(
