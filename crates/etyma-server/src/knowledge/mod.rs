@@ -1,4 +1,5 @@
 use crate::blob::BlobPutMeta;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::fmt;
@@ -28,7 +29,8 @@ pub struct EvidenceRow {
     pub content_hash: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum ImportJobStatus {
     Queued,
@@ -206,6 +208,26 @@ impl KnowledgeStore {
         .map_err(map_read)
     }
 
+    pub async fn get_source(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> KnowledgeResult<Option<SourceRow>> {
+        sqlx::query_as::<_, SourceRow>(
+            r#"
+            SELECT id, workspace_id, kind, title, blob_key, content_hash,
+                   byte_size, content_type, external_id
+            FROM knowledge.sources
+            WHERE workspace_id = $1 AND id = $2
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_read)
+    }
+
     pub async fn list_evidence(&self, workspace_id: &str) -> KnowledgeResult<Vec<EvidenceRow>> {
         sqlx::query_as::<_, EvidenceRow>(
             r#"
@@ -265,6 +287,15 @@ impl KnowledgeStore {
         .fetch_one(&self.pool)
         .await
         .map_err(|error| map_write(error, "import job"))
+    }
+
+    pub async fn enqueue_upload_job(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> KnowledgeResult<ImportJobRow> {
+        self.create_import_job(workspace_id, Some(source_id), "upload", 3, unix_now())
+            .await
     }
 
     pub async fn claim_import_job(

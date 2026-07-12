@@ -34,6 +34,24 @@ fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
     );
 }
 
+async fn upload_raw_source(
+    client: &reqwest::Client,
+    base: &str,
+    workspace_id: &str,
+    admin: &str,
+) -> reqwest::Response {
+    client
+        .post(format!("{base}/v1/spike/workspaces/{workspace_id}/sources"))
+        .header("x-etyma-admin-token", admin)
+        .header("x-etyma-source-title", "upload.md")
+        .header("x-etyma-source-kind", "document")
+        .header("content-type", "text/markdown")
+        .body("# alpha upload\n\nworkspace-scoped evidence")
+        .send()
+        .await
+        .unwrap()
+}
+
 /// Full workspace isolation + spike operator flow against an already-open store.
 async fn run_isolation_suite(
     store: Arc<Store>,
@@ -158,6 +176,33 @@ async fn run_isolation_suite(
     assert_eq!(pack_http.status(), 200);
     let pack_http: serde_json::Value = pack_http.json().await.unwrap();
     assert_multi_source_pack(&pack_http, &ws_http);
+
+    let upload = upload_raw_source(&client, &base, &ws_http, admin).await;
+    assert_eq!(upload.status(), 202);
+    let upload_body: serde_json::Value = upload.json().await.unwrap();
+    assert_eq!(upload_body["workspaceId"], ws_http);
+    assert_eq!(upload_body["source"]["title"], "upload.md");
+    assert_eq!(upload_body["source"]["kind"], "document");
+    assert!(upload_body["source"]["blobKey"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("w/{ws_http}/sha256/")));
+    assert_eq!(upload_body["job"]["status"], "queued");
+    assert!(upload_body["job"].get("leaseToken").is_none());
+
+    let job_id = upload_body["job"]["id"].as_str().unwrap();
+    let status = client
+        .get(format!(
+            "{base}/v1/spike/workspaces/{ws_http}/import-jobs/{job_id}"
+        ))
+        .header("x-etyma-admin-token", admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), 200);
+    let status_body: serde_json::Value = status.json().await.unwrap();
+    assert_eq!(status_body["id"], job_id);
+    assert_eq!(status_body["workspaceId"], ws_http);
 
     // Multi-source pack for w1
     let pack_res = client
@@ -323,5 +368,14 @@ async fn org_hierarchy_sibling_isolation_on_postgres_control_and_knowledge() {
     let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
     // Unique prefix so shared CI/dev Postgres DBs do not collide on fixed org ids.
     let prefix = format!("pg_{}", Uuid::now_v7().simple());
-    run_isolation_suite(store, knowledge, graph, blobs, HostMode::Saas, pool, &prefix).await;
+    run_isolation_suite(
+        store,
+        knowledge,
+        graph,
+        blobs,
+        HostMode::Saas,
+        pool,
+        &prefix,
+    )
+    .await;
 }
