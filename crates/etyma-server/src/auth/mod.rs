@@ -17,6 +17,9 @@ pub use session::{
     SESSION_COOKIE_NAME,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub struct AppState {
     pub auth: Arc<AuthService>,

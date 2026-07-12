@@ -188,6 +188,7 @@ impl AuthService {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_backend_for_test(
         store: Arc<Store>,
         config: AuthConfig,
