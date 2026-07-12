@@ -87,6 +87,30 @@ curl -sS http://127.0.0.1:8787/v1/graph/snapshot \
 Operator route names retain `/spike/` for wire compatibility; their storage is
 Postgres-only. Same-org sibling workspaces remain isolated.
 
+### Upload and import status
+
+After workspace and token creation, operator uploads use the source route and
+return `202 Accepted` with a queued job:
+
+```bash
+UPLOAD=$(curl -sS -X POST \
+  "http://127.0.0.1:8787/v1/spike/workspaces/$WS_ID/sources" \
+  -H "x-etyma-admin-token: $ETYMA_SPIKE_ADMIN_TOKEN" \
+  -H "x-etyma-source-title: design.md" \
+  -H "x-etyma-source-kind: document" \
+  -H "content-type: text/markdown" \
+  --data-binary $'# Design\n\nWorkspace-scoped evidence.')
+
+JOB_ID=$(printf '%s' "$UPLOAD" | jq -r '.job.id')
+curl -sS \
+  "http://127.0.0.1:8787/v1/spike/workspaces/$WS_ID/import-jobs/$JOB_ID" \
+  -H "x-etyma-admin-token: $ETYMA_SPIKE_ADMIN_TOKEN"
+```
+
+Job status is stored in Postgres, source bytes live in the blob adapter, and
+the S2 soft path writes one page-1 evidence record for UTF-8 content. Full
+binary parsing and GraphQLite materialization belong to PON-11 / PON-19.
+
 ## Tests
 
 ```bash
