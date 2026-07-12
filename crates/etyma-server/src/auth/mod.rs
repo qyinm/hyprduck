@@ -8,6 +8,10 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use std::sync::Arc;
 
+mod oidc;
+
+pub use oidc::{AuthError, AuthService, AuthenticatedSession, OidcBackend, OidcFuture};
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Store>,
