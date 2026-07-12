@@ -36,7 +36,7 @@ pub async fn run_upload_job(
 ) -> Result<(), String> {
     let owner = format!("upload-http-{}", Uuid::now_v7().simple());
     let Some(claimed) = knowledge
-        .claim_import_job(workspace_id, &owner, LEASE_DURATION_SECONDS)
+        .claim_import_job_by_id(workspace_id, job_id, &owner, LEASE_DURATION_SECONDS)
         .await
         .map_err(|error| error.to_string())?
     else {
@@ -48,20 +48,6 @@ pub async fn run_upload_job(
         );
         return Ok(());
     };
-
-    if claimed.id != job_id {
-        let error = format!("claimed unexpected import job for source {}", source.id);
-        let _ = knowledge
-            .fail_import_job(
-                workspace_id,
-                &claimed.id,
-                &owner,
-                claimed.lease_token.as_deref().unwrap_or_default(),
-                &error,
-            )
-            .await;
-        return Err(error);
-    }
 
     if claimed.source_id.as_deref() != Some(source.id.as_str()) {
         let error = format!("claimed import job source mismatch for {}", source.id);
