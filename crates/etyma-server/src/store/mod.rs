@@ -65,6 +65,14 @@ pub struct UserWorkspaceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgMemberRow {
+    pub user_id: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub role: MembershipRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiTokenRow {
     pub id: String,
     pub workspace_id: String,
@@ -305,6 +313,31 @@ impl Store {
         .transpose()
     }
 
+    pub async fn get_membership_for_org(
+        &self,
+        user_id: &str,
+        org_id: &str,
+    ) -> StoreResult<Option<MembershipRow>> {
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT org_id, user_id, role
+             FROM control.memberships
+             WHERE user_id = $1 AND org_id = $2",
+        )
+        .bind(user_id)
+        .bind(org_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        row.map(|(org_id, user_id, role)| {
+            Ok(MembershipRow {
+                org_id,
+                user_id,
+                role: MembershipRole::parse(role)?,
+            })
+        })
+        .transpose()
+    }
+
     pub async fn list_user_orgs(&self, user_id: &str) -> StoreResult<Vec<UserOrgRow>> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "SELECT o.id, o.name, m.role
@@ -350,6 +383,30 @@ impl Store {
                 Ok(UserWorkspaceRow {
                     workspace_id,
                     org_id,
+                    role: MembershipRole::parse(role)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn list_org_members(&self, org_id: &str) -> StoreResult<Vec<OrgMemberRow>> {
+        let rows = sqlx::query_as::<_, (String, Option<String>, Option<String>, String)>(
+            "SELECT u.id, u.email, u.display_name, m.role
+             FROM control.memberships m
+             JOIN control.users u ON u.id = m.user_id
+             WHERE m.org_id = $1
+             ORDER BY m.created_at, u.id",
+        )
+        .bind(org_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(pg_err)?;
+        rows.into_iter()
+            .map(|(user_id, email, display_name, role)| {
+                Ok(OrgMemberRow {
+                    user_id,
+                    email,
+                    display_name,
                     role: MembershipRole::parse(role)?,
                 })
             })
@@ -523,6 +580,33 @@ impl Store {
                 email_verified: profile.email_verified,
             });
         }
+
+        let personal_org_id = format!("org_personal_{}", Uuid::now_v7().simple());
+        let personal_org_name = profile
+            .display_name
+            .as_deref()
+            .or(profile.email.as_deref())
+            .map(|name| format!("{name}'s Personal Organization"))
+            .unwrap_or_else(|| "Personal Organization".to_owned());
+        sqlx::query("INSERT INTO control.orgs (id, name, created_at) VALUES ($1, $2, $3)")
+            .bind(&personal_org_id)
+            .bind(personal_org_name)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(pg_err)?;
+        let membership_id = format!("mem_{}", Uuid::now_v7().simple());
+        sqlx::query(
+            "INSERT INTO control.memberships (id, org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(membership_id)
+        .bind(&personal_org_id)
+        .bind(&user_id)
+        .bind(MembershipRole::Owner.as_str())
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(pg_err)?;
 
         tx.commit().await.map_err(pg_err)?;
         Ok(UserRow {
@@ -765,6 +849,34 @@ mod tests {
                 .expect("revoked lookup")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn first_oidc_identity_gets_personal_org_owner_membership() {
+        let url = std::env::var("ETYMA_DATABASE_URL")
+            .expect("ETYMA_DATABASE_URL required for ignored Postgres tests");
+        let pool = crate::db::connect_and_migrate(&url).await.expect("migrate");
+        let store = Store::new(pool);
+        let suffix = Uuid::now_v7().simple().to_string();
+        let profile = OidcIdentityProfile {
+            issuer: "https://accounts.example.com".into(),
+            subject: format!("personal-org-{suffix}"),
+            email: Some(format!("personal-{suffix}@example.com")),
+            display_name: Some("Personal User".into()),
+            avatar_url: None,
+            email_verified: true,
+        };
+
+        let user = store.upsert_oidc_identity(&profile).await.expect("user");
+        let orgs = store.list_user_orgs(&user.id).await.expect("orgs");
+        assert_eq!(orgs.len(), 1);
+        assert_eq!(orgs[0].role, MembershipRole::Owner);
+        assert!(orgs[0].org_id.starts_with("org_personal_"));
+
+        let repeated = store.upsert_oidc_identity(&profile).await.expect("repeat");
+        assert_eq!(repeated.id, user.id);
+        assert_eq!(store.list_user_orgs(&user.id).await.expect("orgs").len(), 1);
     }
 }
 

@@ -251,6 +251,47 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
     assert_eq!(body["emailVerified"], true);
     assert!(body["userId"].as_str().unwrap_or("").starts_with("usr_"));
 
+    let orgs = client
+        .get(format!("{base}/v1/orgs"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("org discovery");
+    assert_eq!(orgs.status(), reqwest::StatusCode::OK);
+    let orgs: serde_json::Value = orgs.json().await.expect("org discovery json");
+    assert_eq!(orgs["orgs"].as_array().map(Vec::len), Some(1));
+    let personal_org_id = orgs["orgs"][0]["orgId"].as_str().expect("org id");
+    assert_eq!(orgs["orgs"][0]["role"], "owner");
+
+    let members = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/members"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("member discovery");
+    assert_eq!(members.status(), reqwest::StatusCode::OK);
+    let members: serde_json::Value = members.json().await.expect("member discovery json");
+    assert_eq!(members["members"].as_array().map(Vec::len), Some(1));
+    assert_eq!(members["members"][0]["role"], "owner");
+
+    let workspaces = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/workspaces"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("workspace discovery");
+    assert_eq!(workspaces.status(), reqwest::StatusCode::OK);
+    let workspaces: serde_json::Value = workspaces.json().await.expect("workspace json");
+    assert_eq!(workspaces["workspaces"].as_array().map(Vec::len), Some(0));
+
+    let foreign = client
+        .get(format!("{base}/v1/orgs/unknown-org/members"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("foreign org discovery");
+    assert_eq!(foreign.status(), reqwest::StatusCode::NOT_FOUND);
+
     let pack = client
         .post(format!("{base}/v1/packs"))
         .header(

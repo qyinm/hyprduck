@@ -1,8 +1,8 @@
 use crate::auth::{
+    AppState, AuthError, AuthenticatedUser, AuthenticatedWorkspace, authorize_human_org,
     build_clear_cookie, build_clear_login_transaction_cookie, build_login_transaction_cookie,
     build_session_cookie, parse_login_transaction_cookie, parse_session_cookie, require_admin,
-    validate_org_id, validate_workspace_id, AppState, AuthError, AuthenticatedUser,
-    AuthenticatedWorkspace,
+    validate_org_id, validate_workspace_id,
 };
 use crate::compose::compose_pack;
 use crate::ingest::ingest_source;
@@ -11,17 +11,17 @@ use crate::seed::seed_multi_source_workspace;
 use crate::store::StoreError;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, State};
-use axum::http::header::{HeaderValue, COOKIE, LOCATION, SET_COOKIE};
-use axum::http::request::Parts;
 use axum::http::StatusCode;
-use axum::http::{header, HeaderMap};
+use axum::http::header::{COOKIE, HeaderValue, LOCATION, SET_COOKIE};
+use axum::http::request::Parts;
+use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use etyma_engine_types::ContextPackV1;
 use mime::Mime;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
@@ -33,6 +33,9 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/callback", get(auth_callback))
         .route("/v1/auth/logout", post(auth_logout))
         .route("/v1/me", get(me))
+        .route("/v1/orgs", get(list_my_orgs))
+        .route("/v1/orgs/{org_id}/members", get(list_my_org_members))
+        .route("/v1/orgs/{org_id}/workspaces", get(list_my_workspaces))
         .route("/v1/sources", get(list_sources))
         .route("/v1/graph/snapshot", get(graph_snapshot))
         .route("/v1/packs", post(create_pack))
@@ -160,6 +163,69 @@ async fn me(auth: AuthenticatedUser) -> Result<Json<MeResponse>, (StatusCode, St
         avatar_url: auth.user.avatar_url,
         email_verified: auth.user.email_verified,
     }))
+}
+
+async fn list_my_orgs(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let orgs = state
+        .store
+        .list_user_orgs(&auth.user.id)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(json!({
+        "orgs": orgs.into_iter().map(|org| json!({
+            "orgId": org.org_id,
+            "name": org.name,
+            "role": org.role.as_str(),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+async fn list_my_org_members(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(org_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    validate_org_id(&org_id)?;
+    authorize_human_org(&state, &auth.user.id, &org_id).await?;
+    let members = state
+        .store
+        .list_org_members(&org_id)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(json!({
+        "orgId": org_id,
+        "members": members.into_iter().map(|member| json!({
+            "userId": member.user_id,
+            "email": member.email,
+            "displayName": member.display_name,
+            "role": member.role.as_str(),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+async fn list_my_workspaces(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(org_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    validate_org_id(&org_id)?;
+    authorize_human_org(&state, &auth.user.id, &org_id).await?;
+    let workspaces = state
+        .store
+        .list_user_workspaces(&auth.user.id, &org_id)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(json!({
+        "orgId": org_id,
+        "workspaces": workspaces.into_iter().map(|workspace| json!({
+            "workspaceId": workspace.workspace_id,
+            "orgId": workspace.org_id,
+            "role": workspace.role.as_str(),
+        })).collect::<Vec<_>>(),
+    })))
 }
 
 async fn auth_logout(
