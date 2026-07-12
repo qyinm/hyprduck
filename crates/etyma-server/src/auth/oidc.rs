@@ -271,6 +271,14 @@ impl AuthService {
             .revoke_session(raw_token, now_unix_seconds())
             .await?)
     }
+
+    pub fn session_cookie_secure(&self) -> bool {
+        self.config.session_cookie_secure
+    }
+
+    pub fn success_redirect(&self) -> &str {
+        &self.config.success_redirect
+    }
 }
 
 fn new_opaque_value() -> String {

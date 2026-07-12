@@ -1,6 +1,6 @@
-use etyma_server::auth::AppState;
+use etyma_server::auth::{AppState, AuthService};
 use etyma_server::blob::{BlobStore, LocalFsBlobStore};
-use etyma_server::config::HostMode;
+use etyma_server::config::{AuthConfig, HostMode};
 use etyma_server::graph::GraphStore;
 use etyma_server::knowledge::KnowledgeStore;
 use etyma_server::seed::seed_multi_source_workspace;
@@ -73,6 +73,7 @@ async fn run_isolation_suite(
 
     let app = {
         let state = AppState {
+            auth: Arc::new(AuthService::disabled(store.clone(), AuthConfig::default())),
             store: store.clone(),
             knowledge: knowledge.clone(),
             graph,
@@ -323,5 +324,14 @@ async fn org_hierarchy_sibling_isolation_on_postgres_control_and_knowledge() {
     let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
     // Unique prefix so shared CI/dev Postgres DBs do not collide on fixed org ids.
     let prefix = format!("pg_{}", Uuid::now_v7().simple());
-    run_isolation_suite(store, knowledge, graph, blobs, HostMode::Saas, pool, &prefix).await;
+    run_isolation_suite(
+        store,
+        knowledge,
+        graph,
+        blobs,
+        HostMode::Saas,
+        pool,
+        &prefix,
+    )
+    .await;
 }
