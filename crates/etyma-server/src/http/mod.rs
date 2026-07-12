@@ -36,26 +36,17 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-/// Readiness for `/health` and `/healthz` (includes Postgres probe when pooled).
-///
-/// - No pool: `postgres: "skipped"`, HTTP 200
-/// - Pool up: `postgres: "up"`, HTTP 200
-/// - Pool present but `SELECT 1` fails: `postgres: "down"`, HTTP 503
+/// Readiness for `/health` and `/healthz` includes the mandatory Postgres probe.
 ///
 /// Prefer this for readiness, not process liveness: a brief DB blip should not
 /// restart the process.
-async fn health(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let (http_status, postgres, ok) = match state.pg_pool.as_ref() {
-        None => (StatusCode::OK, "skipped", true),
-        Some(pool) => match crate::db::health_check(pool).await {
-            Ok(()) => (StatusCode::OK, "up", true),
-            Err(err) => {
-                tracing::warn!(error = %err, "postgres health check failed");
-                (StatusCode::SERVICE_UNAVAILABLE, "down", false)
-            }
-        },
+async fn health(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let (http_status, postgres, ok) = match crate::db::health_check(&state.pg_pool).await {
+        Ok(()) => (StatusCode::OK, "up", true),
+        Err(err) => {
+            tracing::warn!(error = %err, "postgres health check failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "down", false)
+        }
     };
 
     let body = json!({
@@ -78,10 +69,10 @@ async fn list_sources(
     auth: AuthenticatedWorkspace,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let sources = state
-        .store
+        .knowledge
         .list_sources(&auth.workspace_id)
         .await
-        .map_err(store_err)?;
+        .map_err(knowledge_err)?;
     let body: Vec<Value> = sources
         .into_iter()
         .map(|s| {
@@ -97,7 +88,9 @@ async fn list_sources(
             })
         })
         .collect();
-    Ok(Json(json!({ "workspaceId": auth.workspace_id, "sources": body })))
+    Ok(Json(
+        json!({ "workspaceId": auth.workspace_id, "sources": body }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,7 +105,7 @@ async fn create_pack(
     Json(body): Json<PackRequest>,
 ) -> Result<Json<ContextPackV1>, (StatusCode, String)> {
     let pack = compose_pack(
-        &state.store,
+        &state.knowledge,
         state.blobs.as_ref(),
         &auth.workspace_id,
         &body.query,
@@ -288,16 +281,17 @@ async fn seed_workspace(
     validate_workspace_id(&workspace_id)?;
     let source_count = seed_multi_source_workspace(
         &state.store,
+        &state.knowledge,
         state.blobs.as_ref(),
         &workspace_id,
     )
     .await
     .map_err(store_err)?;
     let sources = state
-        .store
+        .knowledge
         .list_sources(&workspace_id)
         .await
-        .map_err(store_err)?;
+        .map_err(knowledge_err)?;
     Ok(Json(json!({
         "workspaceId": workspace_id,
         "sourceCount": source_count,
@@ -319,4 +313,8 @@ fn store_err(err: StoreError) -> (StatusCode, String) {
         StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, err.to_string())
+}
+
+fn knowledge_err(err: crate::knowledge::KnowledgeError) -> (StatusCode, String) {
+    store_err(err.into())
 }

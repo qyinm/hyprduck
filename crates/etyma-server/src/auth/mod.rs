@@ -1,5 +1,6 @@
 use crate::blob::BlobStore;
 use crate::config::HostMode;
+use crate::knowledge::KnowledgeStore;
 use crate::store::Store;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -9,12 +10,12 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Store>,
+    pub knowledge: KnowledgeStore,
     pub blobs: Arc<dyn BlobStore>,
     pub spike_admin_token: Option<String>,
     /// Process host mode (spike vs cloud foundation).
     pub host_mode: HostMode,
-    /// Postgres pool in cloud-foundation mode; `None` for spike SQLite-only boot.
-    pub pg_pool: Option<sqlx::PgPool>,
+    pub pg_pool: sqlx::PgPool,
 }
 
 #[derive(Debug, Clone)]
@@ -81,10 +82,7 @@ pub fn require_admin(state: &AppState, parts: &Parts) -> Result<(), (StatusCode,
 /// Org / workspace ids are tenant keys (not filesystem paths).
 pub fn validate_tenant_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
     if id.is_empty() || id.len() > 128 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("invalid {kind} id length"),
-        ));
+        return Err((StatusCode::BAD_REQUEST, format!("invalid {kind} id length")));
     }
     if !id
         .chars()

@@ -60,7 +60,9 @@ mod tests {
         let pool = connect_and_migrate(&url)
             .await
             .expect("first connect_and_migrate");
-        health_check(&pool).await.expect("health after first migrate");
+        health_check(&pool)
+            .await
+            .expect("health after first migrate");
 
         let pool2 = connect_and_migrate(&url)
             .await
@@ -113,22 +115,65 @@ mod tests {
             "expected S-PG2 control product tables"
         );
 
-        // knowledge/graph still have no product tables (S-PG3/4).
-        let other_plane_tables: Vec<String> = sqlx::query_scalar(
+        let knowledge_tables: Vec<String> = sqlx::query_scalar(
             r#"
-            SELECT table_schema || '.' || table_name
+            SELECT table_name
             FROM information_schema.tables
-            WHERE table_schema IN ('knowledge', 'graph')
+            WHERE table_schema = 'knowledge'
               AND table_type = 'BASE TABLE'
-            ORDER BY 1
+            ORDER BY table_name
             "#,
         )
         .fetch_all(&pool2)
         .await
-        .expect("list knowledge/graph product tables");
+        .expect("list knowledge product tables");
+        assert_eq!(
+            knowledge_tables,
+            vec!["evidence", "import_jobs", "sources"],
+            "expected S-PG3 knowledge product tables"
+        );
+
+        let knowledge_indexes: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'knowledge'
+              AND indexname LIKE 'idx_knowledge_%'
+            ORDER BY indexname
+            "#,
+        )
+        .fetch_all(&pool2)
+        .await
+        .expect("list knowledge indexes");
+        assert_eq!(
+            knowledge_indexes,
+            vec![
+                "idx_knowledge_evidence_workspace_created",
+                "idx_knowledge_evidence_workspace_source_created",
+                "idx_knowledge_import_jobs_queued_claimable",
+                "idx_knowledge_import_jobs_running_expired",
+                "idx_knowledge_import_jobs_workspace_created",
+                "idx_knowledge_import_jobs_workspace_source",
+                "idx_knowledge_sources_workspace_created",
+                "idx_knowledge_sources_workspace_external_id",
+            ]
+        );
+
+        let graph_tables: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'graph'
+              AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            "#,
+        )
+        .fetch_all(&pool2)
+        .await
+        .expect("list graph product tables");
         assert!(
-            other_plane_tables.is_empty(),
-            "knowledge/graph must not have product tables yet; found {other_plane_tables:?}"
+            graph_tables.is_empty(),
+            "S-PG4 graph tables must not exist yet"
         );
     }
 }

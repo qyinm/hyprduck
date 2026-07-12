@@ -1006,7 +1006,6 @@ dependencies = [
  "etyma-engine-types",
  "hex",
  "reqwest 0.12.23",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",

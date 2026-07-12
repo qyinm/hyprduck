@@ -5,13 +5,15 @@ pub mod config;
 pub mod db;
 pub mod http;
 pub mod ingest;
+pub mod knowledge;
 pub mod mcp;
 pub mod seed;
 pub mod store;
 
 use crate::auth::AppState;
 use crate::blob::LocalFsBlobStore;
-use crate::config::{ServerConfig, StorageMode};
+use crate::config::ServerConfig;
+use crate::knowledge::KnowledgeStore;
 use crate::store::Store;
 use anyhow::{Context, Result};
 use axum::Router;
@@ -20,32 +22,22 @@ use tower_http::trace::TraceLayer;
 
 /// Build the HTTP/MCP router.
 ///
-/// In [`StorageMode::PostgresFoundation`], connects a pool, applies migrations, and
-/// opens a hybrid store (control on Postgres, sources/evidence on local SQLite).
-/// Spike mode keeps the full product schema on SQLite only.
+/// Connects Postgres, applies control/knowledge migrations, and builds the SaaS router.
 pub async fn build_app(config: &ServerConfig) -> Result<Router> {
-    let (store, pg_pool) = match &config.storage {
-        StorageMode::PostgresFoundation { database_url } => {
-            let pool = db::connect_and_migrate(database_url)
-                .await
-                .context("postgres connect/migrate")?;
-            let store = Store::open_hybrid(pool.clone(), &config.database_path)
-                .context("open hybrid store (control=pg, knowledge=sqlite)")?;
-            (store, Some(pool))
-        }
-        StorageMode::SpikeSqlite => {
-            let store = Store::open(&config.database_path).context("open server store")?;
-            (store, None)
-        }
-    };
+    let pool = db::connect_and_migrate(config.storage.postgres_url())
+        .await
+        .context("postgres connect/migrate")?;
+    let store = Store::new(pool.clone());
 
     let blobs = LocalFsBlobStore::open(&config.blob_root).context("open blob store")?;
+    let knowledge = KnowledgeStore::new(pool.clone());
     let state = AppState {
         store: Arc::new(store),
+        knowledge,
         blobs: Arc::new(blobs),
         spike_admin_token: config.spike_admin_token.clone(),
         host_mode: config.storage.host_mode(),
-        pg_pool,
+        pg_pool: pool,
     };
     Ok(Router::new()
         .merge(http::router())
@@ -59,14 +51,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind)
         .await
         .with_context(|| format!("bind {}", config.bind))?;
-    match &config.storage {
-        StorageMode::PostgresFoundation { .. } => {
-            tracing::info!("postgres pool ready (migrations applied); control on pg, knowledge on sqlite");
-        }
-        StorageMode::SpikeSqlite => {
-            tracing::info!("postgres pool skipped (spike SQLite metadata path)");
-        }
-    }
+    tracing::info!("postgres pool ready (control and knowledge migrations applied)");
     tracing::info!(%config.bind, "etyma-server listening");
     axum::serve(listener, app).await.context("serve")?;
     Ok(())

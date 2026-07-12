@@ -77,7 +77,7 @@ async fn mcp_handler(
                 return Ok(Json(rpc_error(id, -32602, "query is required".into())));
             }
             let pack = compose_pack(
-                &state.store,
+                &state.knowledge,
                 state.blobs.as_ref(),
                 &workspace_id,
                 &query,
