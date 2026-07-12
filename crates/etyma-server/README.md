@@ -118,14 +118,20 @@ organization roles return `403`. `/v1/spike/*` continues to use
 ### S4 migration rollout
 
 Migration `0009_org_membership_workspace_tokens.sql` backfills deterministic
-token IDs, provisions personal organizations for existing users without an
-owner membership, and installs a temporary-compatible token ID trigger so old
-instances can still insert tokens during a rolling deployment. Unsupported
-legacy membership roles intentionally stop the migration with an actionable
-error; they must be repaired before retrying.
+token IDs and provisions personal organizations for existing users without a
+deterministic personal membership. Unsupported legacy membership roles
+intentionally stop the migration with an actionable error; they must be
+repaired before retrying.
 
-Before deploying, record the following read-only checks and stop if any result
-violates the expected condition:
+This migration is not mixed-version safe for token readers. Drain all
+pre-S4 server instances before applying it, apply the migration once, then
+start only the S4 server version. This ordering preserves immediate revocation;
+rolling old readers after S4 revocation would still accept tokens because they
+do not filter `revoked_at`.
+
+Before deploying, record the following read-only checks. Unsupported roles and
+duplicate token-ID inputs are stop conditions; the personal-membership query is
+the backfill baseline and must be empty after migration:
 
 ```sql
 SELECT role, COUNT(*) FROM control.memberships GROUP BY role;
@@ -140,8 +146,11 @@ HAVING COUNT(*) > 1;
 SELECT u.id
 FROM control.users u
 JOIN control.user_identities i ON i.user_id = u.id
-LEFT JOIN control.memberships m ON m.user_id = u.id
-WHERE m.user_id IS NULL;
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM control.memberships m
+  WHERE m.id = 'mem_personal_' || md5('personal-membership:' || u.id)
+);
 ```
 
 After migration, verify that `control.api_tokens.id` has no nulls, token counts

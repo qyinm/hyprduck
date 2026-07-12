@@ -501,6 +501,49 @@ impl Store {
         .map_err(pg_err)?;
 
         if let Some((id, _, _, _, _)) = existing {
+            let has_personal_org = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(
+                   SELECT 1
+                   FROM control.memberships m
+                   WHERE m.user_id = $1
+                     AND m.role = 'owner'
+                     AND m.org_id LIKE 'org_personal_%'
+                 )",
+            )
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(pg_err)?;
+            if !has_personal_org {
+                let personal_org_id = format!("org_personal_{}", Uuid::now_v7().simple());
+                let personal_org_name = profile
+                    .display_name
+                    .as_deref()
+                    .or(profile.email.as_deref())
+                    .map(|name| format!("{name}'s Personal Organization"))
+                    .unwrap_or_else(|| "Personal Organization".to_owned());
+                sqlx::query(
+                    "INSERT INTO control.orgs (id, name, created_at) VALUES ($1, $2, $3)",
+                )
+                .bind(&personal_org_id)
+                .bind(personal_org_name)
+                .bind(unix_now())
+                .execute(&mut *tx)
+                .await
+                .map_err(pg_err)?;
+                let membership_id = format!("mem_{}", Uuid::now_v7().simple());
+                sqlx::query(
+                    "INSERT INTO control.memberships (id, org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(membership_id)
+                .bind(&personal_org_id)
+                .bind(&id)
+                .bind(MembershipRole::Owner.as_str())
+                .bind(unix_now())
+                .execute(&mut *tx)
+                .await
+                .map_err(pg_err)?;
+            }
             sqlx::query(
                 "UPDATE control.users u SET email = $2, display_name = $3, avatar_url = $4, email_verified = $5, updated_at = $6 FROM control.user_identities i WHERE u.id = i.user_id AND i.issuer = $1 AND i.subject = $7",
             )
@@ -754,7 +797,7 @@ impl Store {
              FROM control.memberships m
              JOIN control.workspaces w ON w.org_id = m.org_id
              WHERE m.user_id = $1 AND w.id = $2
-             FOR UPDATE OF m",
+             FOR UPDATE OF m, w",
         )
         .bind(user_id)
         .bind(workspace_id)
@@ -837,7 +880,7 @@ impl Store {
              FROM control.memberships m
              JOIN control.workspaces w ON w.org_id = m.org_id
              WHERE m.user_id = $1 AND w.id = $2
-             FOR UPDATE OF m",
+             FOR UPDATE OF m, w",
         )
         .bind(user_id)
         .bind(workspace_id)
@@ -907,7 +950,7 @@ impl Store {
              FROM control.memberships m
              JOIN control.workspaces w ON w.org_id = m.org_id
              WHERE m.user_id = $1 AND w.id = $2
-             FOR UPDATE OF m",
+             FOR UPDATE OF m, w",
         )
         .bind(user_id)
         .bind(workspace_id)
