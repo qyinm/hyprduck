@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod graph;
 pub mod http;
+pub mod import_job;
 pub mod ingest;
 pub mod knowledge;
 pub mod mcp;

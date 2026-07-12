@@ -52,6 +52,34 @@ async fn upload_raw_source(
         .unwrap()
 }
 
+async fn wait_for_succeeded_job(
+    client: &reqwest::Client,
+    base: &str,
+    workspace_id: &str,
+    job_id: &str,
+    admin: &str,
+) -> serde_json::Value {
+    let mut last = serde_json::Value::Null;
+    for _ in 0..100 {
+        let response = client
+            .get(format!(
+                "{base}/v1/spike/workspaces/{workspace_id}/import-jobs/{job_id}"
+            ))
+            .header("x-etyma-admin-token", admin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        last = response.json().await.unwrap();
+        if last["status"] == "succeeded" {
+            return last;
+        }
+        assert_ne!(last["status"], "failed", "upload job failed: {last}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("upload job did not succeed: {last}");
+}
+
 /// Full workspace isolation + spike operator flow against an already-open store.
 async fn run_isolation_suite(
     store: Arc<Store>,
@@ -191,18 +219,27 @@ async fn run_isolation_suite(
     assert!(upload_body["job"].get("leaseToken").is_none());
 
     let job_id = upload_body["job"]["id"].as_str().unwrap();
-    let status = client
-        .get(format!(
-            "{base}/v1/spike/workspaces/{ws_http}/import-jobs/{job_id}"
-        ))
-        .header("x-etyma-admin-token", admin)
+    let status_body = wait_for_succeeded_job(&client, &base, &ws_http, job_id, admin).await;
+    assert_eq!(status_body["id"], job_id);
+    assert_eq!(status_body["workspaceId"], ws_http);
+    assert_eq!(status_body["sourceId"], upload_body["source"]["id"]);
+    assert_eq!(status_body["attempts"], 1);
+    assert!(status_body.get("leaseOwner").is_none());
+    assert!(status_body.get("leaseToken").is_none());
+
+    let pack = client
+        .post(format!("{base}/v1/packs"))
+        .header("Authorization", format!("Bearer {t_http}"))
+        .json(&serde_json::json!({ "query": "workspace-scoped evidence" }))
         .send()
         .await
         .unwrap();
-    assert_eq!(status.status(), 200);
-    let status_body: serde_json::Value = status.json().await.unwrap();
-    assert_eq!(status_body["id"], job_id);
-    assert_eq!(status_body["workspaceId"], ws_http);
+    assert_eq!(pack.status(), 200);
+    let pack: serde_json::Value = pack.json().await.unwrap();
+    assert_eq!(pack["workspaceId"], ws_http);
+    assert!(pack["selectedEvidence"].as_array().unwrap().iter().any(
+        |e| e["sourceId"] == upload_body["source"]["id"]
+    ));
 
     // Multi-source pack for w1
     let pack_res = client

@@ -436,6 +436,22 @@ async fn upload_source(
         .enqueue_upload_job(&workspace_id, &source.id)
         .await
         .map_err(knowledge_err)?;
+    let source = state
+        .knowledge
+        .get_source(&workspace_id, &source.id)
+        .await
+        .map_err(knowledge_err)?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("uploaded source not found: {}", source.id),
+        ))?;
+    crate::import_job::spawn_upload_job(
+        state.knowledge.clone(),
+        state.blobs.clone(),
+        workspace_id.clone(),
+        source.clone(),
+        job.id.clone(),
+    );
 
     Ok((
         StatusCode::ACCEPTED,
