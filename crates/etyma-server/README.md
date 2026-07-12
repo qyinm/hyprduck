@@ -117,7 +117,7 @@ organization roles return `403`. `/v1/spike/*` continues to use
 
 ### S4 migration rollout
 
-Migration `0009_org_membership_workspace_tokens.sql` backfills deterministic
+Migration `0010_org_membership_workspace_tokens.sql` backfills deterministic
 token IDs and provisions personal organizations for existing users without a
 deterministic personal membership. Unsupported legacy membership roles
 intentionally stop the migration with an actionable error; they must be
