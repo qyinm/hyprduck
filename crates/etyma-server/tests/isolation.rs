@@ -1,6 +1,7 @@
 use etyma_server::auth::AppState;
 use etyma_server::blob::{BlobStore, LocalFsBlobStore};
 use etyma_server::config::HostMode;
+use etyma_server::graph::GraphStore;
 use etyma_server::knowledge::KnowledgeStore;
 use etyma_server::seed::seed_multi_source_workspace;
 use etyma_server::store::Store;
@@ -37,6 +38,7 @@ fn assert_multi_source_pack(pack: &serde_json::Value, workspace_id: &str) {
 async fn run_isolation_suite(
     store: Arc<Store>,
     knowledge: KnowledgeStore,
+    graph: GraphStore,
     blobs: Arc<LocalFsBlobStore>,
     host_mode: HostMode,
     pg_pool: sqlx::PgPool,
@@ -73,6 +75,7 @@ async fn run_isolation_suite(
         let state = AppState {
             store: store.clone(),
             knowledge: knowledge.clone(),
+            graph,
             blobs: blobs.clone(),
             spike_admin_token: Some("admin-secret".into()),
             host_mode,
@@ -316,8 +319,9 @@ async fn org_hierarchy_sibling_isolation_on_postgres_control_and_knowledge() {
     let dir = tempdir().unwrap();
     let store = Arc::new(Store::new(pool.clone()));
     let knowledge = KnowledgeStore::new(pool.clone());
+    let graph = GraphStore::new(pool.clone());
     let blobs = Arc::new(LocalFsBlobStore::open(dir.path().join("blobs")).unwrap());
     // Unique prefix so shared CI/dev Postgres DBs do not collide on fixed org ids.
     let prefix = format!("pg_{}", Uuid::now_v7().simple());
-    run_isolation_suite(store, knowledge, blobs, HostMode::Saas, pool, &prefix).await;
+    run_isolation_suite(store, knowledge, graph, blobs, HostMode::Saas, pool, &prefix).await;
 }

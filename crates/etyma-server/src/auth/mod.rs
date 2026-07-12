@@ -1,5 +1,6 @@
 use crate::blob::BlobStore;
 use crate::config::HostMode;
+use crate::graph::GraphStore;
 use crate::knowledge::KnowledgeStore;
 use crate::store::Store;
 use axum::extract::FromRequestParts;
@@ -11,6 +12,7 @@ use std::sync::Arc;
 pub struct AppState {
     pub store: Arc<Store>,
     pub knowledge: KnowledgeStore,
+    pub graph: GraphStore,
     pub blobs: Arc<dyn BlobStore>,
     pub spike_admin_token: Option<String>,
     /// Process host mode (spike vs cloud foundation).
