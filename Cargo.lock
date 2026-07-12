@@ -1173,6 +1173,7 @@ dependencies = [
  "axum",
  "etyma-engine-types",
  "hex",
+ "mime",
  "openidconnect",
  "reqwest 0.12.23",
  "serde",

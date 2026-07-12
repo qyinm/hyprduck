@@ -5,16 +5,21 @@ use crate::auth::{
     AuthenticatedWorkspace,
 };
 use crate::compose::compose_pack;
+use crate::ingest::ingest_source;
+use crate::knowledge::{ImportJobRow, SourceRow};
 use crate::seed::seed_multi_source_workspace;
 use crate::store::StoreError;
-use axum::extract::{FromRequestParts, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, State};
 use axum::http::header::{HeaderValue, COOKIE, LOCATION, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
+use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use etyma_engine_types::ContextPackV1;
+use mime::Mime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -43,6 +48,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/v1/spike/workspaces/{workspace_id}/seed",
             post(seed_workspace),
+        )
+        .route(
+            "/v1/spike/workspaces/{workspace_id}/sources",
+            post(upload_source).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/spike/workspaces/{workspace_id}/import-jobs/{job_id}",
+            get(import_job_status),
         )
 }
 
@@ -490,6 +503,248 @@ async fn seed_workspace(
             "byteSize": s.byte_size,
         })).collect::<Vec<_>>(),
     })))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadSourceResponse {
+    workspace_id: String,
+    source: SourceBody,
+    job: ImportJobBody,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceBody {
+    id: String,
+    kind: String,
+    title: String,
+    blob_key: String,
+    content_hash: String,
+    byte_size: i64,
+    content_type: String,
+    external_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportJobBody {
+    id: String,
+    workspace_id: String,
+    source_id: Option<String>,
+    kind: String,
+    status: crate::knowledge::ImportJobStatus,
+    attempts: i32,
+    max_attempts: i32,
+    last_error: Option<String>,
+    available_at: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl From<SourceRow> for SourceBody {
+    fn from(source: SourceRow) -> Self {
+        Self {
+            id: source.id,
+            kind: source.kind,
+            title: source.title,
+            blob_key: source.blob_key,
+            content_hash: source.content_hash,
+            byte_size: source.byte_size,
+            content_type: source.content_type,
+            external_id: source.external_id,
+        }
+    }
+}
+
+impl From<ImportJobRow> for ImportJobBody {
+    fn from(job: ImportJobRow) -> Self {
+        Self {
+            id: job.id,
+            workspace_id: job.workspace_id,
+            source_id: job.source_id,
+            kind: job.kind,
+            status: job.status,
+            attempts: job.attempts,
+            max_attempts: job.max_attempts,
+            last_error: job.last_error,
+            available_at: job.available_at,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+        }
+    }
+}
+
+async fn upload_source(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path(workspace_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<UploadSourceResponse>), (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    let title = required_bounded_header(&headers, "x-etyma-source-title", "source title", 512)?;
+    let kind = optional_kind_header(&headers)?;
+    let external_id =
+        optional_bounded_header(&headers, "x-etyma-source-external-id", "external id", 512)?;
+    let content_type = optional_content_type(&headers)?;
+    if body.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "source body is required".into()));
+    }
+
+    let source = ingest_source(
+        &state.store,
+        &state.knowledge,
+        state.blobs.as_ref(),
+        &workspace_id,
+        &kind,
+        &title,
+        &body,
+        &content_type,
+        external_id.as_deref(),
+    )
+    .await
+    .map_err(store_err)?;
+    let job = state
+        .knowledge
+        .enqueue_upload_job(&workspace_id, &source.id)
+        .await
+        .map_err(knowledge_err)?;
+    let source = state
+        .knowledge
+        .get_source(&workspace_id, &source.id)
+        .await
+        .map_err(knowledge_err)?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("uploaded source not found: {}", source.id),
+        ))?;
+    crate::import_job::spawn_upload_job(
+        state.knowledge.clone(),
+        state.blobs.clone(),
+        workspace_id.clone(),
+        source.clone(),
+        job.id.clone(),
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(UploadSourceResponse {
+            workspace_id,
+            source: source.into(),
+            job: job.into(),
+        }),
+    ))
+}
+
+async fn import_job_status(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path((workspace_id, job_id)): Path<(String, String)>,
+) -> Result<Json<ImportJobBody>, (StatusCode, String)> {
+    validate_workspace_id(&workspace_id)?;
+    let job = state
+        .knowledge
+        .get_import_job(&workspace_id, &job_id)
+        .await
+        .map_err(knowledge_err)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            format!("import job not found: {job_id}"),
+        ))?;
+    Ok(Json(job.into()))
+}
+
+fn required_bounded_header(
+    headers: &HeaderMap,
+    name: &'static str,
+    label: &'static str,
+    max_len: usize,
+) -> Result<String, (StatusCode, String)> {
+    let value = header_value(headers, name)?
+        .ok_or((StatusCode::BAD_REQUEST, format!("{label} is required")))?;
+    bounded_nonempty_value(value, label, max_len)
+}
+
+fn optional_bounded_header(
+    headers: &HeaderMap,
+    name: &'static str,
+    label: &'static str,
+    max_len: usize,
+) -> Result<Option<String>, (StatusCode, String)> {
+    match header_value(headers, name)? {
+        Some(value) if value.trim().is_empty() => Ok(None),
+        Some(value) => bounded_nonempty_value(value, label, max_len).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn optional_kind_header(headers: &HeaderMap) -> Result<String, (StatusCode, String)> {
+    let Some(value) = header_value(headers, "x-etyma-source-kind")? else {
+        return Ok("document".into());
+    };
+    let value = bounded_nonempty_value(value, "source kind", 64)?;
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "source kind must match [A-Za-z0-9_-]+".into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn optional_content_type(headers: &HeaderMap) -> Result<String, (StatusCode, String)> {
+    match headers.get(header::CONTENT_TYPE) {
+        Some(value) => {
+            let value = value
+                .to_str()
+                .map_err(|_| (StatusCode::BAD_REQUEST, "content-type is invalid".into()))?
+                .trim();
+            if value.is_empty() || value.len() > 255 {
+                return Err((StatusCode::BAD_REQUEST, "content-type is invalid".into()));
+            }
+            let parsed: Mime = value
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, "content-type is invalid".into()))?;
+            Ok(parsed.to_string())
+        }
+        None => Ok("application/octet-stream".into()),
+    }
+}
+
+fn header_value<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<Option<&'a str>, (StatusCode, String)> {
+    headers
+        .get(name)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| (StatusCode::BAD_REQUEST, format!("{name} header is invalid")))
+        })
+        .transpose()
+}
+
+fn bounded_nonempty_value(
+    value: &str,
+    label: &'static str,
+    max_len: usize,
+) -> Result<String, (StatusCode, String)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, format!("{label} is required")));
+    }
+    if trimmed.chars().count() > max_len {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("{label} must be at most {max_len} characters"),
+        ));
+    }
+    Ok(trimmed.to_owned())
 }
 
 fn store_err(err: StoreError) -> (StatusCode, String) {

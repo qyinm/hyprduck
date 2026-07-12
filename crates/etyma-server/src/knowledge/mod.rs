@@ -1,4 +1,5 @@
 use crate::blob::BlobPutMeta;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::fmt;
@@ -28,7 +29,8 @@ pub struct EvidenceRow {
     pub content_hash: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum ImportJobStatus {
     Queued,
@@ -53,6 +55,36 @@ pub struct ImportJobRow {
     pub lease_token: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DispatchableUploadJobRow {
+    pub job_id: String,
+    pub workspace_id: String,
+    pub source_id: String,
+    pub source_kind: String,
+    pub source_title: String,
+    pub source_blob_key: String,
+    pub source_content_hash: String,
+    pub source_byte_size: i64,
+    pub source_content_type: String,
+    pub source_external_id: Option<String>,
+}
+
+impl DispatchableUploadJobRow {
+    pub fn source(self) -> SourceRow {
+        SourceRow {
+            id: self.source_id,
+            workspace_id: self.workspace_id,
+            kind: self.source_kind,
+            title: self.source_title,
+            blob_key: self.source_blob_key,
+            content_hash: self.source_content_hash,
+            byte_size: self.source_byte_size,
+            content_type: self.source_content_type,
+            external_id: self.source_external_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -206,6 +238,26 @@ impl KnowledgeStore {
         .map_err(map_read)
     }
 
+    pub async fn get_source(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> KnowledgeResult<Option<SourceRow>> {
+        sqlx::query_as::<_, SourceRow>(
+            r#"
+            SELECT id, workspace_id, kind, title, blob_key, content_hash,
+                   byte_size, content_type, external_id
+            FROM knowledge.sources
+            WHERE workspace_id = $1 AND id = $2
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_read)
+    }
+
     pub async fn list_evidence(&self, workspace_id: &str) -> KnowledgeResult<Vec<EvidenceRow>> {
         sqlx::query_as::<_, EvidenceRow>(
             r#"
@@ -267,43 +319,69 @@ impl KnowledgeStore {
         .map_err(|error| map_write(error, "import job"))
     }
 
+    pub async fn enqueue_upload_job(
+        &self,
+        workspace_id: &str,
+        source_id: &str,
+    ) -> KnowledgeResult<ImportJobRow> {
+        self.create_import_job(workspace_id, Some(source_id), "upload", 3, unix_now())
+            .await
+    }
+
+    pub async fn dispatchable_upload_jobs(
+        &self,
+        limit: usize,
+    ) -> KnowledgeResult<Vec<DispatchableUploadJobRow>> {
+        let limit = limit.clamp(1, 128) as i64;
+        finalize_exhausted_expired_import_jobs_global(&self.pool, Some("upload")).await?;
+        sqlx::query_as::<_, DispatchableUploadJobRow>(
+            r#"
+            SELECT
+              jobs.id AS job_id,
+              jobs.workspace_id,
+              src.id AS source_id,
+              src.kind AS source_kind,
+              src.title AS source_title,
+              src.blob_key AS source_blob_key,
+              src.content_hash AS source_content_hash,
+              src.byte_size AS source_byte_size,
+              src.content_type AS source_content_type,
+              src.external_id AS source_external_id
+            FROM knowledge.import_jobs AS jobs
+            INNER JOIN knowledge.sources AS src
+              ON src.workspace_id = jobs.workspace_id
+             AND src.id = jobs.source_id
+            WHERE jobs.kind = 'upload'
+              AND jobs.attempts < jobs.max_attempts
+              AND (
+                (
+                  jobs.status = 'queued'
+                  AND jobs.available_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                )
+                OR (
+                  jobs.status = 'running'
+                  AND jobs.lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                )
+              )
+            ORDER BY jobs.available_at, jobs.created_at, jobs.id
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_read)
+    }
+
     pub async fn claim_import_job(
         &self,
         workspace_id: &str,
         lease_owner: &str,
         lease_duration_seconds: i64,
     ) -> KnowledgeResult<Option<ImportJobRow>> {
-        if lease_owner.trim().is_empty() {
-            return Err(KnowledgeError::Conflict(
-                "import job lease owner is required".into(),
-            ));
-        }
-        if !(1..=86_400).contains(&lease_duration_seconds) {
-            return Err(KnowledgeError::Conflict(
-                "import job lease duration must be between 1 and 86400 seconds".into(),
-            ));
-        }
-        let lease_token = format!("lease_{}", Uuid::now_v7().simple());
+        let lease_token = validate_import_job_claim_args(lease_owner, lease_duration_seconds)?;
         let mut transaction = self.pool.begin().await.map_err(map_read)?;
-        sqlx::query(
-            r#"
-            UPDATE knowledge.import_jobs
-            SET status = 'failed',
-                last_error = 'maximum attempts exhausted after lease expiry',
-                lease_owner = NULL,
-                lease_expires_at = NULL,
-                lease_token = NULL,
-                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
-            WHERE workspace_id = $1
-              AND status = 'running'
-              AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
-              AND attempts >= max_attempts
-            "#,
-        )
-        .bind(workspace_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_read)?;
+        finalize_exhausted_expired_import_jobs(&mut transaction, workspace_id, None).await?;
 
         let claimed = sqlx::query_as::<_, ImportJobRow>(
             r#"
@@ -355,6 +433,69 @@ impl KnowledgeStore {
         Ok(claimed)
     }
 
+    pub async fn claim_import_job_by_id(
+        &self,
+        workspace_id: &str,
+        job_id: &str,
+        lease_owner: &str,
+        lease_duration_seconds: i64,
+    ) -> KnowledgeResult<Option<ImportJobRow>> {
+        let lease_token = validate_import_job_claim_args(lease_owner, lease_duration_seconds)?;
+        let mut transaction = self.pool.begin().await.map_err(map_read)?;
+        finalize_exhausted_expired_import_jobs(&mut transaction, workspace_id, Some(job_id))
+            .await?;
+
+        let claimed = sqlx::query_as::<_, ImportJobRow>(
+            r#"
+            WITH candidate AS (
+              SELECT id
+              FROM knowledge.import_jobs
+              WHERE workspace_id = $1
+                AND id = $2
+                AND attempts < max_attempts
+                AND (
+                  (
+                    status = 'queued'
+                    AND available_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                  )
+                  OR (
+                    status = 'running'
+                    AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+                  )
+                )
+              FOR UPDATE SKIP LOCKED
+              LIMIT 1
+            )
+            UPDATE knowledge.import_jobs AS jobs
+            SET status = 'running',
+                attempts = jobs.attempts + 1,
+                last_error = NULL,
+                lease_owner = $3,
+                lease_expires_at =
+                  EXTRACT(EPOCH FROM clock_timestamp())::BIGINT + $4,
+                lease_token = $5,
+                updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+            FROM candidate
+            WHERE jobs.id = candidate.id
+            RETURNING jobs.id, jobs.workspace_id, jobs.source_id, jobs.kind,
+                      jobs.status, jobs.attempts, jobs.max_attempts,
+                      jobs.last_error, jobs.available_at, jobs.lease_owner,
+                      jobs.lease_expires_at, jobs.lease_token,
+                      jobs.created_at, jobs.updated_at
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(job_id)
+        .bind(lease_owner)
+        .bind(lease_duration_seconds)
+        .bind(lease_token)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_read)?;
+        transaction.commit().await.map_err(map_read)?;
+        Ok(claimed)
+    }
+
     pub async fn succeed_import_job(
         &self,
         workspace_id: &str,
@@ -371,6 +512,7 @@ impl KnowledgeStore {
                 updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
               AND status = 'running' AND lease_owner = $3 AND lease_token = $4
+              AND lease_expires_at > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
                       lease_expires_at, lease_token, created_at, updated_at
@@ -409,6 +551,7 @@ impl KnowledgeStore {
                 updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
               AND status = 'running' AND lease_owner = $3 AND lease_token = $4
+              AND lease_expires_at > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
                       lease_expires_at, lease_token, created_at, updated_at
@@ -444,6 +587,7 @@ impl KnowledgeStore {
                 updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             WHERE workspace_id = $1 AND id = $2
               AND status = 'running' AND lease_owner = $3 AND lease_token = $4
+              AND lease_expires_at > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
             RETURNING id, workspace_id, source_id, kind, status, attempts,
                       max_attempts, last_error, available_at, lease_owner,
                       lease_expires_at, lease_token, created_at, updated_at
@@ -497,6 +641,78 @@ fn hash_text(text: &str) -> String {
 
 fn bounded_error(error: &str) -> String {
     error.chars().take(4096).collect()
+}
+
+fn validate_import_job_claim_args(
+    lease_owner: &str,
+    lease_duration_seconds: i64,
+) -> KnowledgeResult<String> {
+    if lease_owner.trim().is_empty() {
+        return Err(KnowledgeError::Conflict(
+            "import job lease owner is required".into(),
+        ));
+    }
+    if !(1..=86_400).contains(&lease_duration_seconds) {
+        return Err(KnowledgeError::Conflict(
+            "import job lease duration must be between 1 and 86400 seconds".into(),
+        ));
+    }
+    Ok(format!("lease_{}", Uuid::now_v7().simple()))
+}
+
+async fn finalize_exhausted_expired_import_jobs(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    workspace_id: &str,
+    job_id: Option<&str>,
+) -> KnowledgeResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE knowledge.import_jobs
+        SET status = 'failed',
+            last_error = 'maximum attempts exhausted after lease expiry',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            lease_token = NULL,
+            updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+        WHERE workspace_id = $1
+          AND ($2::TEXT IS NULL OR id = $2)
+          AND status = 'running'
+          AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+          AND attempts >= max_attempts
+        "#,
+    )
+    .bind(workspace_id)
+    .bind(job_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_read)?;
+    Ok(())
+}
+
+async fn finalize_exhausted_expired_import_jobs_global(
+    pool: &PgPool,
+    kind: Option<&str>,
+) -> KnowledgeResult<()> {
+    sqlx::query(
+        r#"
+        UPDATE knowledge.import_jobs
+        SET status = 'failed',
+            last_error = 'maximum attempts exhausted after lease expiry',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            lease_token = NULL,
+            updated_at = EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+        WHERE ($1::TEXT IS NULL OR kind = $1)
+          AND status = 'running'
+          AND lease_expires_at <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT
+          AND attempts >= max_attempts
+        "#,
+    )
+    .bind(kind)
+    .execute(pool)
+    .await
+    .map_err(map_read)?;
+    Ok(())
 }
 
 fn map_read(error: sqlx::Error) -> KnowledgeError {
@@ -694,6 +910,95 @@ mod tests {
             .expect("job exists");
         assert_eq!(persisted.status, ImportJobStatus::Succeeded);
         assert_eq!(persisted.attempts, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn upload_worker_claims_requested_job_id_with_multiple_claimable_jobs() {
+        let database_url = require_database_url();
+        let pool = crate::db::connect_and_migrate(&database_url)
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_targeted_worker")).await;
+        let store = KnowledgeStore::new(pool.clone());
+        let blob_dir = tempfile::tempdir().expect("temp blob dir");
+        let blobs = crate::blob::LocalFsBlobStore::open(blob_dir.path()).expect("open blob store");
+
+        let other_blob = crate::blob::put_bytes(&blobs, &workspace, b"other job evidence")
+            .expect("store other source blob");
+        let target_blob = crate::blob::put_bytes(&blobs, &workspace, b"target job evidence")
+            .expect("store target source blob");
+
+        let other_source = store
+            .insert_source(
+                &workspace,
+                "document",
+                "Other source",
+                &other_blob,
+                "text/plain",
+                Some("OTHER"),
+            )
+            .await
+            .expect("insert other source");
+        let target_source = store
+            .insert_source(
+                &workspace,
+                "document",
+                "Target source",
+                &target_blob,
+                "text/plain",
+                Some("TARGET"),
+            )
+            .await
+            .expect("insert target source");
+
+        let other_job = store
+            .enqueue_upload_job(&workspace, &other_source.id)
+            .await
+            .expect("enqueue other job");
+        let target_job = store
+            .enqueue_upload_job(&workspace, &target_source.id)
+            .await
+            .expect("enqueue target job");
+
+        crate::import_job::run_upload_job(
+            &store,
+            &blobs,
+            &workspace,
+            &target_source,
+            &target_job.id,
+        )
+        .await
+        .expect("run target upload job");
+
+        let persisted_target = store
+            .get_import_job(&workspace, &target_job.id)
+            .await
+            .expect("read target job")
+            .expect("target job exists");
+        let persisted_other = store
+            .get_import_job(&workspace, &other_job.id)
+            .await
+            .expect("read other job")
+            .expect("other job exists");
+        let evidence = store
+            .list_evidence(&workspace)
+            .await
+            .expect("list evidence");
+
+        assert_eq!(persisted_target.status, ImportJobStatus::Succeeded);
+        assert_eq!(persisted_target.attempts, 1);
+        assert!(persisted_target.lease_owner.is_none());
+        assert!(persisted_target.lease_token.is_none());
+
+        assert_eq!(persisted_other.status, ImportJobStatus::Queued);
+        assert_eq!(persisted_other.attempts, 0);
+        assert!(persisted_other.last_error.is_none());
+
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].source_id, target_source.id);
+        assert_eq!(evidence[0].quote, "target job evidence");
     }
 
     #[tokio::test]
@@ -905,6 +1210,79 @@ mod tests {
             )
             .await
             .expect("current lease succeeds");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ETYMA_DATABASE_URL"]
+    async fn expired_lease_cannot_complete_or_fail_without_reclaim() {
+        let pool = crate::db::connect_and_migrate(&require_database_url())
+            .await
+            .expect("connect and migrate");
+        let suffix = uuid::Uuid::now_v7().simple().to_string();
+        let workspace = create_workspace(&pool, &format!("{suffix}_expired_terminal")).await;
+        let store = KnowledgeStore::new(pool.clone());
+
+        let success_job = store
+            .create_import_job(&workspace, None, "upload", 3, 0)
+            .await
+            .expect("create success job");
+        let success_claim = store
+            .claim_import_job(&workspace, "worker-a", 60)
+            .await
+            .expect("claim success job")
+            .expect("job claimed");
+        sqlx::query("UPDATE knowledge.import_jobs SET lease_expires_at = 0 WHERE id = $1")
+            .bind(&success_job.id)
+            .execute(&pool)
+            .await
+            .expect("expire success lease");
+        let stale_success = store
+            .succeed_import_job(
+                &workspace,
+                &success_job.id,
+                "worker-a",
+                success_claim.lease_token.as_deref().expect("success token"),
+            )
+            .await;
+        assert!(stale_success.is_err());
+
+        let failure_job = store
+            .create_import_job(&workspace, None, "upload", 3, 0)
+            .await
+            .expect("create failure job");
+        let failure_claim = store
+            .claim_import_job_by_id(&workspace, &failure_job.id, "worker-b", 60)
+            .await
+            .expect("claim failure job")
+            .expect("job claimed");
+        sqlx::query("UPDATE knowledge.import_jobs SET lease_expires_at = 0 WHERE id = $1")
+            .bind(&failure_job.id)
+            .execute(&pool)
+            .await
+            .expect("expire failure lease");
+        let stale_failure = store
+            .fail_import_job(
+                &workspace,
+                &failure_job.id,
+                "worker-b",
+                failure_claim.lease_token.as_deref().expect("failure token"),
+                "stale worker failure",
+            )
+            .await;
+        assert!(stale_failure.is_err());
+
+        let success_persisted = store
+            .get_import_job(&workspace, &success_job.id)
+            .await
+            .expect("read success job")
+            .expect("success job exists");
+        let failure_persisted = store
+            .get_import_job(&workspace, &failure_job.id)
+            .await
+            .expect("read failure job")
+            .expect("failure job exists");
+        assert_eq!(success_persisted.status, ImportJobStatus::Running);
+        assert_eq!(failure_persisted.status, ImportJobStatus::Running);
     }
 
     #[tokio::test]
