@@ -95,9 +95,70 @@ export ETYMA_AUTH_COOKIE_SECURE=false
 
 The session cookie is `HttpOnly`, `SameSite=Lax`, scoped to `/`, and secure
 when `ETYMA_AUTH_COOKIE_SECURE=true`. Human sessions do not grant workspace
-access: `/v1/packs`, `/v1/sources`, `/v1/graph/snapshot`, and `/v1/mcp` continue
-to require workspace API bearer tokens. `/v1/spike/*` continues to use
-`x-etyma-admin-token` until S4 adds user membership and workspace roles.
+agent access: `/v1/packs`, `/v1/sources`, `/v1/graph/snapshot`, and `/v1/mcp`
+continue to require workspace API bearer tokens. S4 human routes use the
+session cookie and organization membership:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/v1/orgs` | Lists the authenticated user's organizations and roles |
+| `GET` | `/v1/orgs/{org_id}/members` | Lists members for an authorized organization |
+| `GET` | `/v1/orgs/{org_id}/workspaces` | Lists workspaces in an authorized organization |
+| `POST` | `/v1/workspaces/{workspace_id}/tokens` | Owner-only token mint; raw secret is returned once |
+| `GET` | `/v1/workspaces/{workspace_id}/tokens` | Owner-only token metadata, without secrets or hashes |
+| `DELETE` | `/v1/workspaces/{workspace_id}/tokens/{token_id}` | Owner-only idempotent token revocation |
+
+OIDC signup provisions one personal organization and an `owner` membership in
+the same Postgres transaction as the new identity. Members can discover their
+organizations and workspaces but cannot manage tokens. Requests for a workspace
+outside the session user's memberships return a scoped `404`; insufficient
+organization roles return `403`. `/v1/spike/*` continues to use
+`x-etyma-admin-token` for operator bootstrap compatibility.
+
+### S4 migration rollout
+
+Migration `0010_org_membership_workspace_tokens.sql` backfills deterministic
+token IDs and provisions personal organizations for existing users without a
+deterministic personal membership. Unsupported legacy membership roles
+intentionally stop the migration with an actionable error; they must be
+repaired before retrying.
+
+This migration is not mixed-version safe for token readers. Drain all
+pre-S4 server instances before applying it, apply the migration once, then
+start only the S4 server version. This ordering preserves immediate revocation;
+rolling old readers after S4 revocation would still accept tokens because they
+do not filter `revoked_at`.
+
+Before deploying, record the following read-only checks. Unsupported roles and
+duplicate token-ID inputs are stop conditions; the personal-membership query is
+the backfill baseline and must be empty after migration:
+
+```sql
+SELECT role, COUNT(*) FROM control.memberships GROUP BY role;
+SELECT COUNT(*) FROM control.memberships WHERE role NOT IN ('owner', 'member');
+SELECT COUNT(*) AS token_rows,
+       COUNT(*) FILTER (WHERE id IS NULL) AS token_rows_to_rewrite
+FROM control.api_tokens;
+SELECT md5(token_hash || ':' || created_at::TEXT), COUNT(*)
+FROM control.api_tokens
+GROUP BY 1
+HAVING COUNT(*) > 1;
+SELECT u.id
+FROM control.users u
+JOIN control.user_identities i ON i.user_id = u.id
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM control.memberships m
+  WHERE m.id = 'mem_personal_' || md5('personal-membership:' || u.id)
+);
+```
+
+After migration, verify that `control.api_tokens.id` has no nulls, token counts
+per workspace are unchanged, every migrated user has an owner membership, and
+the server's token-auth `401` rate plus OIDC callback errors remain normal.
+Migration DDL is blocking and rollback is only partial after successful
+application: restore from the pre-deploy database backup if the migration must
+be reversed.
 
 ## Operator and pack flow
 

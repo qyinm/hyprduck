@@ -44,7 +44,10 @@ OIDC configuration is optional for the spike. When enabled, all four
 `ETYMA_OIDC_*` variables are required together and the callback must be
 registered as `/v1/auth/callback` at the configured public origin. The login
 cookie flow is documented in `crates/etyma-server/README.md`; human sessions
-identify `/v1/me` but do not replace workspace API bearer tokens.
+identify `/v1/me` and authorize organization discovery plus owner-only token
+management. Agent REST and MCP data access still uses workspace API bearer
+tokens. Newly created users receive a personal organization and owner
+membership during the identity transaction.
 
 ## Site
 

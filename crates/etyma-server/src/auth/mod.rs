@@ -2,10 +2,10 @@ use crate::blob::BlobStore;
 use crate::config::HostMode;
 use crate::graph::GraphStore;
 use crate::knowledge::KnowledgeStore;
-use crate::store::Store;
+use crate::store::{MembershipRole, Store};
 use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use std::sync::Arc;
 
 mod oidc;
@@ -13,9 +13,9 @@ mod session;
 
 pub use oidc::{AuthError, AuthService, AuthenticatedSession, OidcBackend, OidcFuture};
 pub use session::{
-    build_clear_cookie, build_clear_login_transaction_cookie, build_login_transaction_cookie,
-    build_session_cookie, parse_login_transaction_cookie, parse_session_cookie, AuthenticatedUser,
-    SESSION_COOKIE_NAME,
+    AuthenticatedUser, SESSION_COOKIE_NAME, build_clear_cookie,
+    build_clear_login_transaction_cookie, build_login_transaction_cookie, build_session_cookie,
+    parse_login_transaction_cookie, parse_session_cookie,
 };
 
 #[cfg(test)]
@@ -37,6 +37,56 @@ pub struct AppState {
 #[derive(Debug, Clone)]
 pub struct AuthenticatedWorkspace {
     pub workspace_id: String,
+}
+
+pub async fn authorize_human_workspace(
+    state: &AppState,
+    user_id: &str,
+    workspace_id: &str,
+    owner_only: bool,
+) -> Result<crate::store::MembershipRow, (StatusCode, String)> {
+    let membership = state
+        .store
+        .get_membership_for_workspace(user_id, workspace_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "membership lookup failed".into(),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            "workspace not found for authenticated user".into(),
+        ))?;
+    if owner_only && membership.role != MembershipRole::Owner {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "organization role is not authorized for this action".into(),
+        ));
+    }
+    Ok(membership)
+}
+
+pub async fn authorize_human_org(
+    state: &AppState,
+    user_id: &str,
+    org_id: &str,
+) -> Result<crate::store::MembershipRow, (StatusCode, String)> {
+    state
+        .store
+        .get_membership_for_org(user_id, org_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "membership lookup failed".into(),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            "organization not found for authenticated user".into(),
+        ))
 }
 
 impl FromRequestParts<AppState> for AuthenticatedWorkspace {

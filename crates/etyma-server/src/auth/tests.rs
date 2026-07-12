@@ -4,7 +4,7 @@ use crate::config::{AuthConfig, HostMode, OidcConfig};
 use crate::graph::GraphStore;
 use crate::knowledge::KnowledgeStore;
 use crate::seed::seed_multi_source_workspace;
-use crate::store::{OidcIdentityProfile, Store};
+use crate::store::{MembershipRole, OidcIdentityProfile, Store};
 use std::sync::Arc;
 
 struct FakeOidcBackend;
@@ -128,7 +128,7 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("api token");
 
-    let state = make_test_state(pool.clone(), store, blobs, knowledge, graph).await;
+    let state = make_test_state(pool.clone(), store.clone(), blobs, knowledge, graph).await;
     let base = spawn_router(test_router(state)).await;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -204,12 +204,14 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("swapped browser callback");
     assert_eq!(swapped_browser.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert!(swapped_browser
-        .headers()
-        .get_all(reqwest::header::SET_COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0")));
+    assert!(
+        swapped_browser
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0"))
+    );
 
     let callback = client
         .get(format!(
@@ -220,12 +222,14 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("callback");
     assert_eq!(callback.status(), reqwest::StatusCode::SEE_OTHER);
-    assert!(callback
-        .headers()
-        .get_all(reqwest::header::SET_COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0")));
+    assert!(
+        callback
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| value.starts_with("etyma_login=") && value.contains("Max-Age=0"))
+    );
     let set_cookie = callback
         .headers()
         .get(reqwest::header::SET_COOKIE)
@@ -250,6 +254,352 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
     assert_eq!(body["displayName"], "Example User");
     assert_eq!(body["emailVerified"], true);
     assert!(body["userId"].as_str().unwrap_or("").starts_with("usr_"));
+
+    let orgs = client
+        .get(format!("{base}/v1/orgs"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("org discovery");
+    assert_eq!(orgs.status(), reqwest::StatusCode::OK);
+    let orgs: serde_json::Value = orgs.json().await.expect("org discovery json");
+    assert_eq!(orgs["orgs"].as_array().map(Vec::len), Some(1));
+    let personal_org_id = orgs["orgs"][0]["orgId"].as_str().expect("org id");
+    assert_eq!(orgs["orgs"][0]["role"], "owner");
+
+    let members = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/members"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("member discovery");
+    assert_eq!(members.status(), reqwest::StatusCode::OK);
+    let members: serde_json::Value = members.json().await.expect("member discovery json");
+    assert_eq!(members["members"].as_array().map(Vec::len), Some(1));
+    assert_eq!(members["members"][0]["role"], "owner");
+
+    let workspaces = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/workspaces"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("workspace discovery");
+    assert_eq!(workspaces.status(), reqwest::StatusCode::OK);
+    let workspaces: serde_json::Value = workspaces.json().await.expect("workspace json");
+    assert_eq!(workspaces["workspaces"].as_array().map(Vec::len), Some(0));
+
+    let foreign = client
+        .get(format!("{base}/v1/orgs/unknown-org/members"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("foreign org discovery");
+    assert_eq!(foreign.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let human_workspace_id = format!("auth_human_ws_{prefix}");
+    let workspace = client
+        .post(format!("{base}/v1/spike/orgs/{personal_org_id}/workspaces"))
+        .header("x-etyma-admin-token", "admin-secret")
+        .json(&serde_json::json!({ "workspaceId": human_workspace_id }))
+        .send()
+        .await
+        .expect("human workspace bootstrap");
+    assert_eq!(workspace.status(), reqwest::StatusCode::OK);
+
+    let member_profile = OidcIdentityProfile {
+        issuer: "https://idp.example".into(),
+        subject: format!("member-{prefix}"),
+        email: Some(format!("member-{prefix}@example.com")),
+        display_name: Some("Member User".into()),
+        avatar_url: None,
+        email_verified: true,
+    };
+    let member = store
+        .upsert_oidc_identity(&member_profile)
+        .await
+        .expect("member user");
+    store
+        .create_membership(personal_org_id, &member.id, MembershipRole::Member)
+        .await
+        .expect("member membership");
+    let member_session = format!("member-session-{prefix}");
+    store
+        .create_session(&member.id, &member_session, 2_000_000_000)
+        .await
+        .expect("member session");
+    let member_orgs = client
+        .get(format!("{base}/v1/orgs"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member org discovery");
+    assert_eq!(member_orgs.status(), reqwest::StatusCode::OK);
+    let member_orgs: serde_json::Value = member_orgs.json().await.expect("member org json");
+    assert!(
+        member_orgs["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|org| { org["orgId"] == personal_org_id && org["role"] == "member" })
+    );
+    let member_members = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/members"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member member discovery");
+    assert_eq!(member_members.status(), reqwest::StatusCode::OK);
+    let member_members: serde_json::Value = member_members.json().await.expect("member list");
+    assert_eq!(member_members["members"].as_array().map(Vec::len), Some(2));
+    let member_workspaces = client
+        .get(format!("{base}/v1/orgs/{personal_org_id}/workspaces"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member workspace discovery");
+    assert_eq!(member_workspaces.status(), reqwest::StatusCode::OK);
+    let member_workspaces: serde_json::Value = member_workspaces
+        .json()
+        .await
+        .expect("member workspace list");
+    assert!(
+        member_workspaces["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|workspace| workspace["workspaceId"] == human_workspace_id)
+    );
+    let member_token_attempt = client
+        .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .json(&serde_json::json!({ "label": "member-cannot-mint" }))
+        .send()
+        .await
+        .expect("member token attempt");
+    assert_eq!(
+        member_token_attempt.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+
+    let outsider_profile = OidcIdentityProfile {
+        issuer: "https://idp.example".into(),
+        subject: format!("outsider-{prefix}"),
+        email: Some(format!("outsider-{prefix}@example.com")),
+        display_name: Some("Outsider User".into()),
+        avatar_url: None,
+        email_verified: true,
+    };
+    let outsider = store
+        .upsert_oidc_identity(&outsider_profile)
+        .await
+        .expect("outsider user");
+    let outsider_session = format!("outsider-session-{prefix}");
+    store
+        .create_session(&outsider.id, &outsider_session, 2_000_000_000)
+        .await
+        .expect("outsider session");
+    let outsider_token_attempt = client
+        .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={outsider_session}"),
+        )
+        .json(&serde_json::json!({ "label": "outsider-cannot-mint" }))
+        .send()
+        .await
+        .expect("outsider token attempt");
+    assert_eq!(
+        outsider_token_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
+    let minted = client
+        .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .json(&serde_json::json!({ "label": "  human-test  " }))
+        .send()
+        .await
+        .expect("human token mint");
+    assert_eq!(minted.status(), reqwest::StatusCode::OK);
+    let minted: serde_json::Value = minted.json().await.expect("human token json");
+    let human_token = minted["token"]
+        .as_str()
+        .expect("raw human token")
+        .to_owned();
+    let human_token_id = minted["tokenId"]
+        .as_str()
+        .expect("human token id")
+        .to_owned();
+    assert!(human_token.starts_with("etyma_"));
+    assert!(human_token_id.starts_with("tok_"));
+    assert_eq!(minted["label"], "human-test");
+    assert!(minted.get("tokenHash").is_none());
+
+    let too_long_label = client
+        .post(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .json(&serde_json::json!({ "label": "x".repeat(129) }))
+        .send()
+        .await
+        .expect("overlong token label");
+    assert_eq!(too_long_label.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let token_list = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("human token list");
+    assert_eq!(token_list.status(), reqwest::StatusCode::OK);
+    let token_list: serde_json::Value = token_list.json().await.expect("token list json");
+    assert_eq!(token_list["tokens"].as_array().map(Vec::len), Some(1));
+    assert!(token_list["tokens"][0].get("token").is_none());
+    assert!(token_list["tokens"][0].get("tokenHash").is_none());
+
+    let member_list_attempt = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member token list attempt");
+    assert_eq!(member_list_attempt.status(), reqwest::StatusCode::FORBIDDEN);
+    let member_revoke_attempt = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={member_session}"),
+        )
+        .send()
+        .await
+        .expect("member token revoke attempt");
+    assert_eq!(
+        member_revoke_attempt.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let outsider_list_attempt = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={outsider_session}"),
+        )
+        .send()
+        .await
+        .expect("outsider token list attempt");
+    assert_eq!(
+        outsider_list_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let outsider_revoke_attempt = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(
+            reqwest::header::COOKIE,
+            format!("etyma_session={outsider_session}"),
+        )
+        .send()
+        .await
+        .expect("outsider token revoke attempt");
+    assert_eq!(
+        outsider_revoke_attempt.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
+    let agent_sources = client
+        .get(format!("{base}/v1/sources"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {human_token}"),
+        )
+        .send()
+        .await
+        .expect("human token agent request");
+    assert_eq!(agent_sources.status(), reqwest::StatusCode::OK);
+    let agent_sources: serde_json::Value = agent_sources.json().await.expect("sources json");
+    assert_eq!(agent_sources["workspaceId"], human_workspace_id);
+
+    let revoked = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("human token revoke");
+    assert_eq!(revoked.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let after_revoke = client
+        .get(format!("{base}/v1/workspaces/{human_workspace_id}/tokens"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("revoked token metadata");
+    assert_eq!(after_revoke.status(), reqwest::StatusCode::OK);
+    let after_revoke: serde_json::Value = after_revoke.json().await.expect("revoked token list");
+    let revoked_metadata = after_revoke["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|token| token["tokenId"] == human_token_id)
+        .expect("revoked token metadata row");
+    assert!(revoked_metadata["revokedAt"].as_i64().is_some());
+
+    let repeat_revoke = client
+        .delete(format!(
+            "{base}/v1/workspaces/{human_workspace_id}/tokens/{human_token_id}"
+        ))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("repeat human token revoke");
+    assert_eq!(repeat_revoke.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let revoked_agent = client
+        .get(format!("{base}/v1/sources"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {human_token}"),
+        )
+        .send()
+        .await
+        .expect("revoked agent request");
+    assert_eq!(revoked_agent.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let revoked_mcp = client
+        .post(format!("{base}/v1/mcp"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {human_token}"),
+        )
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "get_context_pack",
+                "arguments": { "query": "alpha-token" }
+            }
+        }))
+        .send()
+        .await
+        .expect("revoked MCP request");
+    assert_eq!(revoked_mcp.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     let pack = client
         .post(format!("{base}/v1/packs"))
@@ -280,13 +630,15 @@ async fn oidc_login_creates_session_and_me_returns_human_principal() {
         .await
         .expect("logout");
     assert_eq!(logout.status(), reqwest::StatusCode::NO_CONTENT);
-    assert!(logout
-        .headers()
-        .get(reqwest::header::SET_COOKIE)
-        .expect("clear cookie")
-        .to_str()
-        .expect("clear cookie text")
-        .contains("Max-Age=0"));
+    assert!(
+        logout
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .expect("clear cookie")
+            .to_str()
+            .expect("clear cookie text")
+            .contains("Max-Age=0")
+    );
 
     let me_after_logout = client
         .get(format!("{base}/v1/me"))
