@@ -81,7 +81,7 @@ that performed installation:
 Then ask Codex to use Etyma:
 
 ```text
-Use Etyma to answer from my local document context. Start with
+Use Etyma to answer from my local source context. Start with
 get_context_pack, cite sourceId, page, and evidenceRef for every claim, then ask
 a second question against the same source set.
 ```

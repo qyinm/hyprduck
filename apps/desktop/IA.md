@@ -1,6 +1,8 @@
 # Etyma Desktop IA
 
-목적: Etyma의 UI를 "파일 파싱 앱"에서 "private document를 cited local context pack으로 컴파일하는 도구"로 정렬하기 위한 IA 기록.
+목적: Etyma의 UI를 "문서 파싱 앱"에서 "private source를 cited local context pack으로 컴파일하는 도구"로 정렬하기 위한 IA 기록.
+
+Source의 canonical 정의, revision 경계, container와 evidence locator 규칙은 [`../../docs/source-model.md`](../../docs/source-model.md)를 따른다.
 
 참고한 방향:
 - Karpathy LLM Wiki: raw sources -> LLM-maintained wiki -> schema, ingest/query/lint operations, index.md/log.md, persistent compounding artifact.
@@ -9,17 +11,18 @@
 
 ```text
 Before
-  file -> page images -> markdown output
+  document file -> page images -> markdown output
 
 After
-  files -> source pack + evidence index -> query-time context pack
-        -> agent answer with source/page/evidence refs
+  private source -> type-specific ingest -> source pack + evidence index
+                 -> query-time context pack
+                 -> agent answer with source/evidence refs
 ```
 
 제품 문장:
 
 ```text
-Etyma compiles private documents into reusable, cited local context packs for AI agents.
+Etyma compiles private sources into reusable, cited local context packs for AI agents.
 ```
 
 비범위:
@@ -36,13 +39,13 @@ Etyma는 세 계층을 UI에 드러낸다.
 ```text
 +--------------------------------------------------------------------------------+
 | Layer 1. Sources                                                               |
-| Immutable originals: PDF, DOCX, DOC, generated page images, raw markdown        |
+| Provenance-bearing originals with stable identity, type, and content hash       |
 +--------------------------------------------------------------------------------+
                                       |
                                       v
 +--------------------------------------------------------------------------------+
 | Layer 2. Automatic Ingest                                                       |
-| Extract entities, topics, claims, evidence refs, contradictions, typed links    |
+| Type adapter -> derived artifacts -> evidence, claims, entities, typed links     |
 +--------------------------------------------------------------------------------+
                                       |
                                       v
@@ -51,6 +54,8 @@ Etyma는 세 계층을 UI에 드러낸다.
 | Maintained wiki pages, graph, index, log, answerable project memory             |
 +--------------------------------------------------------------------------------+
 ```
+
+현재 구현된 source adapter는 PDF, DOCX, DOC를 지원한다. Source 모델 자체는 문서에 제한되지 않으며, text/Markdown, web content, code, images, media transcripts, connected services를 후속 adapter로 수용할 수 있어야 한다. Generated page images와 raw markdown은 원본 source가 아니라 현재 document adapter가 만든 derived artifact다.
 
 UI는 사용자가 아래 질문에 답할 수 있게 해야 한다.
 
@@ -78,7 +83,7 @@ Etyma Desktop
 |   +-- Sidebar
 |   +-- Main Content
 |
-+-- Docs
++-- Sources
 |   |
 |   +-- Add Sources
 |   +-- Import Queue
@@ -89,7 +94,7 @@ Etyma Desktop
 |   |
 |   +-- Local Chat Threads
 |   +-- Central Composer
-|   +-- Scope Selector: all docs / selected source / graph context
+|   +-- Scope Selector: all sources / selected source / graph context
 |   +-- Suggested Prompts
 |   +-- IPC-backed Rig agent response with verified citations
 |
@@ -127,16 +132,16 @@ Etyma Desktop
 
 ## 3. Navigation Model
 
-현재 워크스페이스는 `Docs / Agent / Graph` 세 destination으로 나눈다. 예전 `Knowledge` 단일 화면은 너무 많은 일을 한 화면에 묶었기 때문에 파일 관리, 질문, 관계 검사를 분리한다.
+워크스페이스는 `Sources / Ask / Knowledge` 세 destination으로 나눈다. Source 관리, citation-backed 질문, graph 관계 검사를 각각 독립된 작업 surface로 유지한다.
 
 ```text
 Sidebar
 |
-+-- Docs          source file을 추가하고 import 상태, source table, parse warning을 본다
++-- Sources       source를 추가하고 ingest 상태, source table, warning을 본다
 |
-+-- Agent         터미널이 아니라 Etyma agent chat UI에서 citation-backed 답변을 받는다
++-- Ask           터미널이 아니라 Etyma chat UI에서 citation-backed 답변을 받는다
 |
-+-- Graph         graph canvas와 inspector로 document/source/concept 관계를 검사한다
++-- Knowledge     graph canvas와 inspector로 source/evidence/concept 관계를 검사한다
 |
 +-- Settings      provider/schema/storage/maintenance 정책 설정
 
@@ -144,13 +149,13 @@ Window Bar
 |
 +-- Left: Sidebar Toggle   항상 좌측에 위치한다
 +-- Right: History         자동 점검/수정 결과와 사용자 개입이 필요한 충돌을 기록한다
-+-- Far Right: Inspector Toggle   Graph 화면에서만 우측 inspector rail을 열고 닫는다
++-- Far Right: Inspector Toggle   Knowledge 화면에서만 우측 inspector rail을 열고 닫는다
 
 Settings는 window bar에 중복 노출하지 않는다. Settings 진입점은 sidebar 하단에만 둔다.
 History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열려 있어도 History는 window bar의 독립 activity surface로 남고, inspector toggle만 우측 rail을 제어한다.
 ```
 
-사용자가 파일을 넣으면 별도 Compile 화면 없이 Etyma가 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Docs의 import queue/source table과 Graph import banner에 노출한다. Agent는 terminal surface가 아니라 thread list와 central composer를 가진 chat destination이다. Sidebar item에는 source count, Ready/Setup, node count 같은 상태 배지를 넣지 않는다.
+사용자가 source를 추가하면 별도 Compile 화면 없이 Etyma가 자동으로 ingest하고 safe update는 자동 승인한다. 진행 상태는 Sources의 import queue/source table과 Knowledge import banner에 노출한다. Ask는 terminal surface가 아니라 thread list와 central composer를 가진 chat destination이다. Sidebar item에는 source count, Ready/Setup, node count 같은 상태 배지를 넣지 않는다.
 
 ---
 
@@ -162,9 +167,9 @@ History는 inspector 내부에 들어가지 않는다. 우측 inspector가 열�
 +----------------------+-------------------------------------------+-------------+
 | Etyma             | Current Screen                            | Right rail   |
 |                      |                                           | when open    |
-|  > Docs              |                                           |             |
-|    Agent             |                                           |             |
-|    Graph             |                                           |             |
+|  > Sources           |                                           |             |
+|    Ask               |                                           |             |
+|    Knowledge         |                                           |             |
 |                      |                                           |             |
 |  Settings            |                                           |             |
 +----------------------+-------------------------------------------+-------------+
@@ -204,9 +209,9 @@ Collapsed sidebar:
 Rules:
 
 ```text
-+-- Empty state shows Add Files as the primary action.
++-- Empty state shows Add Sources as the primary action.
 +-- Dropping files anywhere in the empty graph starts automatic ingest.
-+-- Ask/Add Files composer is opened by command/action, not permanently shown by default.
++-- Ask/Add Sources composer is opened by command/action, not permanently shown by default.
 +-- Asking without files searches existing knowledge; if empty, prompt suggests adding files first.
 +-- Attached files can be added permanently or used temporarily for a one-time answer.
 ```
@@ -215,21 +220,21 @@ Rules:
 
 ## 6. Source Library Surface IA
 
-목표: `Sources`를 별도 navigation page로 두지 않고, Knowledge graph 안의 first-class source node로 둔다. 원본 파일은 immutable source로 탐색/관리한다. source file은 graph node가 canonical UI object이며, source index/search row/evidence provenance가 모두 같은 객체를 가리키는 projection이다.
+목표: `Sources`를 전용 navigation page로 제공하면서 Knowledge graph 안에서도 first-class source node로 유지한다. 원본 source는 immutable object로 탐색/관리하며, source table, graph node, search result, evidence provenance가 모두 같은 객체를 가리키는 projection이다.
 
 기본 규칙:
 
-- Source Library는 default surface가 아니다. 필요하면 `Source Index` / `All sources`로 command/search/inspector/History에서 여는 projection이다.
+- Source Library는 Sources destination의 default surface다. Knowledge에서는 같은 객체를 graph node와 contextual projection으로 연다.
 - 모든 `SourceSummary`는 graph에 source node로 나타나야 한다. ingest 실패, stale, 아직 link가 없는 source도 source-only graph node로 남는다.
 - source node 클릭 시 Source Detail은 오른쪽 inspector 안에서 열린다. graph context를 떠나지 않는다.
-- Source Index가 생기더라도 left nav destination이 아니라 graph/search/bulk workflow 보조 surface다.
+- Source Index와 Knowledge graph는 동일한 source identity와 selection state를 공유한다.
 
 ```text
 Knowledge / Source Library
 |
 +-- Header
 |   +-- Title: Source Library
-|   +-- Subtitle: Immutable documents that Etyma automatically turns into knowledge.
+|   +-- Subtitle: Immutable sources that Etyma automatically turns into knowledge.
 |   +-- CTA: Add sources
 |
 +-- Source Intake
@@ -262,7 +267,7 @@ Wireframe:
 ```text
 +--------------------------------------------------------------------------------+
 | Knowledge / Source Library                                       [Add sources] |
-| Immutable documents that Etyma turns into structured knowledge automatically. |
+| Immutable sources that Etyma turns into structured knowledge automatically.   |
 |                                                                                |
 | +----------------------------------------------------------------------------+ |
 | | Drop PDF, DOCX, or DOC files here                                          | |
@@ -334,7 +339,7 @@ Knowledge source-library ingest state wireframe:
 ```text
 +--------------------------------------------------------------------------------+
 | Knowledge / Source Library                                       [Add sources] |
-| Added files automatically become wiki pages, graph links, and claims.            |
+| Added sources automatically become wiki pages, graph links, and claims.          |
 |                                                                                |
 | Source Library                                                                  |
 | +----------------------+--------------+-------+----------+--------------------+ |
@@ -404,9 +409,9 @@ Knowledge
     +-- Wiki Page
     +-- Claims Review
     +-- Conflict Review
-    +-- Ask / Add Files Composer
+    +-- Ask / Add Sources Composer
 
-Ask / Add Files Composer
+Ask / Add Sources Composer
     +-- prompt input
     +-- ask selected graph context or whole knowledge base
     +-- attach PDF/DOCX/DOC files
@@ -463,12 +468,12 @@ Graph canvas rules:
 Graph source behavior:
 
 ```text
-+-- Source file nodes are first-class graph nodes.
++-- Source nodes are first-class graph nodes.
 +-- Clicking a source node opens the Source Detail surface in the inspector.
 +-- Source Detail can also be expanded into Knowledge / Source Library with the same source selected.
 +-- The uploaded file remains the immutable object of record.
 +-- Derived artifacts stay adjacent: page images, raw markdown, evidence refs, linked claims.
-+-- Non-source nodes still show provenance links back to their source files/pages.
++-- Non-source nodes still show provenance links back to their sources and evidence.
 ```
 
 Graph prompt composer behavior:
@@ -485,7 +490,7 @@ Graph prompt composer behavior:
 +-- Save metadata fields: source.description, source.user_context, source.ingest_instruction.
 +-- After submit, the answer window floats above the bottom prompt composer and shows only the response plus compact sources; it must not duplicate prompt or attachment controls.
 +-- Example: attach `contract.docx` with "This is the 2024 vendor agreement; focus on payment terms."
-+-- Attached files with Add to knowledge base enter the same automatic ingest pipeline and become source-file graph nodes.
++-- Attached files with Add to knowledge base enter the same automatic ingest pipeline and become source graph nodes.
 +-- The response can be saved back as a wiki page, claim, note, or source description.
 ```
 
@@ -803,7 +808,7 @@ Etyma는 아래 산출물을 명시적으로 다룬다.
 ~/Library/Application Support/Etyma/<workspace>/
 |
 +-- sources/
-|   +-- original files
+|   +-- original sources
 |
 +-- artifacts/
 |   +-- page images
@@ -1132,7 +1137,7 @@ apps/desktop/src/features/workspace/GraphWorkspace.tsx
 +-- expose Wiki / Sources / Claims / Conflicts as contextual surfaces, not default tabs
 +-- keep Entities / Topics as filters/facets before making them full modes
 +-- source-file nodes open Source Detail in the inspector, with actions to open/reveal the uploaded file
-+-- Ask/Add Files composer opens on command/action and handles file attachment, attachment intent, and source metadata prompts
++-- Ask/Add Sources composer opens on command/action and handles file attachment, attachment intent, and source metadata prompts
 
 apps/desktop/src/features/workspace/types.ts
 |

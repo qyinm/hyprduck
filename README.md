@@ -5,7 +5,7 @@
 <h1 align="center">Etyma</h1>
 
 <p align="center">
-  <strong>Local document parsing for agent-ready knowledge.</strong>
+  <strong>Private sources compiled into agent-ready knowledge.</strong>
 </p>
 
 <p align="center">
@@ -19,25 +19,30 @@
 
 ## Overview
 
-Etyma turns private PDFs and Word files into reusable, cited local context
-packs for AI agents.
+Etyma turns private sources into reusable, cited local context packs for AI
+agents. A source is a provenance-bearing original input whose identity and
+evidence trail remain intact throughout ingestion and retrieval.
+The canonical definition and object boundaries are documented in
+[`docs/source-model.md`](docs/source-model.md).
 
-The current wedge is local document ingestion: import PDF, DOCX, or DOC files,
-preserve the original source, derive markdown and page artifacts, then compile
-source packs, evidence indexes, and query-time context packs that agents can
-reuse without losing page evidence.
+Documents are the first implemented source type. The current ingestion adapter
+accepts PDF, DOCX, and DOC files, preserves the original source, derives
+markdown and page artifacts, then compiles source packs, evidence indexes, and
+query-time context packs that agents can reuse without losing page evidence.
+The source model is designed to support additional input types without changing
+the provenance contract.
 
 The primary product loop is:
 
 ```text
-private document
+private source
   -> source pack + evidence index
   -> query-time context pack
-  -> MCP agent reads cited source/page/evidence
+  -> MCP agent reads cited source/evidence refs
   -> same local context is reused in the next task
 ```
 
-Etyma is not a generic document chatbot, a memory OS, or an approval
+Etyma is not a generic file chatbot, a memory OS, or an approval
 dashboard. The product is built around durable local artifacts, visible
 provenance, and agent-readable context.
 
@@ -46,7 +51,7 @@ provenance, and agent-readable context.
 ## What Etyma Builds
 
 ### Source Packs And Evidence Indexes
-- Keeps imported files as immutable source records
+- Keeps imported originals as immutable source records
 - Stores generated page artifacts and markdown output
 - Writes `source_pack.json` and `evidence_index.json` artifacts for imported sources
 - Preserves source IDs, page refs, content hashes, provider route, and parse warnings
@@ -64,7 +69,7 @@ provenance, and agent-readable context.
 - Keeps internal graph/wiki files as retrieval infrastructure, not the product surface
 
 ### Agent Context Surface
-- Provides document search and context-pack contracts through the Rust engine
+- Provides source retrieval and context-pack contracts through the Rust engine
 - Exposes an MCP stdio server for external agents: [`docs/mcp.md`](docs/mcp.md)
 - Preserves provenance so agents can cite source, page, and evidence IDs
 
@@ -80,8 +85,8 @@ provenance, and agent-readable context.
 
 Etyma is in active development. The parser wedge, local workspace layout,
 Source Pack/Evidence Index artifacts, Context Pack v1 with v0 compatibility,
-controlled MCP import/read/write surface, and document-context CLI aliases are
-implemented.
+controlled MCP import/read/write surface, and the first document ingestion
+adapter are implemented.
 
 The current demo and dogfood path proves the loop end to end: import a known
 fixture, generate a schema-valid context pack, read it over MCP, and produce a
@@ -93,7 +98,7 @@ dogfood, and a second-client proof beyond Codex.
 
 ## How It Works
 
-1. Import a local document.
+1. Import a supported local source. The current adapter accepts PDF, DOCX, and DOC.
 2. Etyma saves source metadata and derived artifacts.
 3. The engine parses the document into markdown and page-level evidence.
 4. Etyma writes a source pack and evidence index.
@@ -104,7 +109,7 @@ dogfood, and a second-client proof beyond Codex.
 
 ## Workspace Artifacts
 
-A Etyma workspace is designed around durable local document context files:
+An Etyma workspace is designed around durable local source context:
 
 ```text
 artifacts/<source-id>/
@@ -132,8 +137,8 @@ Original sources remain separate from generated artifacts.
 
 ## AI Providers
 
-Etyma currently supports shared provider settings across parsing and
-document-context workflows:
+Etyma currently supports shared provider settings across ingestion and
+source-context workflows:
 
 - **OpenRouter** for flexible hosted model access
 - **Ollama** for local-first and privacy-sensitive workflows
@@ -150,7 +155,7 @@ route. Task-specific model guidance and latency budgets live in
 
 - macOS 12.3+
 - Apple Silicon or Intel Mac
-- No special macOS permissions are required for document import
+- No special macOS permissions are required for the current document import adapter
 
 ---
 

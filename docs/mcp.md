@@ -1,6 +1,11 @@
 # MCP Context Server
 
-Etyma exposes local document context artifacts through an MCP stdio server:
+Etyma exposes local source context artifacts through an MCP stdio server. The
+current import adapter accepts PDF, DOCX, and DOC, while the MCP contracts use
+stable source and evidence identities that can support additional source types.
+
+The domain meaning of Source, Source Revision, and evidence locator is defined
+in [`source-model.md`](source-model.md).
 
 ```bash
 etyma mcp serve
@@ -91,13 +96,13 @@ This import allowlist is separate from the development-only `rootDir` allowlist.
 | `import_retry_graph` | `jobId` or `sourceId` | Retry graph/wiki materialization for a citation-ready source without reparsing it. |
 | `get_context_pack` | `query` | Build an agent-ready Context Pack v1 with selected sources, typed evidence, findings, warnings, and retrieval trace. |
 | `read_context_pack` | none | Read the latest persisted `context_pack.json`, or pass optional `packId` for a historical pack under `context_packs/`; v1 packs are projected to the v0 compatibility shape for this reader. |
-| `search_documents` | `query` | Return ranked source-backed document context IDs. |
+| `search_documents` | `query` | Return ranked source-backed context IDs. The name is retained for compatibility with the current document ingestion adapter. |
 | `search_brain` | `query` | Compatibility alias for `search_documents`. |
 | `read_source` | `sourceId` | Read a source record with adjacent wiki and evidence. |
 | `read_page_evidence` | `sourceId` | Read source evidence refs, optionally narrowed by 1-based `page`. |
 | `read_wiki_page` | `path` | Read a generated or save-back wiki page. |
 | `read_node` | `nodeId` | Read a graph node with up to 32 evidence refs and 64 adjacent relations. |
-| `read_recent_events` | none | Read append-only document context event history. |
+| `read_recent_events` | none | Read append-only source context event history. |
 | `read_graph_history` | none | List prior materialized graph/wiki states, or pass optional lifecycle selectors for one graph node, relation, or wiki page. |
 | `read_graph_snapshot` | none | Read the latest completed materialized graph/wiki snapshot. |
 | `read_health` | none | Read workspace context readiness, including per-source status, failed-page counts, content-hash state, and provider route. |

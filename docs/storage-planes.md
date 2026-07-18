@@ -167,7 +167,7 @@ Implementation work follows this document; it does not renegotiate the planes.
 ### Product boundary
 
 - Graph, wiki, claims, and event history remain retrieval and inspection
-  infrastructure for private document evidence reuse—not a separate graph-first
+  infrastructure for private source evidence reuse—not a separate graph-first
   product promise.
 - Storage plane choices must not reframe Etyma as a generic memory OS or
   graph-only product.

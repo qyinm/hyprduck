@@ -2,12 +2,13 @@
 
 ## Direction
 
-Etyma is moving from a document parser into a local evidence compiler for AI agents.
+Etyma is moving from a document parser into a local source evidence compiler
+for AI agents. Documents are the first source type, not the product boundary.
 
-The parser remains the wedge, but the next product milestone is not "more chat"
-or a memory OS. The next milestone is proving the reusable cited context loop:
-source pack, evidence index, Context Pack v1, MCP agent citation quality, and
-installed-app distribution.
+The document adapter remains the wedge, but the next product milestone is not
+"more chat" or a memory OS. The next milestone is proving the reusable cited
+context loop: source pack, evidence index, Context Pack v1, MCP agent citation
+quality, and installed-app distribution.
 
 Current roadmap order:
 
@@ -167,7 +168,7 @@ retrieval would freeze a poor external contract too early.
 
 ## P2 - MCP read surface and controlled writes - Done
 
-**What:** Expose Etyma's local document context through MCP after extraction
+**What:** Expose Etyma's local source context through MCP after extraction
 and retrieval stabilize, then add narrow mutating tools for import, graph
 patches, and evidence-backed save-back flows.
 
@@ -246,10 +247,10 @@ losing page evidence.
 
 ## Completed / Existing Substrate
 
-- [x] Local document ingestion wedge
+- [x] Local document ingestion adapter as the first source type
 - [x] Internal graph/wiki materialization substrate
 - [x] Source metadata persistence from composer intent
-- [x] Read-only document context engine API
+- [x] Read-only source context engine API
 - [x] Context readiness lint path
 - [x] Structured extraction artifact
   - Added `StructuredExtractionArtifact` and nested entity/topic/claim/relation/page-ref contracts.

@@ -1,284 +1,624 @@
-# Etyma — Design System
+# Etyma Desktop Design System
 
-## Overview
+## Product Context
 
-Etyma is a local document parsing workspace for turning files into agent-ready markdown. The design is intentionally direct: a paper-white canvas, black primary actions, pill-shaped controls, native-feeling typography, and documentation-like rhythm. The product should read like a trustworthy local tool, not like a generic AI SaaS page.
+- **Product:** A desktop application that compiles private sources into reusable, cited local context for coding agents.
+- **Primary users:** Developers, researchers, and knowledge workers who need verifiable source evidence in agent workflows.
+- **Product type:** A dense, repeat-use, macOS-first professional tool.
+- **Core flow:** `Add Sources -> Ask With Citations -> Verify Evidence -> Reuse`.
+- **Desired impression:** "A calm local knowledge tool that feels related to Finder, Notes, and the Xcode inspector."
 
-The system is intentionally plain. A user should understand the workflow in seconds: import a PDF, DOCX, or DOC file; convert pages into images; run the configured provider; save linked markdown under `~/Documents/Etyma/`; inspect the evidence graph when available. The UI should not look like a generic AI SaaS dashboard.
+Etyma is not a generic file chat product or an AI SaaS dashboard. It is a desktop workbench where users can inspect original sources, ingest state, evidence, relationships, and provider routes.
 
-**Key characteristics:**
-- Paper-white `{colors.canvas}` from edge to edge.
-- Black `{colors.primary}` pills for primary actions.
-- Soft gray pills for paths, local-mode state, provider state, and command-like snippets.
-- A narrow, readable content column for landing/product pages.
-- Compact desktop workspace with sidebar, import panel, markdown preview, and graph/evidence surface.
-- Terminal or README-like previews for parse logs, local provider readiness, and markdown output.
-- No decorative gradients, atmospheric backgrounds, heavy shadows, or stock imagery.
+### Source Model
 
-## Similar Brands
+A source is a provenance-bearing original input with a stable identity, content hash, type, and evidence trail. Documents are the first supported source type, not the limit of the product model.
 
-These brands are useful comparison points for tone and restraint. Etyma should not copy their layouts, assets, or product metaphors directly; use them to calibrate the level of polish, density, and confidence.
+The canonical domain definition, including Source Revisions, containers, evidence locators, and lifecycle semantics, lives in [`docs/source-model.md`](docs/source-model.md).
 
-- **OpenAI:** calm monochrome surfaces, restrained hierarchy, clear prose, and product pages that feel serious without becoming visually heavy.
-- **Linear:** dense but elegant workspace UI, fast command-oriented interactions, crisp borders, compact sidebars, and strong attention to states.
-- **Vercel:** developer-tool clarity, black-and-white contrast, documentation-first rhythm, simple CTAs, and clean deployment/status surfaces.
+- **Currently supported:** PDF, DOCX, and DOC files.
+- **Future source families:** Plain text and Markdown, web content, code repositories and files, images, audio or video transcripts, and connected services.
+- **Invariant:** Every source type must preserve origin, local or hosted processing disclosure, ingest warnings, and addressable evidence.
+- **UI rule:** Use `Source` for the general object. Use `Document`, `Web Page`, `Repository`, or another specific type only when the distinction matters.
 
-## Colors
+## Aesthetic Direction
 
-### Brand & Accent
-- **Pure Black** (`{colors.primary}` — `#000000`): brand anchor, primary CTA, active nav text, strong headings, solid icons.
-- **Ink Deep** (`{colors.ink-deep}` — `#090909`): pressed state for black pills and inverted controls.
+- **Direction:** Native Mac Knowledge Workbench
+- **Decoration:** Minimal
+- **Layout:** macOS split views with contextual inspectors
+- **Color:** Neutral surfaces with system semantic colors
+- **Density:** Between compact and medium
+- **Motion:** Short and functional
 
-### Surface
-- **Canvas** (`{colors.canvas}` — `#ffffff`): primary page and desktop workspace background.
-- **Soft Surface** (`{colors.surface-soft}` — `#fafafa`): path pills, import zones, search/input pills, inactive chips, quiet side panels.
-- **Surface Dark** (`{colors.surface-dark}` — `#171717`): rare inverted surface for terminal previews, parse-log panels, and one strong "local ready" moment.
-- **Hairline** (`{colors.hairline}` — `#e5e5e5`): card borders, dividers, terminal card borders, FAQ rows.
-- **Hairline Strong** (`{colors.hairline-strong}` — `#d4d4d4`): stronger separators for unrelated groups or focused cards.
+The app must feel like a professional macOS tool, not a web page placed inside a desktop window. Window structure, alignment, separators, selection states, and keyboard behavior create the visual identity.
 
-### Text
-- **Ink** (`{colors.ink}` — `#000000`): headings, primary nav links, black-on-white controls.
-- **Charcoal** (`{colors.charcoal}` — `#525252`): secondary labels, feature bullets, provider metadata, body text where slightly stronger contrast is needed.
-- **Body** (`{colors.body}` — `#737373`): default paragraph copy, helper text, FAQ answers, footer links.
-- **Mute** (`{colors.mute}` — `#a3a3a3`): captions, disabled controls, timestamp text, terminal comments.
-- **On Dark** (`{colors.on-dark}` — `#ffffff`): text on `{colors.surface-dark}`.
-- **On Dark Mute** (`{colors.on-dark-mute}` — `rgba(255,255,255,0.7)`): secondary text on dark terminal/log panels.
+### Core Principles
 
-### Semantic
-Semantic color should be sparse. Etyma is a local utility, not a status-heavy observability tool.
+1. Each screen has one dominant work surface.
+2. Every answer remains traceable to its original evidence.
+3. Complexity is progressively disclosed in the right inspector.
+4. Local and hosted execution states are never hidden.
+5. The same source or evidence object keeps the same identity across Sources, Ask, and Knowledge.
+6. The graph is an inspection surface, not decoration.
 
-- **Terminal Red** (`{colors.terminal-red}` — `#ff5f56`): close-window dot inside terminal-like previews only.
-- **Terminal Yellow** (`{colors.terminal-yellow}` — `#ffbd2e`): minimize dot inside terminal-like previews only.
-- **Terminal Green** (`{colors.terminal-green}` — `#27c93f`): local-ready dot and terminal zoom dot.
-- **Focus Ring** (`{colors.focus-ring}` — `rgba(59,130,246,0.5)`): browser-default focus ring. This is the only blue in the system.
+### Avoid
+
+- Marketing-scale headings and hero whitespace
+- Wrapping every section in a rounded card
+- Repeating black pills for every button and input
+- Decorative purple, orange, or green brand accents
+- Gradient backgrounds, glows, orbs, and bokeh
+- Decorative illustrations or mascot-led UI
+- Oversized mobile-style controls
+- Making generated answers appear more trustworthy than their evidence
+- Treating the graph as a static background image
+
+## Design Reference
+
+- Pencil source: [`apps/desktop/design/etyma-apple-native.pen`](apps/desktop/design/etyma-apple-native.pen)
+
+The Pencil document is the visual baseline. Implementation may differ to support accessibility, localization, and real data states, but the window structure, density, color roles, and hierarchy should remain consistent.
 
 ## Typography
 
-### Font Family
-- **SF Pro Rounded** (display headings) — Apple's rounded geometric sans, used at weights 500 and 600 for headlines from `{typography.display-xl}` (36px) down to `{typography.heading-lg}` (24px). Falls back to `system-ui` -> `-apple-system`.
-- **ui-sans-serif** (body, links, buttons, captions) — the operating system's default sans-serif. Carries every non-display text role at 12-20px.
-- **ui-monospace** (code, paths, command tags) — the OS default monospace. Used inside terminal previews, output paths, inline command chips, and markdown/code previews.
+### Font Stack
 
-The typography should feel native and documentation-like. Avoid branded display faces that make the product feel like a marketing page.
+```css
+font-family:
+  Inter,
+  ui-sans-serif,
+  system-ui,
+  -apple-system,
+  BlinkMacSystemFont,
+  "SF Pro Text",
+  "Apple SD Gothic Neo",
+  "Noto Sans KR",
+  "Segoe UI",
+  sans-serif;
+```
 
-### Hierarchy
+- Prefer the system font on macOS.
+- Use `Apple SD Gothic Neo` and `Noto Sans KR` as Korean fallbacks when localized content requires them.
+- Use `ui-monospace`, `SFMono-Regular`, and `Menlo` for paths, source IDs, evidence IDs, revisions, and commands.
+- Letter spacing is always `0` by default.
 
-| Token | Size | Weight | Line Height | Letter Spacing | Use |
-|---|---:|---:|---:|---:|---|
-| `{typography.display-xl}` | 36px | 500 | 1.11 | 0 | Hero headline and first-run empty-state headline |
-| `{typography.display-lg}` | 30px | 500 | 1.2 | 0 | Major section headlines |
-| `{typography.heading-lg}` | 24px | 600 | 1.33 | 0 | Import workflow and local setup headings |
-| `{typography.heading-md}` | 20px | 500 | 1.4 | 0 | Panel titles and card titles |
-| `{typography.heading-sm}` | 18px | 500 | 1.56 | 0 | FAQ questions and inspector titles |
-| `{typography.body-md}` | 16px | 400 | 1.5 | 0 | Default body, markdown explanations, FAQ answers |
-| `{typography.body-strong}` | 16px | 500 | 1.5 | 0 | Inline emphasis and active nav link |
-| `{typography.body-sm}` | 14px | 400 | 1.43 | 0 | Metadata, helper copy, footer links |
-| `{typography.body-sm-strong}` | 14px | 500 | 1.43 | 0 | Button label, chip label, provider label |
-| `{typography.caption-sm}` | 12px | 400 | 1.33 | 0 | Small utility and timestamps |
-| `{typography.code-md}` | 16px | 400 | 1.5 | 0 | Output path, command preview, terminal command |
-| `{typography.code-sm}` | 14px | 400 | 1.43 | 0 | Terminal output, markdown preview, inline code |
-| `{typography.button-md}` | 14px | 500 | 1 | 0 | Button labels |
+### Type Scale
 
-## Layout
+| Role | Size | Weight | Line height | Usage |
+| --- | ---: | ---: | ---: | --- |
+| Screen title | 20px | 650 | 26px | Sources, Knowledge |
+| Conversation title | 18px | 650 | 24px | Ask with your sources |
+| Inspector title | 13px | 650 | 18px | Source Details, Citations, Selection |
+| Section title | 12-13px | 600-650 | 18px | Evidence, Metadata |
+| Body/UI | 12-12.5px | 400 | 18px | Answers, descriptions, buttons |
+| List/table | 11-11.5px | 400-600 | 16px | Source rows and status |
+| Supporting copy | 10.5px | 400 | 15px | Provider and timestamp |
+| Metadata/badge | 9-10px | 500-650 | 13px | Evidence ID and object type |
 
-### Spacing System
-- **Base unit:** 8px, with 2/4/6px available for tight inline gaps.
-- **Major section gap:** `{spacing.section}` (88px) on marketing/product pages.
-- **Desktop app gap:** 16-24px between panels; avoid landing-page whitespace inside repeated workflows.
-- **Card internal padding:** 24-32px depending on density.
-- **FAQ row padding:** 16px vertical with no heavy container.
+Hierarchy comes from position, alignment, weight, separators, and selection state rather than large type.
 
-### Grid & Container
-- **Marketing/documentation page:** one narrow reading column at ~720px, with occasional 2-column workflow splits.
-- **Desktop shell:** compact sidebar + main workspace. Import, settings, markdown preview, and graph/evidence panels should be directly reachable without a marketing hero.
-- **Graph/evidence workspace:** prefer split panes and inspector panels over floating decorative cards.
-- **Mobile/web preview:** stack panels vertically; keep primary import action visible.
+### Numbers and Identifiers
 
-### Whitespace Philosophy
-Whitespace is the design. The page should feel like a Markdown document rendered with care: plain white air between sections, simple headings, short paragraphs, and focused command snippets. Do not use colored bands, floating card stacks, or decorative background treatments to create hierarchy.
+- Use tabular numbers for page counts, evidence counts, percentages, and progress.
+- Do not remove the middle of long source IDs or paths. Truncate to one line in compact surfaces and expose the full value in a tooltip or inspector.
+- Do not expose internal IDs unless they help the user verify or debug an artifact.
 
-## Elevation & Depth
+## Color
 
-| Level | Treatment | Use |
-|---|---|---|
-| 0 — Flat | No border, no shadow | Hero, prose sections, footer, simple product explanation |
-| 1 — Hairline border | 1px solid `{colors.hairline}` | Import card, terminal preview, evidence panel, FAQ rows |
-| 2 — Inverted dark | `{colors.surface-dark}` fill | Terminal/log panel, local-ready proof, one high-attention preview |
+### Base Palette
 
-There are no drop-shadow-heavy cards. Depth comes from hairline borders, inverted panels, and whitespace.
+| Token | Value | Usage |
+| --- | --- | --- |
+| `--native-window` | `#F7F7F8` | Window background and inspector |
+| `--native-sidebar` | `#ECECEF` | Left sidebar |
+| `--native-content` | `#FFFFFF` | Primary work surface |
+| `--native-hover` | `#E4E4E7` | Neutral hover |
+| `--native-selection` | `#DCEBFF` | Selected rows and nodes |
+| `--native-text` | `#1D1D1F` | Primary text |
+| `--native-text-secondary` | `#68686D` | Descriptions and metadata |
+| `--native-text-tertiary` | `#909095` | Inactive information |
+| `--native-border` | `#D6D6D9` | Panel and control boundaries |
+| `--native-separator` | `#E8E8EA` | List and table separators |
+| `--native-accent` | `#0A84FF` | Selection, focus, and primary actions |
+| `--native-accent-soft` | `#EAF4FF` | Citation and selection support surfaces |
 
-## Shapes
+### Semantic Colors
 
-| Token | Value | Use |
-|---|---:|---|
-| `{rounded.none}` | 0px | Structural dividers, footer, nav lines |
-| `{rounded.sm}` | 6px | Inline code chips and tiny command tags |
-| `{rounded.md}` | 8px | Rare dropdown panels |
-| `{rounded.lg}` | 12px | Import cards, terminal preview, evidence panels |
-| `{rounded.full}` | 9999px | Buttons, path pills, search pills, status chips, traffic-light dots |
+Semantic color must always appear with an icon or text label. Never communicate status through color alone.
 
-The dominant vocabulary is pills for interactive controls and 12px cards for functional panels. Avoid arbitrary medium radii.
+| State | Value | Usage |
+| --- | --- | --- |
+| Information/focus | `#0A84FF` | Selection, links, focus ring |
+| Success/ready | `#30A46C` | Indexed source, local engine ready |
+| Warning/review | `#D97706` | Stale source, partial parse |
+| Error/destructive | `#D14343` | Import failure, destructive action |
+
+### Color Constraints
+
+- At least 80% of a default screen should remain neutral.
+- Blue is reserved for selection, primary actions, links, and citations.
+- Green is reserved for completed and locally ready states.
+- File-type colors are limited to small icon wells.
+- Near-black is used for body text and small high-contrast controls such as Send.
+
+## Materials and Surfaces
+
+### App Window
+
+- Reference size: `1440 x 900`
+- Recommended minimum: `960 x 640`
+- Window corner radius: 12px
+- Do not obstruct the macOS traffic-light or drag regions.
+- Content extends to the window edges. Do not place the entire application inside a centered card.
+
+### Titlebar
+
+- Height: 52px
+- Background: `rgba(242, 242, 243, 0.91)`
+- Bottom border: 1px `--native-border`
+- Center: small product or workspace name
+- Left: traffic lights and sidebar toggle
+- Right: window-level actions such as search, history, and inspector toggle
+- Screen titles and primary actions belong in the screen toolbar, not the titlebar.
+
+### Sidebar
+
+- Default width: 224px
+- Background: `--native-sidebar`
+- Right border: 1px `--native-border`
+- Horizontal padding: 12px
+- Navigation row height: 34px
+- Active row radius: 7px
+- Active rows use a translucent white surface with a subtle inner highlight.
+- Place local engine status and Settings at the bottom.
+- Show counts only when they materially help navigation.
+
+### Primary Work Surface
+
+- Background: `--native-content`
+- Fills all space below the toolbar.
+- One of the source list, conversation, or graph is the dominant surface.
+- Prefer split views, toolbars, and separators over cards.
+- Do not add a page-wide max-width card container.
+
+### Inspector
+
+- Default width: 320-360px
+- Background: `--native-window`
+- Left border: 1px `--native-border`
+- Shows details for the selected source, citation, graph node, or graph edge.
+- Follows the current selection and does not introduce separate page navigation.
+- The primary work surface expands naturally when the inspector closes.
+
+### Elevation
+
+| Level | Treatment | Usage |
+| --- | --- | --- |
+| 0 | No shadow | Sidebar, toolbar, table, inspector |
+| 1 | `0 1px 2px rgba(0,0,0,.04)` | Active navigation, small controls |
+| 2 | `0 3px 10px rgba(0,0,0,.05)` | Document preview, composer |
+| Overlay | `0 18px 48px rgba(0,0,0,.16)` | Popover, menu, sheet |
+
+Repeated rows and structural panels do not use shadows.
+
+## Spacing and Density
+
+- **Base unit:** 4px
+- **Toolbar height:** 56-64px
+- **Screen horizontal padding:** 20-24px
+- **Inspector padding:** 18-22px
+- **Section gap:** 16-24px
+- **Navigation row:** 34px
+- **Source row:** 52-58px
+- **General table row:** 36-44px
+- **Button height:** 28-32px
+- **Search/input height:** 30-34px
+- **Icon button:** 28-32px square
+- **Internal control gap:** 6-10px
+- **Default radius:** 6-8px
+- **Composer radius:** 12px
+- **Pill shape:** Counts, statuses, and short filters only
+
+Density must remain consistent within a screen. Do not make the inspector unusually cramped or the composer unusually large.
+
+## Application Structure
+
+```text
+App Window
+|-- Titlebar: 52px
+`-- Body
+    |-- Sidebar: 224px
+    |   |-- Workspace picker
+    |   |-- Sources
+    |   |-- Ask
+    |   |-- Knowledge
+    |   |-- Local engine status
+    |   `-- Settings
+    `-- Active workspace
+        |-- Toolbar: 56-64px
+        |-- Primary work area: fluid
+        `-- Inspector: 320-360px, contextual
+```
+
+### Window Width Behavior
+
+- `>= 1180px`: Sidebar + main surface + inspector
+- `960-1179px`: Sidebar + main surface; inspector opens on demand
+- `< 960px`: Sidebar collapses; inspector opens as an overlay sheet
+
+Etyma Desktop is not a mobile application. Small windows must preserve reading and core actions without introducing bottom navigation or oversized touch controls.
+
+## Screen Architecture
+
+### Sources
+
+**Primary question:** Which sources are available, and are they ready to use?
+
+```text
+Sources toolbar
+|-- Title + source count
+|-- Search
+`-- Add Source
+
+Source workspace
+|-- Compact drop zone
+`-- Source list
+    |-- Name / format
+    |-- Status
+    |-- Pages
+    |-- Evidence
+    `-- Modified
+
+Source Inspector
+|-- Original preview
+|-- Source identity and readiness
+|-- Open / Reveal / Graph
+|-- Metadata
+`-- Citation readiness
+```
+
+- The import drop zone must not dominate the screen.
+- The source table is the primary work surface.
+- Selecting a row populates the right inspector.
+- Do not place every possible action inside each row. Use the inspector or a context menu.
+- Represent the import queue as temporary rows or inline progress above the source list.
+- Connect warnings and failures directly to their source rows and inspector details.
+
+### Ask
+
+**Primary question:** What do my sources support, and where can I verify the answer?
+
+```text
+Ask toolbar
+|-- Thread title
+|-- Local/hosted disclosure
+`-- Provider selector
+
+Conversation
+|-- User message
+|-- Assistant answer
+|   `-- Inline citation chips
+`-- Composer
+
+Citation Inspector
+|-- Source preview
+|-- Selected evidence
+|-- Page / region / confidence
+`-- Open in source
+```
+
+- The path to verifying a citation must never be visually weaker than the answer.
+- Citation chips use a short `page + evidence ID` label.
+- Selecting a citation highlights the same evidence in the inspector.
+- Assistant answers sit directly in the conversation flow, not inside cards.
+- Only user messages may use a compact message bubble.
+- Keep the composer anchored at the bottom without obscuring content.
+- Clearly disclose local and hosted provider state in the toolbar.
+- Only show currently supported provider paths: OpenRouter and Ollama.
+
+### Knowledge
+
+**Primary question:** How are sources, concepts, and evidence connected?
+
+```text
+Knowledge toolbar
+|-- Node/link count
+|-- All / Sources / Concepts filters
+|-- Search
+`-- Center / layout controls
+
+Graph canvas
+|-- Source nodes
+|-- Concept/entity/topic nodes
+|-- Artifact nodes
+`-- Evidence-backed edges
+
+Graph Inspector
+|-- Selection identity
+|-- Type and confidence
+|-- Connected evidence
+|-- Source provenance
+`-- Open original / extracted text
+```
+
+- The graph canvas is the largest area on the screen.
+- Distinguish source, concept, and artifact nodes with icons and type labels in addition to color.
+- Selected nodes use a soft system-blue background and a 2px accent border.
+- Selecting an edge highlights both connected nodes and the supporting evidence.
+- Zoom, pan, center, and filter actions must not move structural UI.
+- An empty graph offers source import or reprocessing actions instead of decorative artwork.
+- Do not market graph, wiki, claims, memory, or event history as the first-run product promise.
+
+### Settings
+
+- Preserve sidebar navigation and use setting rows in the main surface.
+- Expose `General` and `AI` first.
+- Use a `label / control / helper text` row structure.
+- Explain missing provider keys, hosted/local state, and connection errors specifically.
+- Ollama remains configurable without an API key.
+- Confirm saved changes near the toolbar or changed setting row.
 
 ## Components
 
 ### Buttons
 
-**`button-primary`** — universal Etyma action
-- Background `{colors.primary}`, text `{colors.on-dark}`, type `{typography.button-md}`, padding `8px 20px`, height `36px`, rounded `{rounded.full}`.
-- Used for "Import document", "Start parse", "Retry failed pages", "Open output", and "Download desktop".
-- Pressed state: `{colors.ink-deep}` background.
+#### Primary
 
-**`button-secondary`** — outline alternative on light canvas
-- Background `{colors.canvas}`, text `{colors.ink}`, 1px solid `{colors.hairline-strong}`, type `{typography.button-md}`, padding `8px 20px`, height `36px`, rounded `{rounded.full}`.
-- Used for "Cancel", "Reveal in Finder", "Change provider", and lower-priority commands.
+- Height: 30-32px
+- Background: `--native-accent`
+- Text: white
+- Radius: 7px
+- Use for one primary action per screen or toolbar.
+- Examples: `Add Source`, `Open`, and saving provider settings.
 
-**`button-pill-on-dark`** — white pill on dark preview
-- Background `{colors.canvas}`, text `{colors.ink}`, type `{typography.button-md}`, rounded `{rounded.full}`.
-- Used inside terminal/log panels when a command needs an action.
+#### Secondary
 
-**`button-disabled`**
-- Background `{colors.surface-soft}`, text `{colors.mute}`, rounded `{rounded.full}`.
+- Background: white
+- Border: 1px `--native-border`
+- Text: `--native-text`
+- Hover: `--native-window`
 
-### Inputs & Forms
+#### Ghost and Icon Buttons
 
-**`search-pill`** + **`search-pill-focused`**
-- Default: background `{colors.surface-soft}`, text `{colors.ink}`, type `{typography.body-sm}`, padding `8px 16px`, height `36px`, rounded `{rounded.full}`.
-- Used for searching imported documents, graph nodes, and markdown snippets.
-- Focused: background `{colors.canvas}` with `{colors.focus-ring}`.
+- Transparent by default
+- Use `--native-hover` only on hover
+- Prefer a familiar Lucide symbol over a text label when the action is universally understood.
+- Every icon button requires an `aria-label` and tooltip.
 
-**`text-input`** + **`text-input-focused`**
-- Default: background `{colors.canvas}`, 1px solid `{colors.hairline}`, type `{typography.body-md}`, padding `8px 16px`, height `40px`, rounded `{rounded.full}`.
-- Focused: 1px ink border + `{colors.focus-ring}`.
+#### Destructive
 
-**`path-pill`** — output or local model path
-- Background `{colors.surface-soft}`, text `{colors.ink}`, type `{typography.code-sm}`, padding `8px 14px`, rounded `{rounded.full}`.
-- Used for `~/Documents/Etyma/...`, local model paths, and parse job identifiers.
+- Neutral secondary appearance by default
+- Introduce error color only at the point of confirmation.
+- Place destructive actions in an overflow menu or dedicated inspector danger section.
 
-**`command-snippet`** — local action preview
-- Background `{colors.surface-soft}`, text `{colors.ink}` in `{typography.code-md}`, padding `12px 20px`, min-height `48px`, rounded `{rounded.full}`.
-- Examples: `etyma parse ./report.pdf`, `local model ready`, `~/Documents/Etyma/project.md`.
+### Inputs and Search
 
-**`command-tag`**
-- Background `{colors.surface-soft}`, text `{colors.ink}` in `{typography.code-sm}`, padding `6px 12px`, rounded `{rounded.full}`.
-- Used for short provider/model tags: `local`, `openai`, `anthropic`, `openrouter`, `pdf`, `docx`.
+- Height: 30-34px
+- Background: `--native-window` or white
+- Border: 1px `--native-border`
+- Radius: 6-7px
+- Focus: 1px `--native-accent` with a 3px translucent ring
+- Placeholder: `--native-text-tertiary`
+- Pair error borders with an explanatory sentence.
+- Search includes a leading icon and supports clearing with `Escape`.
 
-### Cards & Containers
+### Lists and Tables
 
-**`terminal-card`** — product proof and local runtime preview
-- Container: background `{colors.canvas}`, 1px solid `{colors.hairline}`, padding `{spacing.lg}` (16px), rounded `{rounded.lg}`.
-- Header: three `{component.terminal-traffic-lights}` dots.
-- Body: parse logs and command output rendered in `{typography.code-sm}` with comments in `{colors.mute}` and active commands in `{colors.ink}`.
+- Header height: 32-36px
+- Header background: `--native-window`
+- Separate rows with 1px `--native-separator`.
+- Selected row: `--native-selection`
+- Hover uses a neutral tone weaker than selection.
+- Keep column alignment stable between states.
+- Use consistent right or tabular alignment for numeric columns.
+- Status badges and long filenames must not change row height.
 
-**`terminal-traffic-lights`**
-- Three 12px filled circles at `{rounded.full}`: `{colors.terminal-red}`, `{colors.terminal-yellow}`, `{colors.terminal-green}`.
+### Status
 
-**`workflow-card`**
-- Container: background `{colors.canvas}`, 1px solid `{colors.hairline}`, padding `{spacing.xxl}` (32px), rounded `{rounded.lg}`.
-- Used for Import -> Render -> Analyze -> Save workflow steps.
-- Keep text short; pair each card with one icon or command tag, not an illustration.
+- Default form: 6-7px dot + text label
+- Normal states use low-saturation gray or green.
+- Reserve stronger semantic color for warning and failure.
+- Use actionable language such as `Ready`, `Indexing`, `Warning`, `Failed`, and `Stale`.
+- Pair progress states with a percentage or stage description.
 
-**`evidence-card`**
-- Container: background `{colors.canvas}`, 1px solid `{colors.hairline}`, padding `16px`, rounded `{rounded.lg}`.
-- Used for page evidence, markdown snippets, graph node detail, and grounded answer citations.
-- Use `{typography.code-sm}` for source paths and `{typography.body-sm}` for snippets.
+### Citation
 
-**`local-ready-card`** — rare inverted proof surface
-- Background `{colors.surface-dark}`, text `{colors.on-dark}`, secondary text `{colors.on-dark-mute}`, rounded `{rounded.lg}`.
-- Use once per page or view for "Local Mode ready", "Provider connected", or "Output saved locally".
+- Background: `--native-accent-soft`
+- Text: `--native-accent`
+- Radius: 5px
+- Height: 18-20px
+- Format: `p.2 - E4`
+- Hover and focus preview the connected source and evidence.
+- An answer without citations must not appear equivalent to a citation-ready answer.
 
-**`faq-row`**
-- Background `{colors.canvas}`, padding `16px 0`, 1px bottom border `{colors.hairline}`.
-- Question: `{typography.heading-sm}` in `{colors.ink}`.
-- Answer: `{typography.body-md}` in `{colors.body}`.
-- Always expanded; avoid accordion chrome unless space requires it.
+### Source Preview
 
-### Inline
+- Preserve the original page aspect ratio.
+- Only the page surface receives a paper-white fill and subtle shadow.
+- Use icon controls for page navigation, zoom, and fullscreen.
+- Switch between original and parsed Markdown with tabs or a segmented control.
+- Synchronize the current page between the original and parsed output when possible.
 
-**`link-inline`**
-- `{colors.ink}` text with underline.
+### Composer
 
-**`link-mute`**
-- `{colors.body}` text with underline.
+- Maximum radius: 12px
+- Default height: 64-72px
+- May grow within a constrained range as input expands.
+- Place scope and attachment controls on the left and Send/Stop on the right.
+- Send is a 28px square icon button.
+- During streaming, the same control changes to Stop without moving.
 
-**`status-chip`**
-- Background `{colors.surface-soft}`, text `{colors.charcoal}`, rounded `{rounded.full}`.
-- Optional green terminal dot only for local-ready state.
+### Graph Node
 
-### Navigation
+- Radius: 8px
+- Background: white
+- Border: 1px `--native-border`
+- Selection: `--native-selection` with 2px `--native-accent`
+- Icon well: 24-28px
+- Always pair the label with a type.
+- At high density, reveal labels progressively according to zoom and selection.
 
-**`primary-nav`**
-- Background `{colors.canvas}`, text `{colors.ink}`, height 56px, type `{typography.body-sm-strong}`, rounded `{rounded.none}`.
-- Layout: Etyma mark/name left, links for Product / Docs / GitHub, optional search pill center, right cluster with "Download" or "Open app".
+### Popover and Menu
 
-**Desktop sidebar**
-- Background `{colors.canvas}` or `{colors.surface-soft}`, 1px right border `{colors.hairline}`.
-- Items should use simple icons, body-sm labels, and pill/soft active states.
+- Radius: 8px
+- Background: `rgba(255,255,255,.92)`
+- Backdrop blur: 18-24px
+- Item height: 28-32px
+- Clearly distinguish selection, keyboard focus, and destructive items.
+- Do not nest another card-styled container inside a popover.
 
-### Footer
+## Icons
 
-**`footer-section`**
-- Background `{colors.canvas}`, 1px top border `{colors.hairline}`, padding `32px 24px`, type `{typography.caption-sm}` `{colors.body}`.
-- Links: Download, Docs, GitHub, Privacy, Terms, Contact.
+- Use `lucide-react` throughout the product UI.
+- Default size: 14-16px
+- Primary sidebar icons: 16px
+- Primary object icons: 16-18px
+- Keep stroke weight and perceived size consistent.
+- Use `FileText` for files, `MessageCircle` for Ask, and `Waypoints` or `Network` for relationships.
+- The feather mark is a small titlebar product mark, not a mascot illustration.
+- Do not create custom SVG illustrations to explain features.
 
-## Do's and Don'ts
+## Interaction and State
+
+Every data-driven screen supports:
+
+- Loading
+- Empty
+- Ready
+- Partial/warning
+- Error
+- Permission/restriction
+
+### Loading
+
+- Preserve the layout and show progress inside rows, previews, or inspectors.
+- Do not cover the entire work surface with a spinner.
+- Already-ready sources remain usable while another import runs.
+
+### Empty
+
+- Explain the screen purpose in one sentence.
+- Emphasize one next action.
+- Show real controls and supported formats instead of decorative graphics.
+
+### Error
+
+- Explain what failed and what the user can do next.
+- Do not collapse missing provider keys, an unavailable Ollama instance, and parse failures into one generic error.
+- Technical details may be expandable, but the primary error message remains visible.
+
+### Selection
+
+- List, graph, and inspector selection share one state.
+- Clear the inspector when the selected object disappears.
+- Pointer and keyboard selection use the same visual state.
+
+## Accessibility
+
+- Every workflow is operable with a keyboard.
+- Never remove focus rings.
+- Do not distinguish selection, status, or file type with color alone.
+- Icon buttons have an `aria-label` and tooltip.
+- Lists and tables expose selection with `aria-selected` or an appropriate semantic state.
+- The graph provides a searchable node list or equivalent keyboard navigation path.
+- Citations expose source, page, and evidence in their accessible name.
+- Text contrast meets WCAG AA.
+- Remove position and composer-size transitions under `prefers-reduced-motion`.
+- Minimum pointer target: 28px. Primary actions are at least 30px.
+
+## Motion
+
+- Sidebar open/close: 180ms ease
+- Inspector open/close: 180-220ms ease
+- Hover/focus: 100-140ms
+- Popover/menu: 140-180ms
+- Composer height: 220-320ms with restrained spring-like easing
+- Graph selection: 120ms
+- Import progress: animate only continuous value changes
+
+Do not use decorative entrance animations, full-screen fades, or excessive springs. Data refreshes must not move structural UI.
+
+## Implementation Principles
+
+- React and Electron own window behavior, interaction, and rendering.
+- The Rust engine owns parsing, provider execution, artifact generation, and persistence.
+- Use Tailwind and the existing UI primitives without treating default shadcn styling as the product identity.
+- Define global tokens in `apps/desktop/src/styles.css`.
+- Build small native control primitives instead of repeating arbitrary class combinations across screens.
+- Prefer Lucide icons.
+- Redact local paths by default in agent-facing or shareable output.
+- Preserve translation contracts in `apps/desktop/src/i18n/` when copy changes.
+- Check `apps/desktop/IA.md` and its tests when visible information architecture changes.
+- Compare implementation against the Pencil reference at `1440x900`, `1180x760`, and `960x640`.
+
+## Do and Do Not
 
 ### Do
-- Treat the design like a local README rendered as an app.
-- Use `{component.button-primary}` black pills for primary actions.
-- Default to `{rounded.full}` for interactive controls and `{rounded.lg}` for functional panels.
-- Render paths, parse commands, provider IDs, and output locations as first-class UI elements.
-- Make Local Mode, provider readiness, provider configuration, and output ownership explicit.
-- Keep graph/evidence features grounded in visible snippets and source paths.
-- Keep product language focused on local document parsing, linked markdown, and agent-ready knowledge.
 
-### Don't
-- Don't introduce gradients, atmospheric backgrounds, or decorative color systems.
-- Don't add SaaS dashboard chrome that hides the file import workflow.
-- Don't make hosted providers feel like the default path; local operation should remain visible.
-- Don't imply file parsing requires Screen Recording or Accessibility permissions.
-- Don't lift cards with heavy shadows.
-- Don't replace native/system typography with expressive brand fonts.
-- Don't over-design the duck identity; use it like a small mark, not a mascot-heavy illustration system.
+- Make source lists as scannable as Finder.
+- Keep reading and question flow as quiet as Notes.
+- Put selected-object details in a right inspector, as Xcode does.
+- Clearly disclose local/hosted state and provider routes.
+- Connect source, page, and evidence through one object model.
+- Place warnings near the affected source or evidence.
+- Provide keyboard shortcuts and context menus for repeated actions.
 
-## Responsive Behavior
+### Do Not
 
-### Breakpoints
+- Add a landing-page hero to the desktop app.
+- Nest cards inside cards.
+- Turn every control into a pill.
+- Replace the source table with a decorative card grid.
+- Reduce the graph to a screenshot or miniature preview.
+- Hide citations or provenance behind generated content.
+- Imply direct OpenAI or Anthropic integrations before they ship.
+- Make Screen Recording or Accessibility permissions prerequisites for source import.
 
-| Name | Width | Key Changes |
-|---|---:|---|
-| desktop-large | 1280px+ | Default desktop, 720px marketing column, full desktop workspace |
-| desktop | 1024px | Same layout; nav remains horizontal |
-| tablet | 850px | Workflow cards compress; app panels start stacking |
-| tablet-narrow | 768px | Primary nav becomes hamburger; desktop sidebar collapses |
-| mobile | 640px | Hero headline drops from 36px to ~28px; command snippets wrap; panels become single column |
+## Design Review Checklist
 
-### Touch Targets
-Interactive elements should sit in the 36-44px height range. Buttons and pills at 36px are acceptable when padding creates an effective larger hit area. Text inputs should be at least 40px high.
+### Structure
 
-### Collapsing Strategy
-- **Primary nav:** desktop horizontal -> tablet-narrow hamburger at 768px.
-- **Search pill:** desktop fixed width -> mobile icon or full-width overlay.
-- **Workflow cards:** 3-up or 2-up -> 1-up stacked.
-- **Desktop app panels:** sidebar collapses first; import/markdown/graph panels stack vertically.
-- **Command snippets:** wrap command text rather than truncating it.
+- [ ] Is there one dominant work surface?
+- [ ] Are sidebar, toolbar, main surface, and inspector roles clear?
+- [ ] Are repeated sections free of unnecessary cards?
+- [ ] Are core actions visible at `960x640`?
 
-## Image Behavior
+### Information
 
-Etyma may use a small duck/document mark, but the primary visual vocabulary is text, pills, terminal cards, file paths, markdown previews, and graph/evidence snippets. Treat brand art like a logo, not a hero illustration.
+- [ ] Are source name, status, and critical metadata visible?
+- [ ] Can a user trace every cited answer to the original?
+- [ ] Does graph selection stay synchronized with the inspector?
+- [ ] Is local/hosted provider state accurate?
 
-## Iteration Guide
+### Visual
 
-1. Start with the import workflow. If the file picker, local state, parse progress, markdown output, and saved path are not clear, the design is not done.
-2. Use component and token names directly (`{colors.primary}`, `{component.button-primary}`, `{rounded.full}`).
-3. Use terminal cards for local runtime proof, not as decoration.
-4. Keep `{colors.primary}` scarce per viewport. One black primary action per fold is enough.
-5. Before adding a new component, ask whether it can be expressed with existing pills, hairline panels, terminal cards, or evidence cards.
-6. Prefer source paths and evidence snippets over abstract "AI insight" cards.
-7. When adapting this to the desktop app, keep density higher than the marketing page. The app is a repeated-use tool, not a landing page.
+- [ ] Are neutral surfaces dominant and semantic colors restrained?
+- [ ] Is compact UI free of oversized headings?
+- [ ] Are button and input heights consistently within 28-34px?
+- [ ] Are radius and shadow used only for functional boundaries?
+- [ ] Does all text fit without overlap?
 
-## Known Gaps
+### Interaction
 
-- Mobile screenshots have not been captured.
-- Hover states are intentionally not documented.
-- Authenticated/team surfaces are not part of the current product scope.
-- Graph workspace details may need additional density rules once relation editing and grounded answers mature.
+- [ ] Are loading, empty, warning, and error states defined?
+- [ ] Can the primary flow be completed without a pointer?
+- [ ] Do destructive actions provide clear confirmation and recovery?
+- [ ] Do state changes preserve layout stability?
+
+## Decision Log
+
+| Date | Decision | Reason |
+| --- | --- | --- |
+| 2026-07-18 | Adopt Native Mac Knowledge Workbench | Establish the feel of a repeat-use local professional tool |
+| 2026-07-18 | Retire black-pill-first styling | Repeated pills gave every interaction the same visual weight |
+| 2026-07-18 | Use `Sources / Ask / Knowledge` as top-level destinations | Separate import, cited answers, and relationship inspection |
+| 2026-07-18 | Use a 224px sidebar and 320-360px inspector | Support list comparison and detail inspection in one split view |
+| 2026-07-18 | Use system blue as the only primary accent | Unify selection, focus, primary actions, and citations |
+| 2026-07-18 | Maintain a three-screen Pencil reference | Give implementation and design review one visual baseline |
+
+## Known Scope
+
+- The current baseline covers light appearance. Define dark appearance tokens with a dedicated design.
+- Team and cloud collaboration surfaces are outside the current design scope.
+- Add detailed relation-editing and correction workflows when product behavior is finalized.
+- Windows and Linux preserve the information architecture while providing fallbacks for macOS-specific materials.

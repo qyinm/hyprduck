@@ -1,7 +1,7 @@
 # Model Task Matrix
 
-Etyma uses the parser as the ingest wedge, but the product needs a stable
-model policy for local document parsing and agent-ready evidence reuse. This
+Etyma uses document parsing as the first ingest wedge, but the product needs a
+stable model policy for source ingestion and agent-ready evidence reuse. This
 matrix defines the default model path for each task, the local fallback, and the
 latency budget that should be tracked with the golden corpus.
 

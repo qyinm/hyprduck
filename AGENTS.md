@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Etyma compiles private documents into reusable, cited local context packs for coding agents. The active stack is an Electron desktop shell in `apps/desktop`, a Rust engine/CLI workspace in `crates/`, local SQLite + GraphQLite knowledge storage, and MCP as the agent workflow surface.
+Etyma compiles private sources into reusable, cited local context packs for coding agents. A source is any provenance-bearing original input that Etyma can ingest without losing its identity or evidence trail. Documents are the first supported source type, not the product boundary. The active stack is an Electron desktop shell in `apps/desktop`, a Rust engine/CLI workspace in `crates/`, local SQLite + GraphQLite knowledge storage, and MCP as the agent workflow surface.
 
 ## STRUCTURE
 
@@ -35,13 +35,16 @@ Etyma/
 | Build/test commands | `docs/agents/commands.md`, `justfile` | Commands belong in `docs/agents/`, not root instruction files. |
 | Prior fixes and reusable patterns | `docs/solutions/` | Check before re-solving integration or architecture issues. |
 | Cloud multi-plane storage (frozen target) | `docs/storage-planes.md` | Cloud: Postgres control/knowledge/graph + blob. Local remains SQLite + GraphQLite. |
+| Source identity, revisions, kinds, and evidence locators | `docs/source-model.md` | Canonical product definition; documents are the first adapter. |
 | Public PR wording | `.github/PULL_REQUEST_TEMPLATE.md` | Keep public text to shipped code and verified behavior. |
 
 ## PRODUCT DIRECTION
 
-- Keep the product focused on private document evidence reuse for coding agents.
-- Keep desktop first-run focused on `Add Docs -> Connect Agent -> Ask With Citations -> Verify Evidence -> Reuse`.
-- Keep the desktop app's graph canvas as a required inspection surface for document/source/concept relationships.
+- Keep the product focused on private source evidence reuse for coding agents.
+- Treat documents as the first supported source type. Keep the source model open to additional provenance-bearing inputs such as text, web content, code, images, media transcripts, and connected services as their ingest adapters ship.
+- Follow `docs/source-model.md` for Source boundaries, identity, revisions, kinds, and product language.
+- Keep desktop first-run focused on `Add Sources -> Connect Agent -> Ask With Citations -> Verify Evidence -> Reuse`.
+- Keep the desktop app's graph canvas as a required inspection surface for source/evidence/concept relationships.
 - Treat graph, wiki, claims, memory, and event history as retrieval and inspection infrastructure, not first-run product promises or marketing claims.
 - Do not reframe Etyma as DeepSeek-only, generic PDF chat, graph-first, brain-first, generic memory OS, or a trust console.
 
@@ -52,7 +55,7 @@ Etyma/
 - Keep parsing, artifact generation, provider execution, and output packaging in the Rust engine.
 - Treat SQLite + GraphQLite as the authoritative **local** knowledge/graph store direction; do not revive file artifacts as primary persistence. Cloud multi-plane storage (Postgres control/knowledge/graph + blob) is frozen in `docs/storage-planes.md`.
 - Do not reintroduce frontend-owned output packaging or provider persistence.
-- Do not block document import behind Screen Recording or Accessibility permissions; those apply only to optional legacy capture code.
+- Do not block source import behind Screen Recording or Accessibility permissions; those apply only to optional legacy capture code.
 
 ## ARTIFACT CONTRACT
 

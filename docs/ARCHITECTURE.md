@@ -1,18 +1,22 @@
 # Etyma Architecture
 
-Etyma is a local-first document ingestion and agent-readable knowledge
-workspace. The active product wedge is file parsing: import PDF, DOCX, or DOC,
-convert pages into local artifacts, generate markdown, and materialize a
-source-backed graph/wiki workspace that agents can read.
+Etyma is a local-first source ingestion and agent-readable knowledge workspace.
+The source model is defined by stable identity, provenance, and addressable
+evidence rather than by one file format. The first implemented adapter handles
+documents: import PDF, DOCX, or DOC, convert pages into local artifacts,
+generate markdown, and materialize a source-backed graph/wiki workspace that
+agents can read.
 
-This document describes the current repository behavior after removing the old
-write-gating layer.
+[`source-model.md`](source-model.md) defines the canonical Source, Source
+Revision, container, and evidence locator boundaries. The remainder of this
+document describes the current repository behavior and how it maps onto those
+boundaries after removal of the old write-gating layer.
 
 ## System Goals
 
-1. Import must be local and permission-light. PDF, DOCX, and DOC import works
-   without Screen Recording or Accessibility permissions.
-2. Imported files and generated markdown/page artifacts are stored as durable
+1. Source import must be local and permission-light. The current PDF, DOCX, and
+   DOC adapter works without Screen Recording or Accessibility permissions.
+2. Imported source originals and generated artifacts are stored as durable
    local records.
 3. Derived knowledge is inspectable. Nodes, claims, relations, wiki pages,
    memories, and health events are produced by explicit engine flows.

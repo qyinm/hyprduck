@@ -26,7 +26,7 @@ Repository and crates use the **Etyma** / `etyma` naming after the full rename.
 
 ### Historical names
 
-- **HyprDuck** — previous product/codebase name (local-first document context).
+- **HyprDuck** — previous product/codebase name (local-first source context).
 
 ---
 

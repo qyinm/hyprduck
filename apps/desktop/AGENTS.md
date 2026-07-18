@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-`apps/desktop` is the active Electron desktop shell and React inspection surface for imported document evidence, source history, and graph workspace state.
+`apps/desktop` is the active Electron desktop shell and React inspection surface for imported source evidence, source history, and graph workspace state. The current import UI supports PDF, DOCX, and DOC, while the desktop information architecture treats documents as one source type.
 
 ## WHERE TO LOOK
 

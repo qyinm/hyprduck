@@ -44,7 +44,7 @@ etyma hooks status codex
 - Session and prompt hooks add Etyma MCP guidance without requiring the user
   to type `use Etyma MCP`.
 - Prompt-time guidance tells Codex to call `get_context_pack` when local
-  document evidence may matter.
+  source evidence may matter.
 - Permission hooks can allow known non-destructive Etyma MCP actions.
 - Destructive or unknown Etyma actions stay prompt-gated or are denied with
   an actionable reason.
