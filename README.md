@@ -32,6 +32,13 @@ query-time context packs that agents can reuse without losing page evidence.
 The source model is designed to support additional input types without changing
 the provenance contract.
 
+Etyma has two planned workspace authority modes: a default account-free Local
+Workspace and an explicit Cloud Workspace backed by Postgres and Blob storage.
+Hosted model processing is independent from workspace storage. The current
+desktop path is Local Workspace; the cloud server is a backend foundation, not
+desktop cloud parity. See
+[`docs/local-cloud-operating-model.md`](docs/local-cloud-operating-model.md).
+
 The primary product loop is:
 
 ```text

@@ -4,6 +4,12 @@ SaaS host for workspace-scoped Etyma context packs. The server exposes
 operator bootstrap routes, source listing, REST pack composition, and Cloud MCP
 `get_context_pack`.
 
+This server is the Cloud Workspace backend foundation. It does not make the
+desktop application a cloud client, does not synchronize local SQLite or
+GraphQLite files, and does not change the account-free Local Workspace path.
+The product-level authority and movement rules are defined in
+[`../../docs/local-cloud-operating-model.md`](../../docs/local-cloud-operating-model.md).
+
 ## Storage
 
 | Plane | Backend | Contents |
@@ -11,7 +17,7 @@ operator bootstrap routes, source listing, REST pack composition, and Cloud MCP
 | Control | Postgres `control.*` | Orgs, workspaces, users, OIDC identities, sessions, API tokens, audit stubs |
 | Knowledge | Postgres `knowledge.*` | Source metadata, evidence index, import jobs |
 | Graph | Postgres `graph.*` | Versioned nodes / relations / claims (live projection) |
-| Blob | Blob adapter | Original source bytes |
+| Blob | Blob adapter | Captured Source Revision payloads |
 
 `etyma-server` has no SQLite fallback. `ETYMA_DATABASE_URL` is mandatory and
 startup fails if Postgres cannot connect or migrate. Original bytes are never
@@ -24,12 +30,14 @@ Cloud graph is a **Postgres relational projection**, not GraphQLite:
 - Tables: `graph.nodes`, `graph.relations`, `graph.claims`
 - Rows are versioned (`version_id`, `valid_from` / `valid_to`, `superseded_by`)
 - **Live** projection = `valid_to IS NULL` (one live version per logical id per workspace)
-- Write boundary: `GraphStore` upserts live versions (materialize target for S7)
+- Write boundary: the server materialization path writes live versions through
+  `GraphStore`
 - Read: `GET /v1/graph/snapshot` and pack `graph_trail` from live PG nodes
 - **GraphQLite is local/engine only** — `etyma-server` never opens `knowledge.sqlite3`
 
-Full engine materialize that *writes* the projection is **S7 (PON-11)**. Cutover that
-drops residual cloud SQLite/GraphQLite paths is **S-PG5 (PON-20)**.
+The current server materialization path writes the Postgres projection. The
+S7 (PON-11) and S-PG5 (PON-20) labels remain historical rollout references;
+they do not describe a pending switch to cloud GraphQLite or server SQLite.
 
 ## Environment
 

@@ -247,6 +247,12 @@ losing page evidence.
 
 ## Completed / Existing Substrate
 
+- [x] Local/cloud operating model contract
+  - Defined Local Workspace and Cloud Workspace as mutually exclusive authority modes.
+  - Separated workspace storage authority from local versus hosted model processing.
+  - Defined canonical Source, Source Revision, evidence, mutation, and rebuildable projection ownership.
+  - Defined explicit Local-to-Cloud and Cloud-to-Local movement semantics without introducing live synchronization.
+  - Deferred Slack, external connectors, connector OAuth, and bidirectional sync.
 - [x] Local document ingestion adapter as the first source type
 - [x] Internal graph/wiki materialization substrate
 - [x] Source metadata persistence from composer intent

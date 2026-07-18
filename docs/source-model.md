@@ -64,6 +64,11 @@ The current document adapter effectively exposes one current revision through
 the Source Pack `contentHash`. Future adapters must make revision identity
 explicit.
 
+Each Source Revision must also record the processing locality and provider
+route used to create its derived artifacts. These fields describe a processing
+event; they do not determine whether the workspace is Local or Cloud. Workspace
+authority is defined in [`local-cloud-operating-model.md`](local-cloud-operating-model.md).
+
 ### Source Container
 
 A connector, folder, site, mailbox, or workspace that discovers Sources. A
@@ -154,6 +159,11 @@ The locator is adapter-specific, but it must be deterministic within the bound
 revision. Page numbers are valid for documents; they are not the universal
 evidence model.
 
+Evidence retrieval must obey the workspace authority of its Source. A Local
+Workspace reads from local storage; a Cloud Workspace reads from the cloud
+knowledge and Blob planes. A cached copy may accelerate reads but cannot become
+a second authority.
+
 ## Identity And Deduplication
 
 - Equal content hashes do not automatically mean equal Sources. Two distinct
@@ -207,7 +217,7 @@ partial, failed, and stale.
 | Product concept | Current implementation |
 | --- | --- |
 | Source identity | `SourceId` / `source_id` |
-| Source kind | Local `DocumentFormat`; cloud spike `kind` |
+| Source kind | Local `DocumentFormat`; cloud server `kind` |
 | Origin | `original_path`, `source_path`; cloud `external_id` |
 | Revision integrity | Source Pack and Evidence Index `contentHash` |
 | Evidence locator | `page`, `region`, optional `span`; cloud `locator` |
@@ -215,6 +225,7 @@ partial, failed, and stale.
 | Citation readiness | `citation_ready` |
 | Graph readiness | `graph_ready` |
 | Processing disclosure | `providerRoute`, `localOnly` |
+| Workspace authority | Local desktop/engine or Cloud server path; not yet a shared DTO field |
 
 The current local structs are document-shaped. New adapters should extend the
 general Source and Source Revision contracts instead of adding more

@@ -2,9 +2,13 @@
 
 **Status:** Accepted / Frozen
 
-This document freezes the cloud multi-plane storage model. Later Postgres
-migration work implements this model; it does not re-open graph-store or
-backend-shape debates for cloud.
+This document freezes the cloud multi-plane storage model. The current
+`etyma-server` runtime already uses this placement; future work must preserve
+it and must not re-open graph-store or backend-shape debates for cloud.
+
+The product-level Local Workspace and Cloud Workspace authority contract lives
+in [`local-cloud-operating-model.md`](local-cloud-operating-model.md). This
+document only owns cloud plane placement.
 
 Local desktop and engine storage remain separate. See
 `docs/agents/sqlite-graphqlite-knowledge-store-review.md` for the local SQLite +
@@ -12,18 +16,18 @@ GraphQLite knowledge store direction.
 
 ## Context
 
-### Cloud today (etyma-server spike)
+### Current cloud runtime (`etyma-server`)
 
 | Store | Role today |
 | --- | --- |
-| Server SQLite (`server.sqlite3`) | Control and meta actually present in the spike: orgs, workspaces, API tokens, source meta, evidence index |
-| Blob backend | Original document bytes (`blob_key` + content hash on source rows) |
+| Postgres `control.*` | Organizations, workspaces, users, memberships, sessions, API tokens, and audit metadata |
+| Postgres `knowledge.*` | Source metadata, evidence index, import jobs, content hashes, and Blob references |
+| Postgres `graph.*` | Versioned nodes, relations, and claims as the live graph projection |
+| Blob backend | Captured Source Revision payloads (`blob_key` + content hash on source rows) |
 
-The spike does **not** open per-workspace `knowledge.sqlite3` or GraphQLite. Source
-and evidence rows live in the same server SQLite file as tenant control data.
-
-Users, membership, audit, import job state machines, and full engine knowledge/graph
-are **target** control/knowledge/graph plane contents — not current spike tables.
+The current server requires `ETYMA_DATABASE_URL` and has no SQLite fallback.
+Earlier server SQLite spike behavior is historical and must not be used as the
+current cloud storage description.
 
 ### Local / engine today (unchanged by this freeze)
 
@@ -31,11 +35,11 @@ are **target** control/knowledge/graph plane contents — not current spike tabl
 | --- | --- |
 | Engine SQLite + GraphQLite (`knowledge.sqlite3`) | Local desktop/engine knowledge meta, evidence, FTS, and graph state |
 
-Postgres migration must not turn into a debate about whether **cloud** graph should
-stay on GraphQLite files. Cloud has not adopted GraphQLite as primary, and this freeze
-keeps it that way.
+Cloud graph must remain relational Postgres state. Postgres migration work must
+not turn into a debate about whether **cloud** graph should use GraphQLite files.
 
-Blob storage is already in place for cloud: original bytes live in the blob backend;
+Blob storage is already in place for cloud: captured Source Revision payloads
+live in the Blob backend;
 the database stores `blob_key` and content hash only, not raw file payloads.
 
 ## Decision
@@ -112,18 +116,19 @@ Reasons:
 Local engines may keep GraphQLite. Cloud materialize writes the Postgres
 relational projection instead.
 
-## Migration order
+## Migration history and remaining work
 
-Implement and cut over by plane. Sequence is fixed; later steps do not redefine
-earlier plane ownership.
+The original migration sequence established the current plane placement. The
+sequence is retained as an audit trail; it does not describe an unimplemented
+server SQLite target.
 
 | Step | Plane | What it unlocks |
 | --- | --- | --- |
-| 1 | Control foundation | Postgres bootstrap, schemas/prefixes, migrations, connectivity from the cloud server |
-| 2 | Control plane | Orgs, workspaces, users, membership, tokens, and audit live in Postgres; multi-tenant control no longer depends on `server.sqlite3` |
-| 3 | Knowledge / jobs | Source meta, evidence index, import jobs, content hashes, and `blob_key` live in Postgres (moved off server SQLite spike tables; not grown as a second cloud SQLite/GraphQLite knowledge file) |
-| 4 | Graph projection | Nodes, edges, claims, and version fields materialize into Postgres relational tables; cloud never adopts GraphQLite files as primary |
-| 5 | Cutover | Cloud primary path is Postgres planes + blob; retire cloud reliance on `server.sqlite3` and block any cloud GraphQLite primary path |
+| 1 | Control foundation | Complete in current main: Postgres bootstrap, schemas, migrations, and server connectivity |
+| 2 | Control plane | Complete in current main: organizations, workspaces, users, memberships, tokens, sessions, and audit boundaries |
+| 3 | Knowledge / jobs | Complete in current main: Source metadata, evidence index, import jobs, content hashes, and Blob references in Postgres |
+| 4 | Graph projection | Complete in current main: versioned nodes, relations, claims, and live graph reads in Postgres |
+| 5 | Cloud cutover | Current server path: Postgres planes + Blob; no server SQLite or cloud GraphQLite primary path |
 
 Blob remains in place through all steps. Migration does not re-store original
 bytes in Postgres.
@@ -132,15 +137,17 @@ bytes in Postgres.
 
 This freeze does **not**:
 
-- Implement Postgres schemas, migrations, or runtime dual-write
+- Define new Postgres schemas, migrations, or runtime dual-write beyond the
+  current plane contract
 - Change local desktop/engine to Postgres
 - Replace GraphQLite on the local path
 - Redesign product UX, MCP tool surface, or agent workflow contracts
 - Introduce graph-as-product positioning or memory-OS claims
 - Choose a specific Postgres ORM, hosting vendor, or connection pool
 - Define full table-level DDL (that belongs to migration implementation)
-- Place every local-only artifact (wiki revisions, memory records, full event log
-  schemas) into a plane — default: knowledge plane unless listed under graph
+- Define every local-only artifact (wiki revisions, memory records, full event
+  log schemas) as a cloud table; placement remains an implementation task unless
+  listed under a plane
 
 Implementation work follows this document; it does not renegotiate the planes.
 
@@ -182,5 +189,6 @@ Implementation work follows this document; it does not renegotiate the planes.
 | Blob | Object storage | Already in place; DB holds key + hash only |
 | GraphQLite | Local / dev / future offline only | Not cloud primary |
 
-This multi-plane model is frozen for cloud. Subsequent Postgres migration work
-implements it in the order above.
+This multi-plane model is frozen for cloud. Product authority, workspace
+movement, and any future synchronization policy are defined separately in
+`docs/local-cloud-operating-model.md`.

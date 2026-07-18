@@ -45,7 +45,7 @@ Etyma/
 │   ├── etyma-engine-types            # Shared command, response, graph, brain schemas
 │   ├── etyma-cli                     # CLI, TUI, MCP server, eval harness
 │   ├── etyma-knowledge               # Shared knowledge/brain record types
-│   └── etyma-server                  # Cloud host spike; storage target in docs/storage-planes.md
+│   └── etyma-server                  # Cloud host; Postgres planes + Blob, see docs/storage-planes.md
 ├── docs/                                # Architecture, MCP, model task matrix, graph docs
 ├── schemas/                             # JSON schema contracts for external consumers
 └── scripts/                             # Engine sync/build helpers for Electron
@@ -190,9 +190,11 @@ separate primary database. That local path is unchanged by cloud planning.
 
 **Cloud** primary storage planes are frozen separately: Postgres for control,
 knowledge, and graph projection, plus a blob plane for original bytes. See
-[`docs/storage-planes.md`](./storage-planes.md). That ADR does not change local
-runtime behavior and does not imply Postgres is implemented yet. The cloud spike
-today uses server SQLite + blob only.
+[`docs/storage-planes.md`](./storage-planes.md). The current `etyma-server`
+runtime requires Postgres and uses Blob storage for captured Source Revision
+payloads. It does not open local SQLite or GraphQLite. The product-level
+authority and movement rules live in
+[`docs/local-cloud-operating-model.md`](./local-cloud-operating-model.md).
 
 ## Refactor Pattern Criteria
 
